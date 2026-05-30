@@ -1,0 +1,19 @@
+# Opt-in profile that flips on the in-process OAuth 2.1 stub server used by the
+# inspector's AuthDebugger end-to-end flow. Activate with:
+#
+#   --spring.profiles.active=streamable,oauth-stub
+#
+# The stub serves these endpoints on the same Spring Boot HTTP server:
+#
+#   GET  /.well-known/oauth-authorization-server
+#   POST /oauth/register
+#   GET  /oauth/authorize
+#   POST /oauth/authorize
+#   POST /oauth/token
+#
+# This profile must NEVER be active in production demos — it issues a fixed
+# access token to any caller that performs a PKCE round-trip.
+
+demo:
+  oauth-stub:
+    enabled: true

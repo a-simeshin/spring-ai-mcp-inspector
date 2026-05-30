@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.inspector.mcp</groupId>
+        <artifactId>spring-ai-mcp-inspector-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>spring-ai-mcp-inspector-demo</artifactId>
+    <packaging>jar</packaging>
+    <name>spring-ai-mcp-inspector-demo</name>
+    <description>Demo Spring Boot application showcasing the MCP Inspector across all Spring AI
+        MCP server starters (webmvc, webflux, stdio) and all protocols (SSE, Streamable, Stateless,
+        Stdio). Maven profiles swap which Spring AI starter is on the classpath; Spring profiles
+        switch the active MCP protocol.</description>
+
+    <properties>
+        <!-- Demo carries smoke + Selenide E2E only; coverage gate would be
+             meaningless here. -->
+        <jacoco.skip>true</jacoco.skip>
+    </properties>
+
+    <dependencies>
+        <!-- Always-on Spring Boot core dependencies -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+
+        <!-- MCP SDK (transport / client API used by demo and tests) -->
+        <dependency>
+            <groupId>io.modelcontextprotocol.sdk</groupId>
+            <artifactId>mcp</artifactId>
+        </dependency>
+
+        <!-- Test scope -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.codeborne</groupId>
+            <artifactId>selenide</artifactId>
+            <version>7.6.1</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.github.bonigarcia</groupId>
+            <artifactId>webdrivermanager</artifactId>
+            <version>5.9.2</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Test scope: needed by WebFluxLoopback*IT (reactive stack tests) regardless of active Maven profile -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-server-webflux</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.github.inspector.mcp</groupId>
+            <artifactId>spring-ai-mcp-inspector-starter-webflux</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            NOTE: The webmvc servlet stack is intentionally NOT declared at top-level
+            test scope. Doing so would downgrade the transitive `compile` edges from
+            the `webmvc` profile (Maven's narrowest-scope-wins rule) and produce an
+            exec jar without `tomcat-embed-core`. Instead, the `webmvc` Maven profile
+            (active by default) supplies these dependencies at compile scope, and the
+            `e2e` profile re-declares them at test scope for runs that activate only
+            `-Pe2e` (which deactivates the default `webmvc` profile).
+        -->
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <version>${spring-boot.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                        <configuration>
+                            <!-- Keep a classifier so the original thin jar (with classes
+                                 directly under the root) is preserved for downstream
+                                 modules and ITs that need them on the test classpath. -->
+                            <classifier>exec</classifier>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <profile>
+            <id>webmvc</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>org.springframework.ai</groupId>
+                    <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
+                </dependency>
+                <dependency>
+                    <groupId>io.github.inspector.mcp</groupId>
+                    <artifactId>spring-ai-mcp-inspector-starter-webmvc</artifactId>
+                    <version>${project.version}</version>
+                </dependency>
+            </dependencies>
+        </profile>
+        <profile>
+            <id>webflux</id>
+            <dependencies>
+                <dependency>
+                    <groupId>org.springframework.ai</groupId>
+                    <artifactId>spring-ai-starter-mcp-server-webflux</artifactId>
+                </dependency>
+                <dependency>
+                    <groupId>io.github.inspector.mcp</groupId>
+                    <artifactId>spring-ai-mcp-inspector-starter-webflux</artifactId>
+                    <version>${project.version}</version>
+                </dependency>
+            </dependencies>
+        </profile>
+        <profile>
+            <id>stdio-only</id>
+            <dependencies>
+                <dependency>
+                    <groupId>org.springframework.ai</groupId>
+                    <artifactId>spring-ai-starter-mcp-server</artifactId>
+                </dependency>
+            </dependencies>
+        </profile>
+        <!--
+            Selenide UI e2e tests are gated behind this profile so the default
+            `mvn verify` build (Failsafe runs `**/*IT.java` only) stays fast and
+            does not require a browser. With `-Pe2e`, `**/*E2ETest.java` files
+            are added to the include list — matching the plan-as-contract glob
+            `spring-ai-mcp-inspector-demo/src/test/java/**/*E2ETest.java`.
+        -->
+        <profile>
+            <id>e2e</id>
+            <dependencies>
+                <!--
+                    Activating `-Pe2e` explicitly deactivates the default `webmvc`
+                    profile. Re-declare the servlet stack at test scope here so the
+                    e2e matrix (which boots both webmvc and webflux combos) still has
+                    the servlet autoconfig classes on the classpath. Test scope is
+                    sufficient because the e2e profile never produces an exec jar.
+                -->
+                <dependency>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-starter-web</artifactId>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>org.springframework.ai</groupId>
+                    <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
+                    <scope>test</scope>
+                </dependency>
+                <dependency>
+                    <groupId>io.github.inspector.mcp</groupId>
+                    <artifactId>spring-ai-mcp-inspector-starter-webmvc</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+        </profile>
+    </profiles>
+</project>

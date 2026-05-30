@@ -1,0 +1,26 @@
+/*
+ * Copyright 2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ */
+package io.inspector.mcp.core.oauth;
+
+/**
+ * Body of {@code POST /mcp-inspector/api/oauth/initiate}.
+ *
+ * @param authorizationEndpoint absolute OAuth authorization URL (e.g.
+ * {@code https://auth.example.com/authorize})
+ * @param tokenEndpoint absolute OAuth token URL used later by {@code /oauth/callback};
+ * may be {@code null} if the UI plans to exchange the code itself
+ * @param clientId OAuth client id
+ * @param redirectUri registered redirect URI; required
+ * @param scope optional space-separated scope list
+ * @param codeChallenge optional PKCE {@code S256} code challenge
+ */
+public record OAuthInitiateRequest(String authorizationEndpoint, String tokenEndpoint, String clientId,
+		String redirectUri, String scope, String codeChallenge) {
+}

@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>io.github.inspector.mcp</groupId>
+    <artifactId>spring-ai-mcp-inspector-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <name>spring-ai-mcp-inspector-parent</name>
+    <description>Parent POM for Spring AI MCP Inspector — embeddable inspector UI for Spring AI MCP servers.</description>
+    <url>https://github.com/spring-ai-mcp-inspector/spring-ai-mcp-inspector</url>
+
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <spring-boot.version>3.5.14</spring-boot.version>
+        <spring-ai.version>1.1.7</spring-ai.version>
+        <mcp-sdk.version>0.18.2</mcp-sdk.version>
+
+        <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
+        <maven-surefire-plugin.version>3.5.0</maven-surefire-plugin.version>
+        <maven-failsafe-plugin.version>3.5.0</maven-failsafe-plugin.version>
+        <spring-javaformat-maven-plugin.version>0.0.47</spring-javaformat-maven-plugin.version>
+        <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
+
+        <!-- JaCoCo coverage gate (Surefire only — IT/E2E run under Failsafe
+             and do not contribute). Override per-module to relax or skip. -->
+        <jacoco.line.minimum>0.80</jacoco.line.minimum>
+        <jacoco.branch.minimum>0.80</jacoco.branch.minimum>
+        <jacoco.instruction.minimum>0.80</jacoco.instruction.minimum>
+        <jacoco.skip>false</jacoco.skip>
+    </properties>
+
+    <modules>
+        <module>spring-ai-mcp-inspector-core</module>
+        <module>spring-ai-mcp-inspector-ui</module>
+        <module>spring-ai-mcp-inspector-starter-webmvc</module>
+        <module>spring-ai-mcp-inspector-starter-webflux</module>
+        <module>spring-ai-mcp-inspector-demo</module>
+    </modules>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.modelcontextprotocol.sdk</groupId>
+                <artifactId>mcp</artifactId>
+                <version>${mcp-sdk.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>${maven-compiler-plugin.version}</version>
+                    <configuration>
+                        <source>${maven.compiler.source}</source>
+                        <target>${maven.compiler.target}</target>
+                        <release>${maven.compiler.release}</release>
+                        <!-- Required for Spring AI MCP annotations (mcp-annotations 0.9.0)
+                             to bind JSON-RPC `arguments.X` to method parameters by name.
+                             Without this, every @McpToolParam parameter arrives as null
+                             because reflection sees arg0/arg1 instead of declared names. -->
+                        <parameters>true</parameters>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>${maven-surefire-plugin.version}</version>
+                    <configuration>
+                        <!-- `surefireArgLine` is set by jacoco prepare-agent-unit. -->
+                        <argLine>@{surefireArgLine}</argLine>
+                        <includes>
+                            <include>**/*Test.java</include>
+                        </includes>
+                        <excludes>
+                            <exclude>**/*IT.java</exclude>
+                            <exclude>**/*E2ETest.java</exclude>
+                        </excludes>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-failsafe-plugin</artifactId>
+                    <version>${maven-failsafe-plugin.version}</version>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>integration-test</goal>
+                                <goal>verify</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                    <configuration>
+                        <!-- `failsafeArgLine` is set by jacoco prepare-agent-it. -->
+                        <argLine>@{failsafeArgLine}</argLine>
+                        <includes>
+                            <include>**/*IT.java</include>
+                            <include>**/*E2ETest.java</include>
+                        </includes>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <version>${jacoco-maven-plugin.version}</version>
+                    <configuration>
+                        <skip>${jacoco.skip}</skip>
+                        <!-- Coverage gate applies to production logic only.
+                             Excluded: framework glue (autoconfig, config props),
+                             pure data carriers (records/POJOs in dto/oauth/bootstrap
+                             leaves) and exception types. -->
+                        <excludes>
+                            <exclude>**/*AutoConfiguration*</exclude>
+                            <exclude>io/inspector/mcp/**/config/**</exclude>
+                            <exclude>io/inspector/mcp/**/dto/**</exclude>
+                            <exclude>io/inspector/mcp/**/oauth/OAuth*Request*</exclude>
+                            <exclude>io/inspector/mcp/**/oauth/OAuth*Response*</exclude>
+                            <exclude>io/inspector/mcp/**/transport/DetectedTransport*</exclude>
+                            <exclude>io/inspector/mcp/**/bootstrap/CustomHeader*</exclude>
+                            <exclude>io/inspector/mcp/**/bootstrap/ServerEntry*</exclude>
+                            <exclude>io/inspector/mcp/**/bootstrap/InspectorBootstrap.class</exclude>
+                            <exclude>io/inspector/mcp/**/bootstrap/InspectorBootstrap$*.class</exclude>
+                            <exclude>**/exception/**</exclude>
+                            <exclude>**/*Exception.class</exclude>
+                        </excludes>
+                    </configuration>
+                    <executions>
+                        <!-- Surefire agent → target/jacoco-unit.exec.
+                             Coverage gate reads this file only. -->
+                        <execution>
+                            <id>prepare-agent-unit</id>
+                            <goals>
+                                <goal>prepare-agent</goal>
+                            </goals>
+                            <configuration>
+                                <destFile>${project.build.directory}/jacoco-unit.exec</destFile>
+                                <propertyName>surefireArgLine</propertyName>
+                            </configuration>
+                        </execution>
+                        <!-- Failsafe agent → target/jacoco-it.exec.
+                             Recorded for diagnostics; NOT considered by the gate. -->
+                        <execution>
+                            <id>prepare-agent-it</id>
+                            <goals>
+                                <goal>prepare-agent-integration</goal>
+                            </goals>
+                            <configuration>
+                                <destFile>${project.build.directory}/jacoco-it.exec</destFile>
+                                <propertyName>failsafeArgLine</propertyName>
+                            </configuration>
+                        </execution>
+                        <!-- Unit-only HTML/XML report after Surefire. -->
+                        <execution>
+                            <id>report-unit</id>
+                            <phase>test</phase>
+                            <goals>
+                                <goal>report</goal>
+                            </goals>
+                            <configuration>
+                                <dataFile>${project.build.directory}/jacoco-unit.exec</dataFile>
+                                <outputDirectory>${project.build.directory}/site/jacoco</outputDirectory>
+                            </configuration>
+                        </execution>
+                        <!-- Hard coverage gate, Surefire only. -->
+                        <execution>
+                            <id>check</id>
+                            <phase>verify</phase>
+                            <goals>
+                                <goal>check</goal>
+                            </goals>
+                            <configuration>
+                                <dataFile>${project.build.directory}/jacoco-unit.exec</dataFile>
+                                <rules>
+                                    <rule>
+                                        <element>BUNDLE</element>
+                                        <limits>
+                                            <limit>
+                                                <counter>LINE</counter>
+                                                <value>COVEREDRATIO</value>
+                                                <minimum>${jacoco.line.minimum}</minimum>
+                                            </limit>
+                                            <limit>
+                                                <counter>BRANCH</counter>
+                                                <value>COVEREDRATIO</value>
+                                                <minimum>${jacoco.branch.minimum}</minimum>
+                                            </limit>
+                                            <limit>
+                                                <counter>INSTRUCTION</counter>
+                                                <value>COVEREDRATIO</value>
+                                                <minimum>${jacoco.instruction.minimum}</minimum>
+                                            </limit>
+                                        </limits>
+                                    </rule>
+                                </rules>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+                <plugin>
+                    <groupId>io.spring.javaformat</groupId>
+                    <artifactId>spring-javaformat-maven-plugin</artifactId>
+                    <version>${spring-javaformat-maven-plugin.version}</version>
+                    <executions>
+                        <execution>
+                            <phase>validate</phase>
+                            <inherited>true</inherited>
+                            <goals>
+                                <goal>validate</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+        <plugins>
+            <!-- Failsafe is declared at the parent level so every module's `verify`
+                 phase runs **/*IT.java tests. Configuration lives in pluginManagement above. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+            </plugin>
+            <!-- Spring Java Format runs at validate phase across every module.
+                 Matches the convention used by spring-ai-community siblings
+                 (spring-ai-a2a, mcp-annotations, mcp-security). -->
+            <plugin>
+                <groupId>io.spring.javaformat</groupId>
+                <artifactId>spring-javaformat-maven-plugin</artifactId>
+            </plugin>
+            <!-- JaCoCo: agent on Surefire, report on `test`, hard gate on `verify`.
+                 Demo and UI modules opt out via `<jacoco.skip>true` in their poms. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+    <repositories>
+        <repository>
+            <id>central</id>
+            <name>Maven Central</name>
+            <url>https://repo.maven.apache.org/maven2</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+        <repository>
+            <id>spring-milestones</id>
+            <name>Spring Milestones</name>
+            <url>https://repo.spring.io/milestone</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
+
+</project>

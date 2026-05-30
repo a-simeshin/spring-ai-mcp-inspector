@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: mcp-inspector-demo
+  ai:
+    mcp:
+      server:
+        name: mcp-inspector-demo
+        version: 0.1.0
+server:
+  port: 8080

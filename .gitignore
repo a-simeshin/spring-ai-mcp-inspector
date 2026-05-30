@@ -1,0 +1,102 @@
+# Maven
+target/
+*.class
+*.jar
+*.war
+*.ear
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar.tmp
+
+# Node / Frontend
+node_modules/
+dist/
+build/
+.npm/
+.pnpm-store/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# IDE — IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# IDE — VSCode
+.vscode/
+*.code-workspace
+
+# IDE — Eclipse
+.project
+.classpath
+.settings/
+.metadata/
+.factorypath
+
+# OS — macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# OS — Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# OS — Linux
+*~
+.fuse_hidden*
+
+# Spring Boot
+spring-shell.log
+HELP.md
+application-local.yml
+application-local.properties
+
+# Test / coverage
+*.exec
+coverage/
+.nyc_output/
+jacoco.exec
+surefire-reports/
+failsafe-reports/
+
+# Selenide
+build/reports/tests/
+build/screenshots/
+selenide-reports/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Python cache (hooks)
+__pycache__/
+*.py[cod]
+
+# Secrets / local env
+.env
+.env.*
+!.env.example
+
+# AI / dev tooling — local only
+.claude/
+.serena/
+
+# Runtime logs
+logs/
+
+# Planning / spec artifacts — local only
+PLAN.md
+specs/
+docs/

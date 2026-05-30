@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!--
+        Default profile: log to STDOUT like a normal Spring Boot app.
+    -->
+    <springProfile name="!stdio">
+        <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+        <root level="INFO">
+            <appender-ref ref="STDOUT"/>
+        </root>
+    </springProfile>
+
+    <!--
+        stdio profile: STDOUT is reserved for the MCP JSON-RPC channel.
+        All log output MUST go to STDERR (or a file) - never to STDOUT,
+        otherwise it corrupts the MCP framing.
+    -->
+    <springProfile name="stdio">
+        <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+            <target>System.err</target>
+            <encoder>
+                <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+        <root level="WARN">
+            <appender-ref ref="STDERR"/>
+        </root>
+    </springProfile>
+</configuration>

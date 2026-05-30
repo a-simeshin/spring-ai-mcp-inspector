@@ -1,0 +1,51 @@
+This directory contains a vendored copy of modelcontextprotocol/inspector
+client (Apache License 2.0).
+Source: https://github.com/modelcontextprotocol/inspector
+Vendored version: 0.21.2
+Date: 2026-05-28
+
+Local patches against upstream v0.21.2
+======================================
+
+1. vite.config.ts — `base: '/mcp-inspector/'` so the SPA is mountable
+   under our Spring Boot starter's path.
+
+2. index.html — bootstrap <script> seeds three upstream storage surfaces
+   from the `window.__MCP_INSPECTOR_BOOTSTRAP` global that the backend's
+   `InspectorIndexController` / `InspectorHandler` injects above it via
+   `BootstrapHtmlRenderer`:
+     - `inspectorConfig_v1` (localStorage) — persistent InspectorConfig
+       entries keyed by `MCP_*` (e.g. `MCP_PROXY_FULL_ADDRESS`), in the
+       `{value, label?, description?, is_session_item?}` shape expected by
+       `initializeInspectorConfig` (`src/utils/configUtils.ts`).
+     - `inspectorConfig_v1_ephemeral` (sessionStorage) — session-scoped
+       entries in the same shape (e.g. `MCP_PROXY_AUTH_TOKEN`).
+     - `lastTransportType` / `lastSseUrl` (localStorage, top-level) — the
+       standalone keys consumed by `getInitialTransportType` and
+       `getInitialSseUrl`.
+   The seed merges into existing values so user-edited Settings survive a
+   reload, and it resolves any path-only `proxyAddress` (e.g.
+   `/mcp-inspector-api`) against the current origin before persisting it
+   — the upstream client passes the address straight to `new URL(...)`
+   in `useConnection.ts#checkProxyHealth`, which would otherwise throw
+   on a relative URL. Covered end-to-end by `BootstrapRegressionE2ETest`
+   in `spring-ai-mcp-inspector-demo` (the previous flat-shape seed crashed
+   `initializeInspectorConfig` with `Cannot read properties of undefined
+   (reading 'label')`).
+
+3. src/components/Sidebar.tsx — import path fix
+   (`../../../package.json` → `../../package.json`) so the build runs
+   from this vendored layout. Also: render the app-title heading from a
+   single template literal (`` {`MCP Inspector v${version}`} ``) instead of
+   two adjacent JSX children (`MCP Inspector v{version}`). React produces
+   one text node per child, so the upstream JSX rendered two sibling text
+   nodes inside the `<h1>` and Selenide's `byText("MCP Inspector
+   v0.21.2")` (xpath `text()[…] = "…"`) could not match — see
+   `BootstrapRegressionE2ETest`.
+
+4. src/App.tsx#readResource — fix stale right-pane after switching
+   between resources and templates. Upstream early-returns on cache
+   hit without syncing the singleton `resourceContent` state that
+   ResourcesTab renders. Local fix: on cache hit, call
+   `setResourceContent(resourceContentMap[uri])` before returning.
+   Upstream: https://github.com/modelcontextprotocol/inspector/issues/1266
