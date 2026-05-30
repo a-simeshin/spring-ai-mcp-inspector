@@ -25,8 +25,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -57,6 +64,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Wall-time budget per parametrized run: ≤ 30s. With 2 stacks the suite stays well under
  * the 60s ceiling from the task brief.
  */
+@Epic("Inspector Proxy")
+@Feature("SSE flow")
 class ProxySseFlowIT {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -80,12 +89,21 @@ class ProxySseFlowIT {
 
 	@ParameterizedTest(name = "{0}")
 	@EnumSource(ProxyAppHarness.Stack.class)
-	void sseProxyEndpointPrologueAndJsonRpcRoundtrip(ProxyAppHarness.Stack stack) throws Exception {
+	@DisplayName("SSE endpoint emits the prologue and round-trips a JSON-RPC exchange")
+	@Story("SSE round-trip")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Opens the SSE proxy stream, captures the endpoint prologue with the session id, "
+			+ "posts initialize + tools/list to the message relay, and waits for a valid JSON-RPC "
+			+ "message frame proving the bidirectional path is live")
+	void sseProxyEndpoint_whenJsonRpcPosted_emitsPrologueAndRoundtripsResponse(ProxyAppHarness.Stack stack)
+			throws Exception {
+		// given
 		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
 		int port = ProxyAppHarness.port(app);
 		String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
 
+		// when
 		// The SSE stream is long-lived; we accumulate frames on a background
 		// thread (Awaitility polls the buffer). Use CopyOnWriteArrayList so the
 		// poller never sees a partial state.
@@ -174,6 +192,7 @@ class ProxySseFlowIT {
 			.pollInterval(Duration.ofMillis(100))
 			.until(() -> frames.stream().anyMatch(f -> "message".equals(f.event)));
 
+		// then
 		List<SseFrame> messages = frames.stream().filter(f -> "message".equals(f.event)).toList();
 		assertThat(messages).as("message frames on %s", stack).isNotEmpty();
 

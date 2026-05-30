@@ -17,6 +17,11 @@ import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
@@ -33,6 +38,8 @@ import static io.inspector.mcp.demo.stress.StressTestSupport.WEBMVC_EXCLUDES;
 @TestPropertySource(
 		properties = { "spring.ai.mcp.server.protocol=STREAMABLE", "spring.ai.mcp.inspector.auth-enabled=false",
 				"spring.autoconfigure.exclude=" + WEBMVC_EXCLUDES, "logging.level.io.modelcontextprotocol=DEBUG" })
+@Epic("Stress & Scale")
+@Feature("Argument binding debug")
 class _DebugArgBindingTestDisabled {
 
 	@Autowired
@@ -42,6 +49,8 @@ class _DebugArgBindingTestDisabled {
 	int port;
 
 	@Test
+	@Story("Manual probe")
+	@Severity(SeverityLevel.TRIVIAL)
 	void probe() {
 		McpSyncClient c = loopbackFactory.forStreamable("127.0.0.1", port, "/mcp");
 		try {

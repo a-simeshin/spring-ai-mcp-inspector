@@ -17,7 +17,14 @@ import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.awaitility.Awaitility;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -54,13 +61,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration,"
 				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebFluxAutoConfiguration,"
 				+ "io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration" })
+@Epic("MCP Resources")
+@Feature("Subscribable resources")
 class SubscribableResourceIT {
 
 	@LocalServerPort
 	private int port;
 
 	@Test
-	void clientReceivesResourceUpdateNotifications() {
+	@DisplayName("client receives at least one resources/updated notification within the polling window")
+	@Story("resources/updated notifications")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("Verifies the server-to-client notifications/resources/updated fanout: a client registering a "
+			+ "resourcesUpdateConsumer receives at least one update notification for demo://clock within 8s.")
+	void resourceUpdateNotifications_whenConsumerRegistered_clientReceivesAtLeastOne() {
+		// given
 		AtomicInteger updateCount = new AtomicInteger();
 
 		HttpClientStreamableHttpTransport transport = HttpClientStreamableHttpTransport
@@ -73,7 +88,10 @@ class SubscribableResourceIT {
 			.initializationTimeout(Duration.ofSeconds(10))
 			.resourcesUpdateConsumer(updates -> updateCount.incrementAndGet())
 			.build()) {
+			// when
 			client.initialize();
+
+			// then
 			// Server emits notifications/resources/updated for demo://clock every
 			// demo.clock-tick-millis (1.5s here); we should see at least one within 8s.
 			Awaitility.await()

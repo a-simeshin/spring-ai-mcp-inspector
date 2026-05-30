@@ -25,7 +25,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -53,6 +60,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * original task brief named {@code sum(2,3)}; we exercise the same proxy machinery
  * (request/response correlation, session isolation) through {@code tools/list} instead.
  */
+@Epic("Inspector Proxy")
+@Feature("Session isolation")
 class ProxyMultiSessionIT {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -91,16 +100,26 @@ class ProxyMultiSessionIT {
 
 	@ParameterizedTest(name = "{0}")
 	@EnumSource(ProxyAppHarness.Stack.class)
-	void twoSessionsRouteResponsesIndependently(ProxyAppHarness.Stack stack) throws Exception {
+	@DisplayName("Two concurrent sessions route their responses independently")
+	@Story("Concurrent sessions")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Opens two streamable sessions against the same target, fires parallel tools/list "
+			+ "requests with distinct ids, and verifies each response is routed back to its own session "
+			+ "and both tear down cleanly")
+	void twoSessions_whenRequestsRunInParallel_routeResponsesIndependently(ProxyAppHarness.Stack stack)
+			throws Exception {
+		// given
 		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
 		final int port = ProxyAppHarness.port(app);
 		final String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		final String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
 
+		// when
 		// 1. Open both sessions in parallel via initialize POST → grab mcp-session-id.
 		final String sessionA = openSession(proxyBase, targetUrl, 1);
 		final String sessionB = openSession(proxyBase, targetUrl, 1);
 
+		// then
 		assertThat(sessionA).as("session A id on %s", stack).isNotBlank();
 		assertThat(sessionB).as("session B id on %s", stack).isNotBlank();
 		assertThat(sessionA).as("two sessions on %s MUST have distinct ids", stack).isNotEqualTo(sessionB);

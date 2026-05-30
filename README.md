@@ -1,16 +1,32 @@
-# spring-ai-mcp-inspector
+<p align="center">
+  <img src="docs/img/logo.png" alt="Spring AI MCP Inspector" width="220">
+</p>
+
+<h1 align="center">Spring AI MCP Inspector</h1>
+
+<p align="center">
+  Embeddable MCP Inspector UI for Spring AI MCP servers — one dependency, zero config.
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="Apache 2.0 License" src="https://img.shields.io/badge/License-Apache%202.0-blue.svg"></a>
+  <a href="https://adoptium.net"><img alt="Java 17+" src="https://img.shields.io/badge/Java-17%2B-orange.svg"></a>
+  <a href="https://spring.io/projects/spring-boot"><img alt="Spring Boot 3.5" src="https://img.shields.io/badge/Spring%20Boot-3.5-6DB33F.svg"></a>
+  <a href="https://modelcontextprotocol.io"><img alt="MCP transports" src="https://img.shields.io/badge/MCP-stdio%20%7C%20sse%20%7C%20streamable%20%7C%20stateless-8A2BE2.svg"></a>
+  <a href="CONTRIBUTING.md#code-coverage--mandatory--80"><img alt="Coverage ≥80%" src="https://img.shields.io/badge/coverage-%E2%89%A580%25-success.svg"></a>
+</p>
 
 Embeddable inspector UI for Spring AI MCP servers. Drop in a single Maven dependency and your application exposes a browser-based MCP inspector at `/mcp-inspector`, wired loopback to the MCP server running in the same Spring Boot process.
 
-Supports all MCP transports (`stdio`, `sse`, `streamable-http`, `stateless-http`) and both servlet (WebMVC) and reactive (WebFlux) stacks. The design follows the same pattern as `springdoc-openapi-starter-webmvc-ui` — zero-config when defaults work, fully overridable when they don't.
+Supports all MCP transports (`stdio`, `sse`, `streamable-http`, `stateless-http`) and both servlet (WebMVC) and reactive (WebFlux) stacks. The design follows the same pattern as `springdoc-openapi-starter-webmvc-ui`, zero-config when defaults work, fully overridable when they don't.
 
 ## Why
 
 Spring AI's MCP server starters give you a running MCP endpoint, but no UI to talk to it. The reference [MCP Inspector](https://github.com/modelcontextprotocol/inspector) is a standalone Node app that you point at a remote server. This library embeds that same React UI directly into your Spring Boot app, so:
 
-- one process, one port — no separate proxy to deploy
+- one process, one port, no separate proxy to deploy
 - the inspector connects loopback, so it works in air-gapped/dev environments
-- the bootstrap payload (proxy URL, auth token, default server, headers) is pre-filled from your Spring configuration — no copy-paste of secrets into the UI
+- the bootstrap payload (proxy URL, auth token, default server, headers) is pre-filled from your Spring configuration, no copy-paste of secrets into the UI
 
 ## Requirements
 
@@ -42,7 +58,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 </dependency>
 ```
 
-Start your application and open `http://localhost:8080/mcp-inspector/`. The inspector is pre-connected to your local MCP server — click **Connect** and you'll see tools/resources/prompts immediately.
+Start your application and open `http://localhost:8080/mcp-inspector/`. The inspector is pre-connected to your local MCP server, click **Connect** and you'll see tools/resources/prompts immediately.
 
 ## Configuration
 
@@ -123,7 +139,7 @@ class InspectorCustomizers {
 
 ### Ordering multiple customizers
 
-Customizers are invoked in standard Spring `@Order` sequence — lower values run
+Customizers are invoked in standard Spring `@Order` sequence, lower values run
 first, higher values run last, and on a conflict the **last** customizer to set
 a field **wins**. Customizers without an explicit `@Order` are treated as having
 `Ordered.LOWEST_PRECEDENCE`.
@@ -143,17 +159,17 @@ a field **wins**. Customizers without an explicit `@Order` are treated as having
 `InspectorBootstrap` exposes mutable getters/setters for the full SPA boot
 state:
 
-- `authToken` — proxy auth token (populated by the framework; rarely overridden)
-- `proxyAddress` — base URL the SPA uses for proxied MCP calls (populated by
+- `authToken`, proxy auth token (populated by the framework; rarely overridden)
+- `proxyAddress`, base URL the SPA uses for proxied MCP calls (populated by
   the framework from the configured inspector path)
-- `detectedTransport` — transport auto-detected from the running MCP server
-- `detectedUrl` — URL of the loopback MCP server
-- `defaultUrl` — initial value for the inspector form's MCP-server URL field
-- `defaultTransport` — initial transport selection
-- `defaultHeaders` — `List<CustomHeader>` of headers the UI ships with every
+- `detectedTransport`, transport auto-detected from the running MCP server
+- `detectedUrl`, URL of the loopback MCP server
+- `defaultUrl`, initial value for the inspector form's MCP-server URL field
+- `defaultTransport`, initial transport selection
+- `defaultHeaders`, `List<CustomHeader>` of headers the UI ships with every
   outgoing request by default
-- `serverEntries` — `List<ServerEntry>` shown in the server picker
-- `extra` — escape-hatch `Map<String, Object>` for fields not modeled as
+- `serverEntries`, `List<ServerEntry>` shown in the server picker
+- `extra`, escape-hatch `Map<String, Object>` for fields not modeled as
   first-class properties; serialized verbatim into the JSON payload
 
 See the javadoc on
@@ -189,6 +205,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). All participants are expected to follow 
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+Apache License 2.0 see [LICENSE](LICENSE).
 
-This project bundles a fork of the official [MCP Inspector](https://github.com/modelcontextprotocol/inspector) React client under `spring-ai-mcp-inspector-ui/upstream-client/` with a small number of local patches documented in that directory's `NOTICE.txt`.
+This project bundles a fork of the official [MCP Inspector](https://github.com/modelcontextprotocol/inspector) React client under `spring-ai-mcp-inspector-ui/upstream-client/` with a small number of patches.

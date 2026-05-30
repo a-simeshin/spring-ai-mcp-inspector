@@ -9,6 +9,12 @@
  */
 package io.inspector.mcp.webflux.it;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -30,6 +36,8 @@ import org.springframework.test.web.reactive.server.WebTestClient;
  * <li>{@code customPath_internalApiRespondsOnNewPrefix}</li>
  * </ul>
  */
+@Epic("MCP Inspector WebFlux")
+@Feature("Configurable inspector path (integration)")
 @SpringBootTest(classes = TestMcpServerApp.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
 		properties = { "spring.main.web-application-type=reactive", "spring.ai.mcp.inspector.path=/custom",
 				"spring.ai.mcp.server.protocol=SSE", "spring.ai.mcp.server.name=mcp-inspector-itest-flux-cfg",
@@ -41,7 +49,11 @@ class WebFluxConfigurableInspectorIT {
 	private WebTestClient webTestClient;
 
 	@Test
+	@Story("Custom path remount")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("index.html is served under the custom /custom prefix as text/html")
 	void customPath_indexHtmlRespondsOnNewPrefix() {
+		// given the inspector path configured to /custom; when & then
 		webTestClient.get()
 			.uri("/custom/index.html")
 			.exchange()
@@ -52,7 +64,11 @@ class WebFluxConfigurableInspectorIT {
 	}
 
 	@Test
+	@Story("Custom path remount")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("The /config JSON endpoint responds under the custom /custom prefix")
 	void customPath_configEndpointRespondsOnNewPrefix() {
+		// given the inspector path configured to /custom; when & then
 		webTestClient.get()
 			.uri("/custom/config")
 			.exchange()
@@ -70,17 +86,29 @@ class WebFluxConfigurableInspectorIT {
 	}
 
 	@Test
+	@Story("Custom path remount")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("The default /mcp-inspector prefix is unmapped once a custom path is configured (404)")
 	void customPath_defaultPrefixReturns404() {
+		// given the inspector path configured to /custom; when & then
 		webTestClient.get().uri("/mcp-inspector/index.html").exchange().expectStatus().isNotFound();
 	}
 
 	@Test
+	@Story("Custom path remount")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("The proxy API is mounted on the derived /custom-api prefix and /health responds")
 	void customPath_proxyApiRespondsOnDerivedPrefix() {
+		// given the inspector path configured to /custom; when & then
 		webTestClient.get().uri("/custom-api/health").exchange().expectStatus().isOk();
 	}
 
 	@Test
+	@Story("Custom path remount")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("The internal /api routes are reachable under the new prefix and unmapped under the default one")
 	void customPath_internalApiRespondsOnNewPrefix() {
+		// given the inspector path configured to /custom; when & then
 		// /api/roots requires a sessionId query parameter — without one it
 		// returns 400/404 from the handler. The signal is that the route
 		// MATCHES under the new prefix (vs. completely unmapped).

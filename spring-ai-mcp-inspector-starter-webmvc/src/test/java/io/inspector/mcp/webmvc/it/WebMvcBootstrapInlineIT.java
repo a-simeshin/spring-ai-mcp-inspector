@@ -16,7 +16,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapCustomizer;
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -43,6 +50,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <li>{@code indexHtml_escapesClosingScriptTag}</li>
  * </ul>
  */
+@Epic("WebMvc Inspector")
+@Feature("Inline bootstrap script")
 @SpringBootTest(classes = { TestMcpServerApp.class, WebMvcBootstrapInlineIT.TestCustomizers.class },
 		webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
 		properties = { "spring.ai.mcp.server.protocol=SSE", "spring.ai.mcp.server.name=mcp-inspector-itest-inline",
@@ -69,15 +78,27 @@ class WebMvcBootstrapInlineIT {
 	private int port;
 
 	@Test
+	@DisplayName("index.html contains the bootstrap window global")
+	@Story("Inline bootstrap")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("index.html injects the window.__MCP_INSPECTOR_BOOTSTRAP global so the SPA boots without a round-trip")
 	void indexHtml_containsBootstrapWindowGlobal() {
+		// when
 		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/index.html"), String.class);
+
+		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getBody()).as("index.html must contain the inline bootstrap window global")
 			.contains("window.__MCP_INSPECTOR_BOOTSTRAP =");
 	}
 
 	@Test
+	@DisplayName("inline bootstrap JSON matches the /config endpoint")
+	@Story("Inline bootstrap")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("The inline bootstrap JSON deep-equals the /config response so both stay in lock-step")
 	void indexHtml_bootstrapJsonMatchesConfigEndpoint() throws Exception {
+		// when
 		ResponseEntity<String> indexResponse = restTemplate.getForEntity(url("/mcp-inspector/index.html"),
 				String.class);
 		ResponseEntity<String> configResponse = restTemplate.getForEntity(url("/mcp-inspector/config"), String.class);
@@ -96,8 +117,15 @@ class WebMvcBootstrapInlineIT {
 	}
 
 	@Test
+	@DisplayName("inline bootstrap escapes a closing script tag")
+	@Story("Inline bootstrap")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("A </script> payload in bootstrap.extra is escaped to <\\/script> so the script element cannot be closed early")
 	void indexHtml_escapesClosingScriptTag() {
+		// when
 		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/index.html"), String.class);
+
+		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		String body = response.getBody();
 		assertThat(body).isNotNull();

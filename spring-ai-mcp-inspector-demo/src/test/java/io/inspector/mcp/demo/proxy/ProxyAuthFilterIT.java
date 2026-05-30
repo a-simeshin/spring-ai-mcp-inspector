@@ -15,7 +15,15 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -38,6 +46,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code /health} is intentionally not tested here — it lives in
  * {@link ProxyHealthEndpointIT}, which also verifies the allow-list.
  */
+@Epic("Inspector Proxy")
+@Feature("Auth filter")
 class ProxyAuthFilterIT {
 
 	private static final String AUTH_TOKEN = "deadbeef-cafef00d-deadbeef-cafef00d";
@@ -59,66 +69,123 @@ class ProxyAuthFilterIT {
 		}
 	}
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
-	void protectedEndpointRejectsMissingToken(ProxyAppHarness.Stack stack) throws Exception {
-		app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
-		int port = ProxyAppHarness.port(app);
+	@Nested
+	@DisplayName("Rejects invalid credentials")
+	class RejectsInvalidToken {
 
-		HttpResponse<String> response = get(port, "/config", null);
-		assertThat(response.statusCode()).as("missing X-MCP-Proxy-Auth on %s", stack).isEqualTo(401);
+		@ParameterizedTest(name = "{0}")
+		@EnumSource(ProxyAppHarness.Stack.class)
+		@DisplayName("missing token → 401")
+		@Story("Missing token")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A request to the protected /config endpoint without the X-MCP-Proxy-Auth header is "
+				+ "rejected with 401 on both stacks")
+		void protectedEndpoint_withMissingToken_returns401(ProxyAppHarness.Stack stack) throws Exception {
+			// given
+			app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
+			int port = ProxyAppHarness.port(app);
+
+			// when
+			HttpResponse<String> response = get(port, "/config", null);
+
+			// then
+			assertThat(response.statusCode()).as("missing X-MCP-Proxy-Auth on %s", stack).isEqualTo(401);
+		}
+
+		@ParameterizedTest(name = "{0}")
+		@EnumSource(ProxyAppHarness.Stack.class)
+		@DisplayName("wrong token → 401")
+		@Story("Wrong token")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A request carrying an incorrect bearer token is rejected with 401 on both stacks")
+		void protectedEndpoint_withWrongToken_returns401(ProxyAppHarness.Stack stack) throws Exception {
+			// given
+			app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
+			int port = ProxyAppHarness.port(app);
+
+			// when
+			HttpResponse<String> response = get(port, "/config", "Bearer wrong-token");
+
+			// then
+			assertThat(response.statusCode()).as("wrong token on %s", stack).isEqualTo(401);
+		}
+
 	}
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
-	void protectedEndpointRejectsWrongToken(ProxyAppHarness.Stack stack) throws Exception {
-		app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
-		int port = ProxyAppHarness.port(app);
+	@Nested
+	@DisplayName("Accepts valid credentials")
+	class AcceptsValidToken {
 
-		HttpResponse<String> response = get(port, "/config", "Bearer wrong-token");
-		assertThat(response.statusCode()).as("wrong token on %s", stack).isEqualTo(401);
-	}
+		@ParameterizedTest(name = "{0}")
+		@EnumSource(ProxyAppHarness.Stack.class)
+		@DisplayName("correct bearer token → 200")
+		@Story("Bearer token")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A request carrying the correct token via X-MCP-Proxy-Auth: Bearer <token> is accepted "
+				+ "with 200 on both stacks")
+		void protectedEndpoint_withCorrectBearerToken_returns200(ProxyAppHarness.Stack stack) throws Exception {
+			// given
+			app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
+			int port = ProxyAppHarness.port(app);
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
-	void protectedEndpointAcceptsCorrectBearerToken(ProxyAppHarness.Stack stack) throws Exception {
-		app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
-		int port = ProxyAppHarness.port(app);
+			// when
+			HttpResponse<String> response = get(port, "/config", "Bearer " + AUTH_TOKEN);
 
-		HttpResponse<String> response = get(port, "/config", "Bearer " + AUTH_TOKEN);
-		assertThat(response.statusCode()).as("correct bearer token on %s, body=%s", stack, response.body())
-			.isEqualTo(200);
-	}
+			// then
+			assertThat(response.statusCode()).as("correct bearer token on %s, body=%s", stack, response.body())
+				.isEqualTo(200);
+		}
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
-	void protectedEndpointAcceptsRawToken(ProxyAppHarness.Stack stack) throws Exception {
-		// The filter accepts both "Bearer <token>" and a raw token (matches
-		// upstream's tolerance). Exercise the raw form so future refactors
-		// can't silently drop it.
-		app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
-		int port = ProxyAppHarness.port(app);
+		@ParameterizedTest(name = "{0}")
+		@EnumSource(ProxyAppHarness.Stack.class)
+		@DisplayName("raw token (no Bearer prefix) → 200")
+		@Story("Raw token")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("The filter tolerates a raw token without the Bearer prefix (matches upstream); exercise "
+				+ "it so future refactors cannot silently drop the fallback")
+		void protectedEndpoint_withRawToken_returns200(ProxyAppHarness.Stack stack) throws Exception {
+			// given
+			// The filter accepts both "Bearer <token>" and a raw token (matches
+			// upstream's tolerance). Exercise the raw form so future refactors
+			// can't silently drop it.
+			app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
+			int port = ProxyAppHarness.port(app);
 
-		HttpResponse<String> response = get(port, "/config", AUTH_TOKEN);
-		assertThat(response.statusCode()).as("raw token on %s", stack).isEqualTo(200);
-	}
+			// when
+			HttpResponse<String> response = get(port, "/config", AUTH_TOKEN);
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
-	void queryParamFallbackAcceptedForEventSourceClients(ProxyAppHarness.Stack stack) throws Exception {
-		// EventSource cannot set custom headers. Upstream UI falls back to the
-		// ?MCP_PROXY_AUTH_TOKEN query parameter — verify both stacks honor it.
-		app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
-		int port = ProxyAppHarness.port(app);
+			// then
+			assertThat(response.statusCode()).as("raw token on %s", stack).isEqualTo(200);
+		}
 
-		HttpRequest request = HttpRequest
-			.newBuilder(URI
-				.create("http://127.0.0.1:" + port + "/mcp-inspector-api/config?MCP_PROXY_AUTH_TOKEN=" + AUTH_TOKEN))
-			.timeout(Duration.ofSeconds(10))
-			.GET()
-			.build();
-		HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
-		assertThat(response.statusCode()).as("query-param token on %s, body=%s", stack, response.body()).isEqualTo(200);
+		@ParameterizedTest(name = "{0}")
+		@EnumSource(ProxyAppHarness.Stack.class)
+		@DisplayName("query-param fallback → 200")
+		@Story("Query-param fallback")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("EventSource clients cannot set headers, so the filter accepts the token via the "
+				+ "?MCP_PROXY_AUTH_TOKEN query parameter; verify both stacks honor it")
+		void queryParamFallback_forEventSourceClients_returns200(ProxyAppHarness.Stack stack) throws Exception {
+			// given
+			// EventSource cannot set custom headers. Upstream UI falls back to the
+			// ?MCP_PROXY_AUTH_TOKEN query parameter — verify both stacks honor it.
+			app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
+			int port = ProxyAppHarness.port(app);
+
+			// when
+			HttpRequest request = HttpRequest
+				.newBuilder(URI.create(
+						"http://127.0.0.1:" + port + "/mcp-inspector-api/config?MCP_PROXY_AUTH_TOKEN=" + AUTH_TOKEN))
+				.timeout(Duration.ofSeconds(10))
+				.GET()
+				.build();
+			HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+
+			// then
+			assertThat(response.statusCode()).as("query-param token on %s, body=%s", stack, response.body())
+				.isEqualTo(200);
+		}
+
 	}
 
 	private static HttpResponse<String> get(int port, String path, String authHeader) throws Exception {

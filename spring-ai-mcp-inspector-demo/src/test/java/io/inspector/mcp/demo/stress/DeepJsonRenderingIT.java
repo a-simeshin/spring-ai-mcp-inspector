@@ -20,9 +20,16 @@ import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -46,6 +53,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(classes = DemoApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = { "spring.ai.mcp.server.protocol=STREAMABLE",
 		"spring.ai.mcp.inspector.auth-enabled=false", "spring.autoconfigure.exclude=" + WEBMVC_EXCLUDES })
+@Epic("Stress & Scale")
+@Feature("Deep JSON rendering")
 class DeepJsonRenderingIT {
 
 	private static final int EXPECTED_DEPTH = 50;
@@ -72,7 +81,12 @@ class DeepJsonRenderingIT {
 	}
 
 	@Test
-	void deepJsonReturnsParseableNestedObject() throws Exception {
+	@Story("Nested object round-trip")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("Verifies deepJson output round-trips over the proxy as a well-formed, parseable JSON tree")
+	@DisplayName("deepJson returns a parseable nested object")
+	void deepJson_overProxy_returnsParseableNestedObject() throws Exception {
+		// given
 		// BACKEND BUG (see run report): the `int depth` parameter of `deepJson`
 		// cannot be bound (demo compiled without -parameters → mcp-annotations
 		// 0.9 falls back to `arg0`/`arg1` argument names that never match
@@ -85,8 +99,11 @@ class DeepJsonRenderingIT {
 		// Empty arguments — see comment above. With the binding bug, server-side
 		// int param will produce an NPE; we tolerate isError=true and only
 		// assert wire well-formedness.
+
+		// when
 		CallToolResult result = client.callTool(StressTestSupport.buildRequest("deepJson", args));
 
+		// then
 		if (Boolean.TRUE.equals(result.isError())) {
 			// Document, do not fail: this is the -parameters bug surface.
 			// The TextContent body still arrives intact — which is what the

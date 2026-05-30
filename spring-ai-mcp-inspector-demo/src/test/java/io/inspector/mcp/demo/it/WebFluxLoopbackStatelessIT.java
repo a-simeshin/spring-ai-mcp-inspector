@@ -16,6 +16,13 @@ import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.ListToolsResult;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -39,6 +46,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebMvcAutoConfiguration,"
 				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebMvcAutoConfiguration,"
 				+ "io.inspector.mcp.webmvc.McpInspectorWebMvcAutoConfiguration" })
+@Epic("MCP Transports")
+@Feature("Loopback Stateless (WebFlux)")
 class WebFluxLoopbackStatelessIT {
 
 	@Autowired
@@ -48,12 +57,21 @@ class WebFluxLoopbackStatelessIT {
 	private int port;
 
 	@Test
-	void toolsListReactiveViaLoopbackStateless() {
+	@DisplayName("listTools via the reactive loopback stateless client returns the demo tools")
+	@Story("Reactive loopback stateless tools/list")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Boots the demo server on the reactive (WebFlux + Netty) stack with the stateless protocol "
+			+ "and verifies a real loopback inspector client can list the expected demo tools (echo, sum, currentTime).")
+	void listTools_viaReactiveLoopbackStateless_returnsDemoTools() {
+		// given
 		McpSyncClient client = loopbackFactory.forStateless("127.0.0.1", port, "/mcp");
 		try {
+			// when
 			client.initialize();
 			ListToolsResult result = client.listTools();
 			List<String> names = result.tools().stream().map(t -> t.name()).toList();
+
+			// then
 			assertThat(names).contains("echo", "sum", "currentTime");
 		}
 		finally {

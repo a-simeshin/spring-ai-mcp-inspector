@@ -18,7 +18,14 @@ import java.time.Duration;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -40,6 +47,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * Reported as a brief-vs-impl mismatch in the run report.
  */
+@Epic("Inspector Proxy")
+@Feature("Config endpoint")
 class ProxyConfigEndpointIT {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -63,18 +72,27 @@ class ProxyConfigEndpointIT {
 
 	@ParameterizedTest(name = "{0}")
 	@EnumSource(ProxyAppHarness.Stack.class)
-	void configReturnsUpstreamCompatibleShape(ProxyAppHarness.Stack stack) throws Exception {
+	@DisplayName("GET /config returns the upstream-compatible defaults envelope")
+	@Story("Config defaults")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("Verifies GET /mcp-inspector-api/config returns the upstream-compatible shape "
+			+ "(defaultEnvironment/defaultCommand/defaultArgs/defaultTransport/defaultServerUrl) on both stacks")
+	void config_whenRequested_returnsUpstreamCompatibleShape(ProxyAppHarness.Stack stack) throws Exception {
+		// given
 		// Auth off so we don't need to thread a token through every assertion —
 		// the auth filter is exhaustively covered by ProxyAuthFilterIT.
 		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
 		int port = ProxyAppHarness.port(app);
 
+		// when
 		HttpRequest request = HttpRequest
 			.newBuilder(URI.create("http://127.0.0.1:" + port + "/mcp-inspector-api/config"))
 			.timeout(Duration.ofSeconds(10))
 			.GET()
 			.build();
 		HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+
+		// then
 		assertThat(response.statusCode()).isEqualTo(200);
 
 		JsonNode body = MAPPER.readTree(response.body());

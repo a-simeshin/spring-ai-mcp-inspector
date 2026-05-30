@@ -10,54 +10,92 @@
 package io.inspector.mcp.core.auth;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Unit tests for {@link InspectorAuthTokenProvider}. */
+@Epic("MCP Inspector Core")
+@Feature("Auth token provider")
 class InspectorAuthTokenProviderTest {
 
-	@Test
-	void tokenIsThirtyTwoHexChars() {
-		McpInspectorProperties props = new McpInspectorProperties();
-		InspectorAuthTokenProvider provider = new InspectorAuthTokenProvider(props);
+	@Nested
+	@DisplayName("token()")
+	class Token {
 
-		String token = provider.token();
+		@Test
+		@Story("Random token generation")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("token() generates a 64-char lowercase hex token from 32 random bytes when none is configured")
+		void token_whenNoneConfigured_generatesThirtyTwoByteHex() {
+			// given
+			McpInspectorProperties props = new McpInspectorProperties();
+			InspectorAuthTokenProvider provider = new InspectorAuthTokenProvider(props);
 
-		// 32 random bytes → 64 lowercase hex chars
-		assertThat(token).isNotNull().hasSize(64);
-		assertThat(token).matches("^[0-9a-f]{64}$");
-	}
+			// when
+			String token = provider.token();
 
-	@Test
-	void usesConfiguredTokenWhenSet() {
-		McpInspectorProperties props = new McpInspectorProperties();
-		props.setAuthToken("my-custom-token");
-		InspectorAuthTokenProvider provider = new InspectorAuthTokenProvider(props);
+			// then — 32 random bytes → 64 lowercase hex chars
+			assertThat(token).isNotNull().hasSize(64);
+			assertThat(token).matches("^[0-9a-f]{64}$");
+		}
 
-		assertThat(provider.token()).isEqualTo("my-custom-token");
-	}
+		@Test
+		@Story("Configured token")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("token() returns the explicitly configured token verbatim")
+		void token_whenConfigured_returnsConfiguredValue() {
+			// given
+			McpInspectorProperties props = new McpInspectorProperties();
+			props.setAuthToken("my-custom-token");
+			InspectorAuthTokenProvider provider = new InspectorAuthTokenProvider(props);
 
-	@Test
-	void cachesGeneratedToken() {
-		McpInspectorProperties props = new McpInspectorProperties();
-		InspectorAuthTokenProvider provider = new InspectorAuthTokenProvider(props);
+			// when & then
+			assertThat(provider.token()).isEqualTo("my-custom-token");
+		}
 
-		String first = provider.token();
-		String second = provider.token();
+		@Test
+		@Story("Caching")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("token() caches the generated value so repeated calls return the same instance")
+		void token_whenCalledTwice_returnsCachedInstance() {
+			// given
+			McpInspectorProperties props = new McpInspectorProperties();
+			InspectorAuthTokenProvider provider = new InspectorAuthTokenProvider(props);
 
-		assertThat(second).isSameAs(first);
-	}
+			// when
+			String first = provider.token();
+			String second = provider.token();
 
-	@Test
-	void blankConfiguredTokenFallsBackToRandom() {
-		McpInspectorProperties props = new McpInspectorProperties();
-		props.setAuthToken("   ");
-		InspectorAuthTokenProvider provider = new InspectorAuthTokenProvider(props);
+			// then
+			assertThat(second).isSameAs(first);
+		}
 
-		String token = provider.token();
+		@Test
+		@Story("Blank token fallback")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("token() falls back to a generated token when the configured value is blank")
+		void token_whenConfiguredBlank_fallsBackToRandom() {
+			// given
+			McpInspectorProperties props = new McpInspectorProperties();
+			props.setAuthToken("   ");
+			InspectorAuthTokenProvider provider = new InspectorAuthTokenProvider(props);
 
-		assertThat(token).hasSize(64);
+			// when
+			String token = provider.token();
+
+			// then
+			assertThat(token).hasSize(64);
+		}
+
 	}
 
 }

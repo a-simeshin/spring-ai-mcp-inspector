@@ -23,10 +23,17 @@ import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.LoggingLevel;
 import io.modelcontextprotocol.spec.McpSchema.LoggingMessageNotification;
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -54,6 +61,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(classes = DemoApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = { "spring.ai.mcp.server.protocol=STREAMABLE",
 		"spring.ai.mcp.inspector.auth-enabled=false", "spring.autoconfigure.exclude=" + WEBMVC_EXCLUDES })
+@Epic("Stress & Scale")
+@Feature("Logging notifications")
 class LoggingNotificationsIT {
 
 	@LocalServerPort
@@ -82,14 +91,23 @@ class LoggingNotificationsIT {
 	}
 
 	@Test
-	void largeOutputEmitsAtLeastOneLoggingNotification() {
+	@Story("Notification forwarding")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Verifies invoking largeOutput emits at least one notifications/message frame from the demo.largeOutput logger")
+	@DisplayName("largeOutput emits at least one logging notification")
+	void largeOutput_whenInvoked_emitsLoggingNotification() {
+		// given
 		// Empty args — see BACKEND BUG in run report: the -parameters compile flag is
 		// missing on the demo, so any JSON arg fails to bind. The largeOutput tool
 		// tolerates a null `sizeKb` (defaults to 1024 KiB) and still emits the
 		// `notifications/message` we are testing for. The 1 MiB default payload is
 		// larger than necessary but does not affect this test's correctness.
 		Map<String, Object> args = new LinkedHashMap<>();
+
+		// when
 		CallToolResult result = client.callTool(StressTestSupport.buildRequest("largeOutput", args));
+
+		// then
 		assertThat(Boolean.TRUE.equals(result.isError())).isFalse();
 
 		Awaitility.await()

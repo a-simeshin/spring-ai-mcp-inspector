@@ -9,6 +9,14 @@
  */
 package io.inspector.mcp.core.config;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.mock.env.MockEnvironment;
@@ -17,106 +25,152 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit tests for {@link McpInspectorProperties}. */
+@Epic("MCP Inspector Core")
+@Feature("Inspector configuration properties")
 class McpInspectorPropertiesTest {
 
-	@Test
-	void defaultEnabledTrue() {
-		McpInspectorProperties props = new McpInspectorProperties();
+	@Nested
+	@DisplayName("defaults")
+	class Defaults {
 
-		assertThat(props.isEnabled()).isTrue();
+		@Test
+		@Story("Default values")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a freshly constructed properties bean exposes the documented framework defaults")
+		void defaults_freshInstance_exposeFrameworkDefaults() {
+			// given
+			McpInspectorProperties props = new McpInspectorProperties();
+
+			// when & then
+			assertThat(props.isEnabled()).isTrue();
+			assertThat(props.getPath()).isEqualTo("/mcp-inspector");
+			assertThat(props.isAuthEnabled()).isTrue();
+			assertThat(props.getAuthToken()).isNull();
+			assertThat(props.getAllowedOrigins()).isEmpty();
+		}
+
 	}
 
-	@Test
-	void defaultPathIsMcpInspector() {
-		McpInspectorProperties props = new McpInspectorProperties();
+	@Nested
+	@DisplayName("binding")
+	class Binding {
 
-		assertThat(props.getPath()).isEqualTo("/mcp-inspector");
+		@Test
+		@Story("Relaxed binding")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Spring relaxed binding maps the spring.ai.mcp.inspector.* keys onto the properties bean")
+		void bind_fromEnvironment_populatesAllProperties() {
+			// given
+			MockEnvironment env = new MockEnvironment();
+			env.setProperty("spring.ai.mcp.inspector.enabled", "false");
+			env.setProperty("spring.ai.mcp.inspector.path", "/inspect");
+			env.setProperty("spring.ai.mcp.inspector.auth-token", "my-token");
+			env.setProperty("spring.ai.mcp.inspector.allowed-origins[0]", "https://a.example");
+			env.setProperty("spring.ai.mcp.inspector.allowed-origins[1]", "https://b.example");
+
+			// when
+			McpInspectorProperties bound = Binder.get(env)
+				.bind("spring.ai.mcp.inspector", McpInspectorProperties.class)
+				.get();
+
+			// then
+			assertThat(bound.isEnabled()).isFalse();
+			assertThat(bound.getPath()).isEqualTo("/inspect");
+			assertThat(bound.getAuthToken()).isEqualTo("my-token");
+			assertThat(bound.getAllowedOrigins()).containsExactly("https://a.example", "https://b.example");
+		}
+
+		@Test
+		@Story("Null safety")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("setAllowedOrigins(null) normalizes to an empty list")
+		void setAllowedOrigins_withNull_defaultsToEmptyList() {
+			// given
+			McpInspectorProperties props = new McpInspectorProperties();
+
+			// when
+			props.setAllowedOrigins(null);
+
+			// then
+			assertThat(props.getAllowedOrigins()).isNotNull().isEmpty();
+		}
+
 	}
 
-	@Test
-	void defaultAuthEnabledTrue() {
-		McpInspectorProperties props = new McpInspectorProperties();
+	@Nested
+	@DisplayName("setPath()")
+	class SetPath {
 
-		assertThat(props.isAuthEnabled()).isTrue();
+		@Test
+		@Story("Valid path")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("setPath() accepts a path with a leading slash and no trailing slash")
+		void setPath_withLeadingSlashNoTrailing_isAccepted() {
+			// given
+			McpInspectorProperties props = new McpInspectorProperties();
+
+			// when
+			props.setPath("/foo");
+
+			// then
+			assertThat(props.getPath()).isEqualTo("/foo");
+		}
+
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("setPath() rejects an empty path")
+		void setPath_withEmpty_throwsIllegalArgument() {
+			// given
+			McpInspectorProperties props = new McpInspectorProperties();
+
+			// when & then
+			assertThatThrownBy(() -> props.setPath("")).isInstanceOf(IllegalArgumentException.class);
+		}
+
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("setPath() rejects a trailing slash")
+		void setPath_withTrailingSlash_throwsIllegalArgument() {
+			// given
+			McpInspectorProperties props = new McpInspectorProperties();
+
+			// when & then
+			assertThatThrownBy(() -> props.setPath("/foo/")).isInstanceOf(IllegalArgumentException.class);
+		}
+
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("setPath() rejects a path missing the leading slash")
+		void setPath_withMissingLeadingSlash_throwsIllegalArgument() {
+			// given
+			McpInspectorProperties props = new McpInspectorProperties();
+
+			// when & then
+			assertThatThrownBy(() -> props.setPath("foo")).isInstanceOf(IllegalArgumentException.class);
+		}
+
 	}
 
-	@Test
-	void defaultAuthTokenIsNull() {
-		McpInspectorProperties props = new McpInspectorProperties();
+	@Nested
+	@DisplayName("getProxyPath()")
+	class GetProxyPath {
 
-		assertThat(props.getAuthToken()).isNull();
-	}
+		@Test
+		@Story("Derived path")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("getProxyPath() derives the proxy path by appending -api to the configured path")
+		void proxyPath_isDerivedFromPath() {
+			// given
+			McpInspectorProperties props = new McpInspectorProperties();
+			props.setPath("/foo");
 
-	@Test
-	void defaultAllowedOriginsIsEmpty() {
-		McpInspectorProperties props = new McpInspectorProperties();
+			// when & then
+			assertThat(props.getProxyPath()).isEqualTo("/foo-api");
+		}
 
-		assertThat(props.getAllowedOrigins()).isEmpty();
-	}
-
-	@Test
-	void bindsAllowedOrigins() {
-		MockEnvironment env = new MockEnvironment();
-		env.setProperty("spring.ai.mcp.inspector.enabled", "false");
-		env.setProperty("spring.ai.mcp.inspector.path", "/inspect");
-		env.setProperty("spring.ai.mcp.inspector.auth-token", "my-token");
-		env.setProperty("spring.ai.mcp.inspector.allowed-origins[0]", "https://a.example");
-		env.setProperty("spring.ai.mcp.inspector.allowed-origins[1]", "https://b.example");
-
-		McpInspectorProperties bound = Binder.get(env)
-			.bind("spring.ai.mcp.inspector", McpInspectorProperties.class)
-			.get();
-
-		assertThat(bound.isEnabled()).isFalse();
-		assertThat(bound.getPath()).isEqualTo("/inspect");
-		assertThat(bound.getAuthToken()).isEqualTo("my-token");
-		assertThat(bound.getAllowedOrigins()).containsExactly("https://a.example", "https://b.example");
-	}
-
-	@Test
-	void setAllowedOriginsNullDefaultsToEmptyList() {
-		McpInspectorProperties props = new McpInspectorProperties();
-		props.setAllowedOrigins(null);
-
-		assertThat(props.getAllowedOrigins()).isNotNull().isEmpty();
-	}
-
-	@Test
-	void setPath_acceptsLeadingSlashWithoutTrailing() {
-		McpInspectorProperties props = new McpInspectorProperties();
-
-		props.setPath("/foo");
-
-		assertThat(props.getPath()).isEqualTo("/foo");
-	}
-
-	@Test
-	void setPath_rejectsEmpty() {
-		McpInspectorProperties props = new McpInspectorProperties();
-
-		assertThatThrownBy(() -> props.setPath("")).isInstanceOf(IllegalArgumentException.class);
-	}
-
-	@Test
-	void setPath_rejectsTrailingSlash() {
-		McpInspectorProperties props = new McpInspectorProperties();
-
-		assertThatThrownBy(() -> props.setPath("/foo/")).isInstanceOf(IllegalArgumentException.class);
-	}
-
-	@Test
-	void setPath_rejectsMissingLeadingSlash() {
-		McpInspectorProperties props = new McpInspectorProperties();
-
-		assertThatThrownBy(() -> props.setPath("foo")).isInstanceOf(IllegalArgumentException.class);
-	}
-
-	@Test
-	void proxyPath_isDerivedFromPath() {
-		McpInspectorProperties props = new McpInspectorProperties();
-		props.setPath("/foo");
-
-		assertThat(props.getProxyPath()).isEqualTo("/foo-api");
 	}
 
 }

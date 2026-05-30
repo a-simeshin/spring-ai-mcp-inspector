@@ -38,6 +38,14 @@
         <spring-javaformat-maven-plugin.version>0.0.47</spring-javaformat-maven-plugin.version>
         <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
 
+        <!-- Allure test reporting. allure.version: latest stable Allure 2.x (known-good
+             recent release). aspectj.version MUST match the aspectjweaver version managed
+             by spring-boot-dependencies (3.5.14 → 1.9.25.1) so the -javaagent jar path on
+             surefire/failsafe argLine resolves to a real jar in the local repository. -->
+        <allure.version>2.29.1</allure.version>
+        <aspectj.version>1.9.25.1</aspectj.version>
+        <allure-maven-plugin.version>2.15.2</allure-maven-plugin.version>
+
         <!-- JaCoCo coverage gate (Surefire only — IT/E2E run under Failsafe
              and do not contribute). Override per-module to relax or skip. -->
         <jacoco.line.minimum>0.80</jacoco.line.minimum>
@@ -75,6 +83,15 @@
                 <artifactId>mcp</artifactId>
                 <version>${mcp-sdk.version}</version>
             </dependency>
+            <!-- Allure BOM: aligns allure-junit5 (and any other allure-*) versions
+                 so module poms can omit explicit versions. -->
+            <dependency>
+                <groupId>io.qameta.allure</groupId>
+                <artifactId>allure-bom</artifactId>
+                <version>${allure.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -101,8 +118,10 @@
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>${maven-surefire-plugin.version}</version>
                     <configuration>
-                        <!-- `surefireArgLine` is set by jacoco prepare-agent-unit. -->
-                        <argLine>@{surefireArgLine}</argLine>
+                        <!-- `@{surefireArgLine}` (set by jacoco prepare-agent-unit) MUST stay
+                             first so the JaCoCo agent records unit coverage; the aspectjweaver
+                             javaagent for Allure @Step is appended after it. -->
+                        <argLine>@{surefireArgLine} -XX:+EnableDynamicAgentLoading -javaagent:"${settings.localRepository}/org/aspectj/aspectjweaver/${aspectj.version}/aspectjweaver-${aspectj.version}.jar"</argLine>
                         <includes>
                             <include>**/*Test.java</include>
                         </includes>
@@ -110,6 +129,9 @@
                             <exclude>**/*IT.java</exclude>
                             <exclude>**/*E2ETest.java</exclude>
                         </excludes>
+                        <systemPropertyVariables>
+                            <allure.results.directory>${project.build.directory}/allure-results</allure.results.directory>
+                        </systemPropertyVariables>
                     </configuration>
                 </plugin>
                 <plugin>
@@ -125,12 +147,17 @@
                         </execution>
                     </executions>
                     <configuration>
-                        <!-- `failsafeArgLine` is set by jacoco prepare-agent-it. -->
-                        <argLine>@{failsafeArgLine}</argLine>
+                        <!-- `@{failsafeArgLine}` (set by jacoco prepare-agent-it) MUST stay
+                             first so the JaCoCo agent records IT coverage; the aspectjweaver
+                             javaagent for Allure @Step is appended after it. -->
+                        <argLine>@{failsafeArgLine} -XX:+EnableDynamicAgentLoading -javaagent:"${settings.localRepository}/org/aspectj/aspectjweaver/${aspectj.version}/aspectjweaver-${aspectj.version}.jar"</argLine>
                         <includes>
                             <include>**/*IT.java</include>
                             <include>**/*E2ETest.java</include>
                         </includes>
+                        <systemPropertyVariables>
+                            <allure.results.directory>${project.build.directory}/allure-results</allure.results.directory>
+                        </systemPropertyVariables>
                     </configuration>
                 </plugin>
                 <plugin>
@@ -244,6 +271,17 @@
                         </execution>
                     </executions>
                 </plugin>
+                <!-- Allure: generates the HTML report from target/allure-results
+                     (produced by surefire/failsafe via the allure-junit5 listener). -->
+                <plugin>
+                    <groupId>io.qameta.allure</groupId>
+                    <artifactId>allure-maven</artifactId>
+                    <version>${allure-maven-plugin.version}</version>
+                    <configuration>
+                        <reportVersion>${allure.version}</reportVersion>
+                        <resultsDirectory>${project.build.directory}/allure-results</resultsDirectory>
+                    </configuration>
+                </plugin>
             </plugins>
         </pluginManagement>
         <plugins>
@@ -265,6 +303,12 @@
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
+            </plugin>
+            <!-- Allure report generation (`mvn allure:report` / `allure:serve`).
+                 Configuration lives in pluginManagement above. -->
+            <plugin>
+                <groupId>io.qameta.allure</groupId>
+                <artifactId>allure-maven</artifactId>
             </plugin>
         </plugins>
     </build>

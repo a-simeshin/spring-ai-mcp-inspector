@@ -23,7 +23,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -54,6 +61,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * For the SSE backchannel we use the JDK 17 {@code HttpClient}'s line-streamed body
  * subscriber. Awaitility is used to bound waits.
  */
+@Epic("Inspector Proxy")
+@Feature("Streamable-HTTP flow")
 class ProxyStreamableHttpFlowIT {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -90,12 +99,20 @@ class ProxyStreamableHttpFlowIT {
 	 */
 	@ParameterizedTest(name = "{0}")
 	@EnumSource(ProxyAppHarness.Stack.class)
-	void initializeAndToolsListThroughStreamableHttpProxy(ProxyAppHarness.Stack stack) throws Exception {
+	@DisplayName("initialize + tools/list round-trip through the streamable-HTTP proxy")
+	@Story("Init + tools/list round-trip")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Drives initialize (200 + session id), notifications/initialized (202), tools/list (200) "
+			+ "and DELETE (200 then 404) through /mcp-inspector-api/mcp on both stacks")
+	void initializeAndToolsList_throughStreamableHttpProxy_completesFullDance(ProxyAppHarness.Stack stack)
+			throws Exception {
+		// given
 		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
 		int port = ProxyAppHarness.port(app);
 		String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
 
+		// when
 		// ---- 1. initialize → expects 200 + mcp-session-id header ------------
 		ObjectNode init = buildInit();
 		HttpRequest initRequest = HttpRequest
@@ -107,6 +124,7 @@ class ProxyStreamableHttpFlowIT {
 			.build();
 		HttpResponse<String> initResponse = HTTP.send(initRequest, HttpResponse.BodyHandlers.ofString());
 
+		// then
 		assertThat(initResponse.statusCode()).as("initialize HTTP status on %s, body=%s", stack, initResponse.body())
 			.isEqualTo(200);
 		String sessionId = initResponse.headers().firstValue("mcp-session-id").orElse(null);
@@ -172,10 +190,17 @@ class ProxyStreamableHttpFlowIT {
 	 */
 	@ParameterizedTest(name = "{0}")
 	@EnumSource(ProxyAppHarness.Stack.class)
-	void getMcpWithUnknownSessionRespondsQuickly(ProxyAppHarness.Stack stack) throws Exception {
+	@DisplayName("GET /mcp with an unknown session responds quickly without hanging")
+	@Story("Unknown session GET")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("A GET on /mcp with a never-issued session id must answer within the budget (200 with an "
+			+ "error event on webmvc, 404 on webflux) and never hang")
+	void getMcp_withUnknownSession_respondsQuickly(ProxyAppHarness.Stack stack) throws Exception {
+		// given
 		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
 		int port = ProxyAppHarness.port(app);
 
+		// when
 		HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/mcp-inspector-api/mcp"))
 			.timeout(Duration.ofSeconds(10))
 			.header("mcp-session-id", "definitely-not-a-real-session")
@@ -183,6 +208,7 @@ class ProxyStreamableHttpFlowIT {
 			.build();
 		HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
 
+		// then
 		// WebMvc → 200 with an event:error inside; WebFlux → 404. Accept both
 		// shapes; the contract is "answers within 10s without hanging".
 		assertThat(response.statusCode()).as("status on %s for unknown session GET", stack).isIn(200, 404);

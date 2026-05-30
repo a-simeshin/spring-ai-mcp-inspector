@@ -11,6 +11,12 @@ package io.inspector.mcp.webflux.it;
 
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapCustomizer;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -30,6 +36,8 @@ import org.springframework.test.web.reactive.server.WebTestClient;
  * <li>{@code customizer_orderedByAtOrder}</li>
  * </ul>
  */
+@Epic("MCP Inspector WebFlux")
+@Feature("Bootstrap customizer integration (integration)")
 @SpringBootTest(classes = { TestMcpServerApp.class, WebFluxCustomizerIT.TestCustomizers.class },
 		webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
 		properties = { "spring.main.web-application-type=reactive", "spring.ai.mcp.server.protocol=SSE",
@@ -44,7 +52,11 @@ class WebFluxCustomizerIT {
 	private WebTestClient webTestClient;
 
 	@Test
+	@Story("Customizer applied")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("A registered InspectorBootstrapCustomizer's defaultUrl shows up on the /config endpoint")
 	void customizer_affectsConfigEndpoint() {
+		// given two ordered customizers; when & then
 		webTestClient.get()
 			.uri("/mcp-inspector/config")
 			.exchange()
@@ -56,7 +68,11 @@ class WebFluxCustomizerIT {
 	}
 
 	@Test
+	@Story("Customizer applied")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Customizers run in @Order sequence so the highest-order customizer wins the defaultUrl")
 	void customizer_orderedByAtOrder() {
+		// given two ordered customizers; when & then
 		webTestClient.get()
 			.uri("/mcp-inspector/config")
 			.exchange()

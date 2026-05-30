@@ -24,6 +24,12 @@ import com.codeborne.selenide.Selenide;
 import com.codeborne.selenide.SelenideElement;
 import io.github.bonigarcia.wdm.WebDriverManager;
 import io.inspector.mcp.demo.DemoApplication;
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
@@ -96,6 +102,8 @@ import static com.codeborne.selenide.Selenide.open;
  * {@link InspectorUiIT.ConnectMatrix} for that flow.</li>
  * </ul>
  */
+@Epic("MCP Inspector UI")
+@Feature("Typed-bootstrap regression")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, classes = DemoApplication.class,
 		properties = { "spring.main.web-application-type=servlet", "spring.ai.mcp.server.protocol=SSE",
 				"spring.ai.mcp.inspector.auth-enabled=false" })
@@ -155,11 +163,16 @@ class BootstrapRegressionE2ETest {
 	// ---------------------------------------------------------------------
 
 	@Test
+	@Story("Inline bootstrap")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("React mounts from the injected window.__MCP_INSPECTOR_BOOTSTRAP global (proving the inline bootstrap script has valid JSON and shape) and the sidebar renders with a Connect button without throwing during mount.")
 	@DisplayName("inspectorBoots_andConnectsViaInlineBootstrap — React mounts from "
 			+ "window.__MCP_INSPECTOR_BOOTSTRAP and Connect reaches the tools list")
-	void inspectorBoots_andConnectsViaInlineBootstrap() {
+	void inspectorBoot_withInlineBootstrap_mountsReactAndShowsConnect() {
+		// given
 		Configuration.baseUrl = "http://localhost:" + port;
 
+		// when
 		// (a) Open the index — InspectorIndexController serves index.html with
 		// the inline <script>window.__MCP_INSPECTOR_BOOTSTRAP = {...}</script>
 		// block injected just above the upstream client's bootstrap script.
@@ -181,6 +194,7 @@ class BootstrapRegressionE2ETest {
 			throw e;
 		}
 
+		// then
 		// (c) Sanity: sidebar rendered and Connect button visible. This proves
 		// the bootstrap script didn't crash mid-mount — without a valid
 		// `inspectorConfig_v1` shape, initializeInspectorConfig would

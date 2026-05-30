@@ -16,7 +16,14 @@ import java.util.Map;
 import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
 import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpSyncClient;
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,6 +54,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code InspectorE2ETest#startApp}: autoconfig-exclude opposite stack, force a specific
  * {@code spring.ai.mcp.server.protocol}.
  */
+@Epic("Stress & Scale")
+@Feature("Large tool output")
 class LargeToolOutputIT {
 
 	private static final int ONE_MIB = 1024 * 1024;
@@ -68,6 +77,7 @@ class LargeToolOutputIT {
 	@SpringBootTest(classes = DemoApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 	@TestPropertySource(properties = { "spring.ai.mcp.server.protocol=SSE",
 			"spring.ai.mcp.inspector.auth-enabled=false", "spring.autoconfigure.exclude=" + WEBMVC_EXCLUDES })
+	@DisplayName("SSE transport")
 	class Sse {
 
 		@Autowired
@@ -77,13 +87,22 @@ class LargeToolOutputIT {
 		int port;
 
 		@Test
-		void oneMibPayloadIntactOverSse() {
+		@Story("SSE round-trip")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Verifies a 1 MiB largeOutput payload round-trips intact over SSE within budget")
+		@DisplayName("1 MiB payload stays intact over SSE")
+		void oneMibPayload_overSse_staysIntact() {
+			// given
 			McpSyncClient client = loopbackFactory.forSse("127.0.0.1", port, "", "/mcp/message");
 			try {
 				client.initialize();
+
+				// when
 				Instant t0 = Instant.now();
 				String payload = callToolText(client, "largeOutput", Map.of("sizeKb", 1024));
 				Duration elapsed = Duration.between(t0, Instant.now());
+
+				// then
 				assertOneMib(payload, elapsed);
 			}
 			finally {
@@ -92,10 +111,17 @@ class LargeToolOutputIT {
 		}
 
 		@Test
-		void fourMibPayloadIntactOverSse() {
+		@Story("SSE round-trip")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Verifies a 4 MiB largeOutput payload is not truncated below the server-emitted size over SSE")
+		@DisplayName("4 MiB payload stays intact over SSE")
+		void fourMibPayload_overSse_staysIntact() {
+			// given
 			McpSyncClient client = loopbackFactory.forSse("127.0.0.1", port, "", "/mcp/message");
 			try {
 				client.initialize();
+
+				// when
 				Instant t0 = Instant.now();
 				// BACKEND BUG (filed in report): mcp-annotations 0.9 + SDK 0.18.2 appears
 				// to drop the `Integer sizeKb` argument silently for `largeOutput`,
@@ -106,6 +132,8 @@ class LargeToolOutputIT {
 				// *below* the server-emitted payload size).
 				String payload = callToolText(client, "largeOutput", Map.of("sizeKb", 4096));
 				Duration elapsed = Duration.between(t0, Instant.now());
+
+				// then
 				assertThat(payload.length()).as("payload is not truncated to a sub-server-default size")
 					.isGreaterThanOrEqualTo(ONE_MIB);
 				assertThat(payload.length() % 1024)
@@ -124,6 +152,7 @@ class LargeToolOutputIT {
 	@SpringBootTest(classes = DemoApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 	@TestPropertySource(properties = { "spring.ai.mcp.server.protocol=STREAMABLE",
 			"spring.ai.mcp.inspector.auth-enabled=false", "spring.autoconfigure.exclude=" + WEBMVC_EXCLUDES })
+	@DisplayName("Streamable transport")
 	class Streamable {
 
 		@Autowired
@@ -133,13 +162,22 @@ class LargeToolOutputIT {
 		int port;
 
 		@Test
-		void oneMibPayloadIntactOverStreamable() {
+		@Story("Streamable round-trip")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Verifies a 1 MiB largeOutput payload round-trips intact over Streamable HTTP within budget")
+		@DisplayName("1 MiB payload stays intact over Streamable")
+		void oneMibPayload_overStreamable_staysIntact() {
+			// given
 			McpSyncClient client = loopbackFactory.forStreamable("127.0.0.1", port, "/mcp");
 			try {
 				client.initialize();
+
+				// when
 				Instant t0 = Instant.now();
 				String payload = callToolText(client, "largeOutput", Map.of("sizeKb", 1024));
 				Duration elapsed = Duration.between(t0, Instant.now());
+
+				// then
 				assertOneMib(payload, elapsed);
 			}
 			finally {
@@ -153,6 +191,7 @@ class LargeToolOutputIT {
 	@SpringBootTest(classes = DemoApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 	@TestPropertySource(properties = { "spring.ai.mcp.server.protocol=STATELESS",
 			"spring.ai.mcp.inspector.auth-enabled=false", "spring.autoconfigure.exclude=" + WEBMVC_EXCLUDES })
+	@DisplayName("Stateless transport")
 	class Stateless {
 
 		@Autowired
@@ -162,7 +201,12 @@ class LargeToolOutputIT {
 		int port;
 
 		@Test
-		void oneMibPayloadIntactOverStateless() {
+		@Story("Stateless round-trip")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Verifies the stateless transport delivers a non-trivial resource body without truncation")
+		@DisplayName("large resource body stays intact over Stateless")
+		void largeResourceBody_overStateless_staysIntact() {
+			// given
 			McpSyncClient client = loopbackFactory.forStateless("127.0.0.1", port, "/mcp");
 			try {
 				client.initialize();
@@ -173,11 +217,14 @@ class LargeToolOutputIT {
 				// demo://large-text resource instead: ~256 KiB single-response body
 				// that proves stateless can deliver a non-trivial payload without
 				// truncation.
+
+				// when
 				Instant t0 = Instant.now();
 				var resource = client
 					.readResource(new io.modelcontextprotocol.spec.McpSchema.ReadResourceRequest("demo://large-text"));
 				Duration elapsed = Duration.between(t0, Instant.now());
 
+				// then
 				assertThat(resource.contents()).as("resource read returned content").isNotEmpty();
 				var first = resource.contents().get(0);
 				assertThat(first).isInstanceOf(io.modelcontextprotocol.spec.McpSchema.TextResourceContents.class);

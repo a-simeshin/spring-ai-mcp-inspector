@@ -12,6 +12,14 @@ package io.inspector.mcp.webmvc.sse;
 import java.lang.reflect.Field;
 import java.util.concurrent.ConcurrentMap;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -23,62 +31,105 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 
 /** Unit tests for {@link InspectorSseEmitterRegistry}. */
+@Epic("WebMvc Inspector")
+@Feature("InspectorSseEmitterRegistry")
 class InspectorSseEmitterRegistryTest {
 
-	@Test
-	@SuppressWarnings("unchecked")
-	void broadcastsToAllRegisteredEmitters() throws Exception {
-		InspectorSseEmitterRegistry registry = new InspectorSseEmitterRegistry();
-		String sessionId = "session-1";
+	@Nested
+	@DisplayName("broadcast()")
+	class Broadcast {
 
-		registry.register(sessionId);
+		@Test
+		@Story("Event fan-out")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("broadcast() sends the event to the emitter registered under the session id")
+		@SuppressWarnings("unchecked")
+		void broadcastsToAllRegisteredEmitters() throws Exception {
+			// given
+			InspectorSseEmitterRegistry registry = new InspectorSseEmitterRegistry();
+			String sessionId = "session-1";
+			registry.register(sessionId);
 
-		// Swap registered emitter with a Mockito spy so we can verify a send happened.
-		Field emittersField = InspectorSseEmitterRegistry.class.getDeclaredField("emitters");
-		emittersField.setAccessible(true);
-		ConcurrentMap<String, SseEmitter> emitters = (ConcurrentMap<String, SseEmitter>) emittersField.get(registry);
+			// Swap registered emitter with a Mockito spy so we can verify a send
+			// happened.
+			Field emittersField = InspectorSseEmitterRegistry.class.getDeclaredField("emitters");
+			emittersField.setAccessible(true);
+			ConcurrentMap<String, SseEmitter> emitters = (ConcurrentMap<String, SseEmitter>) emittersField
+				.get(registry);
 
-		SseEmitter spyEmitter = spy(new SseEmitter(Long.MAX_VALUE));
-		doNothing().when(spyEmitter).send(any(SseEmitter.SseEventBuilder.class));
-		emitters.put(sessionId, spyEmitter);
+			SseEmitter spyEmitter = spy(new SseEmitter(Long.MAX_VALUE));
+			doNothing().when(spyEmitter).send(any(SseEmitter.SseEventBuilder.class));
+			emitters.put(sessionId, spyEmitter);
 
-		registry.broadcast(sessionId, "notify", "payload");
+			// when
+			registry.broadcast(sessionId, "notify", "payload");
 
-		verify(spyEmitter, atLeastOnce()).send(any(SseEmitter.SseEventBuilder.class));
+			// then
+			verify(spyEmitter, atLeastOnce()).send(any(SseEmitter.SseEventBuilder.class));
+		}
+
+		@Test
+		@Story("Event fan-out")
+		@Severity(SeverityLevel.MINOR)
+		@Description("broadcast() is a no-op when no emitter is registered for the session")
+		void broadcastWithoutRegistrationIsSafe() {
+			// given
+			InspectorSseEmitterRegistry registry = new InspectorSseEmitterRegistry();
+
+			// when — should not throw
+			registry.broadcast("missing", "event", "payload");
+
+			// then
+			assertThat(registry.size()).isZero();
+		}
+
 	}
 
-	@Test
-	void registerReplacesPreviousEmitter() {
-		InspectorSseEmitterRegistry registry = new InspectorSseEmitterRegistry();
-		String sessionId = "s1";
+	@Nested
+	@DisplayName("register()")
+	class Register {
 
-		SseEmitter first = registry.register(sessionId);
-		SseEmitter second = registry.register(sessionId);
+		@Test
+		@Story("Registration")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("register() replaces a previous emitter for the same session id")
+		void registerReplacesPreviousEmitter() {
+			// given
+			InspectorSseEmitterRegistry registry = new InspectorSseEmitterRegistry();
+			String sessionId = "s1";
 
-		assertThat(first).isNotSameAs(second);
-		assertThat(registry.size()).isEqualTo(1);
+			// when
+			SseEmitter first = registry.register(sessionId);
+			SseEmitter second = registry.register(sessionId);
+
+			// then
+			assertThat(first).isNotSameAs(second);
+			assertThat(registry.size()).isEqualTo(1);
+		}
+
 	}
 
-	@Test
-	void closeRemovesEmitter() {
-		InspectorSseEmitterRegistry registry = new InspectorSseEmitterRegistry();
-		registry.register("s1");
+	@Nested
+	@DisplayName("close()")
+	class Close {
 
-		assertThat(registry.size()).isEqualTo(1);
+		@Test
+		@Story("Teardown")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("close() completes and removes the emitter for the session")
+		void closeRemovesEmitter() {
+			// given
+			InspectorSseEmitterRegistry registry = new InspectorSseEmitterRegistry();
+			registry.register("s1");
+			assertThat(registry.size()).isEqualTo(1);
 
-		registry.close("s1");
+			// when
+			registry.close("s1");
 
-		assertThat(registry.size()).isZero();
-	}
+			// then
+			assertThat(registry.size()).isZero();
+		}
 
-	@Test
-	void broadcastWithoutRegistrationIsSafe() {
-		InspectorSseEmitterRegistry registry = new InspectorSseEmitterRegistry();
-
-		// Should not throw.
-		registry.broadcast("missing", "event", "payload");
-
-		assertThat(registry.size()).isZero();
 	}
 
 }

@@ -24,9 +24,16 @@ import com.codeborne.selenide.Selenide;
 import com.codeborne.selenide.SelenideElement;
 import io.github.bonigarcia.wdm.WebDriverManager;
 import io.inspector.mcp.demo.DemoApplication;
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.openqa.selenium.chrome.ChromeOptions;
@@ -67,6 +74,8 @@ import static com.codeborne.selenide.Selenide.open;
  * T26, so we can hit the {@code /mcp} proxy directly without falling back to SSE.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@Epic("Stress & Scale")
+@Feature("Inspector big-data UI")
 class UiBigDataIT {
 
 	private ConfigurableApplicationContext app;
@@ -175,10 +184,16 @@ class UiBigDataIT {
 	// ------------------------------------------------------------------
 
 	@Test
-	void largeOutputDoesNotFreezeUi() {
+	@Story("Large output rendering")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Verifies running largeOutput in the UI does not freeze the inspector — tab switching stays responsive")
+	@DisplayName("largeOutput run does not freeze the UI")
+	void largeOutput_whenRunInUi_doesNotFreezeUi() {
+		// given
 		startApp();
 		openAndConnect();
 
+		// when
 		clickTab("tools");
 		SelenideElement listTools = activePanel().$(byText("List Tools"));
 		if (listTools.exists() && listTools.isEnabled()) {
@@ -204,16 +219,23 @@ class UiBigDataIT {
 		// "Run Tool"); 60 s is generous for a 128 KiB payload.
 		activePanel().$(byText("Run Tool")).shouldBe(visible, Duration.ofSeconds(60));
 
+		// then
 		// UI not frozen: switching to Ping responds within 5 s.
 		clickTab("ping");
 		activePanel().$(byText("Ping Server")).shouldBe(visible, Duration.ofSeconds(5));
 	}
 
 	@Test
-	void resourcesTabRendersDemoFixtures() {
+	@Story("Resource fixtures rendering")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("Verifies the resources tab renders the demo static fixtures and templated items at scale")
+	@DisplayName("resources tab renders demo fixtures")
+	void resourcesTab_whenOpened_rendersDemoFixtures() {
+		// given
 		startApp();
 		openAndConnect();
 
+		// when
 		clickTab("resources");
 
 		// Trigger resources/list — button is disabled when the list is already populated
@@ -227,6 +249,7 @@ class UiBigDataIT {
 			listTemplates.click();
 		}
 
+		// then
 		// The 5 static resources have stable names — demo-config is the most "checkable"
 		// (JSON resource name in DEMO_CAPABILITIES.md).
 		activePanel().shouldHave(text("demo-config"), Duration.ofSeconds(15));
