@@ -9,6 +9,12 @@
  */
 package io.inspector.mcp.demo.e2e;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -42,13 +48,25 @@ import org.junit.jupiter.api.Test;
  *   mvn -B -pl spring-ai-mcp-inspector-demo -am verify -Dtest=InspectorUiIT
  * }</pre>
  */
+@Epic("MCP Inspector UI")
+@Feature("Legacy E2E harness (superseded)")
 class InspectorE2ETest {
 
 	@Test
+	@Story("Legacy placeholder")
+	@Severity(SeverityLevel.TRIVIAL)
+	@Description("Retained-but-disabled placeholder kept so plan/scripts that reference InspectorE2ETest by name still resolve on the classpath; the active upstream-DOM matrix lives in InspectorUiIT.")
 	@DisplayName("Legacy E2E placeholder — see InspectorUiIT for the active upstream-DOM tests")
 	@Disabled("Superseded by InspectorUiIT. Run `-Dtest=InspectorUiIT` for the real matrix.")
-	void supersededByInspectorUiIT() {
+	void legacyHarness_whenInvoked_isSupersededByInspectorUiIT() {
+		// given
 		// Intentionally left blank. See the class javadoc.
+
+		// when
+		// (no action — test is @Disabled and superseded by InspectorUiIT)
+
+		// then
+		// (no assertion — coverage is provided by InspectorUiIT)
 	}
 
 }

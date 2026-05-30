@@ -9,6 +9,12 @@
  */
 package io.inspector.mcp.webflux.it;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -28,6 +34,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <li>{@code configEndpoint_setsNoCacheHeaders}</li>
  * </ul>
  */
+@Epic("MCP Inspector WebFlux")
+@Feature("Bootstrap /config JSON endpoint (integration)")
 @SpringBootTest(classes = TestMcpServerApp.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
 		properties = { "spring.main.web-application-type=reactive", "spring.ai.mcp.server.protocol=SSE",
 				"spring.ai.mcp.server.name=mcp-inspector-itest-flux-cfgep", "spring.ai.mcp.server.version=0.1.0",
@@ -39,7 +47,11 @@ class WebFluxBootstrapEndpointIT {
 	private WebTestClient webTestClient;
 
 	@Test
+	@Story("Bootstrap payload")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("GET /config returns JSON containing the auth token, proxy address and detected transport")
 	void configEndpoint_returnsBootstrapJsonWithRequiredFields() {
+		// given a booted reactive inspector; when & then
 		webTestClient.get()
 			.uri("/mcp-inspector/config")
 			.exchange()
@@ -57,7 +69,11 @@ class WebFluxBootstrapEndpointIT {
 	}
 
 	@Test
+	@Story("Bootstrap payload")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("GET /config returns a well-formed JSON object body")
 	void configEndpoint_returnsValidJson() {
+		// given a booted reactive inspector; when & then
 		webTestClient.get()
 			.uri("/mcp-inspector/config")
 			.exchange()
@@ -75,7 +91,11 @@ class WebFluxBootstrapEndpointIT {
 	}
 
 	@Test
+	@Story("Bootstrap payload")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("GET /config sets a no-store Cache-Control header so the token is never cached")
 	void configEndpoint_setsNoCacheHeaders() {
+		// given a booted reactive inspector; when & then
 		webTestClient.get()
 			.uri("/mcp-inspector/config")
 			.exchange()

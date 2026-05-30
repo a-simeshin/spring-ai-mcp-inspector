@@ -18,7 +18,14 @@ import java.util.Optional;
 
 import io.inspector.mcp.demo.DemoApplication;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.boot.WebApplicationType;
@@ -42,6 +49,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * Two stacks × one assertion = 2 tests.
  */
+@Epic("Inspector Proxy")
+@Feature("CORS")
 class ProxyCorsIT {
 
 	private static final String ALLOWED_ORIGIN = "http://localhost:5173";
@@ -65,10 +74,18 @@ class ProxyCorsIT {
 
 	@ParameterizedTest(name = "{0}")
 	@EnumSource(ProxyAppHarness.Stack.class)
-	void corsPreflightAdvertisesAllowedHeadersAndOrigin(ProxyAppHarness.Stack stack) throws Exception {
+	@DisplayName("OPTIONS preflight advertises the allowed origin and headers")
+	@Story("CORS preflight")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("Boots the demo with an allowed origin and verifies an OPTIONS preflight surfaces "
+			+ "Access-Control-Allow-Origin and the proxy auth header in Access-Control-Allow-Headers")
+	void corsPreflight_withAllowedOrigin_advertisesAllowedHeadersAndOrigin(ProxyAppHarness.Stack stack)
+			throws Exception {
+		// given
 		app = startWithAllowedOrigin(stack);
 		int port = ((WebServerApplicationContext) app).getWebServer().getPort();
 
+		// when
 		HttpRequest preflight = HttpRequest
 			.newBuilder(URI.create("http://127.0.0.1:" + port + "/mcp-inspector-api/sse"))
 			.method("OPTIONS", HttpRequest.BodyPublishers.noBody())
@@ -79,6 +96,7 @@ class ProxyCorsIT {
 			.build();
 		HttpResponse<String> response = HTTP.send(preflight, HttpResponse.BodyHandlers.ofString());
 
+		// then
 		assertThat(response.statusCode()).as("preflight status on %s, body=%s", stack, response.body())
 			.isBetween(200, 299);
 

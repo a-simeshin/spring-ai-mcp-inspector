@@ -9,6 +9,14 @@
  */
 package io.inspector.mcp.webmvc.it;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
+
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -36,6 +44,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <li>{@code customPath_internalApiRespondsOnNewPrefix}</li>
  * </ul>
  */
+@Epic("WebMvc Inspector")
+@Feature("Configurable mount path")
 @SpringBootTest(classes = TestMcpServerApp.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
 		properties = { "spring.ai.mcp.inspector.path=/custom", "spring.ai.mcp.server.protocol=SSE",
 				"spring.ai.mcp.server.name=mcp-inspector-itest-cfg", "spring.ai.mcp.server.version=0.1.0",
@@ -49,16 +59,30 @@ class WebMvcConfigurableInspectorIT {
 	private int port;
 
 	@Test
+	@DisplayName("custom prefix serves index.html")
+	@Story("Custom path")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Setting spring.ai.mcp.inspector.path=/custom mounts the UI index.html at the new prefix")
 	void customPath_indexHtmlRespondsOnNewPrefix() {
+		// when
 		ResponseEntity<String> response = restTemplate.getForEntity(url("/custom/index.html"), String.class);
+
+		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getHeaders().getContentType()).isNotNull()
 			.matches(mt -> MediaType.TEXT_HTML.isCompatibleWith(mt));
 	}
 
 	@Test
+	@DisplayName("custom prefix serves the config endpoint")
+	@Story("Custom path")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("The /config JSON endpoint is reachable on the custom prefix")
 	void customPath_configEndpointRespondsOnNewPrefix() {
+		// when
 		ResponseEntity<String> response = restTemplate.getForEntity(url("/custom/config"), String.class);
+
+		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getHeaders().getContentType()).isNotNull()
 			.matches(mt -> MediaType.APPLICATION_JSON.isCompatibleWith(mt));
@@ -66,19 +90,37 @@ class WebMvcConfigurableInspectorIT {
 	}
 
 	@Test
+	@DisplayName("default prefix returns 404 when a custom path is set")
+	@Story("Custom path")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("With a custom path configured, the default /mcp-inspector prefix is no longer mounted")
 	void customPath_defaultPrefixReturns404() {
+		// when
 		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/index.html"), String.class);
+
+		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
 	}
 
 	@Test
+	@DisplayName("proxy API responds on the derived -api prefix")
+	@Story("Custom path")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("The proxy backend health probe is reachable on the derived /custom-api prefix")
 	void customPath_proxyApiRespondsOnDerivedPrefix() {
+		// when
 		ResponseEntity<String> response = restTemplate.getForEntity(url("/custom-api/health"), String.class);
+
+		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getBody()).contains("ok");
 	}
 
 	@Test
+	@DisplayName("internal API responds on the new prefix only")
+	@Story("Custom path")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("The internal /api routes are mapped at the custom prefix and unmapped at the default one")
 	void customPath_internalApiRespondsOnNewPrefix() {
 		// The custom prefix's internal API route exists. Without a session id
 		// the controller returns 404 with a Map error body — but the important

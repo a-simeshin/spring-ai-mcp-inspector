@@ -16,6 +16,13 @@ import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.ListToolsResult;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -41,6 +48,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration,"
 				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebFluxAutoConfiguration,"
 				+ "io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration" })
+@Epic("MCP Transports")
+@Feature("Loopback Streamable HTTP")
 class LoopbackStreamableTransportIT {
 
 	@Autowired
@@ -50,12 +59,21 @@ class LoopbackStreamableTransportIT {
 	private int port;
 
 	@Test
-	void toolsListViaLoopbackStreamable() {
+	@DisplayName("listTools via the loopback streamable-HTTP client returns the demo tools")
+	@Story("Loopback streamable tools/list")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Boots the demo server with the streamable-HTTP protocol and verifies a real loopback "
+			+ "inspector client can list the expected demo tools (echo, sum, currentTime).")
+	void listTools_viaLoopbackStreamable_returnsDemoTools() {
+		// given
 		McpSyncClient client = loopbackFactory.forStreamable("127.0.0.1", port, "/mcp");
 		try {
+			// when
 			client.initialize();
 			ListToolsResult result = client.listTools();
 			List<String> names = result.tools().stream().map(t -> t.name()).toList();
+
+			// then
 			assertThat(names).contains("echo", "sum", "currentTime");
 		}
 		finally {

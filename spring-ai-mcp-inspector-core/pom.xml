@@ -56,6 +56,11 @@
             <scope>test</scope>
         </dependency>
         <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
@@ -65,6 +70,20 @@
                     <artifactId>spring-boot-starter</artifactId>
                 </exclusion>
             </exclusions>
+        </dependency>
+
+        <!-- Allure JUnit 5 listener (version from allure-bom) + aspectjweaver
+             for Allure @Step weaving (version managed by the parent property). -->
+        <dependency>
+            <groupId>io.qameta.allure</groupId>
+            <artifactId>allure-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+            <version>${aspectj.version}</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

@@ -23,7 +23,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -56,6 +63,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * instance.</li>
  * </ul>
  */
+@Epic("Inspector Proxy")
+@Feature("Session lifecycle")
 class ProxySessionLifecycleIT {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -89,7 +98,13 @@ class ProxySessionLifecycleIT {
 
 	@ParameterizedTest(name = "{0}")
 	@EnumSource(ProxyAppHarness.Stack.class)
-	void hundredSessionOpenCloseCyclesDoNotLeak(ProxyAppHarness.Stack stack) throws Exception {
+	@DisplayName("100 open/close cycles drain the registry back to its initial size")
+	@Story("Registry leak guard")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Opens and closes 100 streamable sessions sequentially and asserts the "
+			+ "ProxySessionRegistry drains back to its pre-loop size with 100 distinct session ids")
+	void hundredSessionOpenCloseCycles_whenAllDeleted_doNotLeak(ProxyAppHarness.Stack stack) throws Exception {
+		// given
 		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
 		final int port = ProxyAppHarness.port(app);
 		final String targetUrl = "http://127.0.0.1:" + port + "/mcp";
@@ -100,6 +115,7 @@ class ProxySessionLifecycleIT {
 
 		final Set<String> seenSessionIds = new HashSet<>(CYCLES);
 
+		// when
 		for (int i = 0; i < CYCLES; i++) {
 			final String sessionId = openSession(proxyBase, targetUrl);
 			assertThat(sessionId).as("cycle %d on %s: session id must be present", i, stack).isNotBlank();
@@ -113,6 +129,7 @@ class ProxySessionLifecycleIT {
 				.isIn(200, 204);
 		}
 
+		// then
 		assertThat(seenSessionIds).as("100 cycles must produce 100 distinct session ids on %s", stack).hasSize(CYCLES);
 
 		assertThat(registry.size())

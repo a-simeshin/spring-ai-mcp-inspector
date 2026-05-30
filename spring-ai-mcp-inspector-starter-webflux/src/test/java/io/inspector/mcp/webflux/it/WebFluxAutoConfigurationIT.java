@@ -9,6 +9,12 @@
  */
 package io.inspector.mcp.webflux.it;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -26,6 +32,8 @@ import org.springframework.test.web.reactive.server.WebTestClient;
  * <li>{@code configEndpointReturnsDetectedTransportReactive}</li>
  * </ul>
  */
+@Epic("MCP Inspector WebFlux")
+@Feature("WebFlux auto-configuration (integration)")
 @SpringBootTest(classes = TestMcpServerApp.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = { "spring.main.web-application-type=reactive", "spring.ai.mcp.server.protocol=SSE",
 		"spring.ai.mcp.server.name=mcp-inspector-itest-flux", "spring.ai.mcp.server.version=0.1.0",
@@ -36,7 +44,13 @@ class WebFluxAutoConfigurationIT {
 	private WebTestClient webTestClient;
 
 	@Test
+	@Story("Config endpoint")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("GET /api/config over the reactive stack returns the detected SSE transport, WEBFLUX stack and an auth token")
 	void configEndpointReturnsDetectedTransportReactive() {
+		// given — a reactive MCP server booted with the SSE protocol (see
+		// @TestPropertySource)
+		// when & then
 		webTestClient.get()
 			.uri("/mcp-inspector/api/config")
 			.exchange()

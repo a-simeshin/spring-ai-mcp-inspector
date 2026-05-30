@@ -23,9 +23,16 @@ import java.util.concurrent.atomic.AtomicInteger;
 import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
 import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpSyncClient;
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -53,6 +60,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(classes = DemoApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = { "spring.ai.mcp.server.protocol=STREAMABLE",
 		"spring.ai.mcp.inspector.auth-enabled=false", "spring.autoconfigure.exclude=" + WEBMVC_EXCLUDES })
+@Epic("Stress & Scale")
+@Feature("Concurrent tool calls")
 class ConcurrentToolCallsIT {
 
 	private static final Duration HUNDRED_SUMS_BUDGET = Duration.ofSeconds(30);
@@ -83,7 +92,12 @@ class ConcurrentToolCallsIT {
 	}
 
 	@Test
-	void hundredConcurrentCallsAllSucceed() throws Exception {
+	@Story("Parallel execution")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Verifies 100 concurrent currentTime calls on one session complete in parallel within budget and without errors")
+	@DisplayName("100 concurrent calls all succeed within budget")
+	void hundredConcurrentCalls_onSameSession_allSucceed() throws Exception {
+		// given
 		// BACKEND BUG (see run report): the demo is compiled without -parameters,
 		// so mcp-annotations 0.9 cannot bind any `{@McpToolParam}`-annotated
 		// method parameter from the JSON-RPC arguments map — every parameter
@@ -95,6 +109,7 @@ class ConcurrentToolCallsIT {
 			AtomicInteger errors = new AtomicInteger();
 			List<CompletableFuture<String>> futures = new ArrayList<>(100);
 
+			// when
 			Instant t0 = Instant.now();
 			for (int i = 0; i < 100; i++) {
 				CompletableFuture<String> f = CompletableFuture.supplyAsync(() -> {
@@ -113,6 +128,8 @@ class ConcurrentToolCallsIT {
 			all.get(HUNDRED_SUMS_BUDGET.toSeconds(), TimeUnit.SECONDS);
 
 			Duration elapsed = Duration.between(t0, Instant.now());
+
+			// then
 			assertThat(elapsed).as("100 concurrent currentTime calls budget").isLessThanOrEqualTo(HUNDRED_SUMS_BUDGET);
 			assertThat(errors.get()).as("no concurrent call errored").isZero();
 			for (int i = 0; i < futures.size(); i++) {
@@ -128,7 +145,12 @@ class ConcurrentToolCallsIT {
 	}
 
 	@Test
-	void tenConcurrentSlowEchoesRunInParallel() throws Exception {
+	@Story("Parallel execution")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Verifies 10 concurrent 2s slowEcho calls finish in parallel well below the 20s sequential baseline")
+	@DisplayName("10 concurrent slow echoes run in parallel")
+	void tenConcurrentSlowEchoes_onSameSession_runInParallel() throws Exception {
+		// given
 		// BACKEND BUG (see run report): slowEcho's `text` arg cannot be bound
 		// (no -parameters compile flag → mcp-annotations fallback). Without
 		// binding, slowEcho still sleeps 2s server-side then returns "null".
@@ -137,6 +159,8 @@ class ConcurrentToolCallsIT {
 		ExecutorService pool = Executors.newFixedThreadPool(10);
 		try {
 			List<CompletableFuture<String>> futures = new ArrayList<>(10);
+
+			// when
 			Instant t0 = Instant.now();
 			for (int i = 0; i < 10; i++) {
 				futures.add(CompletableFuture.supplyAsync(() -> callToolText(client, "slowEcho", Map.of()), pool));
@@ -145,6 +169,7 @@ class ConcurrentToolCallsIT {
 				.get(TEN_SLOW_ECHO_BUDGET.plusSeconds(2).toSeconds(), TimeUnit.SECONDS);
 			Duration elapsed = Duration.between(t0, Instant.now());
 
+			// then
 			assertThat(elapsed)
 				.as("10 × slowEcho must finish in <6s — sequential 20s baseline would prove the proxy serializes")
 				.isLessThanOrEqualTo(TEN_SLOW_ECHO_BUDGET);

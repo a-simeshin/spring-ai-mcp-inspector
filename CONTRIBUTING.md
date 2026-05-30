@@ -4,8 +4,6 @@ Thanks for your interest in improving this project. This guide covers how to
 set up a local development environment, run the test suites, and submit
 changes.
 
-All contributors are expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
-
 ## Prerequisites
 
 - JDK 17 or newer (JDK 21 verified)
@@ -72,6 +70,43 @@ starter modules.
 Runs the demo on a random port and drives a real Chromium browser through the
 inspector UI. Live in `*E2ETest.java` files under the demo module.
 
+### Code coverage — mandatory ≥ 80%
+
+Every production module must keep **unit-test coverage at 80% or higher**. The
+build enforces this automatically: a change that drops any module below the
+threshold fails `./mvnw verify`.
+
+- **Threshold:** ≥ **80%** for **LINE**, **BRANCH**, and **INSTRUCTION**.
+- **Per module** (`<element>BUNDLE</element>`): `spring-ai-mcp-inspector-core`,
+  `spring-ai-mcp-inspector-starter-webmvc`, `spring-ai-mcp-inspector-starter-webflux`.
+  (`-demo` and `-ui` opt out via `jacoco.skip`.)
+- **Unit tests only.** The gate reads `target/jacoco-unit.exec` (the Surefire
+  run). Integration tests write a separate `jacoco-it.exec` that is **not**
+  counted — coverage must be earned with real unit tests, not integration tests.
+- **Enforced by** `jacoco:check` during `mvn verify`. Thresholds live in the
+  root `pom.xml` (`jacoco.{line,branch,instruction}.minimum`) and must not be
+  lowered.
+
+Coverage is a stability contract, not a number to game — tests must assert real
+behaviour (status codes, mapping, delegation, error branches, state), never
+assert-free or tautological. A class that is genuinely pure glue (a static/HTML
+serving handler, a constants-only class) may be excluded **pointwise** in the
+root `pom.xml` JaCoCo `<excludes>` with a one-line justification; always prefer
+a real test over an exclude.
+
+Check coverage locally — open `target/site/jacoco/index.html` per module:
+
+```
+./mvnw -pl spring-ai-mcp-inspector-core test
+./mvnw -pl spring-ai-mcp-inspector-starter-webmvc test
+./mvnw -pl spring-ai-mcp-inspector-starter-webflux test
+```
+
+New tests follow `method_condition_expectedResult` naming with `// given` /
+`// when` / `// then` comments, AssertJ assertions, and Allure annotations
+(`@Epic`/`@Feature` on the class; `@Story`/`@Severity`/`@Description` per test).
+Mirror the existing test classes.
+
 ## Running the demo manually
 
 ```
@@ -107,8 +142,10 @@ To auto-format:
 1. Fork the repository and create a topic branch off `main`.
 2. Make your change. Keep commits focused — one logical change per commit.
 3. Add or update tests. New behavior needs at least one integration test that
-   would have failed before the change.
-4. Make sure `./mvnw verify` passes locally.
+   would have failed before the change, and unit-test coverage for the touched
+   modules must stay **≥ 80%** (LINE/BRANCH/INSTRUCTION).
+4. Make sure `./mvnw verify` passes locally — including the JaCoCo 80% gate and
+   `spring-javaformat:validate`.
 5. Open a pull request with a clear description of **what** changed and
    **why**. Link any related issues.
 

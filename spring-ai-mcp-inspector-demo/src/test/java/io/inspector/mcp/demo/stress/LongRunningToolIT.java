@@ -16,9 +16,16 @@ import java.util.Map;
 import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
 import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpSyncClient;
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -38,6 +45,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(classes = DemoApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = { "spring.ai.mcp.server.protocol=STREAMABLE",
 		"spring.ai.mcp.inspector.auth-enabled=false", "spring.autoconfigure.exclude=" + WEBMVC_EXCLUDES })
+@Epic("Stress & Scale")
+@Feature("Long-running tool")
 class LongRunningToolIT {
 
 	/** {@code slowEcho} sleeps 2s server-side — anything below is a bug. */
@@ -69,25 +78,40 @@ class LongRunningToolIT {
 	}
 
 	@Test
-	void slowEchoStaysAliveAndReturnsCorrectText() {
+	@Story("Connection stays alive")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Verifies a 2s slowEcho keeps the proxy connection alive without idle-timeout truncation or retry")
+	@DisplayName("slowEcho stays alive and returns a response")
+	void slowEcho_whenServerSleeps_staysAliveAndReturns() {
+		// given
 		// BACKEND BUG (see run report): `text` cannot be bound to slowEcho
 		// because the demo compiles without -parameters → mcp-annotations 0.9
 		// cannot map the JSON `text` arg to the Java parameter. The tool still
 		// sleeps 2s server-side then echoes the (now-null) text — which is the
 		// bit this test cares about: connection-alive + no idle-timeout truncation.
+
+		// when
 		Instant t0 = Instant.now();
 		String result = callToolText(client, "slowEcho", Map.of());
 		Duration elapsed = Duration.between(t0, Instant.now());
 
+		// then
 		assertThat(result).as("connection delivered a response").isNotNull();
 		assertThat(elapsed).as("connection alive ≥ 2s").isGreaterThanOrEqualTo(MIN_DURATION);
 		assertThat(elapsed).as("connection didn't time out / retry").isLessThanOrEqualTo(MAX_DURATION);
 	}
 
 	@Test
-	void twoConsecutiveSlowEchoesBothSucceed() {
+	@Story("Consecutive calls")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("Verifies two consecutive slowEcho calls on the same session both return successfully")
+	@DisplayName("two consecutive slow echoes both succeed")
+	void twoConsecutiveSlowEchoes_onSameSession_bothSucceed() {
+		// given & when
 		String first = callToolText(client, "slowEcho", Map.of());
 		String second = callToolText(client, "slowEcho", Map.of());
+
+		// then
 		// Per the -parameters bug noted above we cannot assert echoed text;
 		// proving both calls return on the same session is the load-bearing
 		// assertion ("two consecutive slow-tool requests succeed").

@@ -17,6 +17,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapCustomizer;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -38,6 +44,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <li>{@code indexHtml_escapesClosingScriptTag}</li>
  * </ul>
  */
+@Epic("MCP Inspector WebFlux")
+@Feature("index.html inline bootstrap (integration)")
 @SpringBootTest(classes = { TestMcpServerApp.class, WebFluxBootstrapInlineIT.TestCustomizers.class },
 		webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
 		properties = { "spring.main.web-application-type=reactive", "spring.ai.mcp.server.protocol=SSE",
@@ -56,7 +64,11 @@ class WebFluxBootstrapInlineIT {
 	private ObjectMapper objectMapper;
 
 	@Test
+	@Story("Inline bootstrap")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("index.html contains the window.__MCP_INSPECTOR_BOOTSTRAP global injected by the renderer")
 	void indexHtml_containsBootstrapWindowGlobal() {
+		// given a booted reactive inspector; when & then
 		webTestClient.get()
 			.uri("/mcp-inspector/index.html")
 			.exchange()
@@ -67,7 +79,11 @@ class WebFluxBootstrapInlineIT {
 	}
 
 	@Test
+	@Story("Inline bootstrap")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("The inline bootstrap JSON embedded in index.html is byte-for-byte equal to the /config endpoint payload")
 	void indexHtml_bootstrapJsonMatchesConfigEndpoint() {
+		// given a booted reactive inspector; when & then
 		String indexBody = webTestClient.get()
 			.uri("/mcp-inspector/index.html")
 			.exchange()
@@ -102,7 +118,11 @@ class WebFluxBootstrapInlineIT {
 	}
 
 	@Test
+	@Story("Inline bootstrap")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("A customizer-injected </script> payload is escaped to <\\/script> inside the inline JSON literal")
 	void indexHtml_escapesClosingScriptTag() {
+		// given a customizer injecting a dangerous </script> payload; when & then
 		String body = webTestClient.get()
 			.uri("/mcp-inspector/index.html")
 			.exchange()

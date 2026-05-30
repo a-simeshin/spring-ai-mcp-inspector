@@ -27,7 +27,14 @@ import io.modelcontextprotocol.spec.McpSchema.ListToolsResult;
 import io.modelcontextprotocol.spec.McpSchema.Role;
 import io.modelcontextprotocol.spec.McpSchema.Root;
 import io.modelcontextprotocol.spec.McpSchema.TextContent;
-
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -54,65 +61,124 @@ import static org.assertj.core.api.Assertions.assertThat;
 				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration,"
 				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebFluxAutoConfiguration,"
 				+ "io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration" })
+@Epic("MCP Interactive Tools")
+@Feature("Sampling, elicitation and roots")
 class InteractiveToolsIT {
 
 	@LocalServerPort
 	private int port;
 
-	@Test
-	void toolsListContainsInteractiveTools() {
-		try (McpSyncClient client = baseClient().build()) {
-			client.initialize();
-			ListToolsResult result = client.listTools();
-			List<String> names = result.tools().stream().map(t -> t.name()).toList();
-			assertThat(names).contains("askLlm", "askUser", "listMyRoots");
+	@Nested
+	@DisplayName("tools/list")
+	class ToolsList {
+
+		@Test
+		@DisplayName("tools/list contains the interactive tools")
+		@Story("Interactive tool discovery")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Verifies the demo server advertises the interactive tools askLlm, askUser and listMyRoots.")
+		void listTools_overStreamable_containsInteractiveTools() {
+			// given
+			try (McpSyncClient client = baseClient().build()) {
+				// when
+				client.initialize();
+				ListToolsResult result = client.listTools();
+				List<String> names = result.tools().stream().map(t -> t.name()).toList();
+
+				// then
+				assertThat(names).contains("askLlm", "askUser", "listMyRoots");
+			}
 		}
+
 	}
 
-	@Test
-	void listMyRootsReturnsClientAdvertisedRoots() {
-		try (McpSyncClient client = baseClient().capabilities(ClientCapabilities.builder().roots(false).build())
-			.roots(new Root("file:///tmp/demo-root-a", "alpha"), new Root("file:///tmp/demo-root-b", "beta"))
-			.build()) {
-			client.initialize();
-			CallToolResult result = client.callTool(new CallToolRequest("listMyRoots", Map.of()));
-			assertThat(result.isError()).isNotEqualTo(Boolean.TRUE);
-			String text = firstText(result);
-			assertThat(text).contains("file:///tmp/demo-root-a");
-			assertThat(text).contains("file:///tmp/demo-root-b");
+	@Nested
+	@DisplayName("listMyRoots()")
+	class ListMyRoots {
+
+		@Test
+		@DisplayName("listMyRoots returns the roots advertised by the client")
+		@Story("Roots")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Verifies the listMyRoots tool reflects back the file roots that the client advertised "
+				+ "via the roots capability.")
+		void listMyRoots_whenClientAdvertisesRoots_returnsAdvertisedRoots() {
+			// given
+			try (McpSyncClient client = baseClient().capabilities(ClientCapabilities.builder().roots(false).build())
+				.roots(new Root("file:///tmp/demo-root-a", "alpha"), new Root("file:///tmp/demo-root-b", "beta"))
+				.build()) {
+				// when
+				client.initialize();
+				CallToolResult result = client.callTool(new CallToolRequest("listMyRoots", Map.of()));
+
+				// then
+				assertThat(result.isError()).isNotEqualTo(Boolean.TRUE);
+				String text = firstText(result);
+				assertThat(text).contains("file:///tmp/demo-root-a");
+				assertThat(text).contains("file:///tmp/demo-root-b");
+			}
 		}
+
 	}
 
-	@Test
-	void askLlmReturnsSamplingHandlerResponse() {
-		try (McpSyncClient client = baseClient().capabilities(ClientCapabilities.builder().sampling().build())
-			.sampling(req -> CreateMessageResult.builder()
-				.role(Role.ASSISTANT)
-				.content(new TextContent("the sky is blue because of Rayleigh scattering"))
-				.model("stub-model")
-				.build())
-			.build()) {
-			client.initialize();
-			CallToolResult result = client
-				.callTool(new CallToolRequest("askLlm", Map.of("question", "why is the sky blue?")));
-			assertThat(result.isError()).isNotEqualTo(Boolean.TRUE);
-			assertThat(firstText(result)).contains("Rayleigh scattering");
+	@Nested
+	@DisplayName("askLlm()")
+	class AskLlm {
+
+		@Test
+		@DisplayName("askLlm returns the response produced by the client's sampling handler")
+		@Story("Sampling")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Verifies the askLlm tool invokes the client-side sampling handler and surfaces its response.")
+		void askLlm_whenSamplingHandlerRegistered_returnsHandlerResponse() {
+			// given
+			try (McpSyncClient client = baseClient().capabilities(ClientCapabilities.builder().sampling().build())
+				.sampling(req -> CreateMessageResult.builder()
+					.role(Role.ASSISTANT)
+					.content(new TextContent("the sky is blue because of Rayleigh scattering"))
+					.model("stub-model")
+					.build())
+				.build()) {
+				// when
+				client.initialize();
+				CallToolResult result = client
+					.callTool(new CallToolRequest("askLlm", Map.of("question", "why is the sky blue?")));
+
+				// then
+				assertThat(result.isError()).isNotEqualTo(Boolean.TRUE);
+				assertThat(firstText(result)).contains("Rayleigh scattering");
+			}
 		}
+
 	}
 
-	@Test
-	void askUserReturnsElicitationHandlerResponse() {
-		try (McpSyncClient client = baseClient().capabilities(ClientCapabilities.builder().elicitation().build())
-			// SDK 0.18.2 quirk: ElicitResult.Builder lacks an `action` setter; the
-			// 2-arg record constructor is the cleanest path.
-			.elicitation(req -> new ElicitResult(ElicitResult.Action.ACCEPT, Map.of("answer", "blue")))
-			.build()) {
-			client.initialize();
-			CallToolResult result = client
-				.callTool(new CallToolRequest("askUser", Map.of("question", "what is your favorite color?")));
-			assertThat(result.isError()).isNotEqualTo(Boolean.TRUE);
-			assertThat(firstText(result)).contains("blue");
+	@Nested
+	@DisplayName("askUser()")
+	class AskUser {
+
+		@Test
+		@DisplayName("askUser returns the response produced by the client's elicitation handler")
+		@Story("Elicitation")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Verifies the askUser tool invokes the client-side elicitation handler and surfaces its answer.")
+		void askUser_whenElicitationHandlerRegistered_returnsHandlerResponse() {
+			// given
+			try (McpSyncClient client = baseClient().capabilities(ClientCapabilities.builder().elicitation().build())
+				// SDK 0.18.2 quirk: ElicitResult.Builder lacks an `action` setter; the
+				// 2-arg record constructor is the cleanest path.
+				.elicitation(req -> new ElicitResult(ElicitResult.Action.ACCEPT, Map.of("answer", "blue")))
+				.build()) {
+				// when
+				client.initialize();
+				CallToolResult result = client
+					.callTool(new CallToolRequest("askUser", Map.of("question", "what is your favorite color?")));
+
+				// then
+				assertThat(result.isError()).isNotEqualTo(Boolean.TRUE);
+				assertThat(firstText(result)).contains("blue");
+			}
 		}
+
 	}
 
 	// ---------------------------------------------------------------------

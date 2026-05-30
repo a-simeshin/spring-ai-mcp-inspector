@@ -13,15 +13,27 @@ import java.util.List;
 import java.util.Map;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Unit tests for Jackson serialization of {@link InspectorBootstrap}. */
+@Epic("MCP Inspector Core")
+@Feature("Bootstrap Jackson serialization")
 class InspectorBootstrapJacksonTest {
 
 	@Test
+	@Story("Serialization")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("InspectorBootstrap serializes all first-class fields plus the extra map to the expected JSON shape")
 	void serialize_emitsExpectedShape() throws Exception {
+		// given
 		InspectorBootstrap bootstrap = new InspectorBootstrap();
 		bootstrap.setAuthToken("token-abc");
 		bootstrap.setProxyAddress("/mcp-inspector-api");
@@ -34,8 +46,10 @@ class InspectorBootstrapJacksonTest {
 			.of(new ServerEntry("internal", "https://internal/mcp", "streamable-http", Map.of("X-Env", "prod"))));
 		bootstrap.getExtra().put("featureFlag", "on");
 
+		// when
 		String json = new ObjectMapper().writeValueAsString(bootstrap);
 
+		// then
 		assertThat(json).contains("\"authToken\":\"token-abc\"")
 			.contains("\"proxyAddress\":\"/mcp-inspector-api\"")
 			.contains("\"detectedTransport\":\"streamable-http\"")

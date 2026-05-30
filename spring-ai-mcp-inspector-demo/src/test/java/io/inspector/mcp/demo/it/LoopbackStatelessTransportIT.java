@@ -16,6 +16,13 @@ import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.ListToolsResult;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -40,6 +47,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration,"
 				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebFluxAutoConfiguration,"
 				+ "io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration" })
+@Epic("MCP Transports")
+@Feature("Loopback Stateless")
 class LoopbackStatelessTransportIT {
 
 	@Autowired
@@ -49,12 +58,21 @@ class LoopbackStatelessTransportIT {
 	private int port;
 
 	@Test
-	void toolsListViaLoopbackStateless() {
+	@DisplayName("listTools via the loopback stateless client returns the demo tools")
+	@Story("Loopback stateless tools/list")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Boots the demo server with the stateless protocol and verifies a real loopback inspector "
+			+ "client can list the expected demo tools (echo, sum, currentTime).")
+	void listTools_viaLoopbackStateless_returnsDemoTools() {
+		// given
 		McpSyncClient client = loopbackFactory.forStateless("127.0.0.1", port, "/mcp");
 		try {
+			// when
 			client.initialize();
 			ListToolsResult result = client.listTools();
 			List<String> names = result.tools().stream().map(t -> t.name()).toList();
+
+			// then
 			assertThat(names).contains("echo", "sum", "currentTime");
 		}
 		finally {

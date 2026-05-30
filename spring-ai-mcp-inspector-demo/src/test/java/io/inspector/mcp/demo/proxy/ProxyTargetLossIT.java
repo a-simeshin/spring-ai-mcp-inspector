@@ -21,8 +21,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -68,6 +75,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * error from the failed POST anyway. We document this in the assertion so a regression
  * that hangs forever fails loudly.
  */
+@Epic("Inspector Proxy")
+@Feature("Target loss handling")
 class ProxyTargetLossIT {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -117,7 +126,14 @@ class ProxyTargetLossIT {
 
 	@ParameterizedTest(name = "{0}")
 	@EnumSource(ProxyAppHarness.Stack.class)
-	void targetLossMidSessionSurfacesAsErrorAndCleansUp(ProxyAppHarness.Stack stack) throws Exception {
+	@DisplayName("Target loss mid-session surfaces as 5xx and the session is cleaned up")
+	@Story("Upstream loss")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Kills the upstream target mid-session and verifies the next POST returns 5xx without "
+			+ "hanging, then the session is reaped so a subsequent DELETE returns 404")
+	void targetLossMidSession_whenUpstreamKilled_surfacesAsErrorAndCleansUp(ProxyAppHarness.Stack stack)
+			throws Exception {
+		// given
 		inspectorApp = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
 		targetApp = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
 
@@ -138,10 +154,12 @@ class ProxyTargetLossIT {
 		final JsonNode baselineBody = MAPPER.readTree(baseline.body());
 		assertThat(baselineBody.path("result").path("tools").isArray()).as("baseline tools list on %s", stack).isTrue();
 
+		// when
 		// 3. Kill the target.
 		targetApp.close();
 		targetApp = null;
 
+		// then
 		// 4. The next POST through the proxy must NOT hang. Either:
 		// - 504 (proxy's own upstream-await timeout fired), or
 		// - 5xx (transport-level failure surfaced sooner).

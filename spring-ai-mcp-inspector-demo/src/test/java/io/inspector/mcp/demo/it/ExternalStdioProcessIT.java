@@ -21,6 +21,13 @@ import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.ListToolsResult;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,10 +46,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Mandated by {@code ### Integration Layer (Java)} →
  * {@code ExternalStdioProcessIT#externalStdioServerToolsListViaSpawnedJar}.
  */
+@Epic("MCP Transports")
+@Feature("External stdio process")
 class ExternalStdioProcessIT {
 
 	@Test
-	void externalStdioServerToolsListViaSpawnedJar() {
+	@DisplayName("listTools over a spawned external stdio server returns the demo tools")
+	@Story("Spawned process tools/list")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Spawns DemoApplication as an external Java child process in stdio mode and verifies "
+			+ "the MCP stdio client can list the expected demo tools (echo, sum, currentTime).")
+	void listTools_overSpawnedExternalStdioServer_returnsDemoTools() {
+		// given
 		String javaHome = System.getProperty("java.home");
 		Path javaBin = Path.of(javaHome, "bin", isWindows() ? "java.exe" : "java");
 		assertThat(javaBin).as("java executable must exist at %s", javaBin).exists();
@@ -66,9 +81,12 @@ class ExternalStdioProcessIT {
 		ExternalStdioClientFactory factory = new ExternalStdioClientFactory();
 		McpSyncClient client = factory.forCommand(command, Map.of());
 		try {
+			// when
 			client.initialize();
 			ListToolsResult result = client.listTools();
 			List<String> names = result.tools().stream().map(t -> t.name()).toList();
+
+			// then
 			assertThat(names).contains("echo", "sum", "currentTime");
 		}
 		finally {

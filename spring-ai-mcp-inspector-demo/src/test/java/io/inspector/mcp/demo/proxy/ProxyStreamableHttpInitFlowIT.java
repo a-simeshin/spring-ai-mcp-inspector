@@ -21,7 +21,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -54,6 +61,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * Both stacks (webmvc + webflux) must satisfy the contract.
  */
+@Epic("Inspector Proxy")
+@Feature("Streamable-HTTP init flow")
 class ProxyStreamableHttpInitFlowIT {
 
 	/** Jackson instance reused across requests; the proxy returns/parses JSON only. */
@@ -93,12 +102,20 @@ class ProxyStreamableHttpInitFlowIT {
 	 */
 	@ParameterizedTest(name = "{0}")
 	@EnumSource(ProxyAppHarness.Stack.class)
-	void streamableHttpInitFlowReturnsRealUpstreamResponses(ProxyAppHarness.Stack stack) throws Exception {
+	@DisplayName("Streamable-HTTP init flow returns real upstream responses, not the legacy placeholder")
+	@Story("Spec-compliant init")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Regression: drives initialize, notifications/initialized and tools/list through the "
+			+ "streamable-HTTP proxy and asserts real upstream responses (200 with result, 202 for "
+			+ "notifications), guarding against the old {\"accepted\":true} placeholder")
+	void streamableHttpInitFlow_whenDriven_returnsRealUpstreamResponses(ProxyAppHarness.Stack stack) throws Exception {
+		// given
 		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
 		int port = ProxyAppHarness.port(app);
 		String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
 
+		// when
 		// ---- 1. initialize ------------------------------------------------
 		ObjectNode init = buildInit(1);
 		HttpResponse<String> initResponse = postProxy(

@@ -13,7 +13,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapCustomizer;
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -40,6 +47,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <li>{@code customizer_orderedByAtOrder}</li>
  * </ul>
  */
+@Epic("WebMvc Inspector")
+@Feature("Bootstrap customizers")
 @SpringBootTest(classes = { TestMcpServerApp.class, WebMvcCustomizerIT.TestCustomizers.class },
 		webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
 		properties = { "spring.ai.mcp.server.protocol=SSE", "spring.ai.mcp.server.name=mcp-inspector-itest-cust",
@@ -61,8 +70,15 @@ class WebMvcCustomizerIT {
 	private int port;
 
 	@Test
+	@DisplayName("a customizer influences the /config bootstrap")
+	@Story("Customizer integration")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("A registered InspectorBootstrapCustomizer contributes a defaultUrl visible at /config")
 	void customizer_affectsConfigEndpoint() throws Exception {
+		// when
 		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/config"), String.class);
+
+		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		JsonNode body = objectMapper.readTree(response.getBody());
 		// setDefaultUrlCustomizer (the lowest-order one) sets defaultUrl. The
@@ -73,8 +89,15 @@ class WebMvcCustomizerIT {
 	}
 
 	@Test
+	@DisplayName("higher @Order customizer wins on field conflict")
+	@Story("Customizer integration")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("When two customizers set the same field, the one with the higher @Order value wins")
 	void customizer_orderedByAtOrder() throws Exception {
+		// when
 		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/config"), String.class);
+
+		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		JsonNode body = objectMapper.readTree(response.getBody());
 		// Two customizers set defaultUrl: @Order(1) writes ORDER_LOSER, then

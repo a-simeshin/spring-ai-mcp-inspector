@@ -16,7 +16,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.inspector.mcp.webmvc.InspectorServerPortHolder;
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -46,6 +53,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <li>{@code jsonRpcRelayCallsToolsList}</li>
  * </ul>
  */
+@Epic("WebMvc Inspector")
+@Feature("Auto-configuration integration")
 @SpringBootTest(classes = TestMcpServerApp.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = { "spring.ai.mcp.server.protocol=SSE", "spring.ai.mcp.server.name=mcp-inspector-itest",
 		"spring.ai.mcp.server.version=0.1.0", "spring.ai.mcp.inspector.auth-enabled=false",
@@ -65,9 +74,15 @@ class WebMvcAutoConfigurationIT {
 	private int port;
 
 	@Test
+	@DisplayName("GET /config returns the detected SSE transport")
+	@Story("Config endpoint")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("The /config endpoint over a real random-port server reports the detected SSE transport and stack")
 	void configEndpointReturnsDetectedTransport() throws Exception {
+		// when
 		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/api/config"), String.class);
 
+		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		JsonNode body = objectMapper.readTree(response.getBody());
 		assertThat(body.path("transport").asText()).isEqualTo("SSE");
@@ -76,6 +91,10 @@ class WebMvcAutoConfigurationIT {
 	}
 
 	@Test
+	@DisplayName("JSON-RPC tools/list relays through the proxy")
+	@Story("JSON-RPC relay")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Opening a session via /connect then relaying tools/list returns the backing server's tool names")
 	void jsonRpcRelayCallsToolsList() throws Exception {
 		// Force the port holder to point at the random embedded-tomcat port,
 		// otherwise the loopback factory falls back to the default 8080.

@@ -12,6 +12,14 @@ package io.inspector.mcp.webmvc.it;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
+
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -35,6 +43,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <li>{@code configEndpoint_setsNoCacheHeaders}</li>
  * </ul>
  */
+@Epic("WebMvc Inspector")
+@Feature("Bootstrap config endpoint")
 @SpringBootTest(classes = TestMcpServerApp.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
 		properties = { "spring.ai.mcp.server.protocol=SSE", "spring.ai.mcp.server.name=mcp-inspector-itest-cfgep",
 				"spring.ai.mcp.server.version=0.1.0", "spring.ai.mcp.inspector.auth-enabled=false",
@@ -51,8 +61,15 @@ class WebMvcBootstrapEndpointIT {
 	private int port;
 
 	@Test
+	@DisplayName("GET /config returns the bootstrap JSON with required fields")
+	@Story("Bootstrap JSON")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("The /config endpoint exposes authToken, proxyAddress and detectedTransport")
 	void configEndpoint_returnsBootstrapJsonWithRequiredFields() throws Exception {
+		// when
 		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/config"), String.class);
+
+		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getHeaders().getContentType()).isNotNull()
 			.matches(mt -> MediaType.APPLICATION_JSON.isCompatibleWith(mt));
@@ -65,8 +82,15 @@ class WebMvcBootstrapEndpointIT {
 	}
 
 	@Test
+	@DisplayName("GET /config returns parseable JSON")
+	@Story("Bootstrap JSON")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("The /config endpoint returns a JSON object that parses cleanly")
 	void configEndpoint_returnsValidJson() throws Exception {
+		// when
 		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/config"), String.class);
+
+		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		// Parse cleanly — anything that doesn't is invalid JSON.
 		JsonNode root = objectMapper.readTree(response.getBody());
@@ -74,8 +98,15 @@ class WebMvcBootstrapEndpointIT {
 	}
 
 	@Test
+	@DisplayName("GET /config sets no-cache headers")
+	@Story("Bootstrap JSON")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("The /config endpoint sets a no-cache Cache-Control header so the SPA always re-reads it")
 	void configEndpoint_setsNoCacheHeaders() {
+		// when
 		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/config"), String.class);
+
+		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		String cacheControl = response.getHeaders().getFirst("Cache-Control");
 		assertThat(cacheControl).as("Cache-Control header on /config").isNotNull().contains("no-cache");

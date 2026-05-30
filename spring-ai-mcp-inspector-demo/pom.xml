@@ -57,6 +57,19 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- Allure (project test standard); version aligned via allure-bom imported in the root pom -->
+        <dependency>
+            <groupId>io.qameta.allure</groupId>
+            <artifactId>allure-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+            <version>${aspectj.version}</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- Test scope: needed by WebFluxLoopback*IT (reactive stack tests) regardless of active Maven profile -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

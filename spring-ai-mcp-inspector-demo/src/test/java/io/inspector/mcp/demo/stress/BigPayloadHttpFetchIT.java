@@ -23,8 +23,15 @@ import java.time.Instant;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
 
@@ -50,6 +57,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * constraint) while still giving us a true 1 MiB external resource for the proxy to
  * round-trip.
  */
+@Epic("Stress & Scale")
+@Feature("Big payload HTTP fetch proxy")
 class BigPayloadHttpFetchIT {
 
 	private static final int ONE_MIB = 1024 * 1024;
@@ -87,7 +96,12 @@ class BigPayloadHttpFetchIT {
 	}
 
 	@Test
-	void fetchProxyReturnsOneMibBodyIntact() throws Exception {
+	@Story("Large body round-trip")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Verifies the outbound fetch proxy hands back a 1 MiB body intact without truncation")
+	@DisplayName("fetch proxy returns a 1 MiB body intact")
+	void fetchProxy_withOneMibTarget_returnsBodyIntact() throws Exception {
+		// given
 		app = StressTestSupport.startWebmvc("STREAMABLE");
 		int port = StressTestSupport.port(app);
 
@@ -104,6 +118,7 @@ class BigPayloadHttpFetchIT {
 		int hostPort = bigPayloadHost.getAddress().getPort();
 		String selfTargetUrl = "http://127.0.0.1:" + hostPort + "/big-payload";
 
+		// when
 		String requestBody = "{\"url\":\"" + selfTargetUrl + "\",\"init\":{\"method\":\"GET\"}}";
 		HttpRequest fetchRequest = HttpRequest
 			.newBuilder(URI.create("http://127.0.0.1:" + port + "/mcp-inspector-api/fetch"))
@@ -116,6 +131,7 @@ class BigPayloadHttpFetchIT {
 		HttpResponse<String> response = HTTP.send(fetchRequest, HttpResponse.BodyHandlers.ofString());
 		Duration elapsed = Duration.between(t0, Instant.now());
 
+		// then
 		assertThat(response.statusCode()).as("fetch proxy responded 2xx (head=%s)", abbreviate(response.body()))
 			.isBetween(200, 299);
 		assertThat(elapsed).as("fetch proxy budget").isLessThanOrEqualTo(FETCH_BUDGET);
