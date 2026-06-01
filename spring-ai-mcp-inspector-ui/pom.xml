@@ -22,6 +22,8 @@
         <jacoco.skip>true</jacoco.skip>
         <!-- Vendored upstream client, no first-party Java: checkstyle gate off. -->
         <checkstyle.skip>true</checkstyle.skip>
+        <!-- Vendored upstream client, no first-party Java: SpotBugs gate off. -->
+        <spotbugs.skip>true</spotbugs.skip>
     </properties>
 
     <build>
