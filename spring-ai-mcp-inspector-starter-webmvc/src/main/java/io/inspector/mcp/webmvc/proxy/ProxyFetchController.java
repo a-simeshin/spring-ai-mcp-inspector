@@ -6,7 +6,14 @@
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webmvc.proxy;
 
 import java.net.URI;
@@ -47,6 +54,8 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>
  * Only {@code http} / {@code https} schemes are allowed; other URLs return 400.
+ *
+ * @author Artem Simeshin
  */
 @RestController
 @RequestMapping("${spring.ai.mcp.inspector.path:/mcp-inspector}-api")
@@ -57,38 +66,38 @@ public class ProxyFetchController {
 	private final HttpClient httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
 	@PostMapping(path = "/fetch", consumes = MediaType.APPLICATION_JSON_VALUE)
-	public ResponseEntity<Object> fetch(@RequestBody JsonNode body) {
-		JsonNode urlNode = body.get("url");
+	public ResponseEntity<Object> fetch(@RequestBody final JsonNode body) {
+		final JsonNode urlNode = body.get("url");
 		if (urlNode == null || !urlNode.isTextual() || urlNode.asText().isBlank()) {
 			return ResponseEntity.badRequest().body(Map.of("error", "missing or invalid url"));
 		}
-		URI uri;
+		final URI uri;
 		try {
 			uri = URI.create(urlNode.asText());
 		}
-		catch (Exception ex) {
+		catch (final Exception ex) {
 			return ResponseEntity.badRequest().body(Map.of("error", "invalid URL"));
 		}
-		String scheme = uri.getScheme();
+		final String scheme = uri.getScheme();
 		if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
 			return ResponseEntity.badRequest().body(Map.of("error", "only http/https URLs are allowed"));
 		}
 
-		JsonNode init = body.get("init");
-		String method = (init != null && init.hasNonNull("method")) ? init.get("method").asText("GET") : "GET";
-		String reqBody = (init != null && init.hasNonNull("body")) ? init.get("body").asText("") : "";
+		final JsonNode init = body.get("init");
+		final String method = (init != null && init.hasNonNull("method")) ? init.get("method").asText("GET") : "GET";
+		final String reqBody = (init != null && init.hasNonNull("body")) ? init.get("body").asText("") : "";
 
-		HttpRequest.Builder reqBuilder = HttpRequest.newBuilder(uri)
+		final HttpRequest.Builder reqBuilder = HttpRequest.newBuilder(uri)
 			.timeout(Duration.ofSeconds(30))
 			.method(method.toUpperCase(), reqBody.isEmpty() ? HttpRequest.BodyPublishers.noBody()
 					: HttpRequest.BodyPublishers.ofString(reqBody));
 		if (init != null && init.has("headers")) {
-			JsonNode headers = init.get("headers");
-			headers.fields().forEachRemaining(e -> {
+			final JsonNode headers = init.get("headers");
+			headers.fields().forEachRemaining((e) -> {
 				try {
 					reqBuilder.header(e.getKey(), e.getValue().asText());
 				}
-				catch (Exception ignored) {
+				catch (final Exception ignored) {
 					// restricted header names (e.g. Host) raise IllegalArgumentException;
 					// skip.
 				}
@@ -96,14 +105,15 @@ public class ProxyFetchController {
 		}
 
 		try {
-			HttpResponse<String> response = httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
-			Map<String, String> respHeaders = new LinkedHashMap<>();
+			final HttpResponse<String> response = this.httpClient.send(reqBuilder.build(),
+					HttpResponse.BodyHandlers.ofString());
+			final Map<String, String> respHeaders = new LinkedHashMap<>();
 			response.headers().map().forEach((k, v) -> {
 				if (!v.isEmpty()) {
 					respHeaders.put(k, v.get(0));
 				}
 			});
-			Map<String, Object> envelope = new LinkedHashMap<>();
+			final Map<String, Object> envelope = new LinkedHashMap<>();
 			envelope.put("ok", response.statusCode() >= 200 && response.statusCode() < 300);
 			envelope.put("status", response.statusCode());
 			envelope.put("statusText", "");
@@ -111,10 +121,10 @@ public class ProxyFetchController {
 			envelope.put("body", response.body());
 			return ResponseEntity.status(response.statusCode()).body(envelope);
 		}
-		catch (Exception ex) {
+		catch (final Exception ex) {
 			LOG.warn("proxy /fetch failed for {}: {}", uri, ex.toString());
 			return ResponseEntity.status(502)
-				.body(Map.of("error", ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()));
+				.body(Map.of("error", (ex.getMessage() != null) ? ex.getMessage() : ex.getClass().getSimpleName()));
 		}
 	}
 

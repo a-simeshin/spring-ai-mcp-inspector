@@ -1506,10 +1506,11 @@ class InspectorUiIT {
 
 		@BeforeAll
 		void bootAndConnect() {
-			// For sidebar-only tests we don't need a connection, but using openAndConnect
-			// keeps the test consistent with the other nested groups.
+			// Sidebar-only tests don't connect. The OAuth block renders only for a
+			// non-stdio transport, so pin ?transport=sse to avoid the initial "stdio"
+			// default racing the async /config fetch.
 			startApp(new Combo("webmvc", "sse"));
-			open("/mcp-inspector/index.html");
+			open("/mcp-inspector/index.html?transport=sse");
 		}
 
 		@AfterAll
@@ -1523,12 +1524,23 @@ class InspectorUiIT {
 		@Description("Toggling the auth-button shows and hides the OAuth Client ID input.")
 		@DisplayName("togglesAuthenticationBlock — auth-button shows/hides OAuth Client ID input")
 		void authBlock_toggle_showsAndHidesOAuthClientIdInput() {
-			// given & when
-			$("[data-testid=auth-button]").shouldBe(visible).click();
+			// given
+			// A sibling test (custom headers) lives inside the auth block and may leave
+			// it expanded; the shared PER_CLASS page carries that state, so establish a
+			// known collapsed precondition instead of assuming a fresh sidebar.
+			final SelenideElement authButton = $("[data-testid=auth-button]");
+			authButton.shouldBe(visible);
+			if ("true".equals(authButton.getAttribute("aria-expanded"))) {
+				authButton.click();
+				$("[data-testid=oauth-client-id-input]").shouldNotBe(visible);
+			}
+
+			// when
+			authButton.click();
 
 			// then
 			$("[data-testid=oauth-client-id-input]").shouldBe(visible);
-			$("[data-testid=auth-button]").click();
+			authButton.click();
 			$("[data-testid=oauth-client-id-input]").shouldNotBe(visible);
 		}
 

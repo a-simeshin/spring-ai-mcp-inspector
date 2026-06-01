@@ -6,21 +6,28 @@
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webmvc.proxy;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 
-import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
-import io.inspector.mcp.core.config.McpInspectorProperties;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-
 import org.springframework.web.filter.OncePerRequestFilter;
+
+import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
+import io.inspector.mcp.core.config.McpInspectorProperties;
 
 /**
  * Bearer-token guard for {@code /mcp-inspector-api/**}.
@@ -40,6 +47,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  *
  * <p>
  * Skipped entirely when {@code spring.ai.mcp.inspector.auth-enabled=false}.
+ *
+ * @author Artem Simeshin
  */
 public class ProxyAuthFilter extends OncePerRequestFilter {
 
@@ -47,21 +56,21 @@ public class ProxyAuthFilter extends OncePerRequestFilter {
 
 	private final InspectorAuthTokenProvider tokenProvider;
 
-	public ProxyAuthFilter(McpInspectorProperties properties, InspectorAuthTokenProvider tokenProvider) {
+	public ProxyAuthFilter(final McpInspectorProperties properties, final InspectorAuthTokenProvider tokenProvider) {
 		this.properties = properties;
 		this.tokenProvider = tokenProvider;
 	}
 
 	@Override
-	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
-			throws ServletException, IOException {
+	protected void doFilterInternal(final HttpServletRequest request, final HttpServletResponse response,
+			final FilterChain chain) throws ServletException, IOException {
 
-		if (!properties.isAuthEnabled()) {
+		if (!this.properties.isAuthEnabled()) {
 			chain.doFilter(request, response);
 			return;
 		}
 
-		String path = request.getRequestURI();
+		final String path = request.getRequestURI();
 		if (path != null && path.endsWith("/health")) {
 			chain.doFilter(request, response);
 			return;
@@ -75,7 +84,7 @@ public class ProxyAuthFilter extends OncePerRequestFilter {
 			presented = request.getParameter(ProxyConstants.AUTH_QUERY_PARAM);
 		}
 
-		String expected = tokenProvider.token();
+		final String expected = this.tokenProvider.token();
 		if (presented == null || !constantTimeEquals(presented, expected)) {
 			response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid or missing MCP proxy auth token");
 			return;
@@ -83,9 +92,9 @@ public class ProxyAuthFilter extends OncePerRequestFilter {
 		chain.doFilter(request, response);
 	}
 
-	private static boolean constantTimeEquals(String a, String b) {
-		byte[] aa = a.getBytes(StandardCharsets.UTF_8);
-		byte[] bb = b.getBytes(StandardCharsets.UTF_8);
+	private static boolean constantTimeEquals(final String a, final String b) {
+		final byte[] aa = a.getBytes(StandardCharsets.UTF_8);
+		final byte[] bb = b.getBytes(StandardCharsets.UTF_8);
 		return MessageDigest.isEqual(aa, bb);
 	}
 

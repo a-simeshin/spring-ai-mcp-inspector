@@ -6,7 +6,14 @@
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webmvc.proxy;
 
 import java.io.IOException;
@@ -20,12 +27,6 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
-import io.inspector.mcp.core.proxy.McpProxy;
-import io.inspector.mcp.core.proxy.ProxySession;
-import io.inspector.mcp.core.proxy.ProxySessionRegistry;
-import io.inspector.mcp.core.proxy.ProxyTransportFactory;
-import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +41,12 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Sinks;
+
+import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxySession;
+import io.inspector.mcp.core.proxy.ProxySessionRegistry;
+import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 
 /**
  * Upstream-compatible proxy endpoints for SSE-style sessions.
@@ -61,6 +68,8 @@ import reactor.core.publisher.Sinks;
  * The SSE response opens with an {@code event: endpoint} prologue that tells the
  * browser-side {@code SSEClientTransport} where to POST messages. Subsequent frames from
  * the target are streamed as {@code event: message}.
+ *
+ * @author Artem Simeshin
  */
 @RestController
 @RequestMapping("${spring.ai.mcp.inspector.path:/mcp-inspector}-api")
@@ -81,8 +90,8 @@ public class SseProxyController {
 
 	private final McpInspectorProperties properties;
 
-	public SseProxyController(ProxySessionRegistry registry, ProxyTransportFactory transportFactory, McpProxy mcpProxy,
-			ObjectMapper objectMapper, McpInspectorProperties properties) {
+	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
+			final McpProxy mcpProxy, final ObjectMapper objectMapper, final McpInspectorProperties properties) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
@@ -103,36 +112,53 @@ public class SseProxyController {
 	 * <li>{@code url}: target URL for sse/streamable</li>
 	 * <li>{@code command}, {@code args}, {@code env}: stdio target</li>
 	 * </ul>
+	 * @param transportType the transport type ({@code sse}, {@code streamable-http}, or
+	 * {@code stdio})
+	 * @param url the target URL for SSE or streamable-HTTP transports
+	 * @param command the executable for stdio transport
+	 * @param args the arguments for stdio transport
+	 * @param env the environment variables for stdio transport as JSON
+	 * @return the {@link SseEmitter} for the opened session
 	 */
 	@GetMapping(path = "/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
 	public SseEmitter openSse(
-			@RequestParam(value = "transportType", required = false, defaultValue = "sse") String transportType,
-			@RequestParam(value = "url", required = false) String url,
-			@RequestParam(value = "command", required = false) String command,
-			@RequestParam(value = "args", required = false) String args,
-			@RequestParam(value = "env", required = false) String env) {
+			@RequestParam(value = "transportType", required = false, defaultValue = "sse") final String transportType,
+			@RequestParam(value = "url", required = false) final String url,
+			@RequestParam(value = "command", required = false) final String command,
+			@RequestParam(value = "args", required = false) final String args,
+			@RequestParam(value = "env", required = false) final String env) {
 		return openProxiedSession(transportType, url, command, args, env);
 	}
 
-	/** Convenience alias for stdio targets. Upstream exposes {@code GET /stdio} too. */
+	/**
+	 * Convenience alias for stdio targets. Upstream exposes {@code GET /stdio} too.
+	 * @param command the executable for stdio transport
+	 * @param args the arguments for stdio transport
+	 * @param env the environment variables for stdio transport as JSON
+	 * @return the {@link SseEmitter} for the opened session
+	 */
 	@GetMapping(path = "/stdio", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-	public SseEmitter openStdio(@RequestParam(value = "command") String command,
-			@RequestParam(value = "args", required = false) String args,
-			@RequestParam(value = "env", required = false) String env) {
+	public SseEmitter openStdio(@RequestParam("command") final String command,
+			@RequestParam(value = "args", required = false) final String args,
+			@RequestParam(value = "env", required = false) final String env) {
 		return openProxiedSession("stdio", null, command, args, env);
 	}
 
 	/**
 	 * Posts a JSON-RPC frame from the browser into the session's {@code browserToTarget}
 	 * sink, which forwards to the upstream transport.
+	 * @param sessionId the proxy session identifier
+	 * @param body the JSON-RPC frame to forward
+	 * @return 202 on success, 404 if the session is unknown, 500 on emit failure
 	 */
 	@PostMapping(path = "/message", consumes = MediaType.APPLICATION_JSON_VALUE)
-	public ResponseEntity<Void> postMessage(@RequestParam("sessionId") String sessionId, @RequestBody JsonNode body) {
-		ProxySession session = registry.get(sessionId);
+	public ResponseEntity<Void> postMessage(@RequestParam("sessionId") final String sessionId,
+			@RequestBody final JsonNode body) {
+		final ProxySession session = this.registry.get(sessionId);
 		if (session == null) {
 			return ResponseEntity.notFound().build();
 		}
-		Sinks.EmitResult result = session.browserToTarget().tryEmitNext(body);
+		final Sinks.EmitResult result = session.browserToTarget().tryEmitNext(body);
 		if (result.isFailure()) {
 			LOG.warn("proxy[{}] /message emit failure: {}", sessionId, result.name());
 			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
@@ -145,15 +171,16 @@ public class SseProxyController {
 	// session bring-up
 	// ---------------------------------------------------------------------
 
-	private SseEmitter openProxiedSession(String transportType, String url, String command, String args, String env) {
-		String sessionId = UUID.randomUUID().toString();
-		SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
+	private SseEmitter openProxiedSession(final String transportType, final String url, final String command,
+			final String args, final String env) {
+		final String sessionId = UUID.randomUUID().toString();
+		final SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
 
-		McpClientTransport target;
+		final McpClientTransport target;
 		try {
 			target = buildTargetTransport(transportType, url, command, args, env);
 		}
-		catch (Exception ex) {
+		catch (final Exception ex) {
 			LOG.warn("proxy[{}] failed to build target transport: {}", sessionId, ex.toString());
 			emitter.completeWithError(ex);
 			return emitter;
@@ -164,88 +191,93 @@ public class SseProxyController {
 		// attach per-request awaiters AND keep the long-lived GET /mcp SSE stream
 		// working. For the SSE proxy this is a strict superset of the previous
 		// unicast contract.
-		Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
-		Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
-		ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
-		registry.put(session);
+		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
+		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
+		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
+		this.registry.put(session);
 
 		// SSE prologue — tells SSEClientTransport on the browser where to POST.
 		try {
-			String messageEndpoint = properties.getProxyPath() + "/message?sessionId=" + sessionId;
+			final String messageEndpoint = this.properties.getProxyPath() + "/message?sessionId=" + sessionId;
 			emitter.send(SseEmitter.event().name("endpoint").data(messageEndpoint));
 		}
-		catch (IOException ex) {
+		catch (final IOException ex) {
 			LOG.warn("proxy[{}] failed to send endpoint event: {}", sessionId, ex.toString());
-			registry.removeAndClose(sessionId);
+			this.registry.removeAndClose(sessionId);
 			emitter.completeWithError(ex);
 			return emitter;
 		}
 
 		// target → browser pump
-		targetToBrowser.asFlux().subscribe(frame -> sendMessageEvent(emitter, sessionId, frame), err -> {
+		targetToBrowser.asFlux().subscribe((frame) -> sendMessageEvent(emitter, sessionId, frame), (err) -> {
 			LOG.warn("proxy[{}] target stream errored: {}", sessionId, err.toString());
 			emitter.completeWithError(err);
 		}, () -> emitter.complete());
 
-		emitter.onCompletion(() -> registry.removeAndClose(sessionId));
-		emitter.onTimeout(() -> registry.removeAndClose(sessionId));
-		emitter.onError(ex -> registry.removeAndClose(sessionId));
+		emitter.onCompletion(() -> this.registry.removeAndClose(sessionId));
+		emitter.onTimeout(() -> this.registry.removeAndClose(sessionId));
+		emitter.onError((ex) -> this.registry.removeAndClose(sessionId));
 
 		// Kick off the proxy. This call subscribes the browser->target pump
 		// and registers the inbound handler on the target transport.
-		mcpProxy.start(session).subscribe(ignored -> {
-		}, err -> {
+		this.mcpProxy.start(session).subscribe((ignored) -> {
+		}, (err) -> {
 			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
-			registry.removeAndClose(sessionId);
+			this.registry.removeAndClose(sessionId);
 			emitter.completeWithError(err);
 		});
 
 		return emitter;
 	}
 
-	private void sendMessageEvent(SseEmitter emitter, String sessionId, JsonNode frame) {
+	private void sendMessageEvent(final SseEmitter emitter, final String sessionId, final JsonNode frame) {
 		try {
-			emitter.send(SseEmitter.event().name("message").data(objectMapper.writeValueAsString(frame)));
+			emitter.send(SseEmitter.event().name("message").data(this.objectMapper.writeValueAsString(frame)));
 		}
-		catch (IOException ex) {
+		catch (final IOException ex) {
 			LOG.warn("proxy[{}] failed to send SSE message: {}", sessionId, ex.toString());
 			emitter.completeWithError(ex);
 		}
 	}
 
-	private McpClientTransport buildTargetTransport(String transportType, String url, String command, String args,
-			String env) throws Exception {
-		String type = (transportType == null) ? "sse" : transportType.toLowerCase();
+	private McpClientTransport buildTargetTransport(final String transportType, final String url, final String command,
+			final String args, final String env) throws Exception {
+		final String type = (transportType != null) ? transportType.toLowerCase() : "sse";
 		return switch (type) {
 			case "sse" -> {
 				if (url == null || url.isBlank()) {
 					throw new IllegalArgumentException("missing required 'url' query parameter for SSE transport");
 				}
-				yield transportFactory.openSse(URI.create(url));
+				yield this.transportFactory.openSse(URI.create(url));
 			}
 			case "streamable-http" -> {
 				if (url == null || url.isBlank()) {
 					throw new IllegalArgumentException(
 							"missing required 'url' query parameter for streamable-http transport");
 				}
-				yield transportFactory.openStreamable(URI.create(url));
+				yield this.transportFactory.openStreamable(URI.create(url));
 			}
 			case "stdio" -> {
 				if (command == null || command.isBlank()) {
 					throw new IllegalArgumentException(
 							"missing required 'command' query parameter for stdio transport");
 				}
-				List<String> argv = parseArgv(command, args);
-				Map<String, String> environment = parseEnv(env);
-				yield transportFactory.openStdio(argv, environment);
+				final List<String> argv = parseArgv(command, args);
+				final Map<String, String> environment = parseEnv(env);
+				yield this.transportFactory.openStdio(argv, environment);
 			}
 			default -> throw new IllegalArgumentException("unsupported transportType: " + transportType);
 		};
 	}
 
-	/** Tokenize {@code command} into [exe, ...] and append shell-split {@code args}. */
-	private static List<String> parseArgv(String command, String args) {
-		List<String> argv = new java.util.ArrayList<>();
+	/**
+	 * Tokenize {@code command} into [exe, ...] and append shell-split {@code args}.
+	 * @param command the executable command
+	 * @param args optional whitespace-separated arguments
+	 * @return the full argument vector
+	 */
+	private static List<String> parseArgv(final String command, final String args) {
+		final List<String> argv = new java.util.ArrayList<>();
 		argv.add(command.trim());
 		if (args != null && !args.isBlank()) {
 			// upstream uses shell-quote; we do a plain whitespace split — good enough
@@ -255,17 +287,17 @@ public class SseProxyController {
 		return argv;
 	}
 
-	private Map<String, String> parseEnv(String env) {
+	private Map<String, String> parseEnv(final String env) {
 		if (env == null || env.isBlank()) {
 			return Map.of();
 		}
 		try {
-			JsonNode node = objectMapper.readTree(env);
-			Map<String, String> out = new LinkedHashMap<>();
-			node.fields().forEachRemaining(e -> out.put(e.getKey(), e.getValue().asText()));
+			final JsonNode node = this.objectMapper.readTree(env);
+			final Map<String, String> out = new LinkedHashMap<>();
+			node.fields().forEachRemaining((e) -> out.put(e.getKey(), e.getValue().asText()));
 			return out;
 		}
-		catch (Exception ex) {
+		catch (final Exception ex) {
 			LOG.warn("proxy: ignoring malformed env JSON: {}", ex.toString());
 			return new HashMap<>();
 		}

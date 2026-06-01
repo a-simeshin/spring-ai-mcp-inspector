@@ -6,7 +6,14 @@
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.core.config;
 
 import java.util.ArrayList;
@@ -39,6 +46,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * Practical consequence for tests: setting the property via {@code @TestPropertySource}
  * or {@code @SpringBootTest(properties=...)} works, but {@code @DynamicPropertySource}
  * registers too late for {@code @RequestMapping} placeholders to pick up the override.
+ *
+ * @author Artem Simeshin
  */
 @ConfigurationProperties(prefix = "spring.ai.mcp.inspector")
 public class McpInspectorProperties {
@@ -69,18 +78,18 @@ public class McpInspectorProperties {
 	private List<String> allowedOrigins = new ArrayList<>();
 
 	public boolean isEnabled() {
-		return enabled;
+		return this.enabled;
 	}
 
-	public void setEnabled(boolean enabled) {
+	public void setEnabled(final boolean enabled) {
 		this.enabled = enabled;
 	}
 
 	public String getPath() {
-		return path;
+		return this.path;
 	}
 
-	public void setPath(String path) {
+	public void setPath(final String path) {
 		if (path == null || path.isBlank()) {
 			throw new IllegalArgumentException("spring.ai.mcp.inspector.path must not be blank");
 		}
@@ -97,32 +106,33 @@ public class McpInspectorProperties {
 	 * Returns the path prefix the proxy backend is mounted under. Derived as
 	 * {@code path + "-api"} — e.g. when {@code path == "/mcp-inspector"} this returns
 	 * {@code "/mcp-inspector-api"}.
+	 * @return the proxy path (never {@code null})
 	 */
 	public String getProxyPath() {
-		return path + "-api";
+		return this.path + "-api";
 	}
 
 	public boolean isAuthEnabled() {
-		return authEnabled;
+		return this.authEnabled;
 	}
 
-	public void setAuthEnabled(boolean authEnabled) {
+	public void setAuthEnabled(final boolean authEnabled) {
 		this.authEnabled = authEnabled;
 	}
 
 	public String getAuthToken() {
-		return authToken;
+		return this.authToken;
 	}
 
-	public void setAuthToken(String authToken) {
+	public void setAuthToken(final String authToken) {
 		this.authToken = authToken;
 	}
 
 	public List<String> getAllowedOrigins() {
-		return allowedOrigins;
+		return this.allowedOrigins;
 	}
 
-	public void setAllowedOrigins(List<String> allowedOrigins) {
+	public void setAllowedOrigins(final List<String> allowedOrigins) {
 		this.allowedOrigins = (allowedOrigins != null) ? allowedOrigins : new ArrayList<>();
 	}
 

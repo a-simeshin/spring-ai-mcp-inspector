@@ -6,20 +6,28 @@
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webflux.filter;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 
-import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
-import io.inspector.mcp.core.config.McpInspectorProperties;
 import org.springframework.core.Ordered;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Mono;
+
+import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
+import io.inspector.mcp.core.config.McpInspectorProperties;
 
 /**
  * Reactive auth filter for the inspector REST endpoints. Validates the
@@ -30,11 +38,15 @@ import reactor.core.publisher.Mono;
  * Only requests starting with {@code /mcp-inspector/api/} are guarded — the UI
  * (index.html, JS, CSS) is served unauthenticated because the token is embedded into the
  * HTML template and the SSE endpoint uses {@code ?auth=}.
+ *
+ * @author Artem Simeshin
  */
 public class InspectorAuthWebFilter implements WebFilter, Ordered {
 
+	/** Header name carrying the inspector authentication token. */
 	public static final String HEADER = "X-MCP-Inspector-Auth";
 
+	/** Query parameter carrying the inspector authentication token for SSE clients. */
 	public static final String QUERY_PARAM = "auth";
 
 	private final McpInspectorProperties properties;
@@ -45,12 +57,13 @@ public class InspectorAuthWebFilter implements WebFilter, Ordered {
 
 	private final String apiPrefix;
 
-	public InspectorAuthWebFilter(McpInspectorProperties properties, InspectorAuthTokenProvider tokenProvider) {
+	public InspectorAuthWebFilter(final McpInspectorProperties properties,
+			final InspectorAuthTokenProvider tokenProvider) {
 		this(properties, tokenProvider, Ordered.HIGHEST_PRECEDENCE + 100);
 	}
 
-	public InspectorAuthWebFilter(McpInspectorProperties properties, InspectorAuthTokenProvider tokenProvider,
-			int order) {
+	public InspectorAuthWebFilter(final McpInspectorProperties properties,
+			final InspectorAuthTokenProvider tokenProvider, final int order) {
 		this.properties = properties;
 		this.tokenProvider = tokenProvider;
 		this.order = order;
@@ -63,20 +76,20 @@ public class InspectorAuthWebFilter implements WebFilter, Ordered {
 
 	@Override
 	public int getOrder() {
-		return order;
+		return this.order;
 	}
 
 	@Override
-	public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
-		if (properties == null || !properties.isAuthEnabled()) {
+	public Mono<Void> filter(final ServerWebExchange exchange, final WebFilterChain chain) {
+		if (this.properties == null || !this.properties.isAuthEnabled()) {
 			return chain.filter(exchange);
 		}
-		String path = exchange.getRequest().getURI().getPath();
-		if (path == null || !path.startsWith(apiPrefix)) {
+		final String path = exchange.getRequest().getURI().getPath();
+		if (path == null || !path.startsWith(this.apiPrefix)) {
 			return chain.filter(exchange);
 		}
 
-		String expected = tokenProvider.token();
+		final String expected = this.tokenProvider.token();
 		String provided = exchange.getRequest().getHeaders().getFirst(HEADER);
 		if (provided == null || provided.isBlank()) {
 			provided = exchange.getRequest().getQueryParams().getFirst(QUERY_PARAM);
@@ -89,12 +102,12 @@ public class InspectorAuthWebFilter implements WebFilter, Ordered {
 		return chain.filter(exchange);
 	}
 
-	private static boolean constantTimeEquals(String a, String b) {
+	private static boolean constantTimeEquals(final String a, final String b) {
 		if (a == null || b == null) {
 			return false;
 		}
-		byte[] aBytes = a.getBytes(StandardCharsets.UTF_8);
-		byte[] bBytes = b.getBytes(StandardCharsets.UTF_8);
+		final byte[] aBytes = a.getBytes(StandardCharsets.UTF_8);
+		final byte[] bBytes = b.getBytes(StandardCharsets.UTF_8);
 		return MessageDigest.isEqual(aBytes, bBytes);
 	}
 

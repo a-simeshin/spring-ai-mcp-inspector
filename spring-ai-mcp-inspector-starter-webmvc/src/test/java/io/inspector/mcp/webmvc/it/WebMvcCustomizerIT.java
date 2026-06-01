@@ -6,20 +6,24 @@
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webmvc.it;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
-import io.inspector.mcp.core.bootstrap.InspectorBootstrapCustomizer;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
-
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,6 +35,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+
+import io.inspector.mcp.core.bootstrap.InspectorBootstrapCustomizer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -57,7 +63,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class WebMvcCustomizerIT {
 
 	static final String EXPECTED_DEFAULT_URL = "http://test/mcp";
+
 	static final String ORDER_LOSER = "http://order-1.example/mcp";
+
 	static final String ORDER_WINNER = "http://order-2.example/mcp";
 
 	@Autowired
@@ -76,11 +84,12 @@ class WebMvcCustomizerIT {
 	@Description("A registered InspectorBootstrapCustomizer contributes a defaultUrl visible at /config")
 	void customizer_affectsConfigEndpoint() throws Exception {
 		// when
-		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/config"), String.class);
+		final ResponseEntity<String> response = this.restTemplate.getForEntity(url("/mcp-inspector/config"),
+				String.class);
 
 		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-		JsonNode body = objectMapper.readTree(response.getBody());
+		final JsonNode body = this.objectMapper.readTree(response.getBody());
 		// setDefaultUrlCustomizer (the lowest-order one) sets defaultUrl. The
 		// @Order-based winner test asserts the final value below — here we only
 		// need to confirm SOME customizer-supplied defaultUrl is present.
@@ -95,19 +104,20 @@ class WebMvcCustomizerIT {
 	@Description("When two customizers set the same field, the one with the higher @Order value wins")
 	void customizer_orderedByAtOrder() throws Exception {
 		// when
-		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/config"), String.class);
+		final ResponseEntity<String> response = this.restTemplate.getForEntity(url("/mcp-inspector/config"),
+				String.class);
 
 		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-		JsonNode body = objectMapper.readTree(response.getBody());
+		final JsonNode body = this.objectMapper.readTree(response.getBody());
 		// Two customizers set defaultUrl: @Order(1) writes ORDER_LOSER, then
 		// @Order(2) overwrites with ORDER_WINNER. The later (higher) order wins.
 		assertThat(body.path("defaultUrl").asText()).as("higher @Order value must win on field conflict")
 			.isEqualTo(ORDER_WINNER);
 	}
 
-	private String url(String path) {
-		return "http://localhost:" + port + path;
+	private String url(final String path) {
+		return "http://localhost:" + this.port + path;
 	}
 
 	@TestConfiguration
@@ -116,13 +126,13 @@ class WebMvcCustomizerIT {
 		@Bean
 		@Order(1)
 		InspectorBootstrapCustomizer firstCustomizer() {
-			return bootstrap -> bootstrap.setDefaultUrl(ORDER_LOSER);
+			return (bootstrap) -> bootstrap.setDefaultUrl(ORDER_LOSER);
 		}
 
 		@Bean
 		@Order(2)
 		InspectorBootstrapCustomizer secondCustomizer() {
-			return bootstrap -> bootstrap.setDefaultUrl(ORDER_WINNER);
+			return (bootstrap) -> bootstrap.setDefaultUrl(ORDER_WINNER);
 		}
 
 	}

@@ -6,7 +6,14 @@
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webflux.it;
 
 import io.qameta.allure.Description;
@@ -54,7 +61,7 @@ class WebFluxConfigurableInspectorIT {
 	@Description("index.html is served under the custom /custom prefix as text/html")
 	void customPath_indexHtmlRespondsOnNewPrefix() {
 		// given the inspector path configured to /custom; when & then
-		webTestClient.get()
+		this.webTestClient.get()
 			.uri("/custom/index.html")
 			.exchange()
 			.expectStatus()
@@ -69,7 +76,7 @@ class WebFluxConfigurableInspectorIT {
 	@Description("The /config JSON endpoint responds under the custom /custom prefix")
 	void customPath_configEndpointRespondsOnNewPrefix() {
 		// given the inspector path configured to /custom; when & then
-		webTestClient.get()
+		this.webTestClient.get()
 			.uri("/custom/config")
 			.exchange()
 			.expectStatus()
@@ -91,7 +98,7 @@ class WebFluxConfigurableInspectorIT {
 	@Description("The default /mcp-inspector prefix is unmapped once a custom path is configured (404)")
 	void customPath_defaultPrefixReturns404() {
 		// given the inspector path configured to /custom; when & then
-		webTestClient.get().uri("/mcp-inspector/index.html").exchange().expectStatus().isNotFound();
+		this.webTestClient.get().uri("/mcp-inspector/index.html").exchange().expectStatus().isNotFound();
 	}
 
 	@Test
@@ -100,7 +107,7 @@ class WebFluxConfigurableInspectorIT {
 	@Description("The proxy API is mounted on the derived /custom-api prefix and /health responds")
 	void customPath_proxyApiRespondsOnDerivedPrefix() {
 		// given the inspector path configured to /custom; when & then
-		webTestClient.get().uri("/custom-api/health").exchange().expectStatus().isOk();
+		this.webTestClient.get().uri("/custom-api/health").exchange().expectStatus().isOk();
 	}
 
 	@Test
@@ -112,16 +119,22 @@ class WebFluxConfigurableInspectorIT {
 		// /api/roots requires a sessionId query parameter — without one it
 		// returns 400/404 from the handler. The signal is that the route
 		// MATCHES under the new prefix (vs. completely unmapped).
-		webTestClient.get().uri("/custom/api/roots?sessionId=missing").exchange().expectStatus().value(status -> {
-			// Either 4xx from our handler (route matched) or 200 — both
-			// prove the route is reachable.
-			org.assertj.core.api.Assertions.assertThat(status)
+		this.webTestClient.get()
+			.uri("/custom/api/roots?sessionId=missing")
+			.exchange()
+			.expectStatus()
+			// Either 4xx from our handler (route matched) or 200 — both prove the route
+			// is reachable.
+			.value((status) -> org.assertj.core.api.Assertions.assertThat(status)
 				.as("internal API at new prefix")
-				.isIn(200, 400, 401, 404);
-		});
+				.isIn(200, 400, 401, 404));
 
 		// Default prefix must be unmapped now.
-		webTestClient.get().uri("/mcp-inspector/api/roots?sessionId=missing").exchange().expectStatus().isNotFound();
+		this.webTestClient.get()
+			.uri("/mcp-inspector/api/roots?sessionId=missing")
+			.exchange()
+			.expectStatus()
+			.isNotFound();
 	}
 
 }

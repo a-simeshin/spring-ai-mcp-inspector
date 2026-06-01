@@ -6,22 +6,32 @@
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webmvc.controller;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import io.modelcontextprotocol.client.McpSyncClient;
+
 import io.inspector.mcp.core.client.PendingServerRequests;
 import io.inspector.mcp.core.dto.RootDto;
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
-import io.modelcontextprotocol.client.McpSyncClient;
 
 /**
  * Servlet-stack per-session state. Holds the loopback MCP client, the mutable list of
  * roots advertised to the server, the pending server-to-client request bridge, and the
  * in-flight OAuth state / token (Auth Debugger).
+ *
+ * @author Artem Simeshin
  */
 final class SessionState {
 
@@ -41,76 +51,76 @@ final class SessionState {
 
 	private volatile OAuthTokenResponse oauthToken;
 
-	SessionState(McpSyncClient client) {
+	SessionState(final McpSyncClient client) {
 		this.client = client;
 	}
 
 	McpSyncClient client() {
-		return client;
+		return this.client;
 	}
 
 	List<RootDto> roots() {
-		return roots;
+		return this.roots;
 	}
 
 	PendingServerRequests pendingServerRequests() {
-		return pendingServerRequests;
+		return this.pendingServerRequests;
 	}
 
-	void replaceRoots(List<RootDto> next) {
-		roots.clear();
+	void replaceRoots(final List<RootDto> next) {
+		this.roots.clear();
 		if (next != null) {
-			roots.addAll(new ArrayList<>(next));
+			this.roots.addAll(new ArrayList<>(next));
 		}
 	}
 
 	String oauthState() {
-		return oauthState;
+		return this.oauthState;
 	}
 
-	void oauthState(String value) {
+	void oauthState(final String value) {
 		this.oauthState = value;
 	}
 
 	String oauthTokenEndpoint() {
-		return oauthTokenEndpoint;
+		return this.oauthTokenEndpoint;
 	}
 
-	void oauthTokenEndpoint(String value) {
+	void oauthTokenEndpoint(final String value) {
 		this.oauthTokenEndpoint = value;
 	}
 
 	String oauthClientId() {
-		return oauthClientId;
+		return this.oauthClientId;
 	}
 
-	void oauthClientId(String value) {
+	void oauthClientId(final String value) {
 		this.oauthClientId = value;
 	}
 
 	String oauthRedirectUri() {
-		return oauthRedirectUri;
+		return this.oauthRedirectUri;
 	}
 
-	void oauthRedirectUri(String value) {
+	void oauthRedirectUri(final String value) {
 		this.oauthRedirectUri = value;
 	}
 
 	OAuthTokenResponse oauthToken() {
-		return oauthToken;
+		return this.oauthToken;
 	}
 
-	void oauthToken(OAuthTokenResponse value) {
+	void oauthToken(final OAuthTokenResponse value) {
 		this.oauthToken = value;
 	}
 
 	void closeQuietly() {
-		pendingServerRequests.clear();
-		if (client != null) {
+		this.pendingServerRequests.clear();
+		if (this.client != null) {
 			try {
-				client.close();
+				this.client.close();
 			}
-			catch (Exception ignored) {
+			catch (final Exception ignored) {
 				/* best-effort */
 			}
 		}

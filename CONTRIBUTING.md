@@ -137,6 +137,39 @@ To auto-format:
 ./mvnw spring-javaformat:apply
 ```
 
+### Checkstyle — classic Spring ruleset
+
+On top of the formatter, the build runs **Checkstyle** with the classic Spring
+ruleset (`io.spring.javaformat.checkstyle.SpringChecks` — the same one Spring
+Boot uses), plus a few project rules. It is bound to the `validate` phase, so a
+violation fails `./mvnw verify` before tests even run. Config lives in
+`config/checkstyle/` (`checkstyle.xml` + `checkstyle-suppressions.xml`).
+
+What it enforces, beyond the formatter:
+
+- **`final` on locals and parameters** that are never reassigned
+  (`FinalLocalVariable`). This is a project house rule.
+- **Apache 2.0 license header** on every `.java` file and a `package-info.java`
+  in every package.
+- **Javadoc** on public types (`@author`), public fields, and complete
+  `@param`/`@return`/`@throws` on documented methods.
+- **BDDMockito** style in tests (`given(...).willReturn(...)`, not
+  `when(...).thenReturn(...)`) and **AssertJ** assertions only.
+- Spring conventions: import order, lambda/ternary parentheses, inner types
+  last, etc.
+
+Run it on its own:
+
+```
+./mvnw checkstyle:check                       # whole reactor, fails on violation
+./mvnw -pl spring-ai-mcp-inspector-core checkstyle:check
+./mvnw checkstyle:check -Dcheckstyle.failOnViolation=false   # list without failing
+```
+
+`-demo` and `-ui` opt out via `<checkstyle.skip>true</checkstyle.skip>`. Test
+classes are named `*Tests.java` (Spring convention); integration tests are
+`*IT.java`, end-to-end `*E2ETest.java`.
+
 ## Submitting changes
 
 1. Fork the repository and create a topic branch off `main`.
@@ -144,8 +177,9 @@ To auto-format:
 3. Add or update tests. New behavior needs at least one integration test that
    would have failed before the change, and unit-test coverage for the touched
    modules must stay **≥ 80%** (LINE/BRANCH/INSTRUCTION).
-4. Make sure `./mvnw verify` passes locally — including the JaCoCo 80% gate and
-   `spring-javaformat:validate`.
+4. Make sure `./mvnw verify` passes locally — including the JaCoCo 80% gate,
+   `spring-javaformat:validate`, and the Checkstyle gate (classic Spring
+   ruleset; `final` locals/params, Javadoc, BDDMockito/AssertJ).
 5. Open a pull request with a clear description of **what** changed and
    **why**. Link any related issues.
 

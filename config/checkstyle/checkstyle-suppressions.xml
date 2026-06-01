@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<!DOCTYPE suppressions PUBLIC
+		"-//Checkstyle//DTD SuppressionFilter Configuration 1.2//EN"
+		"https://checkstyle.org/dtds/suppressions_1_2.dtd">
+<!--
+	Checkstyle suppressions for spring-ai-mcp-inspector.
+
+	Keep this list short and justified. Prefer fixing the code over suppressing a rule.
+-->
+<suppressions>
+
+	<!-- Test sources: package-info / public-Javadoc requirements do not apply to tests. -->
+	<suppress files="[\\/]src[\\/]test[\\/]" checks="JavadocPackageCheck"/>
+	<suppress files="[\\/]src[\\/]test[\\/]" checks="JavadocType"/>
+	<suppress files="[\\/]src[\\/]test[\\/]" checks="JavadocVariableCheck"/>
+	<suppress files="[\\/]src[\\/]test[\\/]" checks="JavadocMethodCheck"/>
+
+</suppressions>

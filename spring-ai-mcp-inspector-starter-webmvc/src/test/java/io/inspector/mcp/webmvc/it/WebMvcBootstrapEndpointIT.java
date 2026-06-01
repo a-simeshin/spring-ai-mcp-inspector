@@ -6,19 +6,24 @@
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webmvc.it;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
-
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -67,14 +72,15 @@ class WebMvcBootstrapEndpointIT {
 	@Description("The /config endpoint exposes authToken, proxyAddress and detectedTransport")
 	void configEndpoint_returnsBootstrapJsonWithRequiredFields() throws Exception {
 		// when
-		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/config"), String.class);
+		final ResponseEntity<String> response = this.restTemplate.getForEntity(url("/mcp-inspector/config"),
+				String.class);
 
 		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getHeaders().getContentType()).isNotNull()
-			.matches(mt -> MediaType.APPLICATION_JSON.isCompatibleWith(mt));
+			.matches((mt) -> MediaType.APPLICATION_JSON.isCompatibleWith(mt));
 
-		JsonNode body = objectMapper.readTree(response.getBody());
+		final JsonNode body = this.objectMapper.readTree(response.getBody());
 		assertThat(body.has("authToken")).isTrue();
 		assertThat(body.has("proxyAddress")).isTrue();
 		assertThat(body.has("detectedTransport")).isTrue();
@@ -88,12 +94,13 @@ class WebMvcBootstrapEndpointIT {
 	@Description("The /config endpoint returns a JSON object that parses cleanly")
 	void configEndpoint_returnsValidJson() throws Exception {
 		// when
-		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/config"), String.class);
+		final ResponseEntity<String> response = this.restTemplate.getForEntity(url("/mcp-inspector/config"),
+				String.class);
 
 		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		// Parse cleanly — anything that doesn't is invalid JSON.
-		JsonNode root = objectMapper.readTree(response.getBody());
+		final JsonNode root = this.objectMapper.readTree(response.getBody());
 		assertThat(root.isObject()).isTrue();
 	}
 
@@ -104,16 +111,17 @@ class WebMvcBootstrapEndpointIT {
 	@Description("The /config endpoint sets a no-cache Cache-Control header so the SPA always re-reads it")
 	void configEndpoint_setsNoCacheHeaders() {
 		// when
-		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/config"), String.class);
+		final ResponseEntity<String> response = this.restTemplate.getForEntity(url("/mcp-inspector/config"),
+				String.class);
 
 		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-		String cacheControl = response.getHeaders().getFirst("Cache-Control");
+		final String cacheControl = response.getHeaders().getFirst("Cache-Control");
 		assertThat(cacheControl).as("Cache-Control header on /config").isNotNull().contains("no-cache");
 	}
 
-	private String url(String path) {
-		return "http://localhost:" + port + path;
+	private String url(final String path) {
+		return "http://localhost:" + this.port + path;
 	}
 
 }

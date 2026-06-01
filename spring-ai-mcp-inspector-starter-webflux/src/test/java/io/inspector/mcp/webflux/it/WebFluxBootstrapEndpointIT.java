@@ -6,7 +6,14 @@
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webflux.it;
 
 import io.qameta.allure.Description;
@@ -52,7 +59,7 @@ class WebFluxBootstrapEndpointIT {
 	@Description("GET /config returns JSON containing the auth token, proxy address and detected transport")
 	void configEndpoint_returnsBootstrapJsonWithRequiredFields() {
 		// given a booted reactive inspector; when & then
-		webTestClient.get()
+		this.webTestClient.get()
 			.uri("/mcp-inspector/config")
 			.exchange()
 			.expectStatus()
@@ -74,14 +81,14 @@ class WebFluxBootstrapEndpointIT {
 	@Description("GET /config returns a well-formed JSON object body")
 	void configEndpoint_returnsValidJson() {
 		// given a booted reactive inspector; when & then
-		webTestClient.get()
+		this.webTestClient.get()
 			.uri("/mcp-inspector/config")
 			.exchange()
 			.expectStatus()
 			.isOk()
 			.expectBody()
-			.consumeWith(result -> {
-				byte[] body = result.getResponseBody();
+			.consumeWith((result) -> {
+				final byte[] body = result.getResponseBody();
 				assertThat(body).isNotNull();
 				// Any malformed JSON would have already failed jsonPath
 				// assertions in other tests; this method exists only to
@@ -96,13 +103,13 @@ class WebFluxBootstrapEndpointIT {
 	@Description("GET /config sets a no-store Cache-Control header so the token is never cached")
 	void configEndpoint_setsNoCacheHeaders() {
 		// given a booted reactive inspector; when & then
-		webTestClient.get()
+		this.webTestClient.get()
 			.uri("/mcp-inspector/config")
 			.exchange()
 			.expectStatus()
 			.isOk()
 			.expectHeader()
-			.value("Cache-Control", value -> assertThat(value).contains("no-store"));
+			.value("Cache-Control", (value) -> assertThat(value).contains("no-store"));
 	}
 
 }

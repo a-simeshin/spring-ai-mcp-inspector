@@ -6,7 +6,14 @@
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.core.dto;
 
 import java.util.List;
@@ -16,6 +23,7 @@ import java.util.List;
  * {@code PUT /mcp-inspector/api/roots}.
  *
  * @param roots ordered list of roots advertised to the MCP server
+ * @author Artem Simeshin
  */
 public record RootsDto(List<RootDto> roots) {
 }

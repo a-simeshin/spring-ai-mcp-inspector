@@ -6,7 +6,14 @@
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webmvc.it;
 
 import java.util.List;
@@ -14,15 +21,12 @@ import java.util.Map;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
-import io.inspector.mcp.webmvc.InspectorServerPortHolder;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
-
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,6 +41,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.web.util.UriComponentsBuilder;
+
+import io.inspector.mcp.webmvc.InspectorServerPortHolder;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -80,11 +86,12 @@ class WebMvcAutoConfigurationIT {
 	@Description("The /config endpoint over a real random-port server reports the detected SSE transport and stack")
 	void configEndpointReturnsDetectedTransport() throws Exception {
 		// when
-		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/api/config"), String.class);
+		final ResponseEntity<String> response = this.restTemplate.getForEntity(url("/mcp-inspector/api/config"),
+				String.class);
 
 		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-		JsonNode body = objectMapper.readTree(response.getBody());
+		final JsonNode body = this.objectMapper.readTree(response.getBody());
 		assertThat(body.path("transport").asText()).isEqualTo("SSE");
 		assertThat(body.path("stack").asText()).isEqualTo("WEBMVC");
 		assertThat(body.path("authToken").asText()).isNotBlank();
@@ -98,55 +105,56 @@ class WebMvcAutoConfigurationIT {
 	void jsonRpcRelayCallsToolsList() throws Exception {
 		// Force the port holder to point at the random embedded-tomcat port,
 		// otherwise the loopback factory falls back to the default 8080.
-		setPort(portHolder, port);
+		setPort(this.portHolder, this.port);
 
 		// 1) Open a session via /connect — inspector builds its own loopback MCP
 		// client against the same embedded Tomcat.
-		HttpHeaders jsonHeaders = new HttpHeaders();
+		final HttpHeaders jsonHeaders = new HttpHeaders();
 		jsonHeaders.setContentType(MediaType.APPLICATION_JSON);
-		HttpEntity<String> connectEntity = new HttpEntity<>("{}", jsonHeaders);
+		final HttpEntity<String> connectEntity = new HttpEntity<>("{}", jsonHeaders);
 
-		ResponseEntity<String> connectResponse = restTemplate.exchange(url("/mcp-inspector/api/connect"),
+		final ResponseEntity<String> connectResponse = this.restTemplate.exchange(url("/mcp-inspector/api/connect"),
 				HttpMethod.POST, connectEntity, String.class);
 		assertThat(connectResponse.getStatusCode()).as("connect: %s", connectResponse.getBody())
 			.isEqualTo(HttpStatus.OK);
-		JsonNode connectBody = objectMapper.readTree(connectResponse.getBody());
-		String sessionId = connectBody.path("sessionId").asText(null);
+		final JsonNode connectBody = this.objectMapper.readTree(connectResponse.getBody());
+		final String sessionId = connectBody.path("sessionId").asText(null);
 		assertThat(sessionId).as("sessionId from /connect").isNotBlank();
 
 		// 2) Relay JSON-RPC tools/list and validate the tool names.
-		Map<String, Object> relayPayload = Map.of("jsonrpc", "2.0", "id", 1, "method", "tools/list", "params",
+		final Map<String, Object> relayPayload = Map.of("jsonrpc", "2.0", "id", 1, "method", "tools/list", "params",
 				Map.of());
-		HttpEntity<String> relayEntity = new HttpEntity<>(objectMapper.writeValueAsString(relayPayload), jsonHeaders);
+		final HttpEntity<String> relayEntity = new HttpEntity<>(this.objectMapper.writeValueAsString(relayPayload),
+				jsonHeaders);
 
-		String jsonrpcUri = UriComponentsBuilder.fromUriString(url("/mcp-inspector/api/jsonrpc"))
+		final String jsonrpcUri = UriComponentsBuilder.fromUriString(url("/mcp-inspector/api/jsonrpc"))
 			.queryParam("sessionId", sessionId)
 			.build()
 			.toUriString();
 
-		ResponseEntity<String> jsonRpcResponse = restTemplate.exchange(jsonrpcUri, HttpMethod.POST, relayEntity,
-				String.class);
+		final ResponseEntity<String> jsonRpcResponse = this.restTemplate.exchange(jsonrpcUri, HttpMethod.POST,
+				relayEntity, String.class);
 
 		assertThat(jsonRpcResponse.getStatusCode()).as("jsonrpc: %s", jsonRpcResponse.getBody())
 			.isEqualTo(HttpStatus.OK);
 
-		JsonNode response = objectMapper.readTree(jsonRpcResponse.getBody());
+		final JsonNode response = this.objectMapper.readTree(jsonRpcResponse.getBody());
 		assertThat(response.path("jsonrpc").asText()).isEqualTo("2.0");
-		JsonNode tools = response.path("result").path("tools");
+		final JsonNode tools = response.path("result").path("tools");
 		assertThat(tools.isArray()).as("result.tools should be an array, body=%s", response).isTrue();
 		assertThat(tools.size()).isGreaterThanOrEqualTo(3);
 
-		List<String> names = new java.util.ArrayList<>();
-		tools.forEach(t -> names.add(t.path("name").asText()));
+		final List<String> names = new java.util.ArrayList<>();
+		tools.forEach((t) -> names.add(t.path("name").asText()));
 		assertThat(names).contains("echo", "sum", "currentTime");
 	}
 
-	private String url(String path) {
-		return "http://localhost:" + port + path;
+	private String url(final String path) {
+		return "http://localhost:" + this.port + path;
 	}
 
-	private static void setPort(InspectorServerPortHolder holder, int port) throws Exception {
-		java.lang.reflect.Method m = InspectorServerPortHolder.class.getDeclaredMethod("setPort", int.class);
+	private static void setPort(final InspectorServerPortHolder holder, final int port) throws Exception {
+		final java.lang.reflect.Method m = InspectorServerPortHolder.class.getDeclaredMethod("setPort", int.class);
 		m.setAccessible(true);
 		m.invoke(holder, port);
 	}

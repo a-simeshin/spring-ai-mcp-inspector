@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<!DOCTYPE module PUBLIC
+		"-//Checkstyle//DTD Checkstyle Configuration 1.3//EN"
+		"https://checkstyle.org/dtds/configuration_1_3.dtd">
+<!--
+	Checkstyle configuration for spring-ai-mcp-inspector.
+
+	Base ruleset is the classic Spring set, io.spring.javaformat.checkstyle.SpringChecks
+	(the same one Spring Boot and the spring-ai-community siblings use). It pairs with the
+	spring-javaformat formatter already wired into the build. On top of it we add:
+	  - SpringJUnit5Check / SpringDeprecatedCheck (Boot's standard extras),
+	  - AssertJ-only assertion enforcement (matches .claude/refs/java-testing.md),
+	  - FinalLocalVariable on locals AND parameters: mandatory `final` whenever the value
+	    is never reassigned (the project's own house rule).
+
+	The SuppressionFilter (config/checkstyle/checkstyle-suppressions.xml) is resolved via the
+	${config_loc} expansion supplied by the maven-checkstyle-plugin propertyExpansion.
+-->
+<module name="com.puppycrawl.tools.checkstyle.Checker">
+
+	<module name="SuppressionFilter">
+		<property name="file" value="${config_loc}/checkstyle-suppressions.xml"/>
+		<property name="optional" value="false"/>
+	</module>
+
+	<!-- Classic Spring ruleset. headerType defaults to `none` (no license-header
+	     requirement); projectRootPackage tunes the import-order check to our base package. -->
+	<module name="io.spring.javaformat.checkstyle.SpringChecks">
+		<property name="projectRootPackage" value="io.inspector.mcp"/>
+	</module>
+
+	<module name="com.puppycrawl.tools.checkstyle.TreeWalker">
+
+		<!-- Boot's standard extras on top of SpringChecks. -->
+		<module name="io.spring.javaformat.checkstyle.check.SpringJUnit5Check"/>
+		<module name="io.spring.javaformat.checkstyle.check.SpringDeprecatedCheck"/>
+
+		<!-- AssertJ-only assertions (see java-testing.md). -->
+		<module name="com.puppycrawl.tools.checkstyle.checks.regexp.RegexpSinglelineJavaCheck">
+			<property name="maximum" value="0"/>
+			<property name="format" value="org\.junit\.Assert|org\.junit\.jupiter\.api\.Assertions"/>
+			<property name="message" value="Please use AssertJ imports."/>
+			<property name="ignoreComments" value="true"/>
+		</module>
+
+		<!-- House rule: `final` on locals and parameters that are never reassigned. -->
+		<module name="com.puppycrawl.tools.checkstyle.checks.coding.FinalLocalVariableCheck">
+			<property name="id" value="finalLocalVariable"/>
+			<property name="tokens" value="VARIABLE_DEF,PARAMETER_DEF"/>
+			<property name="validateEnhancedForLoopVariable" value="true"/>
+		</module>
+
+	</module>
+
+</module>

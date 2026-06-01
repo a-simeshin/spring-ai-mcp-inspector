@@ -6,7 +6,14 @@
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.core.bootstrap;
 
 import java.util.List;
@@ -31,6 +38,8 @@ import io.inspector.mcp.core.transport.TransportType;
  * Spring auto-sorts the injected {@code List<InspectorBootstrapCustomizer>} by
  * {@link org.springframework.core.annotation.Order @Order}; no manual sort is performed
  * here. If no customizer beans are registered, Spring injects an empty list.
+ *
+ * @author Artem Simeshin
  */
 public class InspectorBootstrapAssembler {
 
@@ -42,8 +51,9 @@ public class InspectorBootstrapAssembler {
 
 	private final List<InspectorBootstrapCustomizer> customizers;
 
-	public InspectorBootstrapAssembler(McpInspectorProperties properties, InspectorAuthTokenProvider authTokenProvider,
-			TransportDetector transportDetector, List<InspectorBootstrapCustomizer> customizers) {
+	public InspectorBootstrapAssembler(final McpInspectorProperties properties,
+			final InspectorAuthTokenProvider authTokenProvider, final TransportDetector transportDetector,
+			final List<InspectorBootstrapCustomizer> customizers) {
 		this.properties = properties;
 		this.authTokenProvider = authTokenProvider;
 		this.transportDetector = transportDetector;
@@ -56,15 +66,15 @@ public class InspectorBootstrapAssembler {
 	 * @return populated bootstrap, never {@code null}
 	 */
 	public InspectorBootstrap assemble() {
-		InspectorBootstrap bootstrap = new InspectorBootstrap();
-		bootstrap.setAuthToken(authTokenProvider.token());
-		bootstrap.setProxyAddress(properties.getProxyPath());
+		final InspectorBootstrap bootstrap = new InspectorBootstrap();
+		bootstrap.setAuthToken(this.authTokenProvider.token());
+		bootstrap.setProxyAddress(this.properties.getProxyPath());
 
-		DetectedTransport detected = transportDetector.detect();
+		final DetectedTransport detected = this.transportDetector.detect();
 		bootstrap.setDetectedTransport(mapTransportName(detected.type()));
-		bootstrap.setDetectedUrl(detected.endpoint() != null ? detected.endpoint() : "");
+		bootstrap.setDetectedUrl((detected.endpoint() != null) ? detected.endpoint() : "");
 
-		for (InspectorBootstrapCustomizer customizer : customizers) {
+		for (final InspectorBootstrapCustomizer customizer : this.customizers) {
 			customizer.customize(bootstrap);
 		}
 		return bootstrap;
@@ -74,8 +84,10 @@ public class InspectorBootstrapAssembler {
 	 * Maps the detected transport type into the lowercase identifier the upstream UI
 	 * bundle expects. Kept in lockstep with the equivalent helper in the index
 	 * controllers (see {@code InspectorIndexController#mapTransportName}).
+	 * @param type the detected transport type; may be {@code null}
+	 * @return lowercase transport identifier, or empty string for unknown / null
 	 */
-	private static String mapTransportName(TransportType type) {
+	private static String mapTransportName(final TransportType type) {
 		if (type == null) {
 			return "";
 		}

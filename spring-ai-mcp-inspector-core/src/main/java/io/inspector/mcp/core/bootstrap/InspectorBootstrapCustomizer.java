@@ -6,7 +6,14 @@
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.core.bootstrap;
 
 /**
@@ -85,9 +92,9 @@ package io.inspector.mcp.core.bootstrap;
  * serialized verbatim into the JSON payload. Use it to surface fields that are not
  * modeled as first-class properties on {@link InspectorBootstrap} — for example feature
  * flags, tenant identifiers, or arbitrary metadata your fork of the upstream SPA reads at
- * boot. Note that the assembler escapes {@code </script>} sequences in the serialized
- * JSON before inline injection, so values in {@code extra} can safely contain HTML
- * fragments.
+ * boot. Note that the assembler escapes {@code &lt;/script&gt;} sequences in the
+ * serialized JSON before inline injection, so values in {@code extra} can safely contain
+ * HTML fragments.
  *
  * <h2>Examples</h2>
  *
@@ -129,6 +136,8 @@ package io.inspector.mcp.core.bootstrap;
  *         CustomHeader.of("X-Tenant-Id", "acme"));
  * }
  * }</pre>
+ *
+ * @author Artem Simeshin
  */
 @FunctionalInterface
 public interface InspectorBootstrapCustomizer {
