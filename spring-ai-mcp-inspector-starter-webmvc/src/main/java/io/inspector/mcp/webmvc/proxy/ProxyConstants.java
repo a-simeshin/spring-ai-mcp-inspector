@@ -1,12 +1,19 @@
 /*
- * Copyright 2026 the original author or authors.
+ * Copyright 2025-present the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webmvc.proxy;
 
 /**
@@ -28,6 +35,8 @@ package io.inspector.mcp.webmvc.proxy;
  * <li>{@code GET    /mcp-inspector-api/health} — liveness probe (no auth)</li>
  * <li>{@code POST   /mcp-inspector-api/fetch} — generic outbound HTTP fetch</li>
  * </ul>
+ *
+ * @author Artem Simeshin
  */
 public final class ProxyConstants {
 
@@ -45,10 +54,11 @@ public final class ProxyConstants {
 	 * other runtime-effective path string. Production code reads the path from
 	 * {@code McpInspectorProperties} or via SpEL placeholders of the form
 	 * {@code "${spring.ai.mcp.inspector.path}-api"}.
+	 * @since 0.1.0
 	 * @deprecated Read the path from {@code McpInspectorProperties#getProxyPath()} or use
 	 * the SpEL placeholder {@code "${spring.ai.mcp.inspector.path}-api"} in annotations.
 	 */
-	@Deprecated
+	@Deprecated(since = "0.1.0")
 	public static final String BASE = "/mcp-inspector-api";
 
 	/**

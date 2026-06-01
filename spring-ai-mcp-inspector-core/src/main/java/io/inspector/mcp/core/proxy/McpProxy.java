@@ -1,17 +1,23 @@
 /*
- * Copyright 2026 the original author or authors.
+ * Copyright 2025-present the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.core.proxy;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
 import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema;
@@ -40,6 +46,8 @@ import reactor.core.publisher.Sinks;
  * {@code targetToBrowser} sink and returns {@link Mono#empty()}; the proxy never
  * originates JSON-RPC frames itself, so there is nothing to send back through the
  * handler.
+ *
+ * @author Artem Simeshin
  */
 public final class McpProxy {
 
@@ -49,7 +57,7 @@ public final class McpProxy {
 
 	private final JacksonMcpJsonMapper mcpJsonMapper;
 
-	public McpProxy(ObjectMapper objectMapper) {
+	public McpProxy(final ObjectMapper objectMapper) {
 		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
 		this.mcpJsonMapper = new JacksonMcpJsonMapper(this.objectMapper);
 	}
@@ -64,18 +72,20 @@ public final class McpProxy {
 	 * Each browser frame is deserialized into a typed
 	 * {@link io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage} via
 	 * {@link McpSchema#deserializeJsonRpcMessage(io.modelcontextprotocol.json.McpJsonMapper, String)}.
+	 * @param session the proxy session to wire up (never {@code null})
+	 * @return a {@link Mono} that completes when the upstream transport is connected
 	 */
-	public Mono<Void> start(ProxySession session) {
+	public Mono<Void> start(final ProxySession session) {
 		// Browser → target: every frame the controllers push into browserToTarget
 		// is deserialized then forwarded to the upstream transport.
-		session.browserToTarget().asFlux().flatMap(frame -> {
-			JSONRPCMessage typed = toTyped(frame);
+		session.browserToTarget().asFlux().flatMap((frame) -> {
+			final JSONRPCMessage typed = toTyped(frame);
 			if (typed == null) {
 				return Mono.empty();
 			}
 			return session.targetTransport()
 				.sendMessage(typed)
-				.doOnError(err -> LOG.warn("proxy[{}] sendMessage failed: {}", session.sessionId(), err.toString()));
+				.doOnError((err) -> LOG.warn("proxy[{}] sendMessage failed: {}", session.sessionId(), err.toString()));
 		})
 			.onErrorContinue((err, obj) -> LOG.warn("proxy[{}] browser->target stream error: {}", session.sessionId(),
 					err.toString()))
@@ -85,10 +95,10 @@ public final class McpProxy {
 		// We serialize the typed frame back to a JsonNode and emit it on the
 		// targetToBrowser sink. Returning Mono.empty() tells the SDK we have no
 		// further response to send.
-		return session.targetTransport().connect(inbound -> inbound.flatMap(message -> {
-			JsonNode body = toJsonNode(message);
+		return session.targetTransport().connect((inbound) -> inbound.flatMap((message) -> {
+			final JsonNode body = toJsonNode(message);
 			if (body != null) {
-				Sinks.EmitResult er = session.targetToBrowser().tryEmitNext(body);
+				final Sinks.EmitResult er = session.targetToBrowser().tryEmitNext(body);
 				if (er.isFailure()) {
 					LOG.debug("proxy[{}] target->browser emit failure: {}", session.sessionId(), er.name());
 				}
@@ -101,23 +111,29 @@ public final class McpProxy {
 	/**
 	 * Deserializes a raw {@link JsonNode} into a typed JSON-RPC message via the SDK
 	 * schema parser.
+	 * @param frame the raw JSON node to deserialize
+	 * @return the typed message, or {@code null} if deserialization fails
 	 */
-	private JSONRPCMessage toTyped(JsonNode frame) {
+	private JSONRPCMessage toTyped(final JsonNode frame) {
 		try {
-			return McpSchema.deserializeJsonRpcMessage(mcpJsonMapper, objectMapper.writeValueAsString(frame));
+			return McpSchema.deserializeJsonRpcMessage(this.mcpJsonMapper, this.objectMapper.writeValueAsString(frame));
 		}
-		catch (Exception ex) {
+		catch (final Exception ex) {
 			LOG.warn("proxy: malformed JSON-RPC frame from browser: {}", ex.toString());
 			return null;
 		}
 	}
 
-	/** Converts a typed JSON-RPC message back to a JsonNode. */
-	private JsonNode toJsonNode(JSONRPCMessage message) {
+	/**
+	 * Converts a typed JSON-RPC message back to a {@link JsonNode}.
+	 * @param message the typed message to serialize
+	 * @return the JSON node representation, or {@code null} if serialization fails
+	 */
+	private JsonNode toJsonNode(final JSONRPCMessage message) {
 		try {
-			return objectMapper.valueToTree(message);
+			return this.objectMapper.valueToTree(message);
 		}
-		catch (Exception ex) {
+		catch (final Exception ex) {
 			LOG.warn("proxy: failed to serialize JSON-RPC frame for browser: {}", ex.toString());
 			return null;
 		}

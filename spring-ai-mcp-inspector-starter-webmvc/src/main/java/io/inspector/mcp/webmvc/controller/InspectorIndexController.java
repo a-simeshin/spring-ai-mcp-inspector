@@ -1,12 +1,19 @@
 /*
- * Copyright 2026 the original author or authors.
+ * Copyright 2025-present the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webmvc.controller;
 
 import java.io.IOException;
@@ -14,9 +21,6 @@ import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 
-import io.inspector.mcp.core.bootstrap.BootstrapHtmlRenderer;
-import io.inspector.mcp.core.bootstrap.InspectorBootstrap;
-import io.inspector.mcp.core.bootstrap.InspectorBootstrapAssembler;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpHeaders;
@@ -27,10 +31,14 @@ import org.springframework.util.StreamUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import io.inspector.mcp.core.bootstrap.BootstrapHtmlRenderer;
+import io.inspector.mcp.core.bootstrap.InspectorBootstrap;
+import io.inspector.mcp.core.bootstrap.InspectorBootstrapAssembler;
+
 /**
  * Serves the inspector landing page and injects the typed bootstrap payload into the SPA
- * bundle as a single {@code <script>window.__MCP_INSPECTOR_BOOTSTRAP = ...</script>}
- * block.
+ * bundle as a single
+ * {@code <script>window.__MCP_INSPECTOR_BOOTSTRAP = ...&lt;/script&gt;} block.
  *
  * <p>
  * Routes:
@@ -57,6 +65,8 @@ import org.springframework.web.bind.annotation.RestController;
  * top level even when {@code spring.ai.mcp.inspector.path} is customised. Relocating them
  * would require patching the upstream JS, which is out of scope for the
  * path-parametrization phase.
+ *
+ * @author Artem Simeshin
  */
 @RestController
 public class InspectorIndexController {
@@ -69,8 +79,8 @@ public class InspectorIndexController {
 
 	private final String indexPath;
 
-	public InspectorIndexController(InspectorBootstrapAssembler assembler, BootstrapHtmlRenderer renderer,
-			@Value("${spring.ai.mcp.inspector.path:/mcp-inspector}") String inspectorPath) {
+	public InspectorIndexController(final InspectorBootstrapAssembler assembler, final BootstrapHtmlRenderer renderer,
+			@Value("${spring.ai.mcp.inspector.path:/mcp-inspector}") final String inspectorPath) {
 		this.assembler = assembler;
 		this.renderer = renderer;
 		this.indexPath = inspectorPath + "/index.html";
@@ -94,6 +104,8 @@ public class InspectorIndexController {
 	 *
 	 * <p>
 	 * This path stays hardcoded by design — see the class javadoc.
+	 * @return the rendered index HTML response
+	 * @throws IOException if the bundle resource cannot be read
 	 */
 	@GetMapping(path = "/oauth/callback", produces = MediaType.TEXT_HTML_VALUE)
 	public ResponseEntity<String> oauthCallback() throws IOException {
@@ -107,6 +119,8 @@ public class InspectorIndexController {
 	 *
 	 * <p>
 	 * This path stays hardcoded by design — see the class javadoc.
+	 * @return the rendered index HTML response
+	 * @throws IOException if the bundle resource cannot be read
 	 */
 	@GetMapping(path = "/oauth/callback/debug", produces = MediaType.TEXT_HTML_VALUE)
 	public ResponseEntity<String> oauthCallbackDebug() throws IOException {
@@ -120,7 +134,7 @@ public class InspectorIndexController {
 		// which in multi-context test scenarios (servlet + reactive back-to-back)
 		// may be a stopped Tomcat WebappClassLoader and would throw "Illegal access:
 		// this web application instance has been stopped already".
-		ClassPathResource resource = new ClassPathResource(INDEX_RESOURCE,
+		final ClassPathResource resource = new ClassPathResource(INDEX_RESOURCE,
 				InspectorIndexController.class.getClassLoader());
 		if (!resource.exists()) {
 			return ResponseEntity.status(HttpStatus.NOT_FOUND)
@@ -128,14 +142,14 @@ public class InspectorIndexController {
 				.body("<!doctype html><title>MCP Inspector</title>" + "<p>UI bundle missing: " + INDEX_RESOURCE
 						+ " not on classpath.</p>");
 		}
-		String body;
+		final String body;
 		try (InputStream in = resource.getInputStream()) {
 			body = StreamUtils.copyToString(in, StandardCharsets.UTF_8);
 		}
-		InspectorBootstrap bootstrap = assembler.assemble();
-		String rendered = renderer.renderIndexHtml(body, bootstrap);
+		final InspectorBootstrap bootstrap = this.assembler.assemble();
+		final String rendered = this.renderer.renderIndexHtml(body, bootstrap);
 
-		HttpHeaders headers = new HttpHeaders();
+		final HttpHeaders headers = new HttpHeaders();
 		headers.setContentType(MediaType.TEXT_HTML);
 		headers.setCacheControl("no-cache, no-store, must-revalidate");
 		headers.setPragma("no-cache");
@@ -143,8 +157,8 @@ public class InspectorIndexController {
 	}
 
 	private ResponseEntity<Void> redirectToIndex() {
-		HttpHeaders headers = new HttpHeaders();
-		headers.setLocation(URI.create(indexPath));
+		final HttpHeaders headers = new HttpHeaders();
+		headers.setLocation(URI.create(this.indexPath));
 		return new ResponseEntity<>(headers, HttpStatus.FOUND);
 	}
 

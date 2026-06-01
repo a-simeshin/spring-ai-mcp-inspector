@@ -20,6 +20,8 @@
         <!-- No Java sources to cover; this module bundles the vendored
              React/Vite client only. -->
         <jacoco.skip>true</jacoco.skip>
+        <!-- Vendored upstream client, no first-party Java: checkstyle gate off. -->
+        <checkstyle.skip>true</checkstyle.skip>
     </properties>
 
     <build>

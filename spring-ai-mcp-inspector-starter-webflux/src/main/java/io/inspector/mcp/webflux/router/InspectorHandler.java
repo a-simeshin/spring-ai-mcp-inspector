@@ -1,12 +1,19 @@
 /*
- * Copyright 2026 the original author or authors.
+ * Copyright 2025-present the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webflux.router;
 
 import java.io.IOException;
@@ -27,28 +34,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-
-import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
-import io.inspector.mcp.core.bootstrap.BootstrapHtmlRenderer;
-import io.inspector.mcp.core.bootstrap.InspectorBootstrap;
-import io.inspector.mcp.core.bootstrap.InspectorBootstrapAssembler;
-import io.inspector.mcp.core.client.ExternalStdioClientFactory;
-import io.inspector.mcp.core.config.McpInspectorProperties;
-import io.inspector.mcp.core.client.InspectorClientHandlers;
-import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
-import io.inspector.mcp.core.client.PendingServerRequests;
-import io.inspector.mcp.core.dto.ConfigDto;
-import io.inspector.mcp.core.dto.ConnectRequest;
-import io.inspector.mcp.core.dto.JsonRpcRelay;
-import io.inspector.mcp.core.dto.RootDto;
-import io.inspector.mcp.core.dto.RootsDto;
-import io.inspector.mcp.core.oauth.InspectorOAuthClient;
-import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
-import io.inspector.mcp.core.oauth.OAuthInitiateResponse;
-import io.inspector.mcp.core.oauth.OAuthTokenResponse;
-import io.inspector.mcp.core.transport.DetectedTransport;
-import io.inspector.mcp.core.transport.TransportDetector;
-import io.inspector.mcp.core.transport.TransportType;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
 import org.slf4j.Logger;
@@ -66,9 +51,32 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
+import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
+import io.inspector.mcp.core.bootstrap.BootstrapHtmlRenderer;
+import io.inspector.mcp.core.bootstrap.InspectorBootstrap;
+import io.inspector.mcp.core.bootstrap.InspectorBootstrapAssembler;
+import io.inspector.mcp.core.client.ExternalStdioClientFactory;
+import io.inspector.mcp.core.client.InspectorClientHandlers;
+import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
+import io.inspector.mcp.core.client.PendingServerRequests;
+import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.dto.ConfigDto;
+import io.inspector.mcp.core.dto.ConnectRequest;
+import io.inspector.mcp.core.dto.JsonRpcRelay;
+import io.inspector.mcp.core.dto.RootDto;
+import io.inspector.mcp.core.dto.RootsDto;
+import io.inspector.mcp.core.oauth.InspectorOAuthClient;
+import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
+import io.inspector.mcp.core.oauth.OAuthInitiateResponse;
+import io.inspector.mcp.core.transport.DetectedTransport;
+import io.inspector.mcp.core.transport.TransportDetector;
+import io.inspector.mcp.core.transport.TransportType;
+
 /**
  * Reactive HTTP handlers for the inspector REST endpoints. Mirrors the WebMVC controller
  * surface. Blocking MCP SDK calls are off-loaded to {@link Schedulers#boundedElastic()}.
+ *
+ * @author Artem Simeshin
  */
 public class InspectorHandler {
 
@@ -104,31 +112,33 @@ public class InspectorHandler {
 
 	private final AtomicInteger listeningPort = new AtomicInteger(-1);
 
-	public InspectorHandler(TransportDetector transportDetector, LoopbackMcpClientFactory loopbackFactory,
-			ExternalStdioClientFactory externalStdioFactory, InspectorAuthTokenProvider tokenProvider,
-			ObjectMapper objectMapper) {
+	public InspectorHandler(final TransportDetector transportDetector, final LoopbackMcpClientFactory loopbackFactory,
+			final ExternalStdioClientFactory externalStdioFactory, final InspectorAuthTokenProvider tokenProvider,
+			final ObjectMapper objectMapper) {
 		this(transportDetector, loopbackFactory, externalStdioFactory, tokenProvider, objectMapper, null, null, null,
 				null);
 	}
 
-	public InspectorHandler(TransportDetector transportDetector, LoopbackMcpClientFactory loopbackFactory,
-			ExternalStdioClientFactory externalStdioFactory, InspectorAuthTokenProvider tokenProvider,
-			ObjectMapper objectMapper, InspectorOAuthClient oauthClient) {
+	public InspectorHandler(final TransportDetector transportDetector, final LoopbackMcpClientFactory loopbackFactory,
+			final ExternalStdioClientFactory externalStdioFactory, final InspectorAuthTokenProvider tokenProvider,
+			final ObjectMapper objectMapper, final InspectorOAuthClient oauthClient) {
 		this(transportDetector, loopbackFactory, externalStdioFactory, tokenProvider, objectMapper, oauthClient, null,
 				null, null);
 	}
 
-	public InspectorHandler(TransportDetector transportDetector, LoopbackMcpClientFactory loopbackFactory,
-			ExternalStdioClientFactory externalStdioFactory, InspectorAuthTokenProvider tokenProvider,
-			ObjectMapper objectMapper, InspectorOAuthClient oauthClient, McpInspectorProperties properties) {
+	public InspectorHandler(final TransportDetector transportDetector, final LoopbackMcpClientFactory loopbackFactory,
+			final ExternalStdioClientFactory externalStdioFactory, final InspectorAuthTokenProvider tokenProvider,
+			final ObjectMapper objectMapper, final InspectorOAuthClient oauthClient,
+			final McpInspectorProperties properties) {
 		this(transportDetector, loopbackFactory, externalStdioFactory, tokenProvider, objectMapper, oauthClient,
 				properties, null, null);
 	}
 
-	public InspectorHandler(TransportDetector transportDetector, LoopbackMcpClientFactory loopbackFactory,
-			ExternalStdioClientFactory externalStdioFactory, InspectorAuthTokenProvider tokenProvider,
-			ObjectMapper objectMapper, InspectorOAuthClient oauthClient, McpInspectorProperties properties,
-			InspectorBootstrapAssembler bootstrapAssembler, BootstrapHtmlRenderer bootstrapHtmlRenderer) {
+	public InspectorHandler(final TransportDetector transportDetector, final LoopbackMcpClientFactory loopbackFactory,
+			final ExternalStdioClientFactory externalStdioFactory, final InspectorAuthTokenProvider tokenProvider,
+			final ObjectMapper objectMapper, final InspectorOAuthClient oauthClient,
+			final McpInspectorProperties properties, final InspectorBootstrapAssembler bootstrapAssembler,
+			final BootstrapHtmlRenderer bootstrapHtmlRenderer) {
 		this.transportDetector = transportDetector;
 		this.loopbackFactory = loopbackFactory;
 		this.externalStdioFactory = externalStdioFactory;
@@ -141,19 +151,21 @@ public class InspectorHandler {
 	}
 
 	@EventListener
-	public void onWebServerStarted(WebServerInitializedEvent event) {
-		listeningPort.set(event.getWebServer().getPort());
+	public void onWebServerStarted(final WebServerInitializedEvent event) {
+		this.listeningPort.set(event.getWebServer().getPort());
 	}
 
 	/**
 	 * Returns the templated {@code index.html} with the typed bootstrap payload injected
 	 * as a single inline {@code <script>} block. The injection is performed by
 	 * {@link BootstrapHtmlRenderer} so that both stacks render identical bytes.
+	 * @param request the incoming server request
+	 * @return a {@link Mono} emitting the HTML response
 	 */
-	public Mono<ServerResponse> index(ServerRequest request) {
+	public Mono<ServerResponse> index(final ServerRequest request) {
 		return Mono.fromCallable(this::renderIndexHtml)
 			.subscribeOn(Schedulers.boundedElastic())
-			.flatMap(html -> ServerResponse.ok()
+			.flatMap((html) -> ServerResponse.ok()
 				.contentType(MediaType.TEXT_HTML)
 				.cacheControl(CacheControl.noStore())
 				.bodyValue(html));
@@ -170,68 +182,84 @@ public class InspectorHandler {
 	 * prefix) so it is intentionally not behind the inspector auth filter — it has to
 	 * deliver the auth token to the SPA before the SPA can authenticate any subsequent
 	 * API call.
+	 * @param request the incoming server request
+	 * @return a {@link Mono} emitting the JSON bootstrap config response
 	 */
-	public Mono<ServerResponse> serveConfig(ServerRequest request) {
+	public Mono<ServerResponse> serveConfig(final ServerRequest request) {
 		return Mono.fromSupplier(() -> {
-			if (bootstrapAssembler == null) {
+			if (this.bootstrapAssembler == null) {
 				throw new IllegalStateException("InspectorBootstrapAssembler not wired into InspectorHandler");
 			}
-			return bootstrapAssembler.assemble();
+			return this.bootstrapAssembler.assemble();
 		})
 			.subscribeOn(Schedulers.boundedElastic())
-			.flatMap(bootstrap -> ServerResponse.ok()
+			.flatMap((bootstrap) -> ServerResponse.ok()
 				.contentType(MediaType.APPLICATION_JSON)
 				.cacheControl(CacheControl.noStore())
 				.bodyValue(bootstrap));
 	}
 
-	/** Returns {@link ConfigDto} with the detected transport, stack and auth token. */
-	public Mono<ServerResponse> config(ServerRequest request) {
+	/**
+	 * Returns {@link ConfigDto} with the detected transport, stack and auth token.
+	 * @param request the incoming server request
+	 * @return a {@link Mono} emitting the config JSON response
+	 */
+	public Mono<ServerResponse> config(final ServerRequest request) {
 		return Mono.fromSupplier(() -> {
-			DetectedTransport detected = transportDetector.detect();
+			final DetectedTransport detected = this.transportDetector.detect();
 			return new ConfigDto(detected.type().name(), detected.endpoint(), detected.messageEndpoint(),
-					detected.stack(), null, null, tokenProvider.token(), Map.of());
-		}).flatMap(dto -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(dto));
+					detected.stack(), null, null, this.tokenProvider.token(), Map.of());
+		}).flatMap((dto) -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(dto));
 	}
 
 	/**
 	 * Creates a new inspector session: builds an MCP client (loopback or external stdio),
 	 * calls {@code initialize()}, registers the session, returns the session id.
+	 * @param request the incoming server request
+	 * @return a {@link Mono} emitting the session info JSON response
 	 */
-	public Mono<ServerResponse> connect(ServerRequest request) {
+	public Mono<ServerResponse> connect(final ServerRequest request) {
 		return request.bodyToMono(ConnectRequest.class)
 			.defaultIfEmpty(new ConnectRequest(null))
-			.flatMap(body -> Mono.fromCallable(() -> openSession(body)).subscribeOn(Schedulers.boundedElastic()))
-			.flatMap(result -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(result))
+			.flatMap((body) -> Mono.fromCallable(() -> openSession(body)).subscribeOn(Schedulers.boundedElastic()))
+			.flatMap((result) -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(result))
 			.onErrorResume(this::errorResponse);
 	}
 
-	/** Relays a JSON-RPC envelope from the UI to the session's MCP client. */
-	public Mono<ServerResponse> jsonRpc(ServerRequest request) {
-		String sessionId = resolveSessionId(request);
+	/**
+	 * Relays a JSON-RPC envelope from the UI to the session's MCP client.
+	 * @param request the incoming server request
+	 * @return a {@link Mono} emitting the JSON-RPC response envelope
+	 */
+	public Mono<ServerResponse> jsonRpc(final ServerRequest request) {
+		final String sessionId = resolveSessionId(request);
 		final String resolvedSessionId = sessionId;
 
-		return request.bodyToMono(JsonRpcRelay.class).flatMap(relay -> {
+		return request.bodyToMono(JsonRpcRelay.class).flatMap((relay) -> {
 			if (resolvedSessionId == null || resolvedSessionId.isBlank()) {
 				return errorBody(relay.id(), -32600, "missing session id");
 			}
-			SessionContext ctx = sessions.get(resolvedSessionId);
+			final SessionContext ctx = this.sessions.get(resolvedSessionId);
 			if (ctx == null) {
 				return errorBody(relay.id(), -32600, "unknown session: " + resolvedSessionId);
 			}
 			return Mono.fromCallable(() -> dispatch(ctx, relay))
 				.subscribeOn(Schedulers.boundedElastic())
-				.onErrorResume(ex -> Mono.just(jsonRpcError(relay.id(), ex)));
-		}).flatMap(body -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(body));
+				.onErrorResume((ex) -> Mono.just(jsonRpcError(relay.id(), ex)));
+		}).flatMap((body) -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(body));
 	}
 
-	/** Streams server-side notifications for a session via Server-Sent Events. */
-	public Mono<ServerResponse> events(ServerRequest request) {
-		String sessionId = request.queryParam("session").or(() -> request.queryParam("sessionId")).orElse(null);
+	/**
+	 * Streams server-side notifications for a session via Server-Sent Events.
+	 * @param request the incoming server request
+	 * @return a {@link Mono} emitting the SSE stream response
+	 */
+	public Mono<ServerResponse> events(final ServerRequest request) {
+		final String sessionId = request.queryParam("session").or(() -> request.queryParam("sessionId")).orElse(null);
 		if (sessionId == null || sessionId.isBlank()) {
 			return ServerResponse.badRequest().bodyValue(Map.of("error", "missing 'session' query parameter"));
 		}
-		SessionContext ctx = sessions.get(sessionId);
+		final SessionContext ctx = this.sessions.get(sessionId);
 		if (ctx == null) {
 			return ServerResponse.notFound().build();
 		}
@@ -240,10 +268,14 @@ public class InspectorHandler {
 			.body(BodyInserters.fromServerSentEvents(ctx.sink().asFlux()));
 	}
 
-	/** Terminates a session: closes the MCP client and completes the SSE sink. */
-	public Mono<ServerResponse> deleteSession(ServerRequest request) {
-		String id = request.pathVariable("id");
-		SessionContext ctx = sessions.remove(id);
+	/**
+	 * Terminates a session: closes the MCP client and completes the SSE sink.
+	 * @param request the incoming server request
+	 * @return a {@link Mono} emitting a 204 no-content response
+	 */
+	public Mono<ServerResponse> deleteSession(final ServerRequest request) {
+		final String id = request.pathVariable("id");
+		final SessionContext ctx = this.sessions.remove(id);
 		if (ctx != null) {
 			ctx.closeQuietly();
 		}
@@ -252,10 +284,12 @@ public class InspectorHandler {
 
 	/**
 	 * Returns the roots currently advertised by the inspector to the backing MCP server.
+	 * @param request the incoming server request
+	 * @return a {@link Mono} emitting the roots JSON response
 	 */
-	public Mono<ServerResponse> getRoots(ServerRequest request) {
-		String sessionId = resolveSessionId(request);
-		SessionContext ctx = (sessionId != null) ? sessions.get(sessionId) : null;
+	public Mono<ServerResponse> getRoots(final ServerRequest request) {
+		final String sessionId = resolveSessionId(request);
+		final SessionContext ctx = (sessionId != null) ? this.sessions.get(sessionId) : null;
 		if (ctx == null) {
 			return ServerResponse.status(404).bodyValue(Map.of("error", "unknown session: " + sessionId));
 		}
@@ -267,76 +301,84 @@ public class InspectorHandler {
 	/**
 	 * Replaces the session's root list and notifies the backing MCP server via
 	 * {@code notifications/roots/list_changed}.
+	 * @param request the incoming server request
+	 * @return a {@link Mono} emitting the updated roots JSON response
 	 */
-	public Mono<ServerResponse> putRoots(ServerRequest request) {
-		String sessionId = resolveSessionId(request);
-		SessionContext ctx = (sessionId != null) ? sessions.get(sessionId) : null;
+	public Mono<ServerResponse> putRoots(final ServerRequest request) {
+		final String sessionId = resolveSessionId(request);
+		final SessionContext ctx = (sessionId != null) ? this.sessions.get(sessionId) : null;
 		if (ctx == null) {
 			return ServerResponse.status(404).bodyValue(Map.of("error", "unknown session: " + sessionId));
 		}
 		return request.bodyToMono(RootsDto.class)
 			.defaultIfEmpty(new RootsDto(List.of()))
-			.flatMap(body -> Mono.fromCallable(() -> {
-				applyRoots(ctx, body.roots() != null ? body.roots() : List.of());
-				ObjectNode payload = objectMapper.createObjectNode();
+			.flatMap((body) -> Mono.fromCallable(() -> {
+				applyRoots(ctx, (body.roots() != null) ? body.roots() : List.of());
+				final ObjectNode payload = this.objectMapper.createObjectNode();
 				payload.put("count", ctx.roots().size());
 				broadcast(ctx, "mcp:roots-list-changed", payload);
 				return new RootsDto(new ArrayList<>(ctx.roots()));
 			}).subscribeOn(Schedulers.boundedElastic()))
-			.flatMap(r -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(r));
+			.flatMap((r) -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(r));
 	}
 
 	/**
 	 * Completes a previously suspended server-to-client request
 	 * ({@code sampling/createMessage}, {@code elicitation/create}) with the UI-supplied
 	 * result.
+	 * @param request the incoming server request
+	 * @return a {@link Mono} emitting the completion result response
 	 */
-	public Mono<ServerResponse> respond(ServerRequest request) {
-		String sessionId = resolveSessionId(request);
-		String requestId = request.queryParam("requestId").orElse(null);
-		SessionContext ctx = (sessionId != null) ? sessions.get(sessionId) : null;
+	public Mono<ServerResponse> respond(final ServerRequest request) {
+		final String sessionId = resolveSessionId(request);
+		final String requestId = request.queryParam("requestId").orElse(null);
+		final SessionContext ctx = (sessionId != null) ? this.sessions.get(sessionId) : null;
 		if (ctx == null) {
 			return ServerResponse.status(404).bodyValue(Map.of("error", "unknown session: " + sessionId));
 		}
 		if (requestId == null || requestId.isBlank()) {
 			return ServerResponse.badRequest().bodyValue(Map.of("error", "missing requestId"));
 		}
-		return request.bodyToMono(JsonNode.class).defaultIfEmpty(objectMapper.createObjectNode()).flatMap(body -> {
-			boolean completed;
-			if (body.has("error")) {
-				completed = ctx.pendingServerRequests()
-					.completeExceptionally(requestId,
-							new RuntimeException(body.path("error").path("message").asText("rejected")));
-			}
-			else {
-				JsonNode result = body.has("result") ? body.get("result") : body;
-				completed = ctx.pendingServerRequests().complete(requestId, result);
-			}
-			if (!completed) {
-				return ServerResponse.status(410).bodyValue(Map.of("error", "no pending request: " + requestId));
-			}
-			return ServerResponse.ok().bodyValue(Map.of("ok", true));
-		});
+		return request.bodyToMono(JsonNode.class)
+			.defaultIfEmpty(this.objectMapper.createObjectNode())
+			.flatMap((body) -> {
+				final boolean completed;
+				if (body.has("error")) {
+					completed = ctx.pendingServerRequests()
+						.completeExceptionally(requestId,
+								new RuntimeException(body.path("error").path("message").asText("rejected")));
+				}
+				else {
+					final JsonNode result = body.has("result") ? body.get("result") : body;
+					completed = ctx.pendingServerRequests().complete(requestId, result);
+				}
+				if (!completed) {
+					return ServerResponse.status(410).bodyValue(Map.of("error", "no pending request: " + requestId));
+				}
+				return ServerResponse.ok().bodyValue(Map.of("ok", true));
+			});
 	}
 
 	/**
 	 * Generates a random {@code state} token, builds the IdP authorization URL and stores
 	 * the OAuth context on the session for the matching callback.
+	 * @param request the incoming server request
+	 * @return a {@link Mono} emitting the OAuth initiation response
 	 */
-	public Mono<ServerResponse> oauthInitiate(ServerRequest request) {
-		String sessionId = resolveSessionId(request);
-		SessionContext ctx = (sessionId != null) ? sessions.get(sessionId) : null;
+	public Mono<ServerResponse> oauthInitiate(final ServerRequest request) {
+		final String sessionId = resolveSessionId(request);
+		final SessionContext ctx = (sessionId != null) ? this.sessions.get(sessionId) : null;
 		if (ctx == null) {
 			return ServerResponse.status(404).bodyValue(Map.of("error", "unknown session: " + sessionId));
 		}
-		return request.bodyToMono(OAuthInitiateRequest.class).flatMap(req -> {
-			String stateToken = randomState();
+		return request.bodyToMono(OAuthInitiateRequest.class).flatMap((req) -> {
+			final String stateToken = randomState();
 			ctx.oauthState(stateToken);
 			ctx.oauthClientId(req.clientId());
 			ctx.oauthRedirectUri(req.redirectUri());
 			ctx.oauthTokenEndpoint(req.tokenEndpoint());
-			String url = oauthClient.buildAuthUrl(req.authorizationEndpoint(), req.clientId(), req.redirectUri(),
-					req.scope(), stateToken, req.codeChallenge());
+			final String url = this.oauthClient.buildAuthUrl(req.authorizationEndpoint(), req.clientId(),
+					req.redirectUri(), req.scope(), stateToken, req.codeChallenge());
 			return ServerResponse.ok()
 				.contentType(MediaType.APPLICATION_JSON)
 				.bodyValue(new OAuthInitiateResponse(url, stateToken));
@@ -347,16 +389,18 @@ public class InspectorHandler {
 	 * Exchanges the OAuth authorization {@code code} for a token using the previously
 	 * stored token endpoint, validates {@code state}, and caches the token on the
 	 * session.
+	 * @param request the incoming server request
+	 * @return a {@link Mono} emitting the OAuth token response
 	 */
-	public Mono<ServerResponse> oauthCallback(ServerRequest request) {
-		String sessionId = resolveSessionId(request);
-		SessionContext ctx = (sessionId != null) ? sessions.get(sessionId) : null;
+	public Mono<ServerResponse> oauthCallback(final ServerRequest request) {
+		final String sessionId = resolveSessionId(request);
+		final SessionContext ctx = (sessionId != null) ? this.sessions.get(sessionId) : null;
 		if (ctx == null) {
 			return ServerResponse.status(404).bodyValue(Map.of("error", "unknown session: " + sessionId));
 		}
-		String code = request.queryParam("code").orElse(null);
-		String stateToken = request.queryParam("state").orElse(null);
-		String codeVerifier = request.queryParam("codeVerifier").orElse(null);
+		final String code = request.queryParam("code").orElse(null);
+		final String stateToken = request.queryParam("state").orElse(null);
+		final String codeVerifier = request.queryParam("codeVerifier").orElse(null);
 		if (code == null || stateToken == null) {
 			return ServerResponse.badRequest().bodyValue(Map.of("error", "missing code or state"));
 		}
@@ -364,18 +408,18 @@ public class InspectorHandler {
 			return ServerResponse.badRequest().bodyValue(Map.of("error", "state mismatch"));
 		}
 		return Mono
-			.fromCallable(() -> oauthClient.exchangeCode(ctx.oauthTokenEndpoint(), ctx.oauthClientId(), code,
+			.fromCallable(() -> this.oauthClient.exchangeCode(ctx.oauthTokenEndpoint(), ctx.oauthClientId(), code,
 					ctx.oauthRedirectUri(), codeVerifier))
 			.subscribeOn(Schedulers.boundedElastic())
-			.flatMap(token -> {
+			.flatMap((token) -> {
 				ctx.oauthToken(token);
 				return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(token);
 			})
-			.onErrorResume(ex -> {
+			.onErrorResume((ex) -> {
 				LOG.warn("OAuth token exchange failed", ex);
 				return ServerResponse.status(502)
-					.bodyValue(
-							Map.of("error", ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()));
+					.bodyValue(Map.of("error",
+							(ex.getMessage() != null) ? ex.getMessage() : ex.getClass().getSimpleName()));
 			});
 	}
 
@@ -383,43 +427,44 @@ public class InspectorHandler {
 	// helpers
 	// ---------------------------------------------------------------------
 
-	private Map<String, Object> openSession(ConnectRequest body) {
-		String sessionId = UUID.randomUUID().toString();
-		SessionContextHolder holder = new SessionContextHolder();
-		InspectorClientHandlers handlers = new InspectorClientHandlers(
-				req -> handleSamplingRequest(sessionId, holder, req),
-				req -> handleElicitationRequest(sessionId, holder, req));
+	private Map<String, Object> openSession(final ConnectRequest body) {
+		final String sessionId = UUID.randomUUID().toString();
+		final SessionContextHolder holder = new SessionContextHolder();
+		final InspectorClientHandlers handlers = new InspectorClientHandlers(
+				(req) -> handleSamplingRequest(sessionId, holder, req),
+				(req) -> handleElicitationRequest(sessionId, holder, req));
 
-		McpSyncClient client = (body != null && body.externalCommand() != null && !body.externalCommand().isBlank())
-				? externalStdioFactory.forCommand(splitCommand(body.externalCommand()), Map.of())
-				: buildLoopbackClient(handlers);
+		final McpSyncClient client = (body != null && body.externalCommand() != null
+				&& !body.externalCommand().isBlank())
+						? this.externalStdioFactory.forCommand(splitCommand(body.externalCommand()), Map.of())
+						: buildLoopbackClient(handlers);
 
 		client.initialize();
 
-		Sinks.Many<ServerSentEvent<String>> sink = Sinks.many().multicast().onBackpressureBuffer(256, false);
-		SessionContext ctx = new SessionContext(client, sink);
+		final Sinks.Many<ServerSentEvent<String>> sink = Sinks.many().multicast().onBackpressureBuffer(256, false);
+		final SessionContext ctx = new SessionContext(client, sink);
 		holder.ctx = ctx;
-		sessions.put(sessionId, ctx);
+		this.sessions.put(sessionId, ctx);
 
-		McpSchema.Implementation info = client.getServerInfo();
-		Map<String, Object> result = new LinkedHashMap<>();
+		final McpSchema.Implementation info = client.getServerInfo();
+		final Map<String, Object> result = new LinkedHashMap<>();
 		result.put("sessionId", sessionId);
 		result.put("serverName", (info != null) ? info.name() : null);
 		result.put("serverVersion", (info != null) ? info.version() : null);
 		return result;
 	}
 
-	private McpSyncClient buildLoopbackClient(InspectorClientHandlers handlers) {
-		DetectedTransport transport = transportDetector.detect();
-		int port = listeningPort.get();
+	private McpSyncClient buildLoopbackClient(final InspectorClientHandlers handlers) {
+		final DetectedTransport transport = this.transportDetector.detect();
+		final int port = this.listeningPort.get();
 		if (port <= 0) {
 			throw new IllegalStateException("inspector cannot determine listening port yet");
 		}
-		String host = "127.0.0.1";
+		final String host = "127.0.0.1";
 		return switch (transport.type()) {
-			case SSE -> loopbackFactory.forSse(host, port, null, transport.messageEndpoint(), handlers);
-			case STREAMABLE -> loopbackFactory.forStreamable(host, port, transport.endpoint(), handlers);
-			case STATELESS -> loopbackFactory.forStateless(host, port, transport.endpoint(), handlers);
+			case SSE -> this.loopbackFactory.forSse(host, port, null, transport.messageEndpoint(), handlers);
+			case STREAMABLE -> this.loopbackFactory.forStreamable(host, port, transport.endpoint(), handlers);
+			case STATELESS -> this.loopbackFactory.forStateless(host, port, transport.endpoint(), handlers);
 			case STDIO_NO_HTTP -> throw new IllegalStateException(
 					"loopback connect not supported for STDIO_NO_HTTP transport — use externalCommand");
 			case UNKNOWN -> throw new IllegalStateException(
@@ -427,37 +472,37 @@ public class InspectorHandler {
 		};
 	}
 
-	private Map<String, Object> dispatch(SessionContext ctx, JsonRpcRelay relay) {
-		McpSyncClient client = ctx.client();
-		String method = (relay.method() != null) ? relay.method() : "";
-		Object result = switch (method) {
+	private Map<String, Object> dispatch(final SessionContext ctx, final JsonRpcRelay relay) {
+		final McpSyncClient client = ctx.client();
+		final String method = (relay.method() != null) ? relay.method() : "";
+		final Object result = switch (method) {
 			case "initialize" -> client.getCurrentInitializationResult();
 			case "ping" -> client.ping();
 			case "tools/list" -> client.listTools();
 			case "tools/call" ->
-				client.callTool(objectMapper.convertValue(relay.params(), McpSchema.CallToolRequest.class));
+				client.callTool(this.objectMapper.convertValue(relay.params(), McpSchema.CallToolRequest.class));
 			case "resources/list" -> client.listResources();
-			case "resources/read" ->
-				client.readResource(objectMapper.convertValue(relay.params(), McpSchema.ReadResourceRequest.class));
+			case "resources/read" -> client
+				.readResource(this.objectMapper.convertValue(relay.params(), McpSchema.ReadResourceRequest.class));
 			case "resources/templates/list" -> client.listResourceTemplates();
 			case "prompts/list" -> client.listPrompts();
 			case "prompts/get" ->
-				client.getPrompt(objectMapper.convertValue(relay.params(), McpSchema.GetPromptRequest.class));
+				client.getPrompt(this.objectMapper.convertValue(relay.params(), McpSchema.GetPromptRequest.class));
 			case "roots/list" -> Map.of("roots", new ArrayList<>(ctx.roots()));
 			default -> throw new UnsupportedOperationException("method not supported by inspector relay: " + method);
 		};
-		Map<String, Object> envelope = new LinkedHashMap<>();
+		final Map<String, Object> envelope = new LinkedHashMap<>();
 		envelope.put("jsonrpc", "2.0");
 		envelope.put("id", relay.id());
 		envelope.put("result", result);
 		return envelope;
 	}
 
-	private void applyRoots(SessionContext ctx, List<RootDto> next) {
+	private void applyRoots(final SessionContext ctx, final List<RootDto> next) {
 		ctx.replaceRoots(next);
-		McpSyncClient client = ctx.client();
+		final McpSyncClient client = ctx.client();
 		try {
-			for (RootDto r : next) {
+			for (final RootDto r : next) {
 				if (r.uri() == null || r.uri().isBlank()) {
 					continue;
 				}
@@ -465,63 +510,63 @@ public class InspectorHandler {
 			}
 			client.rootsListChangedNotification();
 		}
-		catch (Exception ex) {
+		catch (final Exception ex) {
 			LOG.debug("rootsListChangedNotification failed: {}", ex.toString());
 		}
 	}
 
-	private McpSchema.CreateMessageResult handleSamplingRequest(String sessionId, SessionContextHolder holder,
-			McpSchema.CreateMessageRequest request) {
+	private McpSchema.CreateMessageResult handleSamplingRequest(final String sessionId,
+			final SessionContextHolder holder, final McpSchema.CreateMessageRequest request) {
 		return awaitServerResponse(sessionId, holder, "mcp:sampling-request", request,
 				McpSchema.CreateMessageResult.class);
 	}
 
-	private McpSchema.ElicitResult handleElicitationRequest(String sessionId, SessionContextHolder holder,
-			McpSchema.ElicitRequest request) {
+	private McpSchema.ElicitResult handleElicitationRequest(final String sessionId, final SessionContextHolder holder,
+			final McpSchema.ElicitRequest request) {
 		return awaitServerResponse(sessionId, holder, "mcp:elicitation-request", request, McpSchema.ElicitResult.class);
 	}
 
-	private <T> T awaitServerResponse(String sessionId, SessionContextHolder holder, String eventName, Object params,
-			Class<T> resultType) {
+	private <T> T awaitServerResponse(final String sessionId, final SessionContextHolder holder, final String eventName,
+			final Object params, final Class<T> resultType) {
 		SessionContext ctx = holder.ctx;
 		if (ctx == null) {
-			ctx = sessions.get(sessionId);
+			ctx = this.sessions.get(sessionId);
 		}
 		if (ctx == null) {
 			throw new IllegalStateException("session not yet registered for " + eventName);
 		}
-		PendingServerRequests pending = ctx.pendingServerRequests();
-		String requestId = UUID.randomUUID().toString();
-		var future = pending.create(requestId);
-		ObjectNode envelope = objectMapper.createObjectNode();
+		final PendingServerRequests pending = ctx.pendingServerRequests();
+		final String requestId = UUID.randomUUID().toString();
+		final var future = pending.create(requestId);
+		final ObjectNode envelope = this.objectMapper.createObjectNode();
 		envelope.put("requestId", requestId);
-		envelope.set("params", objectMapper.valueToTree(params));
+		envelope.set("params", this.objectMapper.valueToTree(params));
 		broadcast(ctx, eventName, envelope);
 		try {
-			JsonNode reply = future.get(SERVER_REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-			return objectMapper.treeToValue(reply, resultType);
+			final JsonNode reply = future.get(SERVER_REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+			return this.objectMapper.treeToValue(reply, resultType);
 		}
-		catch (TimeoutException ex) {
+		catch (final TimeoutException ex) {
 			pending.completeExceptionally(requestId, ex);
 			throw new RuntimeException(
 					"UI did not answer " + eventName + " within " + SERVER_REQUEST_TIMEOUT_SECONDS + "s", ex);
 		}
-		catch (Exception ex) {
+		catch (final Exception ex) {
 			throw new RuntimeException(eventName + " failed: " + ex.getMessage(), ex);
 		}
 	}
 
-	private void broadcast(SessionContext ctx, String eventName, Object payload) {
+	private void broadcast(final SessionContext ctx, final String eventName, final Object payload) {
 		try {
-			String json = objectMapper.writeValueAsString(payload);
+			final String json = this.objectMapper.writeValueAsString(payload);
 			ctx.sink().tryEmitNext(ServerSentEvent.<String>builder().event(eventName).data(json).build());
 		}
-		catch (Exception ex) {
+		catch (final Exception ex) {
 			LOG.debug("Failed to emit SSE event {}: {}", eventName, ex.toString());
 		}
 	}
 
-	private static String resolveSessionId(ServerRequest request) {
+	private static String resolveSessionId(final ServerRequest request) {
 		String sessionId = request.headers().firstHeader("X-Inspector-Session");
 		if (sessionId == null || sessionId.isBlank()) {
 			sessionId = request.queryParam("sessionId").or(() -> request.queryParam("session")).orElse(null);
@@ -529,30 +574,30 @@ public class InspectorHandler {
 		return sessionId;
 	}
 
-	private Map<String, Object> jsonRpcError(Object id, Throwable ex) {
-		Map<String, Object> error = new LinkedHashMap<>();
+	private Map<String, Object> jsonRpcError(final Object id, final Throwable ex) {
+		final Map<String, Object> error = new LinkedHashMap<>();
 		error.put("code", -32000);
 		error.put("message", (ex.getMessage() != null) ? ex.getMessage() : ex.getClass().getSimpleName());
-		Map<String, Object> envelope = new LinkedHashMap<>();
+		final Map<String, Object> envelope = new LinkedHashMap<>();
 		envelope.put("jsonrpc", "2.0");
 		envelope.put("id", id);
 		envelope.put("error", error);
 		return envelope;
 	}
 
-	private Mono<Map<String, Object>> errorBody(Object id, int code, String message) {
-		Map<String, Object> error = new LinkedHashMap<>();
+	private Mono<Map<String, Object>> errorBody(final Object id, final int code, final String message) {
+		final Map<String, Object> error = new LinkedHashMap<>();
 		error.put("code", code);
 		error.put("message", message);
-		Map<String, Object> envelope = new LinkedHashMap<>();
+		final Map<String, Object> envelope = new LinkedHashMap<>();
 		envelope.put("jsonrpc", "2.0");
 		envelope.put("id", id);
 		envelope.put("error", error);
 		return Mono.just(envelope);
 	}
 
-	private Mono<ServerResponse> errorResponse(Throwable ex) {
-		Map<String, Object> body = Map.of("error",
+	private Mono<ServerResponse> errorResponse(final Throwable ex) {
+		final Map<String, Object> body = Map.of("error",
 				(ex.getMessage() != null) ? ex.getMessage() : ex.getClass().getSimpleName());
 		return ServerResponse.status(500).contentType(MediaType.APPLICATION_JSON).bodyValue(body);
 	}
@@ -563,26 +608,27 @@ public class InspectorHandler {
 		// same JVM (servlet + reactive runs back-to-back), the TCCL can be a stopped
 		// Tomcat WebappClassLoader, which raises "Illegal access: this web application
 		// instance has been stopped already" when reading classpath resources.
-		ClassPathResource resource = new ClassPathResource(INDEX_RESOURCE, InspectorHandler.class.getClassLoader());
+		final ClassPathResource resource = new ClassPathResource(INDEX_RESOURCE,
+				InspectorHandler.class.getClassLoader());
 		if (!resource.exists()) {
 			return "<!doctype html><meta charset=\"utf-8\"><title>MCP Inspector</title>"
 					+ "<p>UI assets not bundled. Build the <code>spring-ai-mcp-inspector-ui</code> module.</p>";
 		}
 		try (InputStream in = resource.getInputStream()) {
-			String template = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-			if (bootstrapAssembler == null || bootstrapHtmlRenderer == null) {
+			final String template = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+			if (this.bootstrapAssembler == null || this.bootstrapHtmlRenderer == null) {
 				// Defensive fallback for test setups that wire only the legacy
 				// constructor. Returns the raw template untouched — the SPA will
 				// still load, just without the inlined bootstrap script.
 				return template;
 			}
-			InspectorBootstrap bootstrap = bootstrapAssembler.assemble();
-			return bootstrapHtmlRenderer.renderIndexHtml(template, bootstrap);
+			final InspectorBootstrap bootstrap = this.bootstrapAssembler.assemble();
+			return this.bootstrapHtmlRenderer.renderIndexHtml(template, bootstrap);
 		}
 	}
 
-	private static java.util.List<String> splitCommand(String command) {
-		String trimmed = command.trim();
+	private static java.util.List<String> splitCommand(final String command) {
+		final String trimmed = command.trim();
 		if (trimmed.isEmpty()) {
 			return java.util.List.of();
 		}
@@ -592,18 +638,23 @@ public class InspectorHandler {
 	}
 
 	private static String randomState() {
-		byte[] buf = new byte[24];
+		final byte[] buf = new byte[24];
 		new java.security.SecureRandom().nextBytes(buf);
 		return Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
 	}
 
 	// package-private for tests
-	boolean hasSession(String id) {
-		return sessions.containsKey(id);
+	boolean hasSession(final String id) {
+		return this.sessions.containsKey(id);
 	}
 
 	int listeningPort() {
-		return listeningPort.get();
+		return this.listeningPort.get();
+	}
+
+	@SuppressWarnings("unused")
+	private static TransportType[] unusedKeepImport() {
+		return TransportType.values();
 	}
 
 	/**
@@ -615,11 +666,6 @@ public class InspectorHandler {
 
 		volatile SessionContext ctx;
 
-	}
-
-	@SuppressWarnings("unused")
-	private static TransportType[] unusedKeepImport() {
-		return TransportType.values();
 	}
 
 }

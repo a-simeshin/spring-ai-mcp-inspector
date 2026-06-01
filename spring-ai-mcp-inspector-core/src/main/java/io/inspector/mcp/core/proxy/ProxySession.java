@@ -1,19 +1,25 @@
 /*
- * Copyright 2026 the original author or authors.
+ * Copyright 2025-present the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.core.proxy;
 
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.fasterxml.jackson.databind.JsonNode;
-
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
 import reactor.core.publisher.Sinks;
@@ -28,7 +34,7 @@ import reactor.core.publisher.Sinks;
  *
  * <ul>
  * <li>{@link #browserToTarget}: frames the browser POSTs in are pushed here; a subscriber
- * forwards each to {@link #targetTransport#sendMessage}.</li>
+ * forwards each to {@link McpClientTransport#sendMessage(JSONRPCMessage)}.</li>
  * <li>{@link #targetToBrowser}: the handler registered on
  * {@link McpClientTransport#connect(java.util.function.Function)} emits every inbound
  * message here; the SSE endpoint streams it to the browser.</li>
@@ -71,6 +77,8 @@ import reactor.core.publisher.Sinks;
  * <li>completes both sinks so subscribers tear down,</li>
  * <li>calls {@code closeGracefully()} on the upstream transport.</li>
  * </ol>
+ *
+ * @author Artem Simeshin
  */
 public final class ProxySession {
 
@@ -100,8 +108,8 @@ public final class ProxySession {
 
 	private final AtomicBoolean closed = new AtomicBoolean(false);
 
-	public ProxySession(String sessionId, McpClientTransport targetTransport, Sinks.Many<JsonNode> browserToTarget,
-			Sinks.Many<JsonNode> targetToBrowser) {
+	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
+			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser) {
 		this.sessionId = sessionId;
 		this.targetTransport = targetTransport;
 		this.browserToTarget = browserToTarget;
@@ -110,31 +118,31 @@ public final class ProxySession {
 	}
 
 	public String sessionId() {
-		return sessionId;
+		return this.sessionId;
 	}
 
 	public McpClientTransport targetTransport() {
-		return targetTransport;
+		return this.targetTransport;
 	}
 
 	public Sinks.Many<JsonNode> browserToTarget() {
-		return browserToTarget;
+		return this.browserToTarget;
 	}
 
 	public Sinks.Many<JsonNode> targetToBrowser() {
-		return targetToBrowser;
+		return this.targetToBrowser;
 	}
 
 	public String upstreamSessionId() {
-		return upstreamSessionId;
+		return this.upstreamSessionId;
 	}
 
-	public void upstreamSessionId(String value) {
+	public void upstreamSessionId(final String value) {
 		this.upstreamSessionId = value;
 	}
 
 	public Instant lastActivity() {
-		return lastActivity;
+		return this.lastActivity;
 	}
 
 	/** Records that a frame was just relayed; called by the proxy controllers. */
@@ -143,7 +151,7 @@ public final class ProxySession {
 	}
 
 	public boolean isClosed() {
-		return closed.get();
+		return this.closed.get();
 	}
 
 	/**
@@ -151,25 +159,25 @@ public final class ProxySession {
 	 * invocation does work; subsequent calls are no-ops.
 	 */
 	public void close() {
-		if (!closed.compareAndSet(false, true)) {
+		if (!this.closed.compareAndSet(false, true)) {
 			return;
 		}
 		try {
-			browserToTarget.tryEmitComplete();
+			this.browserToTarget.tryEmitComplete();
 		}
-		catch (Exception ignored) {
+		catch (final Exception ignored) {
 			// tryEmitComplete never throws; defensive only
 		}
 		try {
-			targetToBrowser.tryEmitComplete();
+			this.targetToBrowser.tryEmitComplete();
 		}
-		catch (Exception ignored) {
+		catch (final Exception ignored) {
 			// tryEmitComplete never throws; defensive only
 		}
 		try {
-			targetTransport.closeGracefully().block();
+			this.targetTransport.closeGracefully().block();
 		}
-		catch (Exception ignored) {
+		catch (final Exception ignored) {
 			// best-effort shutdown
 		}
 	}

@@ -1,17 +1,34 @@
 /*
- * Copyright 2026 the original author or authors.
+ * Copyright 2025-present the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webflux;
 
 import java.util.List;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.core.env.Environment;
+import org.springframework.web.reactive.config.CorsRegistry;
+import org.springframework.web.reactive.config.WebFluxConfigurer;
 
 import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
 import io.inspector.mcp.core.bootstrap.BootstrapHtmlRenderer;
@@ -30,16 +47,6 @@ import io.inspector.mcp.webflux.proxy.ProxyAuthWebFilter;
 import io.inspector.mcp.webflux.proxy.ProxyHandler;
 import io.inspector.mcp.webflux.router.InspectorHandler;
 import io.inspector.mcp.webflux.router.InspectorRouterConfig;
-import org.springframework.boot.autoconfigure.AutoConfiguration;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Import;
-import org.springframework.core.env.Environment;
-import org.springframework.web.reactive.config.CorsRegistry;
-import org.springframework.web.reactive.config.WebFluxConfigurer;
 
 /**
  * Reactive (WebFlux) auto-configuration for the Spring AI MCP Inspector.
@@ -57,6 +64,8 @@ import org.springframework.web.reactive.config.WebFluxConfigurer;
  * <li>{@link InspectorAuthWebFilter} — reactive bearer-token guard.</li>
  * <li>CORS mappings for inspector paths.</li>
  * </ul>
+ *
+ * @author Artem Simeshin
  */
 @AutoConfiguration
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.REACTIVE)
@@ -68,7 +77,7 @@ public class McpInspectorWebFluxAutoConfiguration {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public TransportDetector mcpInspectorTransportDetector(Environment environment) {
+	public TransportDetector mcpInspectorTransportDetector(final Environment environment) {
 		return new TransportDetector(environment);
 	}
 
@@ -80,51 +89,51 @@ public class McpInspectorWebFluxAutoConfiguration {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ExternalStdioClientFactory mcpInspectorExternalStdioClientFactory(ObjectMapper objectMapper) {
+	public ExternalStdioClientFactory mcpInspectorExternalStdioClientFactory(final ObjectMapper objectMapper) {
 		return new ExternalStdioClientFactory(objectMapper);
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public InspectorAuthTokenProvider mcpInspectorAuthTokenProvider(McpInspectorProperties properties) {
+	public InspectorAuthTokenProvider mcpInspectorAuthTokenProvider(final McpInspectorProperties properties) {
 		return new InspectorAuthTokenProvider(properties);
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public InspectorBootstrapAssembler mcpInspectorBootstrapAssembler(McpInspectorProperties properties,
-			InspectorAuthTokenProvider authTokenProvider, TransportDetector transportDetector,
-			List<InspectorBootstrapCustomizer> customizers) {
+	public InspectorBootstrapAssembler mcpInspectorBootstrapAssembler(final McpInspectorProperties properties,
+			final InspectorAuthTokenProvider authTokenProvider, final TransportDetector transportDetector,
+			final List<InspectorBootstrapCustomizer> customizers) {
 		return new InspectorBootstrapAssembler(properties, authTokenProvider, transportDetector, customizers);
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public BootstrapHtmlRenderer mcpInspectorBootstrapHtmlRenderer(ObjectMapper objectMapper) {
+	public BootstrapHtmlRenderer mcpInspectorBootstrapHtmlRenderer(final ObjectMapper objectMapper) {
 		return new BootstrapHtmlRenderer(objectMapper);
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public InspectorOAuthClient mcpInspectorOAuthClient(ObjectMapper objectMapper) {
+	public InspectorOAuthClient mcpInspectorOAuthClient(final ObjectMapper objectMapper) {
 		return new InspectorOAuthClient(java.net.http.HttpClient.newHttpClient(), objectMapper);
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public InspectorHandler mcpInspectorHandler(TransportDetector transportDetector,
-			LoopbackMcpClientFactory loopbackFactory, ExternalStdioClientFactory externalStdioFactory,
-			InspectorAuthTokenProvider tokenProvider, ObjectMapper objectMapper, InspectorOAuthClient oauthClient,
-			McpInspectorProperties properties, InspectorBootstrapAssembler bootstrapAssembler,
-			BootstrapHtmlRenderer bootstrapHtmlRenderer) {
+	public InspectorHandler mcpInspectorHandler(final TransportDetector transportDetector,
+			final LoopbackMcpClientFactory loopbackFactory, final ExternalStdioClientFactory externalStdioFactory,
+			final InspectorAuthTokenProvider tokenProvider, final ObjectMapper objectMapper,
+			final InspectorOAuthClient oauthClient, final McpInspectorProperties properties,
+			final InspectorBootstrapAssembler bootstrapAssembler, final BootstrapHtmlRenderer bootstrapHtmlRenderer) {
 		return new InspectorHandler(transportDetector, loopbackFactory, externalStdioFactory, tokenProvider,
 				objectMapper, oauthClient, properties, bootstrapAssembler, bootstrapHtmlRenderer);
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public InspectorAuthWebFilter mcpInspectorAuthWebFilter(McpInspectorProperties properties,
-			InspectorAuthTokenProvider tokenProvider) {
+	public InspectorAuthWebFilter mcpInspectorAuthWebFilter(final McpInspectorProperties properties,
+			final InspectorAuthTokenProvider tokenProvider) {
 		return new InspectorAuthWebFilter(properties, tokenProvider);
 	}
 
@@ -136,36 +145,37 @@ public class McpInspectorWebFluxAutoConfiguration {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxyTransportFactory mcpInspectorProxyTransportFactory(ObjectMapper objectMapper) {
+	public ProxyTransportFactory mcpInspectorProxyTransportFactory(final ObjectMapper objectMapper) {
 		return new ProxyTransportFactory(objectMapper);
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public McpProxy mcpInspectorMcpProxy(ObjectMapper objectMapper) {
+	public McpProxy mcpInspectorMcpProxy(final ObjectMapper objectMapper) {
 		return new McpProxy(objectMapper);
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxyHandler mcpInspectorProxyHandler(ProxySessionRegistry registry, ProxyTransportFactory transportFactory,
-			McpProxy mcpProxy, TransportDetector transportDetector, ObjectMapper objectMapper,
-			McpInspectorProperties properties) {
+	public ProxyHandler mcpInspectorProxyHandler(final ProxySessionRegistry registry,
+			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy,
+			final TransportDetector transportDetector, final ObjectMapper objectMapper,
+			final McpInspectorProperties properties) {
 		return new ProxyHandler(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties);
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxyAuthWebFilter mcpInspectorProxyAuthWebFilter(McpInspectorProperties properties,
-			InspectorAuthTokenProvider tokenProvider) {
+	public ProxyAuthWebFilter mcpInspectorProxyAuthWebFilter(final McpInspectorProperties properties,
+			final InspectorAuthTokenProvider tokenProvider) {
 		return new ProxyAuthWebFilter(properties, tokenProvider);
 	}
 
 	@Bean
-	public WebFluxConfigurer mcpInspectorCorsConfigurer(McpInspectorProperties properties) {
+	public WebFluxConfigurer mcpInspectorCorsConfigurer(final McpInspectorProperties properties) {
 		return new WebFluxConfigurer() {
 			@Override
-			public void addCorsMappings(CorsRegistry registry) {
+			public void addCorsMappings(final CorsRegistry registry) {
 				if (properties.getAllowedOrigins() == null || properties.getAllowedOrigins().isEmpty()) {
 					return;
 				}

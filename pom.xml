@@ -38,6 +38,12 @@
         <spring-javaformat-maven-plugin.version>0.0.47</spring-javaformat-maven-plugin.version>
         <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
 
+        <!-- Checkstyle: the classic Spring ruleset (io.spring.javaformat.checkstyle.SpringChecks)
+             plus FinalLocalVariable, gated at the validate phase. checkstyle.version must match
+             what spring-javaformat-checkstyle 0.0.47 was built against (Checkstyle 10.x). -->
+        <maven-checkstyle-plugin.version>3.6.0</maven-checkstyle-plugin.version>
+        <checkstyle.version>10.21.4</checkstyle.version>
+
         <!-- Allure test reporting. allure.version: latest stable Allure 2.x (known-good
              recent release). aspectj.version MUST match the aspectjweaver version managed
              by spring-boot-dependencies (3.5.14 → 1.9.25.1) so the -javaagent jar path on
@@ -123,7 +129,7 @@
                              javaagent for Allure @Step is appended after it. -->
                         <argLine>@{surefireArgLine} -XX:+EnableDynamicAgentLoading -javaagent:"${settings.localRepository}/org/aspectj/aspectjweaver/${aspectj.version}/aspectjweaver-${aspectj.version}.jar"</argLine>
                         <includes>
-                            <include>**/*Test.java</include>
+                            <include>**/*Tests.java</include>
                         </includes>
                         <excludes>
                             <exclude>**/*IT.java</exclude>
@@ -271,6 +277,45 @@
                         </execution>
                     </executions>
                 </plugin>
+                <!-- Checkstyle: classic Spring ruleset (SpringChecks) + FinalLocalVariable.
+                     Config in config/checkstyle/. Bound to validate in the active <plugins>
+                     below; demo/ui opt out via <checkstyle.skip>true</checkstyle.skip>. -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-checkstyle-plugin</artifactId>
+                    <version>${maven-checkstyle-plugin.version}</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>com.puppycrawl.tools</groupId>
+                            <artifactId>checkstyle</artifactId>
+                            <version>${checkstyle.version}</version>
+                        </dependency>
+                        <dependency>
+                            <groupId>io.spring.javaformat</groupId>
+                            <artifactId>spring-javaformat-checkstyle</artifactId>
+                            <version>${spring-javaformat-maven-plugin.version}</version>
+                        </dependency>
+                    </dependencies>
+                    <configuration>
+                        <configLocation>${maven.multiModuleProjectDirectory}/config/checkstyle/checkstyle.xml</configLocation>
+                        <suppressionsLocation>${maven.multiModuleProjectDirectory}/config/checkstyle/checkstyle-suppressions.xml</suppressionsLocation>
+                        <includeTestSourceDirectory>true</includeTestSourceDirectory>
+                        <propertyExpansion>config_loc=${maven.multiModuleProjectDirectory}/config/checkstyle</propertyExpansion>
+                        <failOnViolation>true</failOnViolation>
+                        <violationSeverity>warning</violationSeverity>
+                        <consoleOutput>true</consoleOutput>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <id>checkstyle-validation</id>
+                            <phase>validate</phase>
+                            <inherited>true</inherited>
+                            <goals>
+                                <goal>check</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
                 <!-- Allure: generates the HTML report from target/allure-results
                      (produced by surefire/failsafe via the allure-junit5 listener). -->
                 <plugin>
@@ -297,6 +342,13 @@
             <plugin>
                 <groupId>io.spring.javaformat</groupId>
                 <artifactId>spring-javaformat-maven-plugin</artifactId>
+            </plugin>
+            <!-- Checkstyle gate at validate phase (after javaformat). Classic Spring
+                 ruleset + mandatory `final` on non-reassigned locals/parameters.
+                 Configuration lives in pluginManagement above. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-checkstyle-plugin</artifactId>
             </plugin>
             <!-- JaCoCo: agent on Surefire, report on `test`, hard gate on `verify`.
                  Demo and UI modules opt out via `<jacoco.skip>true` in their poms. -->

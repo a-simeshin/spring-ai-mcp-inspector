@@ -1,12 +1,19 @@
 /*
- * Copyright 2026 the original author or authors.
+ * Copyright 2025-present the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webmvc.proxy;
 
 import java.io.IOException;
@@ -17,11 +24,6 @@ import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
-import io.inspector.mcp.core.proxy.McpProxy;
-import io.inspector.mcp.core.proxy.ProxySession;
-import io.inspector.mcp.core.proxy.ProxySessionRegistry;
-import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +41,11 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+
+import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxySession;
+import io.inspector.mcp.core.proxy.ProxySessionRegistry;
+import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 
 /**
  * Streamable-HTTP transport ports.
@@ -61,6 +68,8 @@ import reactor.core.publisher.Sinks;
  * <li>{@code DELETE /mcp-inspector-api/mcp} with {@code mcp-session-id} — tears down the
  * session.</li>
  * </ul>
+ *
+ * @author Artem Simeshin
  */
 @RestController
 @RequestMapping("${spring.ai.mcp.inspector.path:/mcp-inspector}-api")
@@ -85,8 +94,8 @@ public class StreamableHttpProxyController {
 
 	private final ObjectMapper objectMapper;
 
-	public StreamableHttpProxyController(ProxySessionRegistry registry, ProxyTransportFactory transportFactory,
-			McpProxy mcpProxy, ObjectMapper objectMapper) {
+	public StreamableHttpProxyController(final ProxySessionRegistry registry,
+			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final ObjectMapper objectMapper) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
@@ -95,12 +104,12 @@ public class StreamableHttpProxyController {
 
 	@PostMapping(path = "/mcp", consumes = MediaType.APPLICATION_JSON_VALUE)
 	public ResponseEntity<Object> postMcp(
-			@RequestHeader(value = ProxyConstants.MCP_SESSION_ID_HEADER, required = false) String mcpSessionId,
-			@RequestParam(value = "url", required = false) String url, @RequestBody JsonNode body) {
+			@RequestHeader(value = ProxyConstants.MCP_SESSION_ID_HEADER, required = false) final String mcpSessionId,
+			@RequestParam(value = "url", required = false) final String url, @RequestBody final JsonNode body) {
 		if (mcpSessionId == null || mcpSessionId.isBlank()) {
 			return openSessionAndForward(url, body);
 		}
-		ProxySession session = registry.get(mcpSessionId);
+		final ProxySession session = this.registry.get(mcpSessionId);
 		if (session == null) {
 			return ResponseEntity.status(HttpStatus.NOT_FOUND).body("unknown mcp-session-id: " + mcpSessionId);
 		}
@@ -108,22 +117,22 @@ public class StreamableHttpProxyController {
 	}
 
 	@GetMapping(path = "/mcp", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-	public SseEmitter getMcp(@RequestHeader(value = ProxyConstants.MCP_SESSION_ID_HEADER) String mcpSessionId) {
-		SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
-		ProxySession session = registry.get(mcpSessionId);
+	public SseEmitter getMcp(@RequestHeader(ProxyConstants.MCP_SESSION_ID_HEADER) final String mcpSessionId) {
+		final SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
+		final ProxySession session = this.registry.get(mcpSessionId);
 		if (session == null) {
 			return emitErrorAndComplete(emitter, "unknown mcp-session-id: " + mcpSessionId);
 		}
 		session.targetToBrowser()
 			.asFlux()
-			.subscribe(frame -> sendEvent(emitter, frame), emitter::completeWithError, emitter::complete);
+			.subscribe((frame) -> sendEvent(emitter, frame), emitter::completeWithError, emitter::complete);
 		return emitter;
 	}
 
 	@DeleteMapping("/mcp")
 	public ResponseEntity<Void> deleteMcp(
-			@RequestHeader(value = ProxyConstants.MCP_SESSION_ID_HEADER) String mcpSessionId) {
-		boolean removed = registry.removeAndClose(mcpSessionId);
+			@RequestHeader(ProxyConstants.MCP_SESSION_ID_HEADER) final String mcpSessionId) {
+		final boolean removed = this.registry.removeAndClose(mcpSessionId);
 		return removed ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
 	}
 
@@ -135,13 +144,16 @@ public class StreamableHttpProxyController {
 	 * Brings up a fresh session and forwards the first frame. If the frame is a JSON-RPC
 	 * request, blocks for up to {@link #REQUEST_TIMEOUT} on the matching response.
 	 * Otherwise returns 202.
+	 * @param url the streamable-HTTP target URL
+	 * @param body the JSON-RPC frame to forward
+	 * @return the HTTP response entity
 	 */
-	private ResponseEntity<Object> openSessionAndForward(String url, JsonNode body) {
+	private ResponseEntity<Object> openSessionAndForward(final String url, final JsonNode body) {
 		if (url == null || url.isBlank()) {
 			return ResponseEntity.badRequest()
 				.body("missing required 'url' query parameter for streamable-http transport");
 		}
-		ProxySession session = openSession(url);
+		final ProxySession session = openSession(url);
 		if (session == null) {
 			return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body("upstream connect failed");
 		}
@@ -151,8 +163,11 @@ public class StreamableHttpProxyController {
 	/**
 	 * Forwards a frame to an already-open session. Same request/notification split as
 	 * {@link #openSessionAndForward}, minus the session-id response header.
+	 * @param session the live proxy session
+	 * @param body the JSON-RPC frame to forward
+	 * @return the HTTP response entity
 	 */
-	private ResponseEntity<Object> forwardOnExistingSession(ProxySession session, JsonNode body) {
+	private ResponseEntity<Object> forwardOnExistingSession(final ProxySession session, final JsonNode body) {
 		return relayWithSessionHeader(session, body, false);
 	}
 
@@ -162,19 +177,20 @@ public class StreamableHttpProxyController {
 	 * @param body incoming JSON-RPC frame
 	 * @param includeSessionHeader whether to attach the {@code mcp-session-id} header to
 	 * the response (only on the first POST of a session)
+	 * @return the HTTP response entity with the relayed result
 	 */
-	private ResponseEntity<Object> relayWithSessionHeader(ProxySession session, JsonNode body,
-			boolean includeSessionHeader) {
-		JsonNode idNode = extractRequestId(body);
+	private ResponseEntity<Object> relayWithSessionHeader(final ProxySession session, final JsonNode body,
+			final boolean includeSessionHeader) {
+		final JsonNode idNode = extractRequestId(body);
 		// Notification / response — no answer expected from upstream → 202 Accepted.
 		if (idNode == null) {
-			Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
+			final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
 			if (emitResult.isFailure()) {
 				return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
 					.body("emit failed: " + emitResult.name());
 			}
 			session.touch();
-			ResponseEntity.BodyBuilder builder = ResponseEntity.accepted();
+			final ResponseEntity.BodyBuilder builder = ResponseEntity.accepted();
 			if (includeSessionHeader) {
 				builder.header(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
 			}
@@ -184,25 +200,25 @@ public class StreamableHttpProxyController {
 		// if the upstream answer lands before .block() registers a subscriber,
 		// the replay buffer still hands it over). We still emit AFTER preparing
 		// the await pipeline so the read-side wiring exists first.
-		Mono<JsonNode> awaiter = session.targetToBrowser()
+		final Mono<JsonNode> awaiter = session.targetToBrowser()
 			.asFlux()
-			.filter(frame -> matchesId(frame, idNode))
+			.filter((frame) -> matchesId(frame, idNode))
 			.next()
 			.timeout(REQUEST_TIMEOUT);
-		Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
+		final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
 		if (emitResult.isFailure()) {
 			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("emit failed: " + emitResult.name());
 		}
 		session.touch();
 		try {
-			JsonNode response = awaiter.block(REQUEST_TIMEOUT);
-			ResponseEntity.BodyBuilder builder = ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON);
+			final JsonNode response = awaiter.block(REQUEST_TIMEOUT);
+			final ResponseEntity.BodyBuilder builder = ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON);
 			if (includeSessionHeader) {
 				builder.header(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
 			}
 			return builder.body(response);
 		}
-		catch (RuntimeException ex) {
+		catch (final RuntimeException ex) {
 			LOG.warn("proxy[{}] await response failed: {}", session.sessionId(), ex.toString());
 			return ResponseEntity.status(HttpStatus.GATEWAY_TIMEOUT)
 				.body(Map.of("error", "upstream did not respond within " + REQUEST_TIMEOUT.toSeconds() + "s"));
@@ -212,25 +228,28 @@ public class StreamableHttpProxyController {
 	/**
 	 * Allocates the {@link ProxySession} and kicks off the {@link McpProxy} pumps.
 	 * Returns {@code null} on transport-construction failure.
+	 * @param url the streamable-HTTP target URL
+	 * @return a live {@link ProxySession}, or {@code null} if the transport could not be
+	 * created
 	 */
-	private ProxySession openSession(String url) {
-		String sessionId = UUID.randomUUID().toString();
-		McpClientTransport target;
+	private ProxySession openSession(final String url) {
+		final String sessionId = UUID.randomUUID().toString();
+		final McpClientTransport target;
 		try {
-			target = transportFactory.openStreamable(URI.create(url));
+			target = this.transportFactory.openStreamable(URI.create(url));
 		}
-		catch (Exception ex) {
+		catch (final Exception ex) {
 			LOG.warn("proxy[{}] upstream connect failed: {}", sessionId, ex.toString());
 			return null;
 		}
-		Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
-		Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(REPLAY_BUFFER);
-		ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
-		registry.put(session);
-		mcpProxy.start(session).subscribe(ignored -> {
-		}, err -> {
+		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
+		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(REPLAY_BUFFER);
+		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
+		this.registry.put(session);
+		this.mcpProxy.start(session).subscribe((ignored) -> {
+		}, (err) -> {
 			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
-			registry.removeAndClose(sessionId);
+			this.registry.removeAndClose(sessionId);
 		});
 		return session;
 	}
@@ -238,42 +257,53 @@ public class StreamableHttpProxyController {
 	/**
 	 * Extracts {@code id} from a JSON-RPC frame if present; {@code null} →
 	 * notification/response.
+	 * @param body the JSON-RPC frame
+	 * @return the {@code id} node, or {@code null} if absent or null
 	 */
-	private static JsonNode extractRequestId(JsonNode body) {
+	private static JsonNode extractRequestId(final JsonNode body) {
 		if (body == null || !body.isObject()) {
 			return null;
 		}
-		JsonNode id = body.get("id");
+		final JsonNode id = body.get("id");
 		if (id == null || id.isNull()) {
 			return null;
 		}
 		return id;
 	}
 
-	/** True iff {@code frame.id} equals {@code expected} (by JsonNode equality). */
-	private static boolean matchesId(JsonNode frame, JsonNode expected) {
+	/**
+	 * True iff {@code frame.id} equals {@code expected} (by JsonNode equality).
+	 * @param frame the JSON-RPC frame to inspect
+	 * @param expected the expected id value
+	 * @return {@code true} if the frame id matches expected
+	 */
+	private static boolean matchesId(final JsonNode frame, final JsonNode expected) {
 		if (frame == null || !frame.isObject()) {
 			return false;
 		}
-		JsonNode id = frame.get("id");
+		final JsonNode id = frame.get("id");
 		return id != null && !id.isNull() && id.equals(expected);
 	}
 
-	/** Pushes a single message frame to the SSE emitter; logs/aborts on IO error. */
-	private void sendEvent(SseEmitter emitter, JsonNode frame) {
+	/**
+	 * Pushes a single message frame to the SSE emitter; logs/aborts on IO error.
+	 * @param emitter the SSE emitter to send to
+	 * @param frame the JSON-RPC frame to send
+	 */
+	private void sendEvent(final SseEmitter emitter, final JsonNode frame) {
 		try {
-			emitter.send(SseEmitter.event().name("message").data(objectMapper.writeValueAsString(frame)));
+			emitter.send(SseEmitter.event().name("message").data(this.objectMapper.writeValueAsString(frame)));
 		}
-		catch (IOException ex) {
+		catch (final IOException ex) {
 			emitter.completeWithError(ex);
 		}
 	}
 
-	private SseEmitter emitErrorAndComplete(SseEmitter emitter, String message) {
+	private SseEmitter emitErrorAndComplete(final SseEmitter emitter, final String message) {
 		try {
 			emitter.send(SseEmitter.event().name("error").data(message));
 		}
-		catch (IOException ignored) {
+		catch (final IOException ignored) {
 			// best-effort error notice
 		}
 		emitter.complete();

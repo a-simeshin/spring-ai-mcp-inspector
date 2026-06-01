@@ -23,6 +23,8 @@
         <!-- Demo carries smoke + Selenide E2E only; coverage gate would be
              meaningless here. -->
         <jacoco.skip>true</jacoco.skip>
+        <!-- Demo is example code, not a published artifact: checkstyle gate off. -->
+        <checkstyle.skip>true</checkstyle.skip>
     </properties>
 
     <dependencies>

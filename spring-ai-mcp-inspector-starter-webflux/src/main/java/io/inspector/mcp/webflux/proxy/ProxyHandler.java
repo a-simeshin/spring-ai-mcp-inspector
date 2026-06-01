@@ -1,12 +1,19 @@
 /*
- * Copyright 2026 the original author or authors.
+ * Copyright 2025-present the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webflux.proxy;
 
 import java.net.URI;
@@ -24,15 +31,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
-import io.inspector.mcp.core.config.McpInspectorProperties;
-import io.inspector.mcp.core.proxy.McpProxy;
-import io.inspector.mcp.core.proxy.ProxySession;
-import io.inspector.mcp.core.proxy.ProxySessionRegistry;
-import io.inspector.mcp.core.proxy.ProxyTransportFactory;
-import io.inspector.mcp.core.transport.DetectedTransport;
-import io.inspector.mcp.core.transport.TransportDetector;
-import io.inspector.mcp.core.transport.TransportType;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,6 +43,15 @@ import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+
+import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxySession;
+import io.inspector.mcp.core.proxy.ProxySessionRegistry;
+import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.transport.DetectedTransport;
+import io.inspector.mcp.core.transport.TransportDetector;
+import io.inspector.mcp.core.transport.TransportType;
 
 /**
  * Reactive handlers for the upstream-compatible proxy endpoints. Mirrors the
@@ -62,6 +69,8 @@ import reactor.core.publisher.Sinks;
  * <li>{@code GET /health} — liveness</li>
  * <li>{@code POST /fetch} — outbound HTTP proxy</li>
  * </ul>
+ *
+ * @author Artem Simeshin
  */
 public class ProxyHandler {
 
@@ -88,13 +97,14 @@ public class ProxyHandler {
 
 	private final AtomicInteger listeningPort = new AtomicInteger(-1);
 
-	public ProxyHandler(ProxySessionRegistry registry, ProxyTransportFactory transportFactory, McpProxy mcpProxy,
-			TransportDetector transportDetector, ObjectMapper objectMapper) {
+	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
+			final McpProxy mcpProxy, final TransportDetector transportDetector, final ObjectMapper objectMapper) {
 		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, null);
 	}
 
-	public ProxyHandler(ProxySessionRegistry registry, ProxyTransportFactory transportFactory, McpProxy mcpProxy,
-			TransportDetector transportDetector, ObjectMapper objectMapper, McpInspectorProperties properties) {
+	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
+			final McpProxy mcpProxy, final TransportDetector transportDetector, final ObjectMapper objectMapper,
+			final McpInspectorProperties properties) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
@@ -104,21 +114,21 @@ public class ProxyHandler {
 	}
 
 	@EventListener
-	public void onWebServerStarted(WebServerInitializedEvent event) {
-		listeningPort.set(event.getWebServer().getPort());
+	public void onWebServerStarted(final WebServerInitializedEvent event) {
+		this.listeningPort.set(event.getWebServer().getPort());
 	}
 
 	// ---------------------------------------------------------------------
 	// health / config / fetch
 	// ---------------------------------------------------------------------
 
-	public Mono<ServerResponse> health(ServerRequest request) {
+	public Mono<ServerResponse> health(final ServerRequest request) {
 		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(Map.of("status", "ok"));
 	}
 
-	public Mono<ServerResponse> config(ServerRequest request) {
-		DetectedTransport detected = transportDetector.detect();
-		Map<String, Object> body = new LinkedHashMap<>();
+	public Mono<ServerResponse> config(final ServerRequest request) {
+		final DetectedTransport detected = this.transportDetector.detect();
+		final Map<String, Object> body = new LinkedHashMap<>();
 		body.put("defaultEnvironment", Map.of());
 		body.put("defaultCommand", "");
 		body.put("defaultArgs", "");
@@ -127,51 +137,52 @@ public class ProxyHandler {
 		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(body);
 	}
 
-	public Mono<ServerResponse> fetch(ServerRequest request) {
+	public Mono<ServerResponse> fetch(final ServerRequest request) {
 		return request.bodyToMono(JsonNode.class)
-			.flatMap(body -> Mono.fromCallable(() -> doFetch(body))
-				.flatMap(envelope -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(envelope))
-				.onErrorResume(ex -> ServerResponse.status(502)
+			.flatMap((body) -> Mono.fromCallable(() -> doFetch(body))
+				.flatMap((envelope) -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(envelope))
+				.onErrorResume((ex) -> ServerResponse.status(502)
 					.bodyValue(Map.of("error",
-							ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()))));
+							(ex.getMessage() != null) ? ex.getMessage() : ex.getClass().getSimpleName()))));
 	}
 
-	private Map<String, Object> doFetch(JsonNode body) throws Exception {
-		JsonNode urlNode = body.get("url");
+	private Map<String, Object> doFetch(final JsonNode body) throws Exception {
+		final JsonNode urlNode = body.get("url");
 		if (urlNode == null || !urlNode.isTextual()) {
 			throw new IllegalArgumentException("missing or invalid url");
 		}
-		URI uri = URI.create(urlNode.asText());
-		String scheme = uri.getScheme();
+		final URI uri = URI.create(urlNode.asText());
+		final String scheme = uri.getScheme();
 		if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
 			throw new IllegalArgumentException("only http/https URLs are allowed");
 		}
-		JsonNode init = body.get("init");
-		String method = (init != null && init.hasNonNull("method")) ? init.get("method").asText("GET") : "GET";
-		String reqBody = (init != null && init.hasNonNull("body")) ? init.get("body").asText("") : "";
+		final JsonNode init = body.get("init");
+		final String method = (init != null && init.hasNonNull("method")) ? init.get("method").asText("GET") : "GET";
+		final String reqBody = (init != null && init.hasNonNull("body")) ? init.get("body").asText("") : "";
 
-		HttpRequest.Builder rb = HttpRequest.newBuilder(uri)
+		final HttpRequest.Builder rb = HttpRequest.newBuilder(uri)
 			.timeout(Duration.ofSeconds(30))
 			.method(method.toUpperCase(), reqBody.isEmpty() ? HttpRequest.BodyPublishers.noBody()
 					: HttpRequest.BodyPublishers.ofString(reqBody));
 		if (init != null && init.has("headers")) {
-			init.get("headers").fields().forEachRemaining(e -> {
+			init.get("headers").fields().forEachRemaining((e) -> {
 				try {
 					rb.header(e.getKey(), e.getValue().asText());
 				}
-				catch (Exception ignored) {
+				catch (final Exception ignored) {
 					// restricted header names are silently skipped
 				}
 			});
 		}
-		HttpResponse<String> resp = outboundHttpClient.send(rb.build(), HttpResponse.BodyHandlers.ofString());
-		Map<String, String> respHeaders = new LinkedHashMap<>();
+		final HttpResponse<String> resp = this.outboundHttpClient.send(rb.build(),
+				HttpResponse.BodyHandlers.ofString());
+		final Map<String, String> respHeaders = new LinkedHashMap<>();
 		resp.headers().map().forEach((k, v) -> {
 			if (!v.isEmpty()) {
 				respHeaders.put(k, v.get(0));
 			}
 		});
-		Map<String, Object> out = new LinkedHashMap<>();
+		final Map<String, Object> out = new LinkedHashMap<>();
 		out.put("ok", resp.statusCode() >= 200 && resp.statusCode() < 300);
 		out.put("status", resp.statusCode());
 		out.put("statusText", "");
@@ -184,33 +195,33 @@ public class ProxyHandler {
 	// SSE proxy
 	// ---------------------------------------------------------------------
 
-	public Mono<ServerResponse> openSse(ServerRequest request) {
-		String transportType = request.queryParam("transportType").orElse("sse");
-		String url = request.queryParam("url").orElse(null);
-		String command = request.queryParam("command").orElse(null);
-		String args = request.queryParam("args").orElse(null);
-		String env = request.queryParam("env").orElse(null);
+	public Mono<ServerResponse> openSse(final ServerRequest request) {
+		final String transportType = request.queryParam("transportType").orElse("sse");
+		final String url = request.queryParam("url").orElse(null);
+		final String command = request.queryParam("command").orElse(null);
+		final String args = request.queryParam("args").orElse(null);
+		final String env = request.queryParam("env").orElse(null);
 		return openProxiedSession(transportType, url, command, args, env);
 	}
 
-	public Mono<ServerResponse> openStdio(ServerRequest request) {
-		String command = request.queryParam("command").orElse(null);
-		String args = request.queryParam("args").orElse(null);
-		String env = request.queryParam("env").orElse(null);
+	public Mono<ServerResponse> openStdio(final ServerRequest request) {
+		final String command = request.queryParam("command").orElse(null);
+		final String args = request.queryParam("args").orElse(null);
+		final String env = request.queryParam("env").orElse(null);
 		return openProxiedSession("stdio", null, command, args, env);
 	}
 
-	public Mono<ServerResponse> postMessage(ServerRequest request) {
-		String sessionId = request.queryParam("sessionId").orElse(null);
+	public Mono<ServerResponse> postMessage(final ServerRequest request) {
+		final String sessionId = request.queryParam("sessionId").orElse(null);
 		if (sessionId == null) {
 			return ServerResponse.badRequest().bodyValue(Map.of("error", "missing sessionId"));
 		}
-		ProxySession session = registry.get(sessionId);
+		final ProxySession session = this.registry.get(sessionId);
 		if (session == null) {
 			return ServerResponse.notFound().build();
 		}
-		return request.bodyToMono(JsonNode.class).flatMap(body -> {
-			Sinks.EmitResult er = session.browserToTarget().tryEmitNext(body);
+		return request.bodyToMono(JsonNode.class).flatMap((body) -> {
+			final Sinks.EmitResult er = session.browserToTarget().tryEmitNext(body);
 			if (er.isFailure()) {
 				return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
 					.bodyValue(Map.of("error", "emit failed: " + er.name()));
@@ -220,14 +231,14 @@ public class ProxyHandler {
 		});
 	}
 
-	private Mono<ServerResponse> openProxiedSession(String transportType, String url, String command, String args,
-			String env) {
-		String sessionId = UUID.randomUUID().toString();
-		McpClientTransport target;
+	private Mono<ServerResponse> openProxiedSession(final String transportType, final String url, final String command,
+			final String args, final String env) {
+		final String sessionId = UUID.randomUUID().toString();
+		final McpClientTransport target;
 		try {
 			target = buildTargetTransport(transportType, url, command, args, env);
 		}
-		catch (Exception ex) {
+		catch (final Exception ex) {
 			LOG.warn("proxy[{}] failed to build target transport: {}", sessionId, ex.toString());
 			return ServerResponse.badRequest().bodyValue(Map.of("error", ex.getMessage()));
 		}
@@ -235,82 +246,83 @@ public class ProxyHandler {
 		// targetToBrowser is multicast-replay so per-request awaiters in the
 		// Streamable-HTTP path can attach while keeping this long-lived SSE
 		// subscriber working.
-		Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
-		Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
-		ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
-		registry.put(session);
+		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
+		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
+		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
+		this.registry.put(session);
 
-		String proxyBase = (properties != null) ? properties.getProxyPath() : "/mcp-inspector-api";
-		ServerSentEvent<String> prologue = ServerSentEvent.<String>builder()
+		final String proxyBase = (this.properties != null) ? this.properties.getProxyPath() : "/mcp-inspector-api";
+		final ServerSentEvent<String> prologue = ServerSentEvent.<String>builder()
 			.event("endpoint")
 			.data(proxyBase + "/message?sessionId=" + sessionId)
 			.build();
 
-		var flux = targetToBrowser.asFlux().map(frame -> {
+		final var flux = targetToBrowser.asFlux().map((frame) -> {
 			try {
 				return ServerSentEvent.<String>builder()
 					.event("message")
-					.data(objectMapper.writeValueAsString(frame))
+					.data(this.objectMapper.writeValueAsString(frame))
 					.build();
 			}
-			catch (Exception ex) {
+			catch (final Exception ex) {
 				return ServerSentEvent.<String>builder().event("error").data(ex.getMessage()).build();
 			}
 		})
 			.startWith(prologue)
-			.doOnCancel(() -> registry.removeAndClose(sessionId))
-			.doOnTerminate(() -> registry.removeAndClose(sessionId));
+			.doOnCancel(() -> this.registry.removeAndClose(sessionId))
+			.doOnTerminate(() -> this.registry.removeAndClose(sessionId));
 
-		mcpProxy.start(session).subscribe(ignored -> {
-		}, err -> {
+		this.mcpProxy.start(session).subscribe((ignored) -> {
+		}, (err) -> {
 			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
-			registry.removeAndClose(sessionId);
+			this.registry.removeAndClose(sessionId);
 		});
 
 		return ServerResponse.ok().contentType(MediaType.TEXT_EVENT_STREAM).body(flux, ServerSentEvent.class);
 	}
 
-	private McpClientTransport buildTargetTransport(String transportType, String url, String command, String args,
-			String env) {
-		String type = (transportType == null) ? "sse" : transportType.toLowerCase();
+	private McpClientTransport buildTargetTransport(final String transportType, final String url, final String command,
+			final String args, final String env) {
+		final String type = (transportType != null) ? transportType.toLowerCase() : "sse";
 		return switch (type) {
-			case "sse" -> transportFactory.openSse(URI.create(requireUrl(url, "sse")));
-			case "streamable-http" -> transportFactory.openStreamable(URI.create(requireUrl(url, "streamable-http")));
+			case "sse" -> this.transportFactory.openSse(URI.create(requireUrl(url, "sse")));
+			case "streamable-http" ->
+				this.transportFactory.openStreamable(URI.create(requireUrl(url, "streamable-http")));
 			case "stdio" -> {
 				if (command == null || command.isBlank()) {
 					throw new IllegalArgumentException(
 							"missing required 'command' query parameter for stdio transport");
 				}
-				List<String> argv = new ArrayList<>();
+				final List<String> argv = new ArrayList<>();
 				argv.add(command.trim());
 				if (args != null && !args.isBlank()) {
 					argv.addAll(Arrays.asList(args.trim().split("\\s+")));
 				}
-				Map<String, String> environment = parseEnv(env);
-				yield transportFactory.openStdio(argv, environment);
+				final Map<String, String> environment = parseEnv(env);
+				yield this.transportFactory.openStdio(argv, environment);
 			}
 			default -> throw new IllegalArgumentException("unsupported transportType: " + transportType);
 		};
 	}
 
-	private static String requireUrl(String url, String type) {
+	private static String requireUrl(final String url, final String type) {
 		if (url == null || url.isBlank()) {
 			throw new IllegalArgumentException("missing required 'url' query parameter for " + type + " transport");
 		}
 		return url;
 	}
 
-	private Map<String, String> parseEnv(String env) {
+	private Map<String, String> parseEnv(final String env) {
 		if (env == null || env.isBlank()) {
 			return Map.of();
 		}
 		try {
-			JsonNode node = objectMapper.readTree(env);
-			Map<String, String> out = new LinkedHashMap<>();
-			node.fields().forEachRemaining(e -> out.put(e.getKey(), e.getValue().asText()));
+			final JsonNode node = this.objectMapper.readTree(env);
+			final Map<String, String> out = new LinkedHashMap<>();
+			node.fields().forEachRemaining((e) -> out.put(e.getKey(), e.getValue().asText()));
 			return out;
 		}
-		catch (Exception ex) {
+		catch (final Exception ex) {
 			LOG.warn("proxy: ignoring malformed env JSON: {}", ex.toString());
 			return Map.of();
 		}
@@ -320,10 +332,10 @@ public class ProxyHandler {
 	// Streamable-HTTP proxy
 	// ---------------------------------------------------------------------
 
-	public Mono<ServerResponse> postMcp(ServerRequest request) {
-		String mcpSessionId = request.headers().firstHeader(ProxyConstants.MCP_SESSION_ID_HEADER);
+	public Mono<ServerResponse> postMcp(final ServerRequest request) {
+		final String mcpSessionId = request.headers().firstHeader(ProxyConstants.MCP_SESSION_ID_HEADER);
 		return request.bodyToMono(JsonNode.class)
-			.flatMap(body -> handlePostMcp(mcpSessionId, request.queryParam("url").orElse(null), body));
+			.flatMap((body) -> handlePostMcp(mcpSessionId, request.queryParam("url").orElse(null), body));
 	}
 
 	/**
@@ -332,12 +344,16 @@ public class ProxyHandler {
 	 * <p>
 	 * If {@code mcpSessionId} is missing — opens a new session, then routes the frame
 	 * through {@link #relayAndAwait}. Otherwise looks up the existing session.
+	 * @param mcpSessionId the {@code mcp-session-id} header value, may be {@code null}
+	 * @param url the upstream URL query parameter, may be {@code null}
+	 * @param body the JSON-RPC frame received from the browser
+	 * @return a {@link Mono} emitting the upstream response
 	 */
-	private Mono<ServerResponse> handlePostMcp(String mcpSessionId, String url, JsonNode body) {
+	private Mono<ServerResponse> handlePostMcp(final String mcpSessionId, final String url, final JsonNode body) {
 		if (mcpSessionId == null || mcpSessionId.isBlank()) {
 			return openSessionAndRelay(url, body);
 		}
-		ProxySession session = registry.get(mcpSessionId);
+		final ProxySession session = this.registry.get(mcpSessionId);
 		if (session == null) {
 			return ServerResponse.status(HttpStatus.NOT_FOUND)
 				.bodyValue(Map.of("error", "unknown mcp-session-id: " + mcpSessionId));
@@ -345,29 +361,34 @@ public class ProxyHandler {
 		return relayAndAwait(session, body, false);
 	}
 
-	/** Builds a new {@link ProxySession} and dispatches the first frame. */
-	private Mono<ServerResponse> openSessionAndRelay(String url, JsonNode body) {
+	/**
+	 * Builds a new {@link ProxySession} and dispatches the first frame.
+	 * @param url the upstream streamable-HTTP URL
+	 * @param body the first JSON-RPC frame to relay
+	 * @return a {@link Mono} emitting the upstream response
+	 */
+	private Mono<ServerResponse> openSessionAndRelay(final String url, final JsonNode body) {
 		if (url == null || url.isBlank()) {
 			return ServerResponse.badRequest()
 				.bodyValue(Map.of("error", "missing required 'url' query parameter for streamable-http transport"));
 		}
-		String sessionId = UUID.randomUUID().toString();
-		McpClientTransport target;
+		final String sessionId = UUID.randomUUID().toString();
+		final McpClientTransport target;
 		try {
-			target = transportFactory.openStreamable(URI.create(url));
+			target = this.transportFactory.openStreamable(URI.create(url));
 		}
-		catch (Exception ex) {
+		catch (final Exception ex) {
 			return ServerResponse.status(HttpStatus.BAD_GATEWAY)
 				.bodyValue(Map.of("error", "upstream connect failed: " + ex.getMessage()));
 		}
-		Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
-		Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
-		ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
-		registry.put(session);
-		mcpProxy.start(session).subscribe(ignored -> {
-		}, err -> {
+		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
+		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
+		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
+		this.registry.put(session);
+		this.mcpProxy.start(session).subscribe((ignored) -> {
+		}, (err) -> {
 			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
-			registry.removeAndClose(sessionId);
+			this.registry.removeAndClose(sessionId);
 		});
 		return relayAndAwait(session, body, true);
 	}
@@ -377,17 +398,22 @@ public class ProxyHandler {
 	 * {@code id}), waits up to 30s for the matching response and returns it as
 	 * {@code application/json}. Notification/response frames produce a 202 with empty
 	 * body.
+	 * @param session the proxy session to relay through
+	 * @param body the JSON-RPC frame to relay
+	 * @param includeSessionHeader whether to echo the {@code mcp-session-id} header
+	 * @return a {@link Mono} emitting the relay result
 	 */
-	private Mono<ServerResponse> relayAndAwait(ProxySession session, JsonNode body, boolean includeSessionHeader) {
-		JsonNode idNode = extractRequestId(body);
+	private Mono<ServerResponse> relayAndAwait(final ProxySession session, final JsonNode body,
+			final boolean includeSessionHeader) {
+		final JsonNode idNode = extractRequestId(body);
 		if (idNode == null) {
-			Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
+			final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
 			if (emitResult.isFailure()) {
 				return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
 					.bodyValue(Map.of("error", "emit failed: " + emitResult.name()));
 			}
 			session.touch();
-			ServerResponse.BodyBuilder accepted = ServerResponse.accepted();
+			final ServerResponse.BodyBuilder accepted = ServerResponse.accepted();
 			if (includeSessionHeader) {
 				accepted.header(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
 			}
@@ -395,24 +421,24 @@ public class ProxyHandler {
 		}
 		// Pre-create the awaiter Mono first so the replay subscription registers
 		// (or has a buffer ready) before we push the request frame.
-		Mono<JsonNode> awaiter = session.targetToBrowser()
+		final Mono<JsonNode> awaiter = session.targetToBrowser()
 			.asFlux()
-			.filter(frame -> matchesId(frame, idNode))
+			.filter((frame) -> matchesId(frame, idNode))
 			.next()
 			.timeout(STREAMABLE_REQUEST_TIMEOUT);
-		Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
+		final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
 		if (emitResult.isFailure()) {
 			return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
 				.bodyValue(Map.of("error", "emit failed: " + emitResult.name()));
 		}
 		session.touch();
-		return awaiter.flatMap(node -> {
-			ServerResponse.BodyBuilder ok = ServerResponse.ok().contentType(MediaType.APPLICATION_JSON);
+		return awaiter.flatMap((node) -> {
+			final ServerResponse.BodyBuilder ok = ServerResponse.ok().contentType(MediaType.APPLICATION_JSON);
 			if (includeSessionHeader) {
 				ok.header(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
 			}
 			return ok.bodyValue(node);
-		}).onErrorResume(ex -> {
+		}).onErrorResume((ex) -> {
 			LOG.warn("proxy[{}] await response failed: {}", session.sessionId(), ex.toString());
 			return ServerResponse.status(HttpStatus.GATEWAY_TIMEOUT)
 				.bodyValue(Map.of("error",
@@ -423,59 +449,66 @@ public class ProxyHandler {
 	/**
 	 * Returns the {@code id} node if {@code body} is a JSON-RPC request, else
 	 * {@code null}.
+	 * @param body the JSON node to inspect
+	 * @return the {@code id} field, or {@code null} if absent or not a request
 	 */
-	private static JsonNode extractRequestId(JsonNode body) {
+	private static JsonNode extractRequestId(final JsonNode body) {
 		if (body == null || !body.isObject()) {
 			return null;
 		}
-		JsonNode id = body.get("id");
+		final JsonNode id = body.get("id");
 		if (id == null || id.isNull()) {
 			return null;
 		}
 		return id;
 	}
 
-	/** True iff {@code frame.id} equals {@code expected}. */
-	private static boolean matchesId(JsonNode frame, JsonNode expected) {
+	/**
+	 * Returns {@code true} iff {@code frame.id} equals {@code expected}.
+	 * @param frame the JSON-RPC frame to test
+	 * @param expected the expected id value
+	 * @return {@code true} if the frame id matches
+	 */
+	private static boolean matchesId(final JsonNode frame, final JsonNode expected) {
 		if (frame == null || !frame.isObject()) {
 			return false;
 		}
-		JsonNode id = frame.get("id");
+		final JsonNode id = frame.get("id");
 		return id != null && !id.isNull() && id.equals(expected);
 	}
 
-	public Mono<ServerResponse> getMcp(ServerRequest request) {
-		String mcpSessionId = request.headers().firstHeader(ProxyConstants.MCP_SESSION_ID_HEADER);
-		ProxySession session = (mcpSessionId == null) ? null : registry.get(mcpSessionId);
+	public Mono<ServerResponse> getMcp(final ServerRequest request) {
+		final String mcpSessionId = request.headers().firstHeader(ProxyConstants.MCP_SESSION_ID_HEADER);
+		final ProxySession session = (mcpSessionId != null) ? this.registry.get(mcpSessionId) : null;
 		if (session == null) {
 			return ServerResponse.status(HttpStatus.NOT_FOUND)
 				.bodyValue(Map.of("error", "unknown mcp-session-id: " + mcpSessionId));
 		}
-		var flux = session.targetToBrowser().asFlux().map(frame -> {
+		final var flux = session.targetToBrowser().asFlux().map((frame) -> {
 			try {
 				return ServerSentEvent.<String>builder()
 					.event("message")
-					.data(objectMapper.writeValueAsString(frame))
+					.data(this.objectMapper.writeValueAsString(frame))
 					.build();
 			}
-			catch (Exception ex) {
+			catch (final Exception ex) {
 				return ServerSentEvent.<String>builder().event("error").data(ex.getMessage()).build();
 			}
 		});
 		return ServerResponse.ok().contentType(MediaType.TEXT_EVENT_STREAM).body(flux, ServerSentEvent.class);
 	}
 
-	public Mono<ServerResponse> deleteMcp(ServerRequest request) {
-		String mcpSessionId = request.headers().firstHeader(ProxyConstants.MCP_SESSION_ID_HEADER);
-		boolean removed = registry.removeAndClose(mcpSessionId);
-		return removed ? ServerResponse.ok().build() : ServerResponse.notFound().build();
+	public Mono<ServerResponse> deleteMcp(final ServerRequest request) {
+		final String mcpSessionId = request.headers().firstHeader(ProxyConstants.MCP_SESSION_ID_HEADER);
+		final boolean removed = this.registry.removeAndClose(mcpSessionId);
+		return (removed) ? ServerResponse.ok().build() : ServerResponse.notFound().build();
 	}
 
 	// ---------------------------------------------------------------------
 	// helpers
 	// ---------------------------------------------------------------------
 
-	private static String mapTransport(TransportType type) {
+	private static String mapTransport(final TransportType type) {
 		if (type == null) {
 			return "";
 		}
@@ -487,8 +520,8 @@ public class ProxyHandler {
 		};
 	}
 
-	private String buildServerUrl(DetectedTransport detected) {
-		int port = listeningPort.get();
+	private String buildServerUrl(final DetectedTransport detected) {
+		final int port = this.listeningPort.get();
 		if (port <= 0 || detected == null || detected.type() == TransportType.UNKNOWN
 				|| detected.type() == TransportType.STDIO_NO_HTTP) {
 			return "";

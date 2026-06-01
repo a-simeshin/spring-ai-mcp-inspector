@@ -1,12 +1,19 @@
 /*
- * Copyright 2026 the original author or authors.
+ * Copyright 2025-present the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webmvc.it;
 
 import io.qameta.allure.Description;
@@ -15,7 +22,6 @@ import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
-
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -65,12 +71,12 @@ class WebMvcConfigurableInspectorIT {
 	@Description("Setting spring.ai.mcp.inspector.path=/custom mounts the UI index.html at the new prefix")
 	void customPath_indexHtmlRespondsOnNewPrefix() {
 		// when
-		ResponseEntity<String> response = restTemplate.getForEntity(url("/custom/index.html"), String.class);
+		final ResponseEntity<String> response = this.restTemplate.getForEntity(url("/custom/index.html"), String.class);
 
 		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getHeaders().getContentType()).isNotNull()
-			.matches(mt -> MediaType.TEXT_HTML.isCompatibleWith(mt));
+			.matches((mt) -> MediaType.TEXT_HTML.isCompatibleWith(mt));
 	}
 
 	@Test
@@ -80,12 +86,12 @@ class WebMvcConfigurableInspectorIT {
 	@Description("The /config JSON endpoint is reachable on the custom prefix")
 	void customPath_configEndpointRespondsOnNewPrefix() {
 		// when
-		ResponseEntity<String> response = restTemplate.getForEntity(url("/custom/config"), String.class);
+		final ResponseEntity<String> response = this.restTemplate.getForEntity(url("/custom/config"), String.class);
 
 		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getHeaders().getContentType()).isNotNull()
-			.matches(mt -> MediaType.APPLICATION_JSON.isCompatibleWith(mt));
+			.matches((mt) -> MediaType.APPLICATION_JSON.isCompatibleWith(mt));
 		assertThat(response.getBody()).contains("authToken", "proxyAddress", "detectedTransport");
 	}
 
@@ -96,7 +102,8 @@ class WebMvcConfigurableInspectorIT {
 	@Description("With a custom path configured, the default /mcp-inspector prefix is no longer mounted")
 	void customPath_defaultPrefixReturns404() {
 		// when
-		ResponseEntity<String> response = restTemplate.getForEntity(url("/mcp-inspector/index.html"), String.class);
+		final ResponseEntity<String> response = this.restTemplate.getForEntity(url("/mcp-inspector/index.html"),
+				String.class);
 
 		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
@@ -109,7 +116,7 @@ class WebMvcConfigurableInspectorIT {
 	@Description("The proxy backend health probe is reachable on the derived /custom-api prefix")
 	void customPath_proxyApiRespondsOnDerivedPrefix() {
 		// when
-		ResponseEntity<String> response = restTemplate.getForEntity(url("/custom-api/health"), String.class);
+		final ResponseEntity<String> response = this.restTemplate.getForEntity(url("/custom-api/health"), String.class);
 
 		// then
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -126,8 +133,8 @@ class WebMvcConfigurableInspectorIT {
 		// the controller returns 404 with a Map error body — but the important
 		// signal is that the route is registered (404 from the controller, not
 		// a 404 from Spring's no-handler-found because no mapping existed).
-		ResponseEntity<String> response = restTemplate.getForEntity(url("/custom/api/roots?sessionId=missing"),
-				String.class);
+		final ResponseEntity<String> response = this.restTemplate
+			.getForEntity(url("/custom/api/roots?sessionId=missing"), String.class);
 		assertThat(response.getStatusCode())
 			.as("inspector internal API must be reachable at the new prefix; body=%s", response.getBody())
 			.isIn(HttpStatus.OK, HttpStatus.NOT_FOUND, HttpStatus.UNAUTHORIZED);
@@ -138,14 +145,14 @@ class WebMvcConfigurableInspectorIT {
 			.contains("error");
 
 		// The default prefix must NOT exist anymore.
-		ResponseEntity<String> defaultResponse = restTemplate
+		final ResponseEntity<String> defaultResponse = this.restTemplate
 			.getForEntity(url("/mcp-inspector/api/roots?sessionId=missing"), String.class);
 		assertThat(defaultResponse.getStatusCode()).as("default prefix must be unmapped when path is customised")
 			.isEqualTo(HttpStatus.NOT_FOUND);
 	}
 
-	private String url(String path) {
-		return "http://localhost:" + port + path;
+	private String url(final String path) {
+		return "http://localhost:" + this.port + path;
 	}
 
 }

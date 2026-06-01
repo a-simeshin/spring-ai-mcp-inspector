@@ -1,24 +1,32 @@
 /*
- * Copyright 2026 the original author or authors.
+ * Copyright 2025-present the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webflux.router;
 
 import java.net.URI;
 
-import io.inspector.mcp.core.config.McpInspectorProperties;
-import io.inspector.mcp.webflux.proxy.ProxyHandler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.RouterFunctions;
 import org.springframework.web.reactive.function.server.ServerResponse;
+
+import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.webflux.proxy.ProxyHandler;
 
 import static org.springframework.web.reactive.function.server.RequestPredicates.DELETE;
 import static org.springframework.web.reactive.function.server.RequestPredicates.GET;
@@ -43,6 +51,8 @@ import static org.springframework.web.reactive.function.server.RouterFunctions.r
  * hardcoded — the upstream React bundle checks them as literals against
  * {@code window.location.pathname}, so the backend must serve them at the top-level URL
  * regardless of the inspector's configured prefix.
+ *
+ * @author Artem Simeshin
  */
 @Configuration(proxyBeanMethods = false)
 public class InspectorRouterConfig {
@@ -50,12 +60,13 @@ public class InspectorRouterConfig {
 	private static final ClassPathResource UI_ROOT = new ClassPathResource("mcp-inspector-bundle/");
 
 	@Bean
-	public RouterFunction<ServerResponse> inspectorRouter(InspectorHandler handler, McpInspectorProperties properties) {
-		String basePath = properties.getPath();
-		String apiPath = basePath + "/api";
-		URI indexRedirect = URI.create(basePath + "/index.html");
-		return route(GET(basePath), req -> ServerResponse.temporaryRedirect(indexRedirect).build())
-			.andRoute(GET(basePath + "/"), req -> ServerResponse.temporaryRedirect(indexRedirect).build())
+	public RouterFunction<ServerResponse> inspectorRouter(final InspectorHandler handler,
+			final McpInspectorProperties properties) {
+		final String basePath = properties.getPath();
+		final String apiPath = basePath + "/api";
+		final URI indexRedirect = URI.create(basePath + "/index.html");
+		return route(GET(basePath), (req) -> ServerResponse.temporaryRedirect(indexRedirect).build())
+			.andRoute(GET(basePath + "/"), (req) -> ServerResponse.temporaryRedirect(indexRedirect).build())
 			.andRoute(GET(basePath + "/index.html"), handler::index)
 			// Top-level OAuth callback routes serve the same templated SPA so the
 			// upstream React client's App.tsx pathname checks
@@ -83,10 +94,14 @@ public class InspectorRouterConfig {
 	/**
 	 * Upstream-compatible proxy routes. Lives on a sibling prefix ({@code path + "-api"})
 	 * to keep the v1 inspector contract intact.
+	 * @param proxy the proxy handler bean
+	 * @param properties the inspector configuration properties
+	 * @return the router function for proxy endpoints
 	 */
 	@Bean
-	public RouterFunction<ServerResponse> inspectorProxyRouter(ProxyHandler proxy, McpInspectorProperties properties) {
-		String proxyBase = properties.getProxyPath();
+	public RouterFunction<ServerResponse> inspectorProxyRouter(final ProxyHandler proxy,
+			final McpInspectorProperties properties) {
+		final String proxyBase = properties.getProxyPath();
 		return route(GET(proxyBase + "/health"), proxy::health).andRoute(GET(proxyBase + "/config"), proxy::config)
 			.andRoute(POST(proxyBase + "/fetch"), proxy::fetch)
 			.andRoute(GET(proxyBase + "/sse"), proxy::openSse)

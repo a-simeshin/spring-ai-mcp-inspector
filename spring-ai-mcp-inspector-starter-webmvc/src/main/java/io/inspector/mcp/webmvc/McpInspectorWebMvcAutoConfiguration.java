@@ -1,17 +1,37 @@
 /*
- * Copyright 2026 the original author or authors.
+ * Copyright 2025-present the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webmvc;
 
 import java.util.List;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.core.Ordered;
+import org.springframework.core.env.Environment;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
 import io.inspector.mcp.core.bootstrap.BootstrapHtmlRenderer;
@@ -37,20 +57,6 @@ import io.inspector.mcp.webmvc.proxy.SseProxyController;
 import io.inspector.mcp.webmvc.proxy.StreamableHttpProxyController;
 import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
 
-import org.springframework.boot.autoconfigure.AutoConfiguration;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.boot.web.servlet.FilterRegistrationBean;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Import;
-import org.springframework.core.Ordered;
-import org.springframework.core.env.Environment;
-import org.springframework.web.servlet.config.annotation.CorsRegistry;
-import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
-import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
-
 /**
  * Servlet-stack auto-configuration for the Spring AI MCP Inspector.
  *
@@ -66,6 +72,8 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  * Registers all inspector beans, the {@code InspectorAuthFilter} (scoped to
  * {@code /mcp-inspector/api/*}), the static-resource handler for the SPA bundle, and CORS
  * rules driven by {@link McpInspectorProperties#getAllowedOrigins()}.
+ *
+ * @author Artem Simeshin
  */
 @AutoConfiguration
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
@@ -79,13 +87,13 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	private final McpInspectorProperties properties;
 
-	public McpInspectorWebMvcAutoConfiguration(McpInspectorProperties properties) {
+	public McpInspectorWebMvcAutoConfiguration(final McpInspectorProperties properties) {
 		this.properties = properties;
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public TransportDetector mcpInspectorTransportDetector(Environment environment) {
+	public TransportDetector mcpInspectorTransportDetector(final Environment environment) {
 		return new TransportDetector(environment);
 	}
 
@@ -104,19 +112,20 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 	@Bean
 	@ConditionalOnMissingBean
 	public InspectorAuthTokenProvider mcpInspectorAuthTokenProvider() {
-		return new InspectorAuthTokenProvider(properties);
+		return new InspectorAuthTokenProvider(this.properties);
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public InspectorBootstrapAssembler mcpInspectorBootstrapAssembler(InspectorAuthTokenProvider authTokenProvider,
-			TransportDetector transportDetector, List<InspectorBootstrapCustomizer> customizers) {
-		return new InspectorBootstrapAssembler(properties, authTokenProvider, transportDetector, customizers);
+	public InspectorBootstrapAssembler mcpInspectorBootstrapAssembler(
+			final InspectorAuthTokenProvider authTokenProvider, final TransportDetector transportDetector,
+			final List<InspectorBootstrapCustomizer> customizers) {
+		return new InspectorBootstrapAssembler(this.properties, authTokenProvider, transportDetector, customizers);
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public BootstrapHtmlRenderer mcpInspectorBootstrapHtmlRenderer(ObjectMapper objectMapper) {
+	public BootstrapHtmlRenderer mcpInspectorBootstrapHtmlRenderer(final ObjectMapper objectMapper) {
 		return new BootstrapHtmlRenderer(objectMapper);
 	}
 
@@ -140,10 +149,10 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Bean
 	public FilterRegistrationBean<InspectorAuthFilter> mcpInspectorAuthFilterRegistration(
-			InspectorAuthTokenProvider tokenProvider) {
-		InspectorAuthFilter filter = new InspectorAuthFilter(properties, tokenProvider);
-		FilterRegistrationBean<InspectorAuthFilter> registration = new FilterRegistrationBean<>(filter);
-		registration.addUrlPatterns(properties.getPath() + "/api/*");
+			final InspectorAuthTokenProvider tokenProvider) {
+		final InspectorAuthFilter filter = new InspectorAuthFilter(this.properties, tokenProvider);
+		final FilterRegistrationBean<InspectorAuthFilter> registration = new FilterRegistrationBean<>(filter);
+		registration.addUrlPatterns(this.properties.getPath() + "/api/*");
 		registration.setName("mcpInspectorAuthFilter");
 		registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 50);
 		return registration;
@@ -157,41 +166,41 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxyTransportFactory mcpInspectorProxyTransportFactory(ObjectMapper objectMapper) {
+	public ProxyTransportFactory mcpInspectorProxyTransportFactory(final ObjectMapper objectMapper) {
 		return new ProxyTransportFactory(objectMapper);
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public McpProxy mcpInspectorMcpProxy(ObjectMapper objectMapper) {
+	public McpProxy mcpInspectorMcpProxy(final ObjectMapper objectMapper) {
 		return new McpProxy(objectMapper);
 	}
 
 	@Bean
 	public FilterRegistrationBean<ProxyAuthFilter> mcpInspectorProxyAuthFilterRegistration(
-			InspectorAuthTokenProvider tokenProvider) {
-		ProxyAuthFilter filter = new ProxyAuthFilter(properties, tokenProvider);
-		FilterRegistrationBean<ProxyAuthFilter> registration = new FilterRegistrationBean<>(filter);
-		registration.addUrlPatterns(properties.getProxyPath() + "/*");
+			final InspectorAuthTokenProvider tokenProvider) {
+		final ProxyAuthFilter filter = new ProxyAuthFilter(this.properties, tokenProvider);
+		final FilterRegistrationBean<ProxyAuthFilter> registration = new FilterRegistrationBean<>(filter);
+		registration.addUrlPatterns(this.properties.getProxyPath() + "/*");
 		registration.setName("mcpInspectorProxyAuthFilter");
 		registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 60);
 		return registration;
 	}
 
 	@Override
-	public void addResourceHandlers(ResourceHandlerRegistry registry) {
-		registry.addResourceHandler(properties.getPath() + "/**")
+	public void addResourceHandlers(final ResourceHandlerRegistry registry) {
+		registry.addResourceHandler(this.properties.getPath() + "/**")
 			.addResourceLocations("classpath:/mcp-inspector-bundle/")
 			.setCachePeriod(0);
 	}
 
 	@Override
-	public void addCorsMappings(CorsRegistry registry) {
-		List<String> origins = properties.getAllowedOrigins();
+	public void addCorsMappings(final CorsRegistry registry) {
+		final List<String> origins = this.properties.getAllowedOrigins();
 		if (origins == null || origins.isEmpty()) {
 			return;
 		}
-		registry.addMapping(properties.getPath() + "/api/**")
+		registry.addMapping(this.properties.getPath() + "/api/**")
 			.allowedOrigins(origins.toArray(String[]::new))
 			.allowedMethods("GET", "POST", "DELETE", "OPTIONS")
 			.allowedHeaders("*")
@@ -199,7 +208,7 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 			.maxAge(3600);
 		// The vendored upstream UI calls the proxy under a separate prefix —
 		// expose CORS rules for it too so non-loopback hosts can connect.
-		registry.addMapping(properties.getProxyPath() + "/**")
+		registry.addMapping(this.properties.getProxyPath() + "/**")
 			.allowedOrigins(origins.toArray(String[]::new))
 			.allowedMethods("GET", "POST", "DELETE", "OPTIONS")
 			.allowedHeaders("*")

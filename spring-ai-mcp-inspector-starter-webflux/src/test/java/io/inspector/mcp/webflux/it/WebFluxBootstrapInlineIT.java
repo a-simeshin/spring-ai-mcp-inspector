@@ -1,12 +1,19 @@
 /*
- * Copyright 2026 the original author or authors.
+ * Copyright 2025-present the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.webflux.it;
 
 import java.util.regex.Matcher;
@@ -14,9 +21,6 @@ import java.util.regex.Pattern;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
-import io.inspector.mcp.core.bootstrap.InspectorBootstrapCustomizer;
-
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -29,6 +33,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.test.web.reactive.server.WebTestClient;
+
+import io.inspector.mcp.core.bootstrap.InspectorBootstrapCustomizer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -69,13 +75,13 @@ class WebFluxBootstrapInlineIT {
 	@Description("index.html contains the window.__MCP_INSPECTOR_BOOTSTRAP global injected by the renderer")
 	void indexHtml_containsBootstrapWindowGlobal() {
 		// given a booted reactive inspector; when & then
-		webTestClient.get()
+		this.webTestClient.get()
 			.uri("/mcp-inspector/index.html")
 			.exchange()
 			.expectStatus()
 			.isOk()
 			.expectBody(String.class)
-			.value(body -> assertThat(body).contains("window.__MCP_INSPECTOR_BOOTSTRAP ="));
+			.value((body) -> assertThat(body).contains("window.__MCP_INSPECTOR_BOOTSTRAP ="));
 	}
 
 	@Test
@@ -84,7 +90,7 @@ class WebFluxBootstrapInlineIT {
 	@Description("The inline bootstrap JSON embedded in index.html is byte-for-byte equal to the /config endpoint payload")
 	void indexHtml_bootstrapJsonMatchesConfigEndpoint() {
 		// given a booted reactive inspector; when & then
-		String indexBody = webTestClient.get()
+		final String indexBody = this.webTestClient.get()
 			.uri("/mcp-inspector/index.html")
 			.exchange()
 			.expectStatus()
@@ -92,7 +98,7 @@ class WebFluxBootstrapInlineIT {
 			.expectBody(String.class)
 			.returnResult()
 			.getResponseBody();
-		String configBody = webTestClient.get()
+		final String configBody = this.webTestClient.get()
 			.uri("/mcp-inspector/config")
 			.exchange()
 			.expectStatus()
@@ -103,16 +109,16 @@ class WebFluxBootstrapInlineIT {
 
 		assertThat(indexBody).isNotNull();
 		assertThat(configBody).isNotNull();
-		Matcher m = BOOTSTRAP_PATTERN.matcher(indexBody);
+		final Matcher m = BOOTSTRAP_PATTERN.matcher(indexBody);
 		assertThat(m.find()).as("inline bootstrap JSON must be present").isTrue();
-		String inlineJson = m.group(1).replace("<\\/", "</");
+		final String inlineJson = m.group(1).replace("<\\/", "</");
 
 		try {
-			JsonNode inline = objectMapper.readTree(inlineJson);
-			JsonNode config = objectMapper.readTree(configBody);
+			final JsonNode inline = this.objectMapper.readTree(inlineJson);
+			final JsonNode config = this.objectMapper.readTree(configBody);
 			assertThat(inline).isEqualTo(config);
 		}
-		catch (Exception ex) {
+		catch (final Exception ex) {
 			throw new AssertionError("failed to parse inline or config JSON: " + ex.getMessage(), ex);
 		}
 	}
@@ -123,7 +129,7 @@ class WebFluxBootstrapInlineIT {
 	@Description("A customizer-injected </script> payload is escaped to <\\/script> inside the inline JSON literal")
 	void indexHtml_escapesClosingScriptTag() {
 		// given a customizer injecting a dangerous </script> payload; when & then
-		String body = webTestClient.get()
+		final String body = this.webTestClient.get()
 			.uri("/mcp-inspector/index.html")
 			.exchange()
 			.expectStatus()
@@ -132,9 +138,9 @@ class WebFluxBootstrapInlineIT {
 			.returnResult()
 			.getResponseBody();
 		assertThat(body).isNotNull();
-		Matcher m = BOOTSTRAP_PATTERN.matcher(body);
+		final Matcher m = BOOTSTRAP_PATTERN.matcher(body);
 		assertThat(m.find()).as("inline bootstrap block must still render").isTrue();
-		String literal = m.group(1);
+		final String literal = m.group(1);
 		assertThat(literal).as("raw </script> must NOT appear inside the JSON literal").doesNotContain("</script>");
 		assertThat(literal).as("the escape sequence <\\/ must be present (proof escaping ran)").contains("<\\/script>");
 	}
@@ -144,7 +150,7 @@ class WebFluxBootstrapInlineIT {
 
 		@Bean
 		InspectorBootstrapCustomizer payloadInjectingCustomizer() {
-			return bootstrap -> bootstrap.getExtra().put("dangerous", "</script><script>alert(1)</script>");
+			return (bootstrap) -> bootstrap.getExtra().put("dangerous", "</script><script>alert(1)</script>");
 		}
 
 	}

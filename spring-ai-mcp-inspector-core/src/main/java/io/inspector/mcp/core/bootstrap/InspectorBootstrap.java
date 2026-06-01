@@ -1,12 +1,19 @@
 /*
- * Copyright 2026 the original author or authors.
+ * Copyright 2025-present the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 package io.inspector.mcp.core.bootstrap;
 
 import java.util.ArrayList;
@@ -29,6 +36,8 @@ import java.util.Map;
  * <p>
  * The class is a deliberately plain mutable POJO so that Jackson can serialize it with
  * zero configuration and customizers can mutate it in-place.
+ *
+ * @author Artem Simeshin
  */
 public class InspectorBootstrap {
 
@@ -51,66 +60,66 @@ public class InspectorBootstrap {
 	private final Map<String, Object> extra = new LinkedHashMap<>();
 
 	public String getAuthToken() {
-		return authToken;
+		return this.authToken;
 	}
 
-	public void setAuthToken(String authToken) {
+	public void setAuthToken(final String authToken) {
 		this.authToken = authToken;
 	}
 
 	public String getProxyAddress() {
-		return proxyAddress;
+		return this.proxyAddress;
 	}
 
-	public void setProxyAddress(String proxyAddress) {
+	public void setProxyAddress(final String proxyAddress) {
 		this.proxyAddress = proxyAddress;
 	}
 
 	public String getDetectedTransport() {
-		return detectedTransport;
+		return this.detectedTransport;
 	}
 
-	public void setDetectedTransport(String detectedTransport) {
+	public void setDetectedTransport(final String detectedTransport) {
 		this.detectedTransport = detectedTransport;
 	}
 
 	public String getDetectedUrl() {
-		return detectedUrl;
+		return this.detectedUrl;
 	}
 
-	public void setDetectedUrl(String detectedUrl) {
+	public void setDetectedUrl(final String detectedUrl) {
 		this.detectedUrl = detectedUrl;
 	}
 
 	public String getDefaultUrl() {
-		return defaultUrl;
+		return this.defaultUrl;
 	}
 
-	public void setDefaultUrl(String defaultUrl) {
+	public void setDefaultUrl(final String defaultUrl) {
 		this.defaultUrl = defaultUrl;
 	}
 
 	public String getDefaultTransport() {
-		return defaultTransport;
+		return this.defaultTransport;
 	}
 
-	public void setDefaultTransport(String defaultTransport) {
+	public void setDefaultTransport(final String defaultTransport) {
 		this.defaultTransport = defaultTransport;
 	}
 
 	public List<CustomHeader> getDefaultHeaders() {
-		return defaultHeaders;
+		return this.defaultHeaders;
 	}
 
-	public void setDefaultHeaders(List<CustomHeader> defaultHeaders) {
+	public void setDefaultHeaders(final List<CustomHeader> defaultHeaders) {
 		this.defaultHeaders = (defaultHeaders != null) ? defaultHeaders : new ArrayList<>();
 	}
 
 	public List<ServerEntry> getServerEntries() {
-		return serverEntries;
+		return this.serverEntries;
 	}
 
-	public void setServerEntries(List<ServerEntry> serverEntries) {
+	public void setServerEntries(final List<ServerEntry> serverEntries) {
 		this.serverEntries = (serverEntries != null) ? serverEntries : new ArrayList<>();
 	}
 
@@ -118,9 +127,10 @@ public class InspectorBootstrap {
 	 * Returns the mutable {@code extra} map — the escape hatch for customizers that need
 	 * to surface fields not modeled as first-class properties. Intentionally has no
 	 * setter: the map identity is fixed for the lifetime of this bootstrap instance.
+	 * @return mutable extra map; never {@code null}
 	 */
 	public Map<String, Object> getExtra() {
-		return extra;
+		return this.extra;
 	}
 
 }
