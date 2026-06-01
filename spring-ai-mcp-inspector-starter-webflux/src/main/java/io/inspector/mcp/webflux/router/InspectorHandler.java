@@ -19,6 +19,7 @@ package io.inspector.mcp.webflux.router;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -81,6 +82,12 @@ import io.inspector.mcp.core.transport.TransportType;
 public class InspectorHandler {
 
 	private static final Logger LOG = LoggerFactory.getLogger(InspectorHandler.class);
+
+	/**
+	 * Shared CSPRNG for OAuth {@code state} generation. {@link SecureRandom} is
+	 * thread-safe and expensive to seed, so a single instance is reused.
+	 */
+	private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
 	private static final String INDEX_RESOURCE = "mcp-inspector-bundle/index.html";
 
@@ -639,7 +646,7 @@ public class InspectorHandler {
 
 	private static String randomState() {
 		final byte[] buf = new byte[24];
-		new java.security.SecureRandom().nextBytes(buf);
+		SECURE_RANDOM.nextBytes(buf);
 		return Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
 	}
 

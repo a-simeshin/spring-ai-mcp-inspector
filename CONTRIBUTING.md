@@ -170,6 +170,30 @@ Run it on its own:
 classes are named `*Tests.java` (Spring convention); integration tests are
 `*IT.java`, end-to-end `*E2ETest.java`.
 
+### SpotBugs — static bytecode analysis
+
+The build also runs **SpotBugs** on the compiled production classes with
+`effort=Max` and `threshold=Medium` — the Spring-convention balance that catches
+real defects (null derefs, resource leaks, broken contracts) without
+low-confidence noise. It is bound to the `verify` phase (it needs compiled
+bytecode), so a finding fails `./mvnw verify`. The exclusion filter lives in
+`config/spotbugs/spotbugs-exclude.xml`; keep it small and justify every entry.
+
+`EI_EXPOSE_REP` / `EI_EXPOSE_REP2` are excluded project-wide: in DI code,
+constructors store container-managed collaborators by reference and internal
+DTO/config carriers return their collections by reference — both are deliberate,
+so defensive copies would only add cost and noise.
+
+Run it on its own:
+
+```
+./mvnw -pl spring-ai-mcp-inspector-core compile spotbugs:check   # analyze + fail
+./mvnw -pl spring-ai-mcp-inspector-core spotbugs:gui             # browse findings
+```
+
+Tests are not scanned (`includeTests=false`); `-demo` and `-ui` opt out via
+`<spotbugs.skip>true</spotbugs.skip>`.
+
 ## Submitting changes
 
 1. Fork the repository and create a topic branch off `main`.
@@ -178,8 +202,9 @@ classes are named `*Tests.java` (Spring convention); integration tests are
    would have failed before the change, and unit-test coverage for the touched
    modules must stay **≥ 80%** (LINE/BRANCH/INSTRUCTION).
 4. Make sure `./mvnw verify` passes locally — including the JaCoCo 80% gate,
-   `spring-javaformat:validate`, and the Checkstyle gate (classic Spring
-   ruleset; `final` locals/params, Javadoc, BDDMockito/AssertJ).
+   `spring-javaformat:validate`, the Checkstyle gate (classic Spring ruleset;
+   `final` locals/params, Javadoc, BDDMockito/AssertJ), and the SpotBugs gate
+   (`effort=Max`, `threshold=Medium`).
 5. Open a pull request with a clear description of **what** changed and
    **why**. Link any related issues.
 

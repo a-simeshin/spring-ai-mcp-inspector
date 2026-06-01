@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SpotBugs exclusion filter for spring-ai-mcp-inspector.
+
+  Keep this list small and justified: every <Match> is a documented, reviewed
+  decision to silence a category SpotBugs cannot reason about correctly for this
+  codebase (Spring bean wiring, framework contracts). Prefer fixing the code over
+  adding an exclusion. See https://spotbugs.readthedocs.io/en/stable/filter.html
+-->
+<FindBugsFilter
+        xmlns="https://github.com/spotbugs/filter/3.0.0"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="https://github.com/spotbugs/filter/3.0.0 https://raw.githubusercontent.com/spotbugs/spotbugs/master/spotbugs/etc/findbugsfilter.xsd">
+
+    <!--
+      EI_EXPOSE_REP / EI_EXPOSE_REP2 — "may expose internal representation by
+      returning / storing a reference to a mutable object".
+
+      Silenced project-wide and deliberately:
+        * Constructors store injected Spring collaborators (ObjectMapper,
+          McpClientTransport, McpInspectorProperties, Sinks.Many). These are
+          container-managed singletons, not defensive-copy candidates — copying
+          them would be incorrect.
+        * Accessors on internal bootstrap/config/DTO carriers return their
+          collections by reference. These objects are assembled once and treated
+          as immutable in practice; defensive copies on every access add cost and
+          boilerplate for no real safety benefit in this codebase.
+
+      These two patterns are the highest-noise / lowest-signal SpotBugs categories
+      for dependency-injected code; excluding them keeps the gate focused on
+      genuine defects (null derefs, resource leaks, bad contracts).
+    -->
+    <Match>
+        <Bug pattern="EI_EXPOSE_REP" />
+    </Match>
+    <Match>
+        <Bug pattern="EI_EXPOSE_REP2" />
+    </Match>
+
+</FindBugsFilter>

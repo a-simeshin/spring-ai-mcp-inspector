@@ -44,6 +44,14 @@
         <maven-checkstyle-plugin.version>3.6.0</maven-checkstyle-plugin.version>
         <checkstyle.version>10.21.4</checkstyle.version>
 
+        <!-- SpotBugs static analysis: effort=Max / threshold=Medium, gated at the
+             verify phase (needs compiled bytecode). spotbugs.version pins the core
+             engine to the same train as the plugin wrapper. demo/ui opt out via
+             <spotbugs.skip>true</spotbugs.skip>. -->
+        <spotbugs-maven-plugin.version>4.9.3.0</spotbugs-maven-plugin.version>
+        <spotbugs.version>4.9.3</spotbugs.version>
+        <spotbugs.skip>false</spotbugs.skip>
+
         <!-- Allure test reporting. allure.version: latest stable Allure 2.x (known-good
              recent release). aspectj.version MUST match the aspectjweaver version managed
              by spring-boot-dependencies (3.5.14 → 1.9.25.1) so the -javaagent jar path on
@@ -316,6 +324,44 @@
                         </execution>
                     </executions>
                 </plugin>
+                <!-- SpotBugs: bytecode static analysis. Bound to verify (after
+                     compile) in the active <plugins> below; demo/ui opt out via
+                     <spotbugs.skip>true</spotbugs.skip>. Filter in config/spotbugs/. -->
+                <plugin>
+                    <groupId>com.github.spotbugs</groupId>
+                    <artifactId>spotbugs-maven-plugin</artifactId>
+                    <version>${spotbugs-maven-plugin.version}</version>
+                    <dependencies>
+                        <dependency>
+                            <groupId>com.github.spotbugs</groupId>
+                            <artifactId>spotbugs</artifactId>
+                            <version>${spotbugs.version}</version>
+                        </dependency>
+                    </dependencies>
+                    <configuration>
+                        <skip>${spotbugs.skip}</skip>
+                        <!-- Max effort, Medium confidence: the Spring-convention
+                             balance — catches real defects without low-confidence noise. -->
+                        <effort>Max</effort>
+                        <threshold>Medium</threshold>
+                        <failOnError>true</failOnError>
+                        <!-- Production code only; tests use reflection/mocks that
+                             trip many false positives. -->
+                        <includeTests>false</includeTests>
+                        <excludeFilterFile>${maven.multiModuleProjectDirectory}/config/spotbugs/spotbugs-exclude.xml</excludeFilterFile>
+                        <xmlOutput>true</xmlOutput>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <id>spotbugs-check</id>
+                            <phase>verify</phase>
+                            <inherited>true</inherited>
+                            <goals>
+                                <goal>check</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
                 <!-- Allure: generates the HTML report from target/allure-results
                      (produced by surefire/failsafe via the allure-junit5 listener). -->
                 <plugin>
@@ -355,6 +401,13 @@
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
+            </plugin>
+            <!-- SpotBugs gate at the verify phase. effort=Max / threshold=Medium.
+                 Demo and UI modules opt out via `<spotbugs.skip>true` in their poms.
+                 Configuration lives in pluginManagement above. -->
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
             </plugin>
             <!-- Allure report generation (`mvn allure:report` / `allure:serve`).
                  Configuration lives in pluginManagement above. -->

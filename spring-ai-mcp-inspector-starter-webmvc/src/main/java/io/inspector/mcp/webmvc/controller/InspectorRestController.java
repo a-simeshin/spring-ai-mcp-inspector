@@ -16,6 +16,7 @@
 
 package io.inspector.mcp.webmvc.controller;
 
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -80,6 +81,12 @@ import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
 public class InspectorRestController {
 
 	private static final Logger LOG = LoggerFactory.getLogger(InspectorRestController.class);
+
+	/**
+	 * Shared CSPRNG for OAuth {@code state} generation. {@link SecureRandom} is
+	 * thread-safe and expensive to seed, so a single instance is reused.
+	 */
+	private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
 	static final String INSPECTOR_VERSION = "0.1.0";
 
@@ -507,7 +514,7 @@ public class InspectorRestController {
 
 	private static String randomState() {
 		final byte[] buf = new byte[24];
-		new java.security.SecureRandom().nextBytes(buf);
+		SECURE_RANDOM.nextBytes(buf);
 		return Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
 	}
 
