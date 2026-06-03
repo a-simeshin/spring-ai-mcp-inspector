@@ -60,7 +60,39 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 
 Start your application and open `http://localhost:8080/mcp-inspector/`. The inspector is pre-connected to your local MCP server, click **Connect** and you'll see tools/resources/prompts immediately.
 
-## Configuration
+## Ported 95% of original MCP Inspector
+
+#### Transport
+![transport](docs/img/transports.png)
+
+#### Authorization and custom headers
+![authorization_and_custom_headers](docs/img/authorization_and_custom_headers.png)
+
+#### Connection configurations
+![connection_configuraiton](docs/img/connection_configuraiton.png)
+
+#### Resources
+![resources_in_action](docs/img/resources_in_action.png)
+
+#### Prompts
+![prompts](docs/img/prompts.png)
+
+#### Tools (basic)
+![tools](docs/img/tools.png)
+
+#### Tools (sampling - call to LLM)
+![sampling](docs/img/sampling.png)
+
+#### Tools (elicitation - call to User)
+![elicitation](docs/img/elicitation.png)
+
+#### Roots
+![roots](docs/img/roots.png)
+
+#### Tool cals and events logs
+![tool_calls_and_notifications](docs/img/tool_calls_and_notifications.png)
+
+## Configuration properties
 
 All settings live under the `spring.ai.mcp.inspector` namespace:
 
