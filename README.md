@@ -34,6 +34,20 @@ Spring AI's MCP server starters give you a running MCP endpoint, but no UI to ta
 - Spring Boot 3.4+
 - Spring AI 1.1+ (`org.springframework.ai:spring-ai-bom`)
 
+## Compatibility
+
+Each library release is built and tested against a fixed set of upstream versions.
+The table below records the exact stack a given inspector release was verified with.
+
+| Inspector library | Spring Boot | Spring AI | Java MCP SDK | Bundled MCP Inspector UI |
+|-------------------|-------------|-----------|--------------|--------------------------|
+| `0.1.0-SNAPSHOT`  | `3.5.15`    | `1.1.8`   | `0.18.3`     | `0.21.2`                 |
+
+> Newer versions in any column may work but are not part of the verified set for the
+> corresponding library release. The bundled MCP Inspector UI is a vendored copy
+> (see `spring-ai-mcp-inspector-ui/upstream-client/NOTICE.txt`); `Java MCP SDK` is the
+> `io.modelcontextprotocol.sdk:mcp-core` version pulled in transitively via Spring AI.
+
 ## Quickstart
 
 ### WebMVC
