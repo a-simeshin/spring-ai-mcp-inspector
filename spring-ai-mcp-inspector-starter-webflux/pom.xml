@@ -5,9 +5,9 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>io.github.inspector.mcp</groupId>
+        <groupId>io.github.a-simeshin</groupId>
         <artifactId>spring-ai-mcp-inspector-parent</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
+        <version>1.0.0-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -18,12 +18,12 @@
 
     <dependencies>
         <dependency>
-            <groupId>io.github.inspector.mcp</groupId>
+            <groupId>io.github.a-simeshin</groupId>
             <artifactId>spring-ai-mcp-inspector-core</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
-            <groupId>io.github.inspector.mcp</groupId>
+            <groupId>io.github.a-simeshin</groupId>
             <artifactId>spring-ai-mcp-inspector-ui</artifactId>
             <version>${project.version}</version>
         </dependency>

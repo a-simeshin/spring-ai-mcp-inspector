@@ -4,14 +4,14 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>io.github.inspector.mcp</groupId>
+    <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-parent</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>1.0.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>spring-ai-mcp-inspector-parent</name>
     <description>Parent POM for Spring AI MCP Inspector — embeddable inspector UI for Spring AI MCP servers.</description>
-    <url>https://github.com/spring-ai-mcp-inspector/spring-ai-mcp-inspector</url>
+    <url>https://github.com/a-simeshin/spring-ai-mcp-inspector</url>
 
     <licenses>
         <license>
@@ -20,6 +20,21 @@
             <distribution>repo</distribution>
         </license>
     </licenses>
+
+    <developers>
+        <developer>
+            <id>a-simeshin</id>
+            <name>Artem Simeshin</name>
+            <url>https://github.com/a-simeshin</url>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://github.com/a-simeshin/spring-ai-mcp-inspector.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/a-simeshin/spring-ai-mcp-inspector.git</developerConnection>
+        <url>https://github.com/a-simeshin/spring-ai-mcp-inspector</url>
+        <tag>HEAD</tag>
+    </scm>
 
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
@@ -37,6 +52,12 @@
         <maven-failsafe-plugin.version>3.5.0</maven-failsafe-plugin.version>
         <spring-javaformat-maven-plugin.version>0.0.47</spring-javaformat-maven-plugin.version>
         <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
+
+        <!-- Maven Central release tooling (activated by the `release` profile). -->
+        <maven-source-plugin.version>3.3.1</maven-source-plugin.version>
+        <maven-javadoc-plugin.version>3.11.2</maven-javadoc-plugin.version>
+        <maven-gpg-plugin.version>3.2.7</maven-gpg-plugin.version>
+        <central-publishing-maven-plugin.version>0.7.0</central-publishing-maven-plugin.version>
 
         <!-- Checkstyle: the classic Spring ruleset (io.spring.javaformat.checkstyle.SpringChecks)
              plus FinalLocalVariable, gated at the validate phase. checkstyle.version must match
@@ -442,5 +463,86 @@
             </snapshots>
         </repository>
     </repositories>
+
+    <profiles>
+        <!-- Maven Central release profile. Activate with `-Prelease` (the GitHub
+             Actions release workflow does this). Adds the sources + javadoc jars,
+             GPG signing of every artifact, and the Sonatype Central Portal deploy.
+             Kept out of the default build so day-to-day `mvn verify` needs no GPG key. -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>${maven-source-plugin.version}</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>${maven-javadoc-plugin.version}</version>
+                        <configuration>
+                            <!-- Central requires the jar to exist; do not fail the
+                                 release on Java 17 doclint warnings. -->
+                            <doclint>none</doclint>
+                            <quiet>true</quiet>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>${maven-gpg-plugin.version}</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                                <configuration>
+                                    <!-- Loopback lets the passphrase come from
+                                         settings.xml / env without an interactive pinentry. -->
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>${central-publishing-maven-plugin.version}</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <!-- `central` is the <server> id holding the Central Portal
+                                 token in settings.xml. -->
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
+                            <waitUntil>published</waitUntil>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
 </project>

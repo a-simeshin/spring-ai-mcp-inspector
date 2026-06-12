@@ -5,15 +5,17 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>io.github.inspector.mcp</groupId>
+        <groupId>io.github.a-simeshin</groupId>
         <artifactId>spring-ai-mcp-inspector-parent</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
+        <version>1.0.0-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
     <artifactId>spring-ai-mcp-inspector-ui</artifactId>
     <packaging>jar</packaging>
     <name>spring-ai-mcp-inspector-ui</name>
+    <description>Pre-built MCP Inspector web UI bundle (vendored React/Vite client) packaged as
+        a classpath resource for the Spring AI MCP Inspector starters.</description>
 
     <properties>
         <skipUI>false</skipUI>
@@ -93,4 +95,48 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- This module ships only the vendored JS bundle — there are no Java sources,
+             so the parent release profile's source/javadoc plugins emit nothing. Maven
+             Central still requires a -sources and -javadoc jar per published jar artifact,
+             so attach empty (signed) stubs during `-Prelease`. -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-jar-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>empty-sources-jar</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                                <configuration>
+                                    <classifier>sources</classifier>
+                                    <classesDirectory>${project.build.directory}/empty-stub</classesDirectory>
+                                    <forceCreation>true</forceCreation>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>empty-javadoc-jar</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                                <configuration>
+                                    <classifier>javadoc</classifier>
+                                    <classesDirectory>${project.build.directory}/empty-stub</classesDirectory>
+                                    <forceCreation>true</forceCreation>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
