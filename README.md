@@ -51,9 +51,9 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 
 ```xml
 <dependency>
-    <groupId>io.github.inspector.mcp</groupId>
+    <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webmvc</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>1.0.0</version>
 </dependency>
 ```
 
@@ -61,9 +61,9 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 
 ```xml
 <dependency>
-    <groupId>io.github.inspector.mcp</groupId>
+    <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webflux</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>1.0.0</version>
 </dependency>
 ```
 
