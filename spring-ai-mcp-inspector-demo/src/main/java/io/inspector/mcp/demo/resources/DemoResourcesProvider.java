@@ -1,6 +1,6 @@
 package io.inspector.mcp.demo.resources;
 
-import org.springaicommunity.mcp.annotation.McpResource;
+import org.springframework.ai.mcp.annotation.McpResource;
 import org.springframework.stereotype.Component;
 
 /**

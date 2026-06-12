@@ -16,7 +16,7 @@
 
 package io.inspector.mcp.webmvc;
 
-import org.springframework.boot.web.context.WebServerInitializedEvent;
+import org.springframework.boot.web.server.context.WebServerInitializedEvent;
 import org.springframework.context.event.EventListener;
 
 /**

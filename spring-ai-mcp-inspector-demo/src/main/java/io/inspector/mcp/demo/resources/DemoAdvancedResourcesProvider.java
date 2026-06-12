@@ -15,7 +15,7 @@ import io.modelcontextprotocol.spec.McpSchema.ResourceContents;
 
 import java.util.List;
 
-import org.springaicommunity.mcp.annotation.McpResource;
+import org.springframework.ai.mcp.annotation.McpResource;
 import org.springframework.stereotype.Component;
 
 /**

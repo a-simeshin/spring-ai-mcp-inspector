@@ -16,6 +16,8 @@
 
 package io.inspector.mcp.core.client;
 
+import java.util.function.Function;
+
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
@@ -157,7 +159,13 @@ public class LoopbackMcpClientFactory {
 			spec = spec.sampling(handlers.sampling());
 		}
 		if (handlers.elicitation() != null) {
-			spec = spec.elicitation(handlers.elicitation());
+			// SDK 2.0 split elicitation into form-mode and url-mode (SEP-1036). Both
+			// ElicitFormRequest and ElicitUrlRequest implement the ElicitRequest interface,
+			// so the single inspector bridge (typed on ElicitRequest) serves either channel;
+			// the UI branches on the request's mode().
+			final Function<McpSchema.ElicitRequest, McpSchema.ElicitResult> elicitation = handlers.elicitation();
+			spec = spec.elicitation(elicitation::apply);
+			spec = spec.urlElicitation(elicitation::apply);
 		}
 		return spec;
 	}
