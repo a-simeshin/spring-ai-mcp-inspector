@@ -27,6 +27,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -42,6 +43,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
+import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
@@ -77,12 +79,6 @@ public class StreamableHttpProxyController {
 
 	private static final Logger LOG = LoggerFactory.getLogger(StreamableHttpProxyController.class);
 
-	/** SSE inactivity timeout — generous because MCP servers may idle for minutes. */
-	private static final long SSE_TIMEOUT_MS = 30L * 60L * 1000L;
-
-	/** How long a single POST awaits the matching JSON-RPC response from the upstream. */
-	private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(30);
-
 	/** Replay buffer size for the {@code targetToBrowser} sink (per session). */
 	private static final int REPLAY_BUFFER = 256;
 
@@ -94,12 +90,26 @@ public class StreamableHttpProxyController {
 
 	private final ObjectMapper objectMapper;
 
+	private final McpInspectorProperties properties;
+
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final ObjectMapper objectMapper) {
+		this(registry, transportFactory, mcpProxy, objectMapper, null);
+	}
+
+	@Autowired
+	public StreamableHttpProxyController(final ProxySessionRegistry registry,
+			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final ObjectMapper objectMapper,
+			final McpInspectorProperties properties) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
 		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
+		this.properties = properties;
+	}
+
+	private McpInspectorProperties.Timeouts resolveTimeouts() {
+		return (this.properties != null) ? this.properties.getTimeouts() : new McpInspectorProperties.Timeouts();
 	}
 
 	@PostMapping(path = "/mcp", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -118,7 +128,7 @@ public class StreamableHttpProxyController {
 
 	@GetMapping(path = "/mcp", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
 	public SseEmitter getMcp(@RequestHeader(ProxyConstants.MCP_SESSION_ID_HEADER) final String mcpSessionId) {
-		final SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
+		final SseEmitter emitter = new SseEmitter(resolveTimeouts().getSseSession().toMillis());
 		final ProxySession session = this.registry.get(mcpSessionId);
 		if (session == null) {
 			return emitErrorAndComplete(emitter, "unknown mcp-session-id: " + mcpSessionId);
@@ -142,8 +152,9 @@ public class StreamableHttpProxyController {
 
 	/**
 	 * Brings up a fresh session and forwards the first frame. If the frame is a JSON-RPC
-	 * request, blocks for up to {@link #REQUEST_TIMEOUT} on the matching response.
-	 * Otherwise returns 202.
+	 * request, blocks for up to the configured
+	 * {@code spring.ai.mcp.inspector.timeouts.streamable-request} on the matching
+	 * response. Otherwise returns 202.
 	 * @param url the streamable-HTTP target URL
 	 * @param body the JSON-RPC frame to forward
 	 * @return the HTTP response entity
@@ -200,18 +211,19 @@ public class StreamableHttpProxyController {
 		// if the upstream answer lands before .block() registers a subscriber,
 		// the replay buffer still hands it over). We still emit AFTER preparing
 		// the await pipeline so the read-side wiring exists first.
+		final Duration requestTimeout = resolveTimeouts().getStreamableRequest();
 		final Mono<JsonNode> awaiter = session.targetToBrowser()
 			.asFlux()
 			.filter((frame) -> matchesId(frame, idNode))
 			.next()
-			.timeout(REQUEST_TIMEOUT);
+			.timeout(requestTimeout);
 		final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
 		if (emitResult.isFailure()) {
 			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("emit failed: " + emitResult.name());
 		}
 		session.touch();
 		try {
-			final JsonNode response = awaiter.block(REQUEST_TIMEOUT);
+			final JsonNode response = awaiter.block(requestTimeout);
 			final ResponseEntity.BodyBuilder builder = ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON);
 			if (includeSessionHeader) {
 				builder.header(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
@@ -221,7 +233,7 @@ public class StreamableHttpProxyController {
 		catch (final RuntimeException ex) {
 			LOG.warn("proxy[{}] await response failed: {}", session.sessionId(), ex.toString());
 			return ResponseEntity.status(HttpStatus.GATEWAY_TIMEOUT)
-				.body(Map.of("error", "upstream did not respond within " + REQUEST_TIMEOUT.toSeconds() + "s"));
+				.body(Map.of("error", "upstream did not respond within " + requestTimeout.toSeconds() + "s"));
 		}
 	}
 

@@ -67,13 +67,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * </ol>
  *
  * <p>
- * Documented observation: the proxy currently relies on the per-POST 30-second await
- * timeout to surface upstream loss as {@code 504} (see
- * {@code StreamableHttpProxyController#REQUEST_TIMEOUT}). The SSE backchannel does
- * <em>not</em> emit an explicit {@code event: error} frame on target loss — the sink
- * simply stops producing. That is acceptable for the upstream UI which displays a timeout
- * error from the failed POST anyway. We document this in the assertion so a regression
- * that hangs forever fails loudly.
+ * Documented observation: the proxy currently relies on the per-POST await timeout
+ * (configurable via {@code spring.ai.mcp.inspector.timeouts.streamable-request}, default
+ * 30s) to surface upstream loss as {@code 504}. The SSE backchannel does <em>not</em>
+ * emit an explicit {@code event: error} frame on target loss — the sink simply stops
+ * producing. That is acceptable for the upstream UI which displays a timeout error from
+ * the failed POST anyway. We document this in the assertion so a regression that hangs
+ * forever fails loudly.
  */
 @Epic("Inspector Proxy")
 @Feature("Target loss handling")

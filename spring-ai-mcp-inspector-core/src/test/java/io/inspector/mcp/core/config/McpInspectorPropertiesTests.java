@@ -16,6 +16,8 @@
 
 package io.inspector.mcp.core.config;
 
+import java.time.Duration;
+
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -100,6 +102,74 @@ class McpInspectorPropertiesTests {
 
 			// then
 			assertThat(props.getAllowedOrigins()).isNotNull().isEmpty();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("timeouts")
+	class Timeouts {
+
+		@Test
+		@Story("Default values")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a freshly constructed timeouts group exposes the upstream-compatible defaults")
+		void timeouts_freshInstance_exposeDefaults() {
+			// given
+			final McpInspectorProperties props = new McpInspectorProperties();
+
+			// when
+			final McpInspectorProperties.Timeouts timeouts = props.getTimeouts();
+
+			// then
+			assertThat(timeouts).isNotNull();
+			assertThat(timeouts.getSseSession()).isEqualTo(Duration.ofMinutes(30));
+			assertThat(timeouts.getStreamableRequest()).isEqualTo(Duration.ofSeconds(30));
+			assertThat(timeouts.getFetchConnect()).isEqualTo(Duration.ofSeconds(10));
+			assertThat(timeouts.getFetchRequest()).isEqualTo(Duration.ofSeconds(30));
+			assertThat(timeouts.getServerRequest()).isEqualTo(Duration.ofSeconds(120));
+		}
+
+		@Test
+		@Story("Relaxed binding")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("the spring.ai.mcp.inspector.timeouts.* keys bind with Spring's relaxed Duration syntax")
+		void bind_timeouts_fromEnvironment_overridesDefaults() {
+			// given
+			final MockEnvironment env = new MockEnvironment();
+			env.setProperty("spring.ai.mcp.inspector.timeouts.sse-session", "10m");
+			env.setProperty("spring.ai.mcp.inspector.timeouts.streamable-request", "5s");
+			env.setProperty("spring.ai.mcp.inspector.timeouts.fetch-connect", "2s");
+			env.setProperty("spring.ai.mcp.inspector.timeouts.fetch-request", "15s");
+			env.setProperty("spring.ai.mcp.inspector.timeouts.server-request", "60s");
+
+			// when
+			final McpInspectorProperties bound = Binder.get(env)
+				.bind("spring.ai.mcp.inspector", McpInspectorProperties.class)
+				.get();
+
+			// then
+			assertThat(bound.getTimeouts().getSseSession()).isEqualTo(Duration.ofMinutes(10));
+			assertThat(bound.getTimeouts().getStreamableRequest()).isEqualTo(Duration.ofSeconds(5));
+			assertThat(bound.getTimeouts().getFetchConnect()).isEqualTo(Duration.ofSeconds(2));
+			assertThat(bound.getTimeouts().getFetchRequest()).isEqualTo(Duration.ofSeconds(15));
+			assertThat(bound.getTimeouts().getServerRequest()).isEqualTo(Duration.ofSeconds(60));
+		}
+
+		@Test
+		@Story("Null safety")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("setTimeouts(null) normalizes back to a default group")
+		void setTimeouts_withNull_defaultsToNewGroup() {
+			// given
+			final McpInspectorProperties props = new McpInspectorProperties();
+
+			// when
+			props.setTimeouts(null);
+
+			// then
+			assertThat(props.getTimeouts()).isNotNull();
+			assertThat(props.getTimeouts().getStreamableRequest()).isEqualTo(Duration.ofSeconds(30));
 		}
 
 	}

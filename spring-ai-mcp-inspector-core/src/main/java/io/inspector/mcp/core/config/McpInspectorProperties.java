@@ -16,10 +16,12 @@
 
 package io.inspector.mcp.core.config;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.NestedConfigurationProperty;
 
 /**
  * Configuration properties for the Spring AI MCP Inspector.
@@ -76,6 +78,10 @@ public class McpInspectorProperties {
 
 	/** Origins allowed by the inspector CORS / origin-check filter. Empty by default. */
 	private List<String> allowedOrigins = new ArrayList<>();
+
+	/** Tunable timeouts for the proxy backend and server→UI request bridge. */
+	@NestedConfigurationProperty
+	private Timeouts timeouts = new Timeouts();
 
 	public boolean isEnabled() {
 		return this.enabled;
@@ -134,6 +140,91 @@ public class McpInspectorProperties {
 
 	public void setAllowedOrigins(final List<String> allowedOrigins) {
 		this.allowedOrigins = (allowedOrigins != null) ? allowedOrigins : new ArrayList<>();
+	}
+
+	public Timeouts getTimeouts() {
+		return this.timeouts;
+	}
+
+	public void setTimeouts(final Timeouts timeouts) {
+		this.timeouts = (timeouts != null) ? timeouts : new Timeouts();
+	}
+
+	/**
+	 * Tunable timeouts for the proxy backend. All values accept Spring's relaxed
+	 * {@link Duration} syntax — e.g. {@code 30s}, {@code 2m}, {@code 500ms} — and fall
+	 * back to upstream-compatible defaults when unset.
+	 *
+	 * <p>
+	 * Bound under {@code spring.ai.mcp.inspector.timeouts}.
+	 */
+	public static class Timeouts {
+
+		/**
+		 * Inactivity budget for a proxied SSE / streamable-HTTP browser session (servlet
+		 * stack only; the reactive stack keeps the stream open for the lifetime of its
+		 * publisher). Generous because MCP servers may idle for minutes. Default 30m.
+		 */
+		private Duration sseSession = Duration.ofMinutes(30);
+
+		/**
+		 * Per-request wall-clock budget for awaiting the matching JSON-RPC response from
+		 * an upstream streamable-HTTP server before returning {@code 504}. Default 30s.
+		 */
+		private Duration streamableRequest = Duration.ofSeconds(30);
+
+		/** Connect timeout for the outbound {@code /fetch} HTTP client. Default 10s. */
+		private Duration fetchConnect = Duration.ofSeconds(10);
+
+		/** Per-request timeout for outbound {@code /fetch} calls. Default 30s. */
+		private Duration fetchRequest = Duration.ofSeconds(30);
+
+		/**
+		 * How long a server→UI request (sampling / elicitation / roots) waits for the
+		 * browser to answer before the proxied tool call fails. Default 120s.
+		 */
+		private Duration serverRequest = Duration.ofSeconds(120);
+
+		public Duration getSseSession() {
+			return this.sseSession;
+		}
+
+		public void setSseSession(final Duration sseSession) {
+			this.sseSession = sseSession;
+		}
+
+		public Duration getStreamableRequest() {
+			return this.streamableRequest;
+		}
+
+		public void setStreamableRequest(final Duration streamableRequest) {
+			this.streamableRequest = streamableRequest;
+		}
+
+		public Duration getFetchConnect() {
+			return this.fetchConnect;
+		}
+
+		public void setFetchConnect(final Duration fetchConnect) {
+			this.fetchConnect = fetchConnect;
+		}
+
+		public Duration getFetchRequest() {
+			return this.fetchRequest;
+		}
+
+		public void setFetchRequest(final Duration fetchRequest) {
+			this.fetchRequest = fetchRequest;
+		}
+
+		public Duration getServerRequest() {
+			return this.serverRequest;
+		}
+
+		public void setServerRequest(final Duration serverRequest) {
+			this.serverRequest = serverRequest;
+		}
+
 	}
 
 }
