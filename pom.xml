@@ -43,9 +43,13 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
-        <spring-boot.version>3.5.15</spring-boot.version>
-        <spring-ai.version>1.1.8</spring-ai.version>
-        <mcp-sdk.version>0.18.3</mcp-sdk.version>
+        <spring-boot.version>4.1.0</spring-boot.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
+        <!-- MCP Java SDK is BOM-managed by spring-ai-bom 2.0.0 (mcp 2.0.0). Do NOT pin it
+             here: an explicit override would drag the SDK two majors behind the BOM and
+             silently reintroduce 0.18 APIs. -->
+        <!-- mcp-sdk.version intentionally removed; managed by spring-ai-bom -->
+
 
         <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>3.5.0</maven-surefire-plugin.version>
@@ -114,10 +118,16 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!-- MCP Java SDK BOM. spring-ai-bom does NOT manage the raw SDK
+                 (io.modelcontextprotocol.sdk:mcp-core / mcp-json-*), only the Spring
+                 transports, so we import the SDK BOM to version mcp-core + the Jackson2
+                 binding directly. The SDK version tracks Spring AI's train (2.0.0). -->
             <dependency>
                 <groupId>io.modelcontextprotocol.sdk</groupId>
-                <artifactId>mcp</artifactId>
-                <version>${mcp-sdk.version}</version>
+                <artifactId>mcp-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
             <!-- Allure BOM: aligns allure-junit5 (and any other allure-*) versions
                  so module poms can omit explicit versions. -->
