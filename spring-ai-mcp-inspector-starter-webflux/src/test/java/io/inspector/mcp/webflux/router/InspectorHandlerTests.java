@@ -33,7 +33,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.web.context.WebServerInitializedEvent;
+import org.springframework.boot.web.server.context.WebServerInitializedEvent;
 import org.springframework.boot.web.server.WebServer;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -626,7 +626,7 @@ class InspectorHandlerTests {
 			// given
 			final McpSyncClient client = connectedClient();
 			given(client.getCurrentInitializationResult()).willReturn(null);
-			given(client.callTool(any())).willReturn(new McpSchema.CallToolResult(List.of(), false));
+			given(client.callTool(any())).willReturn(new McpSchema.CallToolResult(List.of(), false, null, null));
 			given(client.readResource(any(McpSchema.ReadResourceRequest.class)))
 				.willReturn(new McpSchema.ReadResourceResult(List.of()));
 			given(client.listResourceTemplates())

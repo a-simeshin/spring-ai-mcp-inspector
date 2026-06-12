@@ -58,6 +58,15 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Boot 4 moved TestRestTemplate out of spring-boot-test into the dedicated
+             spring-boot-resttestclient module (new package
+             org.springframework.boot.resttestclient). Needed by the WebMvc*IT
+             integration tests that drive the inspector over HTTP. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-resttestclient</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>

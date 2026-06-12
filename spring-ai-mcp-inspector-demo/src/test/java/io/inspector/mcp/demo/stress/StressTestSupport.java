@@ -127,7 +127,7 @@ final class StressTestSupport {
 
 	/** Extracts the dynamically allocated server port from a started context. */
 	static int port(org.springframework.context.ConfigurableApplicationContext ctx) {
-		return ((org.springframework.boot.web.context.WebServerApplicationContext) ctx).getWebServer().getPort();
+		return ((org.springframework.boot.web.server.context.WebServerApplicationContext) ctx).getWebServer().getPort();
 	}
 
 	/** Convenience: best-effort close that never throws (used in {@code @AfterEach}). */
