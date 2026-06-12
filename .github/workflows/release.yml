@@ -7,12 +7,12 @@ name: Release to Maven Central
 # The job derives the release version from the tag (strips the leading `v`), stamps it
 # into every POM, then builds + signs + publishes under the `release` profile.
 #
-# Required repository secrets (Settings -> Secrets and variables -> Actions):
-#   CENTRAL_USERNAME   - Central Portal user token name  (Portal -> Account -> Generate token)
-#   CENTRAL_PASSWORD   - Central Portal user token secret
-#   GPG_PRIVATE_KEY    - ASCII-armored private key (gpg --armor --export-secret-keys <id>)
-#   GPG_PASSPHRASE     - passphrase for that key
-# See RELEASING.md for the full setup walkthrough.
+# Required repository secrets (Settings -> Secrets and variables -> Actions).
+# Names match the sibling spring-ai-ragas repo, so the same values can be reused:
+#   OSSRH_USERNAME   - Central Portal user token name    (Portal -> Account -> Generate token)
+#   OSSRH_TOKEN      - Central Portal user token secret
+#   GPG_PRIVATE_KEY  - ASCII-armored private key (gpg --armor --export-secret-keys <id>)
+#   GPG_PASSPHRASE   - passphrase for that key
 
 on:
   push:
@@ -42,8 +42,8 @@ jobs:
           java-version: '17'
           cache: maven
           server-id: central
-          server-username: CENTRAL_USERNAME
-          server-password: CENTRAL_PASSWORD
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
@@ -67,7 +67,7 @@ jobs:
 
       - name: Build, sign and publish to Central
         env:
-          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
-          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: ./mvnw -B -ntp -Prelease -DskipTests deploy
