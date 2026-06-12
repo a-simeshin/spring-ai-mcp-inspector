@@ -70,4 +70,8 @@ jobs:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: ./mvnw -B -ntp -Prelease -DskipTests deploy
+        # Exclude the demo app from the reactor: central-publishing bundles every
+        # built module and does NOT honor maven.deploy.skip, so demo (no sources/
+        # javadoc/signature) would otherwise be added to the bundle and rejected by
+        # Central, failing the whole deployment.
+        run: ./mvnw -B -ntp -Prelease -DskipTests -pl '!:spring-ai-mcp-inspector-demo' deploy
