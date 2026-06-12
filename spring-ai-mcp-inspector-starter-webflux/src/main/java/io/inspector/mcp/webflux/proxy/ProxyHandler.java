@@ -136,8 +136,23 @@ public class ProxyHandler {
 		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(body);
 	}
 
+	/**
+	 * Reads the request body as a Jackson 2 {@link JsonNode}.
+	 *
+	 * <p>
+	 * Spring Framework 7 routes {@code bodyToMono(JsonNode.class)} through the Jackson 3
+	 * reactive codec, which cannot bind to the Jackson 2 {@code com.fasterxml} node tree
+	 * this proxy is built on. Decode the raw text instead and parse it with the inspector's
+	 * own Jackson 2 {@link ObjectMapper} so the whole proxy stays on a single Jackson.
+	 * @param request the incoming request
+	 * @return the parsed body, or an empty {@link Mono} when the request has no body
+	 */
+	private Mono<JsonNode> readJsonBody(final ServerRequest request) {
+		return request.bodyToMono(String.class).flatMap((raw) -> Mono.fromCallable(() -> this.objectMapper.readTree(raw)));
+	}
+
 	public Mono<ServerResponse> fetch(final ServerRequest request) {
-		return request.bodyToMono(JsonNode.class)
+		return readJsonBody(request)
 			.flatMap((body) -> Mono.fromCallable(() -> doFetch(body))
 				.flatMap((envelope) -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(envelope))
 				.onErrorResume((ex) -> ServerResponse.status(502)
@@ -219,7 +234,7 @@ public class ProxyHandler {
 		if (session == null) {
 			return ServerResponse.notFound().build();
 		}
-		return request.bodyToMono(JsonNode.class).flatMap((body) -> {
+		return readJsonBody(request).flatMap((body) -> {
 			final Sinks.EmitResult er = session.browserToTarget().tryEmitNext(body);
 			if (er.isFailure()) {
 				return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -333,7 +348,7 @@ public class ProxyHandler {
 
 	public Mono<ServerResponse> postMcp(final ServerRequest request) {
 		final String mcpSessionId = request.headers().firstHeader(ProxyConstants.MCP_SESSION_ID_HEADER);
-		return request.bodyToMono(JsonNode.class)
+		return readJsonBody(request)
 			.flatMap((body) -> handlePostMcp(mcpSessionId, request.queryParam("url").orElse(null), body));
 	}
 

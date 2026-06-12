@@ -334,6 +334,21 @@ public class InspectorHandler {
 	 * @param request the incoming server request
 	 * @return a {@link Mono} emitting the completion result response
 	 */
+	/**
+	 * Reads the request body as a Jackson 2 {@link JsonNode}.
+	 *
+	 * <p>
+	 * Spring Framework 7 routes {@code bodyToMono(JsonNode.class)} through the Jackson 3
+	 * reactive codec, which cannot bind to the Jackson 2 {@code com.fasterxml} node tree
+	 * the inspector is built on. Decode the raw text and parse it with the inspector's own
+	 * Jackson 2 {@link ObjectMapper} instead.
+	 * @param request the incoming request
+	 * @return the parsed body, or an empty {@link Mono} when the request has no body
+	 */
+	private Mono<JsonNode> readJsonBody(final ServerRequest request) {
+		return request.bodyToMono(String.class).flatMap((raw) -> Mono.fromCallable(() -> this.objectMapper.readTree(raw)));
+	}
+
 	public Mono<ServerResponse> respond(final ServerRequest request) {
 		final String sessionId = resolveSessionId(request);
 		final String requestId = request.queryParam("requestId").orElse(null);
@@ -344,7 +359,7 @@ public class InspectorHandler {
 		if (requestId == null || requestId.isBlank()) {
 			return ServerResponse.badRequest().bodyValue(Map.of("error", "missing requestId"));
 		}
-		return request.bodyToMono(JsonNode.class)
+		return readJsonBody(request)
 			.defaultIfEmpty(this.objectMapper.createObjectNode())
 			.flatMap((body) -> {
 				final boolean completed;
