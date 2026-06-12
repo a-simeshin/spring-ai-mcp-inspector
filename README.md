@@ -115,6 +115,30 @@ spring:
 
 Inspector now lives at `/admin/inspector/`; the proxy is at `/admin/inspector-api`.
 
+### Proxy timeouts
+
+The proxy backend ships with upstream-compatible defaults. Override them under
+`spring.ai.mcp.inspector.timeouts` when an MCP server is unusually slow (or to fail
+fast). All values use Spring's relaxed `Duration` syntax — e.g. `30s`, `2m`, `500ms`.
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `spring.ai.mcp.inspector.timeouts.sse-session` | `30m` | Inactivity budget for a proxied SSE / streamable-HTTP browser session (servlet stack only). |
+| `spring.ai.mcp.inspector.timeouts.streamable-request` | `30s` | Per-request wait for a streamable-HTTP JSON-RPC response before returning `504`. |
+| `spring.ai.mcp.inspector.timeouts.fetch-connect` | `10s` | Connect timeout for the outbound `/fetch` HTTP client. |
+| `spring.ai.mcp.inspector.timeouts.fetch-request` | `30s` | Per-request timeout for outbound `/fetch` calls. |
+| `spring.ai.mcp.inspector.timeouts.server-request` | `120s` | How long a server→UI request (sampling / elicitation / roots) waits for the browser to answer. |
+
+```yaml
+spring:
+  ai:
+    mcp:
+      inspector:
+        timeouts:
+          streamable-request: 60s
+          server-request: 5m
+```
+
 ## Customizing the inspector bootstrap
 
 When the inspector serves `index.html` it injects a single inline

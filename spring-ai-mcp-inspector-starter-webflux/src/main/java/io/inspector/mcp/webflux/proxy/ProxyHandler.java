@@ -76,9 +76,6 @@ public class ProxyHandler {
 
 	private static final Logger LOG = LoggerFactory.getLogger(ProxyHandler.class);
 
-	/** Per-request wall-clock budget for awaiting an upstream JSON-RPC response. */
-	private static final Duration STREAMABLE_REQUEST_TIMEOUT = Duration.ofSeconds(30);
-
 	private final ProxySessionRegistry registry;
 
 	private final ProxyTransportFactory transportFactory;
@@ -91,9 +88,9 @@ public class ProxyHandler {
 
 	private final McpInspectorProperties properties;
 
-	private final HttpClient outboundHttpClient = HttpClient.newBuilder()
-		.connectTimeout(Duration.ofSeconds(10))
-		.build();
+	private final McpInspectorProperties.Timeouts timeouts;
+
+	private final HttpClient outboundHttpClient;
 
 	private final AtomicInteger listeningPort = new AtomicInteger(-1);
 
@@ -111,6 +108,8 @@ public class ProxyHandler {
 		this.transportDetector = transportDetector;
 		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
 		this.properties = properties;
+		this.timeouts = (properties != null) ? properties.getTimeouts() : new McpInspectorProperties.Timeouts();
+		this.outboundHttpClient = HttpClient.newBuilder().connectTimeout(this.timeouts.getFetchConnect()).build();
 	}
 
 	@EventListener
@@ -161,7 +160,7 @@ public class ProxyHandler {
 		final String reqBody = (init != null && init.hasNonNull("body")) ? init.get("body").asText("") : "";
 
 		final HttpRequest.Builder rb = HttpRequest.newBuilder(uri)
-			.timeout(Duration.ofSeconds(30))
+			.timeout(this.timeouts.getFetchRequest())
 			.method(method.toUpperCase(), reqBody.isEmpty() ? HttpRequest.BodyPublishers.noBody()
 					: HttpRequest.BodyPublishers.ofString(reqBody));
 		if (init != null && init.has("headers")) {
@@ -421,11 +420,12 @@ public class ProxyHandler {
 		}
 		// Pre-create the awaiter Mono first so the replay subscription registers
 		// (or has a buffer ready) before we push the request frame.
+		final Duration requestTimeout = this.timeouts.getStreamableRequest();
 		final Mono<JsonNode> awaiter = session.targetToBrowser()
 			.asFlux()
 			.filter((frame) -> matchesId(frame, idNode))
 			.next()
-			.timeout(STREAMABLE_REQUEST_TIMEOUT);
+			.timeout(requestTimeout);
 		final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
 		if (emitResult.isFailure()) {
 			return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -441,8 +441,7 @@ public class ProxyHandler {
 		}).onErrorResume((ex) -> {
 			LOG.warn("proxy[{}] await response failed: {}", session.sessionId(), ex.toString());
 			return ServerResponse.status(HttpStatus.GATEWAY_TIMEOUT)
-				.bodyValue(Map.of("error",
-						"upstream did not respond within " + STREAMABLE_REQUEST_TIMEOUT.toSeconds() + "s"));
+				.bodyValue(Map.of("error", "upstream did not respond within " + requestTimeout.toSeconds() + "s"));
 		});
 	}
 

@@ -77,9 +77,6 @@ public class SseProxyController {
 
 	private static final Logger LOG = LoggerFactory.getLogger(SseProxyController.class);
 
-	/** SSE inactivity timeout — generous because MCP servers may idle for minutes. */
-	private static final long SSE_TIMEOUT_MS = 30L * 60L * 1000L; // 30 minutes
-
 	private final ProxySessionRegistry registry;
 
 	private final ProxyTransportFactory transportFactory;
@@ -97,6 +94,10 @@ public class SseProxyController {
 		this.mcpProxy = mcpProxy;
 		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
 		this.properties = properties;
+	}
+
+	private McpInspectorProperties.Timeouts resolveTimeouts() {
+		return (this.properties != null) ? this.properties.getTimeouts() : new McpInspectorProperties.Timeouts();
 	}
 
 	/**
@@ -174,7 +175,7 @@ public class SseProxyController {
 	private SseEmitter openProxiedSession(final String transportType, final String url, final String command,
 			final String args, final String env) {
 		final String sessionId = UUID.randomUUID().toString();
-		final SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
+		final SseEmitter emitter = new SseEmitter(resolveTimeouts().getSseSession().toMillis());
 
 		final McpClientTransport target;
 		try {

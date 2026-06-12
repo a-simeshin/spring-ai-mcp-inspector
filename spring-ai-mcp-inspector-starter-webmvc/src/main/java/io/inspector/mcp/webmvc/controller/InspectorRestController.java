@@ -94,12 +94,6 @@ public class InspectorRestController {
 
 	static final int JSONRPC_INTERNAL_ERROR = -32603;
 
-	/**
-	 * Maximum time we block a transport thread waiting for the UI to answer a server
-	 * request.
-	 */
-	static final long SERVER_REQUEST_TIMEOUT_SECONDS = 120L;
-
 	private final McpInspectorProperties properties;
 
 	private final TransportDetector transportDetector;
@@ -498,14 +492,14 @@ public class InspectorRestController {
 		envelope.put("requestId", requestId);
 		envelope.set("params", this.objectMapper.valueToTree(params));
 		this.emitterRegistry.broadcast(sessionId, eventName, envelope);
+		final long timeoutSeconds = this.properties.getTimeouts().getServerRequest().toSeconds();
 		try {
-			final JsonNode reply = future.get(SERVER_REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+			final JsonNode reply = future.get(timeoutSeconds, TimeUnit.SECONDS);
 			return this.objectMapper.treeToValue(reply, resultType);
 		}
 		catch (final TimeoutException ex) {
 			pending.completeExceptionally(requestId, ex);
-			throw new RuntimeException(
-					"UI did not answer " + eventName + " within " + SERVER_REQUEST_TIMEOUT_SECONDS + "s", ex);
+			throw new RuntimeException("UI did not answer " + eventName + " within " + timeoutSeconds + "s", ex);
 		}
 		catch (final Exception ex) {
 			throw new RuntimeException(eventName + " failed: " + ex.getMessage(), ex);

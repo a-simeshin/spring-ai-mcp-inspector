@@ -91,12 +91,6 @@ public class InspectorHandler {
 
 	private static final String INDEX_RESOURCE = "mcp-inspector-bundle/index.html";
 
-	/**
-	 * Maximum time we block a transport thread waiting for the UI to answer a server
-	 * request.
-	 */
-	static final long SERVER_REQUEST_TIMEOUT_SECONDS = 120L;
-
 	private final TransportDetector transportDetector;
 
 	private final LoopbackMcpClientFactory loopbackFactory;
@@ -155,6 +149,10 @@ public class InspectorHandler {
 		this.properties = properties;
 		this.bootstrapAssembler = bootstrapAssembler;
 		this.bootstrapHtmlRenderer = bootstrapHtmlRenderer;
+	}
+
+	private McpInspectorProperties.Timeouts resolveTimeouts() {
+		return (this.properties != null) ? this.properties.getTimeouts() : new McpInspectorProperties.Timeouts();
 	}
 
 	@EventListener
@@ -549,14 +547,14 @@ public class InspectorHandler {
 		envelope.put("requestId", requestId);
 		envelope.set("params", this.objectMapper.valueToTree(params));
 		broadcast(ctx, eventName, envelope);
+		final long timeoutSeconds = resolveTimeouts().getServerRequest().toSeconds();
 		try {
-			final JsonNode reply = future.get(SERVER_REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+			final JsonNode reply = future.get(timeoutSeconds, TimeUnit.SECONDS);
 			return this.objectMapper.treeToValue(reply, resultType);
 		}
 		catch (final TimeoutException ex) {
 			pending.completeExceptionally(requestId, ex);
-			throw new RuntimeException(
-					"UI did not answer " + eventName + " within " + SERVER_REQUEST_TIMEOUT_SECONDS + "s", ex);
+			throw new RuntimeException("UI did not answer " + eventName + " within " + timeoutSeconds + "s", ex);
 		}
 		catch (final Exception ex) {
 			throw new RuntimeException(eventName + " failed: " + ex.getMessage(), ex);
