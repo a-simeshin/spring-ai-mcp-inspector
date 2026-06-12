@@ -28,9 +28,9 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
-        <spring-boot.version>3.5.14</spring-boot.version>
-        <spring-ai.version>1.1.7</spring-ai.version>
-        <mcp-sdk.version>0.18.2</mcp-sdk.version>
+        <spring-boot.version>3.5.15</spring-boot.version>
+        <spring-ai.version>1.1.8</spring-ai.version>
+        <mcp-sdk.version>0.18.3</mcp-sdk.version>
 
         <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>3.5.0</maven-surefire-plugin.version>
@@ -54,7 +54,7 @@
 
         <!-- Allure test reporting. allure.version: latest stable Allure 2.x (known-good
              recent release). aspectj.version MUST match the aspectjweaver version managed
-             by spring-boot-dependencies (3.5.14 → 1.9.25.1) so the -javaagent jar path on
+             by spring-boot-dependencies (3.5.15 → 1.9.25.1) so the -javaagent jar path on
              surefire/failsafe argLine resolves to a real jar in the local repository. -->
         <allure.version>2.29.1</allure.version>
         <aspectj.version>1.9.25.1</aspectj.version>
