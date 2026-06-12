@@ -1,0 +1,73 @@
+name: Release to Maven Central
+
+# Publishes all library modules (core, ui, both starters, parent) to Maven Central
+# via the Sonatype Central Portal. The demo module is excluded (maven.deploy.skip).
+#
+# Trigger by pushing a tag like `v1.0.0`, or run manually with an explicit version.
+# The job derives the release version from the tag (strips the leading `v`), stamps it
+# into every POM, then builds + signs + publishes under the `release` profile.
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions).
+# Names match the sibling spring-ai-ragas repo, so the same values can be reused:
+#   OSSRH_USERNAME   - Central Portal user token name    (Portal -> Account -> Generate token)
+#   OSSRH_TOKEN      - Central Portal user token secret
+#   GPG_PRIVATE_KEY  - ASCII-armored private key (gpg --armor --export-secret-keys <id>)
+#   GPG_PASSPHRASE   - passphrase for that key
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, e.g. 1.0.0'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build, sign and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17 + Maven settings + GPG
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          server-id: central
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - name: Resolve release version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing version $VERSION"
+
+      - name: Stamp release version into POMs
+        run: >-
+          ./mvnw -B -ntp versions:set
+          -DnewVersion=${{ steps.ver.outputs.version }}
+          -DprocessAllModules=true
+          -DgenerateBackupPoms=false
+
+      - name: Build, sign and publish to Central
+        env:
+          MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: ./mvnw -B -ntp -Prelease -DskipTests deploy

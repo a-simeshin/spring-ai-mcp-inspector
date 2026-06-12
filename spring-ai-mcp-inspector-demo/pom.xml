@@ -5,9 +5,9 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>io.github.inspector.mcp</groupId>
+        <groupId>io.github.a-simeshin</groupId>
         <artifactId>spring-ai-mcp-inspector-parent</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
+        <version>1.0.0-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -27,6 +27,12 @@
         <checkstyle.skip>true</checkstyle.skip>
         <!-- Example code, not a published artifact: SpotBugs gate off. -->
         <spotbugs.skip>true</spotbugs.skip>
+        <!-- Demo is example code: never deploy to Maven Central, and skip the
+             release-profile sources/javadoc/GPG work that would otherwise run on it. -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.source.skip>true</maven.source.skip>
+        <maven.javadoc.skip>true</maven.javadoc.skip>
+        <gpg.skip>true</gpg.skip>
     </properties>
 
     <dependencies>
@@ -86,7 +92,7 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>io.github.inspector.mcp</groupId>
+            <groupId>io.github.a-simeshin</groupId>
             <artifactId>spring-ai-mcp-inspector-starter-webflux</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
@@ -138,7 +144,7 @@
                     <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
                 </dependency>
                 <dependency>
-                    <groupId>io.github.inspector.mcp</groupId>
+                    <groupId>io.github.a-simeshin</groupId>
                     <artifactId>spring-ai-mcp-inspector-starter-webmvc</artifactId>
                     <version>${project.version}</version>
                 </dependency>
@@ -152,7 +158,7 @@
                     <artifactId>spring-ai-starter-mcp-server-webflux</artifactId>
                 </dependency>
                 <dependency>
-                    <groupId>io.github.inspector.mcp</groupId>
+                    <groupId>io.github.a-simeshin</groupId>
                     <artifactId>spring-ai-mcp-inspector-starter-webflux</artifactId>
                     <version>${project.version}</version>
                 </dependency>
@@ -195,7 +201,7 @@
                     <scope>test</scope>
                 </dependency>
                 <dependency>
-                    <groupId>io.github.inspector.mcp</groupId>
+                    <groupId>io.github.a-simeshin</groupId>
                     <artifactId>spring-ai-mcp-inspector-starter-webmvc</artifactId>
                     <version>${project.version}</version>
                     <scope>test</scope>
