@@ -42,6 +42,7 @@ The table below records the exact stack a given inspector release was verified w
 | `spring-ai-mcp-inspector` | Spring Boot | Spring AI | Java MCP SDK | Bundled MCP Inspector UI |
 |---------------------------|-------------|-----------|--------------|--------------------------|
 | `1.0.0`                   | `3.5.15`    | `1.1.8`   | `0.18.3`     | `0.21.2`                 |
+| `2.0.0`                   | `4.1.0`     | `2.0.0`   | `2.0.0`      | `0.22.0`                 |
 
 ## Quickstart
 

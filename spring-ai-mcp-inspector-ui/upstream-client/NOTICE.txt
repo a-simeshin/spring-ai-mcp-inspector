@@ -1,10 +1,10 @@
 This directory contains a vendored copy of modelcontextprotocol/inspector
 client (Apache License 2.0).
 Source: https://github.com/modelcontextprotocol/inspector
-Vendored version: 0.21.2
+Vendored version: 0.22.0
 Date: 2026-05-28
 
-Local patches against upstream v0.21.2
+Local patches against upstream v0.22.0
 ======================================
 
 1. vite.config.ts — `base: '/mcp-inspector/'` so the SPA is mountable
@@ -40,7 +40,7 @@ Local patches against upstream v0.21.2
    two adjacent JSX children (`MCP Inspector v{version}`). React produces
    one text node per child, so the upstream JSX rendered two sibling text
    nodes inside the `<h1>` and Selenide's `byText("MCP Inspector
-   v0.21.2")` (xpath `text()[…] = "…"`) could not match — see
+   v0.22.0")` (xpath `text()[…] = "…"`) could not match — see
    `BootstrapRegressionE2ETest`.
 
 4. src/App.tsx#readResource — fix stale right-pane after switching

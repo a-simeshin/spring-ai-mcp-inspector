@@ -63,7 +63,7 @@ import static com.codeborne.selenide.Selenide.open;
  * {@link DemoApplication} on a random port using the default Spring profile so the demo
  * MCP server (SSE) is available;</li>
  * <li>Selenide opens {@code http://localhost:${port}/mcp-inspector/} and waits for the
- * {@code MCP Inspector v0.21.2} heading (rendered by {@code Sidebar.tsx} once React
+ * {@code MCP Inspector v0.22.0} heading (rendered by {@code Sidebar.tsx} once React
  * mounts — proves the bootstrap global was read successfully);</li>
  * <li>Clicks {@code Connect}, waits for the Tools tab trigger to appear and clicks it
  * (proves the inspector proxy completed the SSE handshake against the in-process MCP
@@ -183,12 +183,12 @@ class BootstrapRegressionE2ETest {
 		// trailing-slash variant is a 302 to this URL anyway.
 		open("/mcp-inspector/index.html");
 
-		// (b) The "MCP Inspector v0.21.2" heading is rendered by Sidebar.tsx only
+		// (b) The "MCP Inspector v0.22.0" heading is rendered by Sidebar.tsx only
 		// AFTER React mounts and reads the bootstrap. If the bootstrap script
 		// had a syntax error (unescaped </script>, malformed JSON, missing
 		// window global), Sidebar.tsx wouldn't reach this point.
 		try {
-			$(byText("MCP Inspector v0.21.2")).shouldBe(visible, Duration.ofSeconds(30));
+			$(byText("MCP Inspector v0.22.0")).shouldBe(visible, Duration.ofSeconds(30));
 		}
 		catch (AssertionError e) {
 			dumpBrowserDiagnostics();

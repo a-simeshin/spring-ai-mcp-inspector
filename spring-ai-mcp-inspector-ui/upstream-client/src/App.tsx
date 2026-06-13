@@ -439,15 +439,27 @@ const App = () => {
     onElicitationRequest: (request, resolve) => {
       const currentTab = lastToolCallOriginTabRef.current;
 
+      const requestId = nextRequestId.current++;
+      const requestData =
+        request.params.mode === "url"
+          ? {
+              id: requestId,
+              mode: "url" as const,
+              message: request.params.message,
+              url: request.params.url,
+              elicitationId: request.params.elicitationId,
+            }
+          : {
+              id: requestId,
+              message: request.params.message,
+              requestedSchema: request.params.requestedSchema,
+            };
+
       setPendingElicitationRequests((prev) => [
         ...prev,
         {
-          id: nextRequestId.current++,
-          request: {
-            id: nextRequestId.current,
-            message: request.params.message,
-            requestedSchema: request.params.requestedSchema,
-          },
+          id: requestId,
+          request: requestData,
           originatingTab: currentTab,
           resolve,
           decline: (error: Error) => {
@@ -903,7 +915,7 @@ const App = () => {
   };
 
   const readResource = async (uri: string) => {
-    // Local patch (vs upstream v0.21.2):
+    // Local patch (vs upstream v0.22.0):
     // Original early-return on cache hit forgot to sync the singleton
     // `resourceContent` state that ResourcesTab renders in the right pane.
     // Result: after viewing a resource template, clicking back to a
