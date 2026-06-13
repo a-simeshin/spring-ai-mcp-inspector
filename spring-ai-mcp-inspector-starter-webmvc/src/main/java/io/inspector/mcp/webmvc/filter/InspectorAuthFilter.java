@@ -72,6 +72,13 @@ public class InspectorAuthFilter extends OncePerRequestFilter {
 			return;
 		}
 
+		// CORS preflight requests carry no credentials; let them pass so the CORS
+		// layer can answer the preflight instead of rejecting it with 401.
+		if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+			chain.doFilter(request, response);
+			return;
+		}
+
 		String presented = request.getHeader(AUTH_HEADER);
 		if (presented == null || presented.isBlank()) {
 			presented = request.getParameter(AUTH_QUERY_PARAM);

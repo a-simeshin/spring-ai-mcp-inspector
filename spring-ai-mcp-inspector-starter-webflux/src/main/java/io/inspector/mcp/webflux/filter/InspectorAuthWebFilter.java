@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 
 import org.springframework.core.Ordered;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
@@ -86,6 +87,11 @@ public class InspectorAuthWebFilter implements WebFilter, Ordered {
 		}
 		final String path = exchange.getRequest().getURI().getPath();
 		if (path == null || !path.startsWith(this.apiPrefix)) {
+			return chain.filter(exchange);
+		}
+		// CORS preflight requests carry no credentials; let them pass so the CORS
+		// layer can answer the preflight instead of rejecting it with 401.
+		if (exchange.getRequest().getMethod() == HttpMethod.OPTIONS) {
 			return chain.filter(exchange);
 		}
 

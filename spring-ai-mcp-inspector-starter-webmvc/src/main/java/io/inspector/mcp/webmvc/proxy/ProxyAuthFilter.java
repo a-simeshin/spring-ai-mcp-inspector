@@ -70,6 +70,13 @@ public class ProxyAuthFilter extends OncePerRequestFilter {
 			return;
 		}
 
+		// CORS preflight requests carry no credentials; let them pass so the CORS
+		// layer can answer the preflight instead of rejecting it with 401.
+		if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+			chain.doFilter(request, response);
+			return;
+		}
+
 		final String path = request.getRequestURI();
 		if (path != null && path.endsWith("/health")) {
 			chain.doFilter(request, response);

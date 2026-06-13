@@ -17,6 +17,8 @@
 package io.inspector.mcp.core.bootstrap;
 
 import java.io.IOException;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
@@ -65,9 +67,14 @@ public class BootstrapHtmlRenderer {
 		// Escape any "</" sequence (notably "</script>") so injected JSON cannot
 		// terminate the surrounding <script> element. The JS parser treats
 		// "<\/" as the same character sequence as "</" inside a string literal.
-		final String safeJson = json.replace("</", "<\\/");
+		// Additionally neutralise HTML comment delimiters ("<!--" / "-->") so a
+		// bootstrap value cannot break out of a comment or script context.
+		final String safeJson = json.replace("</", "<\\/").replace("<!--", "<\\!--").replace("-->", "--\\>");
 		final String scriptBlock = "<script>window.__MCP_INSPECTOR_BOOTSTRAP = " + safeJson + ";</script>";
-		return htmlTemplate.replace(PLACEHOLDER, scriptBlock);
+		// Replace only the FIRST placeholder occurrence: the served index.html may
+		// contain the literal placeholder a second time inside a documentation
+		// comment, and String.replace would inject the script (and auth token) twice.
+		return htmlTemplate.replaceFirst(Pattern.quote(PLACEHOLDER), Matcher.quoteReplacement(scriptBlock));
 	}
 
 }

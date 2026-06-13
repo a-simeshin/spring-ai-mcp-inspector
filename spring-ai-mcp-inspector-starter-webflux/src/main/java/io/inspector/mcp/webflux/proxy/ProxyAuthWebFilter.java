@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 
 import org.springframework.core.Ordered;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
@@ -86,6 +87,11 @@ public class ProxyAuthWebFilter implements WebFilter, Ordered {
 		}
 		// Health is intentionally open.
 		if (path.endsWith("/health")) {
+			return chain.filter(exchange);
+		}
+		// CORS preflight requests carry no credentials; let them pass so the CORS
+		// layer can answer the preflight instead of rejecting it with 401.
+		if (exchange.getRequest().getMethod() == HttpMethod.OPTIONS) {
 			return chain.filter(exchange);
 		}
 
