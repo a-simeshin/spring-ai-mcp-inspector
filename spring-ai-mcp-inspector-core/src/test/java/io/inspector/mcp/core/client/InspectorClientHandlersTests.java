@@ -47,7 +47,7 @@ class InspectorClientHandlersTests {
 		@Test
 		@Story("Empty handlers")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("none() returns a tuple with both sampling and elicitation callbacks unset")
+		@Description("none() returns a tuple with sampling, elicitation, and urlElicitation all unset")
 		void none_returnsTupleWithNoCallbacks() {
 			// when
 			final InspectorClientHandlers handlers = InspectorClientHandlers.none();
@@ -55,6 +55,7 @@ class InspectorClientHandlersTests {
 			// then
 			assertThat(handlers.sampling()).isNull();
 			assertThat(handlers.elicitation()).isNull();
+			assertThat(handlers.urlElicitation()).isNull();
 		}
 
 	}
@@ -82,7 +83,7 @@ class InspectorClientHandlersTests {
 				.model("test-model")
 				.build();
 			given(sampling.apply(request)).willReturn(result);
-			final InspectorClientHandlers handlers = new InspectorClientHandlers(sampling, null);
+			final InspectorClientHandlers handlers = new InspectorClientHandlers(sampling, null, null);
 
 			// when
 			final McpSchema.CreateMessageResult produced = handlers.sampling().apply(request);
@@ -114,7 +115,7 @@ class InspectorClientHandlersTests {
 				.content(java.util.Map.of("name", "value"))
 				.build();
 			given(elicitation.apply(any())).willReturn(result);
-			final InspectorClientHandlers handlers = new InspectorClientHandlers(null, elicitation);
+			final InspectorClientHandlers handlers = new InspectorClientHandlers(null, elicitation, null);
 
 			// when
 			final McpSchema.ElicitResult produced = handlers.elicitation().apply(request);
@@ -123,6 +124,38 @@ class InspectorClientHandlersTests {
 			assertThat(produced).isSameAs(result);
 			assertThat(produced.action()).isEqualTo(McpSchema.ElicitResult.Action.ACCEPT);
 			verify(elicitation).apply(request);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("urlElicitation()")
+	class UrlElicitation {
+
+		@Test
+		@Story("Dispatch")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("the urlElicitation handler is invoked with the url request and returns an ACCEPT result")
+		@SuppressWarnings("unchecked")
+		void urlElicitation_whenInvoked_dispatchesRequestAndShapesResult() {
+			// given
+			final Function<McpSchema.ElicitUrlRequest, McpSchema.ElicitResult> urlHandler = mock(Function.class);
+			final McpSchema.ElicitUrlRequest request = McpSchema.ElicitUrlRequest
+				.builder("open browser", "https://auth.example.com/consent", "elicit-99")
+				.build();
+			final McpSchema.ElicitResult result = McpSchema.ElicitResult.builder()
+				.message(McpSchema.ElicitResult.Action.ACCEPT)
+				.build();
+			given(urlHandler.apply(request)).willReturn(result);
+			final InspectorClientHandlers handlers = new InspectorClientHandlers(null, null, urlHandler);
+
+			// when
+			final McpSchema.ElicitResult produced = handlers.urlElicitation().apply(request);
+
+			// then
+			assertThat(produced).isSameAs(result);
+			assertThat(produced.action()).isEqualTo(McpSchema.ElicitResult.Action.ACCEPT);
+			verify(urlHandler).apply(request);
 		}
 
 	}

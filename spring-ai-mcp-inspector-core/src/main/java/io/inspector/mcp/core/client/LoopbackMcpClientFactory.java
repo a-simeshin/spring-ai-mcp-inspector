@@ -146,7 +146,9 @@ public class LoopbackMcpClientFactory {
 	}
 
 	/**
-	 * Wires sampling / elicitation handlers (if present) on the given client spec.
+	 * Wires sampling / elicitation handlers (if present) on the given client spec and
+	 * advertises the matching {@link McpSchema.ClientCapabilities} so the server knows
+	 * exactly which elicitation modes are supported.
 	 * @param spec the client spec to configure
 	 * @param handlers the handlers to apply; may be {@code null}
 	 * @return the same spec instance for chaining
@@ -158,15 +160,17 @@ public class LoopbackMcpClientFactory {
 		if (handlers.sampling() != null) {
 			spec = spec.sampling(handlers.sampling());
 		}
-		if (handlers.elicitation() != null) {
-			// SDK 2.0 split elicitation into form-mode and url-mode (SEP-1036). We
-			// intentionally register ONLY form-mode here: the bundled inspector UI does
-			// not implement url-mode elicitation, so advertising/accepting it would hand
-			// the server a client capability the UI cannot fulfill (the form would crash
-			// on an undefined requestedSchema). Wire url-mode (spec.urlElicitation(...))
-			// only once the UI supports it.
+		final boolean hasForm = handlers.elicitation() != null;
+		final boolean hasUrl = handlers.urlElicitation() != null;
+		if (hasForm) {
 			final Function<McpSchema.ElicitRequest, McpSchema.ElicitResult> elicitation = handlers.elicitation();
 			spec = spec.elicitation(elicitation::apply);
+		}
+		if (hasUrl) {
+			spec = spec.urlElicitation(handlers.urlElicitation()::apply);
+		}
+		if (hasForm || hasUrl) {
+			spec = spec.capabilities(McpSchema.ClientCapabilities.builder().elicitation(hasForm, hasUrl).build());
 		}
 		return spec;
 	}

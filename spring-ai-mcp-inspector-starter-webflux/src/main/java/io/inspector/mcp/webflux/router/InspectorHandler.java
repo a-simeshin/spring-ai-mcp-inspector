@@ -451,7 +451,8 @@ public class InspectorHandler {
 		final SessionContextHolder holder = new SessionContextHolder();
 		final InspectorClientHandlers handlers = new InspectorClientHandlers(
 				(req) -> handleSamplingRequest(sessionId, holder, req),
-				(req) -> handleElicitationRequest(sessionId, holder, req));
+				(req) -> handleElicitationRequest(sessionId, holder, req),
+				(req) -> handleUrlElicitationRequest(sessionId, holder, req));
 
 		final McpSyncClient client = (body != null && body.externalCommand() != null
 				&& !body.externalCommand().isBlank())
@@ -542,6 +543,19 @@ public class InspectorHandler {
 
 	private McpSchema.ElicitResult handleElicitationRequest(final String sessionId, final SessionContextHolder holder,
 			final McpSchema.ElicitRequest request) {
+		return awaitServerResponse(sessionId, holder, "mcp:elicitation-request", request, McpSchema.ElicitResult.class);
+	}
+
+	/**
+	 * Bridges a server-initiated url-mode {@code elicitation/create} request onto the SSE
+	 * stream and blocks until the UI POSTs back to the respond endpoint.
+	 * @param sessionId the inspector session identifier
+	 * @param holder the mutable forward-declaration of the session context
+	 * @param request the url elicitation request from the MCP server
+	 * @return the UI-supplied elicit result
+	 */
+	private McpSchema.ElicitResult handleUrlElicitationRequest(final String sessionId,
+			final SessionContextHolder holder, final McpSchema.ElicitUrlRequest request) {
 		return awaitServerResponse(sessionId, holder, "mcp:elicitation-request", request, McpSchema.ElicitResult.class);
 	}
 

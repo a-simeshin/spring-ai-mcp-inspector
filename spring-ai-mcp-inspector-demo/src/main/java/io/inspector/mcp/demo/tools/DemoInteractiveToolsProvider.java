@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -29,6 +30,7 @@ import io.modelcontextprotocol.spec.McpSchema.CreateMessageRequest;
 import io.modelcontextprotocol.spec.McpSchema.CreateMessageResult;
 import io.modelcontextprotocol.spec.McpSchema.ElicitRequest;
 import io.modelcontextprotocol.spec.McpSchema.ElicitResult;
+import io.modelcontextprotocol.spec.McpSchema.ElicitUrlRequest;
 import io.modelcontextprotocol.spec.McpSchema.ListRootsResult;
 import io.modelcontextprotocol.spec.McpSchema.Role;
 import io.modelcontextprotocol.spec.McpSchema.Root;
@@ -352,6 +354,48 @@ public class DemoInteractiveToolsProvider {
 			out.append("\n\nskipped roots:\n").append(String.join("\n", skipped));
 		}
 		return out.toString();
+	}
+
+	/**
+	 * Server-initiated url-mode elicitation. Asks the connected client to open the
+	 * supplied HTTPS URL in the user's browser and report back when the user accepts or
+	 * declines the navigation.
+	 *
+	 * <p>
+	 * Requires the client to advertise {@code elicitation.url} in its
+	 * {@link ClientCapabilities}. The URL must use the {@code https} scheme. No content
+	 * is read from the result (url-mode carries no form data).
+	 * @param exchange the per-call server exchange (auto-injected by mcp-annotations)
+	 * @param authUrl the HTTPS URL the user should visit to complete authorization
+	 * @return a status string describing the user's action or any error condition
+	 */
+	@McpTool(name = "authorizeViaUrl",
+			description = "Ask the connected client's user to visit an HTTPS URL via MCP url-mode elicitation")
+	public String authorizeViaUrl(McpSyncServerExchange exchange,
+			@McpToolParam(description = "the HTTPS URL the user should visit", required = true) String authUrl) {
+		if (exchange == null) {
+			return "authorizeViaUrl: no server exchange available (transport does not support server→client requests)";
+		}
+		ClientCapabilities caps = exchange.getClientCapabilities();
+		if (caps == null || caps.elicitation() == null || caps.elicitation().url() == null) {
+			return "authorizeViaUrl: client does not advertise url-mode elicitation capability";
+		}
+		if (authUrl == null || !authUrl.startsWith("https://")) {
+			return "authorizeViaUrl: authUrl must use the https scheme";
+		}
+		try {
+			ElicitUrlRequest request = ElicitUrlRequest
+				.builder("Authorize by visiting the provided URL", authUrl, UUID.randomUUID().toString())
+				.build();
+			ElicitResult r = exchange.createElicitation(request);
+			if (r.action() != ElicitResult.Action.ACCEPT) {
+				return "authorizeViaUrl: user " + r.action().name().toLowerCase();
+			}
+			return "authorizeViaUrl: user accepted and returned from " + authUrl;
+		}
+		catch (RuntimeException e) {
+			return "authorizeViaUrl: url elicitation request failed: " + e.getMessage();
+		}
 	}
 
 	@McpTool(name = "listMyRoots", description = "List the roots advertised by the connected client (roots/list)")

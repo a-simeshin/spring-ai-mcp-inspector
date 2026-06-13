@@ -2442,6 +2442,111 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
+	// S2. Elicitation tab — url-mode round-trip via authorizeViaUrl.
+	//
+	// Flow: trigger authorizeViaUrl(authUrl) from Tools, switch to
+	// elicitations tab, wait for [data-testid=elicitation-request], assert
+	// the elicitation message text is visible, assert the "Open URL" button
+	// is visible and not disabled (proves the https guard passed client-side),
+	// then click "Accept". Back in Tools the result must contain
+	// "user accepted".
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Elicitation tab (url-mode authorizeViaUrl)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class ElicitationUrlMode {
+
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("webmvc", "sse"));
+			openAndConnect();
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		/**
+		 * Triggers {@code authorizeViaUrl(authUrl)} from the Tools tab and returns
+		 * immediately — the upstream client fires the tool call asynchronously, so the
+		 * blocked call lives on the server until the elicitation card is resolved.
+		 *
+		 * <p>
+		 * The tool parameter name is {@code authUrl} (declared as
+		 * {@code @McpToolParam … String authUrl} in
+		 * {@link io.inspector.mcp.demo.tools.DemoInteractiveToolsProvider}); the Spring
+		 * AI MCP annotation scanner keeps the Java parameter name when
+		 * {@code -parameters} is enabled (see {@code <parameters>true</parameters>} in
+		 * the parent POM). DynamicJsonForm therefore renders the input as
+		 * {@code <input id="authUrl">}.
+		 */
+		private void fireAuthorizeViaUrl(final String authUrl) {
+			clickTab("tools");
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			selectRow("authorizeViaUrl");
+			// DynamicJsonForm renders the single string property as <input id="authUrl">.
+			$("#authUrl").shouldBe(visible).setValue(authUrl);
+			activePanel().$(byText("Run Tool")).click();
+		}
+
+		@Test
+		@Story("Elicitation url-mode accept")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Accepting a url-mode elicitation request unblocks authorizeViaUrl and the tool returns 'user accepted'.")
+		@DisplayName("urlModeElicitation_accept_toolReturnsUserAccepted — Open URL button visible, click Accept, tool returns 'user accepted'")
+		void elicitationUrlMode_accept_toolReturnsUserAccepted() {
+			// given
+			// Fire the tool — the server side blocks on
+			// exchange.createElicitation(ElicitUrlRequest).
+			fireAuthorizeViaUrl("https://oauth.example.com/authorize?code=demo");
+
+			// when
+			// Switch to the Elicitations tab — the pending url-mode request renders
+			// there.
+			clickTab("elicitations");
+			SelenideElement card = $("[data-testid=elicitation-request]").shouldBe(visible, Duration.ofSeconds(20));
+
+			// Assert the elicitation message text is present in the card. The tool passes
+			// "Authorize by visiting the provided URL" as the ElicitUrlRequest message
+			// (see DemoInteractiveToolsProvider.authorizeViaUrl). The upstream
+			// ElicitationTab renders this as the card's descriptive text.
+			card.shouldHave(text("Authorize by visiting the provided URL"), Duration.ofSeconds(5));
+
+			// Assert the "Open URL" button is visible and NOT disabled. The upstream
+			// ElicitationTab renders a button that calls window.open(url) only when the
+			// URL passes the https guard (url starts with "https://"). The button must
+			// exist and be enabled to prove the guard is satisfied.
+			//
+			// We intentionally do NOT click "Open URL" here: window.open() in headless
+			// Chrome spawns an uncontrollable blank tab that Selenide has no handle for
+			// (Selenium can only switch to windows it opened itself), and the new tab
+			// immediately navigates to oauth.example.com which is an external hostname
+			// that is not available in the test environment. Clicking would cause the
+			// test
+			// to hang on the blank tab or trigger an unhandled window switch.
+			SelenideElement openUrlButton = card.$(byText("Open URL"));
+			openUrlButton.shouldBe(visible);
+			openUrlButton.shouldBe(Condition.enabled);
+
+			// Click "Accept" to resolve the url-mode elicitation (no form data is
+			// returned by url-mode requests — the action alone unblocks the server call).
+			card.$(byText("Accept")).click();
+
+			// then
+			// Back to the Tools tab — authorizeViaUrl returns
+			// "authorizeViaUrl: user accepted and returned from <url>" on ACCEPT.
+			clickTab("tools");
+			activePanel().shouldHave(text("user accepted"), Duration.ofSeconds(20));
+		}
+
+	}
+
+	// =====================================================================
 	// T. Roots tab — client-advertised roots queryable via listMyRoots.
 	//
 	// The Roots tab renders an "Add Root" button + per-row URI input + Save

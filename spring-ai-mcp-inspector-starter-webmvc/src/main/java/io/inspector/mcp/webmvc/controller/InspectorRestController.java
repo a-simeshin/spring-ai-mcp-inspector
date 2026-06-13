@@ -148,7 +148,8 @@ public class InspectorRestController {
 		final SessionStateHolder holder = new SessionStateHolder();
 		final InspectorClientHandlers handlers = new InspectorClientHandlers(
 				(req) -> handleSamplingRequest(sessionId, holder, req),
-				(req) -> handleElicitationRequest(sessionId, holder, req));
+				(req) -> handleElicitationRequest(sessionId, holder, req),
+				(req) -> handleUrlElicitationRequest(sessionId, holder, req));
 
 		final McpSyncClient client;
 		try {
@@ -471,6 +472,19 @@ public class InspectorRestController {
 	 */
 	private McpSchema.ElicitResult handleElicitationRequest(final String sessionId, final SessionStateHolder holder,
 			final McpSchema.ElicitRequest request) {
+		return awaitServerResponse(sessionId, holder, "mcp:elicitation-request", request, McpSchema.ElicitResult.class);
+	}
+
+	/**
+	 * Bridges a server-initiated url-mode {@code elicitation/create} request onto the SSE
+	 * stream and blocks until the UI POSTs back to {@code /jsonrpc/respond}.
+	 * @param sessionId the inspector session identifier
+	 * @param holder the mutable forward-declaration of the session state
+	 * @param request the url elicitation request from the MCP server
+	 * @return the UI-supplied elicit result
+	 */
+	private McpSchema.ElicitResult handleUrlElicitationRequest(final String sessionId, final SessionStateHolder holder,
+			final McpSchema.ElicitUrlRequest request) {
 		return awaitServerResponse(sessionId, holder, "mcp:elicitation-request", request, McpSchema.ElicitResult.class);
 	}
 

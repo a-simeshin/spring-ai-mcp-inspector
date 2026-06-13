@@ -144,7 +144,8 @@ class LoopbackMcpClientFactoryTests {
 	@DisplayName("inspector client handlers")
 	class WithHandlers {
 
-		private static final InspectorClientHandlers BOTH = new InspectorClientHandlers((req) -> null, (req) -> null);
+		private static final InspectorClientHandlers BOTH = new InspectorClientHandlers((req) -> null, (req) -> null,
+				null);
 
 		@Test
 		@Story("Wire SSE handlers")
@@ -194,7 +195,7 @@ class LoopbackMcpClientFactoryTests {
 		@Description("forStreamable() wires only the sampling handler when elicitation is absent")
 		void forStreamable_withSamplingOnly_buildsClient() {
 			// given
-			final InspectorClientHandlers samplingOnly = new InspectorClientHandlers((req) -> null, null);
+			final InspectorClientHandlers samplingOnly = new InspectorClientHandlers((req) -> null, null, null);
 
 			// when
 			final McpSyncClient client = LoopbackMcpClientFactoryTests.this.factory.forStreamable("localhost", 8080,
@@ -216,6 +217,83 @@ class LoopbackMcpClientFactoryTests {
 
 			// then
 			assertThat(client).isNotNull();
+			closeQuietly(client);
+		}
+
+	}
+
+	/**
+	 * Branch-matrix tests for {@code applyHandlers}: exercises the
+	 * {@code if(hasForm)/if(hasUrl)/if(hasForm||hasUrl)} conditional paths so the new
+	 * url-mode conditionals achieve the required line/branch coverage gate.
+	 */
+	@Nested
+	@DisplayName("applyHandlers branch matrix")
+	class ApplyHandlersBranchMatrix {
+
+		@Test
+		@Story("Form-only elicitation branch")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("applyHandlers enters only the hasForm branch when form handler is set and url handler is null")
+		void formOnly_buildsClientAndAdvertisesFormCapability() {
+			// given – form handler wired, url handler absent
+			final InspectorClientHandlers formOnly = new InspectorClientHandlers(null, (req) -> null, null);
+
+			// when
+			final McpSyncClient client = LoopbackMcpClientFactoryTests.this.factory.forStreamable("localhost", 8080,
+					"/mcp", formOnly);
+
+			// then – client builds without error (branch: hasForm=true, hasUrl=false)
+			assertThat(client).isNotNull();
+			final io.modelcontextprotocol.spec.McpSchema.ClientCapabilities caps = client.getClientCapabilities();
+			assertThat(caps).isNotNull();
+			assertThat(caps.elicitation()).isNotNull();
+			assertThat(caps.elicitation().form()).isNotNull();
+			assertThat(caps.elicitation().url()).isNull();
+			closeQuietly(client);
+		}
+
+		@Test
+		@Story("Url-only elicitation branch")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("applyHandlers enters only the hasUrl branch when url handler is set and form handler is null")
+		void urlOnly_buildsClientAndAdvertisesUrlCapability() {
+			// given – url handler wired, form handler absent
+			final InspectorClientHandlers urlOnly = new InspectorClientHandlers(null, null, (req) -> null);
+
+			// when
+			final McpSyncClient client = LoopbackMcpClientFactoryTests.this.factory.forStreamable("localhost", 8080,
+					"/mcp", urlOnly);
+
+			// then – client builds without error (branch: hasForm=false, hasUrl=true)
+			assertThat(client).isNotNull();
+			final io.modelcontextprotocol.spec.McpSchema.ClientCapabilities caps = client.getClientCapabilities();
+			assertThat(caps).isNotNull();
+			assertThat(caps.elicitation()).isNotNull();
+			assertThat(caps.elicitation().url()).isNotNull();
+			assertThat(caps.elicitation().form()).isNull();
+			closeQuietly(client);
+		}
+
+		@Test
+		@Story("Form+url elicitation branch")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("applyHandlers enters both hasForm and hasUrl branches when both handlers are set")
+		void formAndUrl_buildsClientAndAdvertisesBothCapabilities() {
+			// given – both handlers wired
+			final InspectorClientHandlers both = new InspectorClientHandlers(null, (req) -> null, (req) -> null);
+
+			// when
+			final McpSyncClient client = LoopbackMcpClientFactoryTests.this.factory.forStreamable("localhost", 8080,
+					"/mcp", both);
+
+			// then – client builds without error (branch: hasForm=true, hasUrl=true)
+			assertThat(client).isNotNull();
+			final io.modelcontextprotocol.spec.McpSchema.ClientCapabilities caps = client.getClientCapabilities();
+			assertThat(caps).isNotNull();
+			assertThat(caps.elicitation()).isNotNull();
+			assertThat(caps.elicitation().form()).isNotNull();
+			assertThat(caps.elicitation().url()).isNotNull();
 			closeQuietly(client);
 		}
 

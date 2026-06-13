@@ -31,14 +31,18 @@ import io.modelcontextprotocol.spec.McpSchema;
  *
  * @param sampling handler for {@code sampling/createMessage} requests; may be
  * {@code null}
- * @param elicitation handler for {@code elicitation/create} requests; may be {@code null}
+ * @param elicitation handler for form-mode {@code elicitation/create} requests; may be
+ * {@code null}
+ * @param urlElicitation handler for url-mode {@code elicitation/create} requests; may be
+ * {@code null}
  * @author Artem Simeshin
  */
 public record InspectorClientHandlers(Function<McpSchema.CreateMessageRequest, McpSchema.CreateMessageResult> sampling,
-		Function<McpSchema.ElicitRequest, McpSchema.ElicitResult> elicitation) {
+		Function<McpSchema.ElicitRequest, McpSchema.ElicitResult> elicitation,
+		Function<McpSchema.ElicitUrlRequest, McpSchema.ElicitResult> urlElicitation) {
 
 	/** Returns a handlers tuple with no callbacks registered. */
 	public static InspectorClientHandlers none() {
-		return new InspectorClientHandlers(null, null);
+		return new InspectorClientHandlers(null, null, null);
 	}
 }
