@@ -14,7 +14,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
@@ -29,7 +28,6 @@ import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
-
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,6 +36,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.TestPropertySource;
+
+import io.inspector.mcp.demo.DemoApplication;
 
 import static io.inspector.mcp.demo.stress.StressTestSupport.WEBMVC_EXCLUDES;
 import static io.inspector.mcp.demo.stress.StressTestSupport.quietClose;
@@ -59,8 +59,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * builder seam.
  */
 @SpringBootTest(classes = DemoApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@TestPropertySource(properties = { "spring.ai.mcp.server.protocol=STREAMABLE",
-		"spring.ai.mcp.inspector.auth-enabled=false", "spring.autoconfigure.exclude=" + WEBMVC_EXCLUDES })
+@TestPropertySource(
+		properties = { "spring.ai.mcp.server.protocol=STREAMABLE", "spring.ai.mcp.inspector.auth-enabled=false",
+				"spring.main.web-application-type=servlet", "spring.autoconfigure.exclude=" + WEBMVC_EXCLUDES })
 @Epic("Stress & Scale")
 @Feature("Logging notifications")
 class LoggingNotificationsIT {

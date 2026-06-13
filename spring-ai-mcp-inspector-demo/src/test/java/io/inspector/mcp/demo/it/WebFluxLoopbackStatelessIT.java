@@ -11,11 +11,8 @@ package io.inspector.mcp.demo.it;
 
 import java.util.List;
 
-import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
-import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.ListToolsResult;
-
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -28,6 +25,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.TestPropertySource;
+
+import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
+import io.inspector.mcp.demo.DemoApplication;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -42,9 +42,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 @TestPropertySource(properties = { "spring.main.web-application-type=reactive",
 		"spring.ai.mcp.server.protocol=STATELESS", "spring.ai.mcp.inspector.auth-enabled=false",
 		"spring.autoconfigure.exclude="
-				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerSseWebMvcAutoConfiguration,"
-				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebMvcAutoConfiguration,"
-				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebMvcAutoConfiguration,"
+				+ "org.springframework.ai.mcp.server.webmvc.autoconfigure.McpServerSseWebMvcAutoConfiguration,"
+				+ "org.springframework.ai.mcp.server.webmvc.autoconfigure.McpServerStreamableHttpWebMvcAutoConfiguration,"
+				+ "org.springframework.ai.mcp.server.webmvc.autoconfigure.McpServerStatelessWebMvcAutoConfiguration,"
 				+ "io.inspector.mcp.webmvc.McpInspectorWebMvcAutoConfiguration" })
 @Epic("MCP Transports")
 @Feature("Loopback Stateless (WebFlux)")

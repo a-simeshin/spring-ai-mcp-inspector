@@ -27,8 +27,8 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import tools.jackson.databind.json.JsonMapper;
 import org.springframework.util.Assert;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Lightweight OAuth 2.0 authorization-code client backed by {@link HttpClient}.

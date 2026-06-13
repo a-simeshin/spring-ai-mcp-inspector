@@ -12,8 +12,6 @@ package io.inspector.mcp.demo.stress;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
-import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
@@ -22,13 +20,15 @@ import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
-
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.TestPropertySource;
+
+import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
+import io.inspector.mcp.demo.DemoApplication;
 
 import static io.inspector.mcp.demo.stress.StressTestSupport.WEBMVC_EXCLUDES;
 

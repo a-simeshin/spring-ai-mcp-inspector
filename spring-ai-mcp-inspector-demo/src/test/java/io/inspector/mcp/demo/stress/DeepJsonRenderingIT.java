@@ -12,11 +12,6 @@ package io.inspector.mcp.demo.stress;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.json.JsonMapper;
-
-import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
-import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
@@ -26,7 +21,6 @@ import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
-
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -35,6 +29,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.TestPropertySource;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+
+import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
+import io.inspector.mcp.demo.DemoApplication;
 
 import static io.inspector.mcp.demo.stress.StressTestSupport.WEBMVC_EXCLUDES;
 import static io.inspector.mcp.demo.stress.StressTestSupport.quietClose;
@@ -87,42 +86,28 @@ class DeepJsonRenderingIT {
 	@DisplayName("deepJson returns a parseable nested object")
 	void deepJson_overProxy_returnsParseableNestedObject() throws Exception {
 		// given
-		// BACKEND BUG (see run report): the `int depth` parameter of `deepJson`
-		// cannot be bound (demo compiled without -parameters → mcp-annotations
-		// 0.9 falls back to `arg0`/`arg1` argument names that never match
-		// user-supplied JSON keys). Passing primitive int triggers an NPE on
-		// server-side method invocation. Workaround: invoke with no arguments
-		// and accept whatever default depth the binder happens to produce; the
-		// proxy-wire question is "is the resulting JSON well-formed and
-		// parseable?", which is still answered.
+		// MCP SDK 2.0 enforces tool-input JSON-schema validation: `deepJson`
+		// declares `int depth` as @McpToolParam(required=true), so the request
+		// must supply it. Send the full expected depth so the recursive
+		// JsonView renderer produces a 50-level-nested object, then assert the
+		// tree round-trips over the proxy well-formed and at the expected depth.
 		Map<String, Object> args = new LinkedHashMap<>();
-		// Empty arguments — see comment above. With the binding bug, server-side
-		// int param will produce an NPE; we tolerate isError=true and only
-		// assert wire well-formedness.
+		args.put("depth", EXPECTED_DEPTH);
 
 		// when
 		CallToolResult result = client.callTool(StressTestSupport.buildRequest("deepJson", args));
 
 		// then
-		if (Boolean.TRUE.equals(result.isError())) {
-			// Document, do not fail: this is the -parameters bug surface.
-			// The TextContent body still arrives intact — which is what the
-			// big-data wire test cares about.
-			assertThat(result.content()).as("error result still contains content").isNotEmpty();
-			return;
-		}
+		assertThat(result.isError()).as("deepJson(depth=50) must succeed").isNotEqualTo(Boolean.TRUE);
 
 		JsonNode root = resolveTree(result);
 		assertThat(root).as("deepJson must yield a JSON object").isNotNull();
 		assertThat(root.isObject() || root.isArray() || root.isValueNode())
 			.as("deepJson returned a parseable JSON tree")
 			.isTrue();
-		// When the (binding-bug-affected) default executes, depth=1; assert at
-		// least one level of structure so we still catch wire truncation.
-		if (root.isObject()) {
-			assertThat(measureDepth(root)).as("nesting depth ≥ 1 (50 is unreachable until -parameters lands)")
-				.isGreaterThanOrEqualTo(1);
-		}
+		// The provider nests `depth` levels along the "a" chain — verify the
+		// full tree survived the proxy wire intact (catches truncation).
+		assertThat(measureDepth(root)).as("deepJson must round-trip the full nesting depth").isEqualTo(EXPECTED_DEPTH);
 	}
 
 	/**

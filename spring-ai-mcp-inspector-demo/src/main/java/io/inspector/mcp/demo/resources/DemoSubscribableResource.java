@@ -14,7 +14,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.server.McpSyncServer;
 import io.modelcontextprotocol.spec.McpSchema.ResourcesUpdatedNotification;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.mcp.annotation.McpResource;

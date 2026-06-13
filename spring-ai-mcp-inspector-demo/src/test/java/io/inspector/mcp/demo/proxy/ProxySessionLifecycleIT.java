@@ -19,10 +19,6 @@ import java.time.Duration;
 import java.util.HashSet;
 import java.util.Set;
 
-import tools.jackson.databind.json.JsonMapper;
-import tools.jackson.databind.node.ObjectNode;
-
-import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -34,6 +30,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.context.ConfigurableApplicationContext;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
+
+import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

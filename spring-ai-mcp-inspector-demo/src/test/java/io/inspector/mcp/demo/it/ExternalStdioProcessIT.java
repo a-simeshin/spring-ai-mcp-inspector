@@ -15,12 +15,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-// Uses io.modelcontextprotocol.client.transport.StdioClientTransport via ExternalStdioClientFactory
-import io.inspector.mcp.core.client.ExternalStdioClientFactory;
-import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.ListToolsResult;
-
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -29,6 +25,9 @@ import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+
+import io.inspector.mcp.core.client.ExternalStdioClientFactory;
+import io.inspector.mcp.demo.DemoApplication;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

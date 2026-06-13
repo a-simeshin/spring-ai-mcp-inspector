@@ -9,12 +9,12 @@
  */
 package io.inspector.mcp.demo.proxy;
 
-import io.inspector.mcp.demo.DemoApplication;
-
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
+
+import io.inspector.mcp.demo.DemoApplication;
 
 /**
  * Boots a fresh {@link DemoApplication} on a random port for the proxy-level integration
@@ -68,16 +68,16 @@ final class ProxyAppHarness {
 		String exclude;
 		if (reactive) {
 			exclude = String.join(",",
-					"org.springframework.ai.mcp.server.autoconfigure.McpServerSseWebMvcAutoConfiguration",
-					"org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebMvcAutoConfiguration",
-					"org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebMvcAutoConfiguration",
+					"org.springframework.ai.mcp.server.webmvc.autoconfigure.McpServerSseWebMvcAutoConfiguration",
+					"org.springframework.ai.mcp.server.webmvc.autoconfigure.McpServerStreamableHttpWebMvcAutoConfiguration",
+					"org.springframework.ai.mcp.server.webmvc.autoconfigure.McpServerStatelessWebMvcAutoConfiguration",
 					"io.inspector.mcp.webmvc.McpInspectorWebMvcAutoConfiguration");
 		}
 		else {
 			exclude = String.join(",",
-					"org.springframework.ai.mcp.server.autoconfigure.McpServerSseWebFluxAutoConfiguration",
-					"org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration",
-					"org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebFluxAutoConfiguration",
+					"org.springframework.ai.mcp.server.webflux.autoconfigure.McpServerSseWebFluxAutoConfiguration",
+					"org.springframework.ai.mcp.server.webflux.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration",
+					"org.springframework.ai.mcp.server.webflux.autoconfigure.McpServerStatelessWebFluxAutoConfiguration",
 					"io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration");
 		}
 

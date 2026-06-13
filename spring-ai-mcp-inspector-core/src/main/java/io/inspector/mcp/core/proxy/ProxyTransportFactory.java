@@ -20,7 +20,6 @@ import java.net.URI;
 import java.util.List;
 import java.util.Map;
 
-import tools.jackson.databind.json.JsonMapper;
 import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
 import io.modelcontextprotocol.client.transport.ServerParameters;
@@ -28,6 +27,7 @@ import io.modelcontextprotocol.client.transport.SseMessageEndpointValidator;
 import io.modelcontextprotocol.client.transport.StdioClientTransport;
 import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Builds <strong>bare</strong> {@link McpClientTransport} instances that the proxy

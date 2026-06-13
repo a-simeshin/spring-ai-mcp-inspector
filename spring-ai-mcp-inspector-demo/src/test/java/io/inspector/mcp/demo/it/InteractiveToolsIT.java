@@ -13,7 +13,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
-import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
@@ -40,6 +39,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.TestPropertySource;
 
+import io.inspector.mcp.demo.DemoApplication;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -57,9 +58,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 @TestPropertySource(properties = { "spring.ai.mcp.server.protocol=STREAMABLE",
 		"spring.ai.mcp.inspector.auth-enabled=false",
 		"spring.autoconfigure.exclude="
-				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerSseWebFluxAutoConfiguration,"
-				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration,"
-				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebFluxAutoConfiguration,"
+				+ "org.springframework.ai.mcp.server.webflux.autoconfigure.McpServerSseWebFluxAutoConfiguration,"
+				+ "org.springframework.ai.mcp.server.webflux.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration,"
+				+ "org.springframework.ai.mcp.server.webflux.autoconfigure.McpServerStatelessWebFluxAutoConfiguration,"
 				+ "io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration" })
 @Epic("MCP Interactive Tools")
 @Feature("Sampling, elicitation and roots")

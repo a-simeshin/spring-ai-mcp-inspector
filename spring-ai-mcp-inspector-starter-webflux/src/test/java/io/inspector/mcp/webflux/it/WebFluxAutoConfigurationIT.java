@@ -25,6 +25,7 @@ import io.qameta.allure.Story;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webtestclient.autoconfigure.AutoConfigureWebTestClient;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
@@ -41,6 +42,7 @@ import org.springframework.test.web.reactive.server.WebTestClient;
  */
 @Epic("MCP Inspector WebFlux")
 @Feature("WebFlux auto-configuration (integration)")
+@AutoConfigureWebTestClient
 @SpringBootTest(classes = TestMcpServerApp.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = { "spring.main.web-application-type=reactive", "spring.ai.mcp.server.protocol=SSE",
 		"spring.ai.mcp.server.name=mcp-inspector-itest-flux", "spring.ai.mcp.server.version=0.1.0",

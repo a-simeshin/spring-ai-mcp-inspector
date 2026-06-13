@@ -9,12 +9,11 @@
  */
 package io.inspector.mcp.demo.resources;
 
+import java.util.List;
+
 import io.modelcontextprotocol.spec.McpSchema.BlobResourceContents;
 import io.modelcontextprotocol.spec.McpSchema.ReadResourceResult;
 import io.modelcontextprotocol.spec.McpSchema.ResourceContents;
-
-import java.util.List;
-
 import org.springframework.ai.mcp.annotation.McpResource;
 import org.springframework.stereotype.Component;
 

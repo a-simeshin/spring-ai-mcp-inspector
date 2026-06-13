@@ -12,13 +12,13 @@ package io.inspector.mcp.demo.stress;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import tools.jackson.databind.json.JsonMapper;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.Content;
 import io.modelcontextprotocol.spec.McpSchema.TextContent;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Shared helpers for the {@code *IT.java} stress / big-data integration tests under
@@ -41,9 +41,9 @@ final class StressTestSupport {
 	 * so it can be referenced from {@code @TestPropertySource} annotation values, which
 	 * require constant expressions.
 	 */
-	static final String WEBMVC_EXCLUDES = "org.springframework.ai.mcp.server.autoconfigure.McpServerSseWebFluxAutoConfiguration,"
-			+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration,"
-			+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebFluxAutoConfiguration,"
+	static final String WEBMVC_EXCLUDES = "org.springframework.ai.mcp.server.webflux.autoconfigure.McpServerSseWebFluxAutoConfiguration,"
+			+ "org.springframework.ai.mcp.server.webflux.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration,"
+			+ "org.springframework.ai.mcp.server.webflux.autoconfigure.McpServerStatelessWebFluxAutoConfiguration,"
 			+ "io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration";
 
 	/**

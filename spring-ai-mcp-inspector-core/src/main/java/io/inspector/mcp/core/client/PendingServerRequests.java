@@ -20,8 +20,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-import tools.jackson.databind.JsonNode;
 import org.springframework.util.Assert;
+import tools.jackson.databind.JsonNode;
 
 /**
  * Per-session registry of MCP server-to-client requests (e.g.

@@ -20,8 +20,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
-import io.inspector.mcp.demo.DemoApplication;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -29,7 +27,6 @@ import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
-
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -38,6 +35,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.TestPropertySource;
+
+import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
+import io.inspector.mcp.demo.DemoApplication;
 
 import static io.inspector.mcp.demo.stress.StressTestSupport.WEBMVC_EXCLUDES;
 import static io.inspector.mcp.demo.stress.StressTestSupport.callToolText;
@@ -98,12 +98,8 @@ class ConcurrentToolCallsIT {
 	@DisplayName("100 concurrent calls all succeed within budget")
 	void hundredConcurrentCalls_onSameSession_allSucceed() throws Exception {
 		// given
-		// BACKEND BUG (see run report): the demo is compiled without -parameters,
-		// so mcp-annotations 0.9 cannot bind any `{@McpToolParam}`-annotated
-		// method parameter from the JSON-RPC arguments map — every parameter
-		// arrives as null on the server. We therefore drive concurrency through
-		// `currentTime` (zero-arg) which exercises the same proxy-session
-		// serialization, just without parameter binding.
+		// Drive concurrency through `currentTime` (zero-arg) which exercises the
+		// proxy-session serialization without needing any tool input arguments.
 		ExecutorService pool = Executors.newFixedThreadPool(20);
 		try {
 			AtomicInteger errors = new AtomicInteger();
@@ -151,11 +147,10 @@ class ConcurrentToolCallsIT {
 	@DisplayName("10 concurrent slow echoes run in parallel")
 	void tenConcurrentSlowEchoes_onSameSession_runInParallel() throws Exception {
 		// given
-		// BACKEND BUG (see run report): slowEcho's `text` arg cannot be bound
-		// (no -parameters compile flag → mcp-annotations fallback). Without
-		// binding, slowEcho still sleeps 2s server-side then returns "null".
-		// That's enough to prove the proxy session does not serialize calls —
-		// 10 × 2s slow tools in parallel must finish in <6s (vs 20s sequential).
+		// slowEcho requires a non-null `text` arg (MCP SDK 2.0 enforces tool
+		// input schema validation server-side). Each call sleeps ~2s and echoes
+		// the text back. Running 10 in parallel on one session must finish in
+		// <6s (vs the 20s sequential baseline) to prove calls are not serialized.
 		ExecutorService pool = Executors.newFixedThreadPool(10);
 		try {
 			List<CompletableFuture<String>> futures = new ArrayList<>(10);
@@ -163,7 +158,9 @@ class ConcurrentToolCallsIT {
 			// when
 			Instant t0 = Instant.now();
 			for (int i = 0; i < 10; i++) {
-				futures.add(CompletableFuture.supplyAsync(() -> callToolText(client, "slowEcho", Map.of()), pool));
+				int idx = i;
+				futures.add(CompletableFuture
+					.supplyAsync(() -> callToolText(client, "slowEcho", Map.of("text", "echo-" + idx)), pool));
 			}
 			CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
 				.get(TEN_SLOW_ECHO_BUDGET.plusSeconds(2).toSeconds(), TimeUnit.SECONDS);
@@ -173,10 +170,10 @@ class ConcurrentToolCallsIT {
 			assertThat(elapsed)
 				.as("10 × slowEcho must finish in <6s — sequential 20s baseline would prove the proxy serializes")
 				.isLessThanOrEqualTo(TEN_SLOW_ECHO_BUDGET);
-			// Wall-clock parallelism is the assertion. Each call returns "null"
-			// due to the -parameters bug; we still assert non-null result objects.
+			// Wall-clock parallelism is the primary assertion; each call also
+			// echoes its text back, so the result must be non-empty.
 			for (var f : futures) {
-				assertThat(f.join()).isNotNull();
+				assertThat(f.join()).isNotBlank();
 			}
 		}
 		finally {

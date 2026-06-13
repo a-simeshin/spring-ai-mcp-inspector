@@ -16,7 +16,6 @@
 
 package io.inspector.mcp.core.proxy;
 
-import tools.jackson.databind.JsonNode;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -29,6 +28,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import tools.jackson.databind.JsonNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.BDDMockito.given;

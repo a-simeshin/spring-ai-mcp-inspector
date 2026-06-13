@@ -17,17 +17,12 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Base64;
 
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.json.JsonMapper;
-
-import io.inspector.mcp.demo.DemoApplication;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
-
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -36,6 +31,10 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+
+import io.inspector.mcp.demo.DemoApplication;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -55,12 +54,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest(classes = DemoApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles({ "streamable", "oauth-stub" })
-@TestPropertySource(properties = { "spring.ai.mcp.inspector.auth-enabled=false",
-		"spring.autoconfigure.exclude="
-				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerSseWebFluxAutoConfiguration,"
-				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration,"
-				+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebFluxAutoConfiguration,"
-				+ "io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration" })
+@TestPropertySource(properties = { "spring.ai.mcp.inspector.auth-enabled=false", "spring.autoconfigure.exclude="
+		+ "org.springframework.ai.mcp.server.webflux.autoconfigure.McpServerSseWebFluxAutoConfiguration,"
+		+ "org.springframework.ai.mcp.server.webflux.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration,"
+		+ "org.springframework.ai.mcp.server.webflux.autoconfigure.McpServerStatelessWebFluxAutoConfiguration,"
+		+ "io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration" })
 @Epic("OAuth 2.0 Stub")
 @Feature("Authorization code flow with PKCE")
 class OAuthStubIT {

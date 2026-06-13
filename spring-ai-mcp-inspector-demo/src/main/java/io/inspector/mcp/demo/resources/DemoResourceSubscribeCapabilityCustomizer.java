@@ -11,7 +11,6 @@ package io.inspector.mcp.demo.resources;
 
 import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.spec.McpSchema.ServerCapabilities;
-
 import org.springframework.ai.mcp.customizer.McpSyncServerCustomizer;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;

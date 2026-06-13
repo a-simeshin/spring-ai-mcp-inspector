@@ -19,12 +19,12 @@ package io.inspector.mcp.core.client;
 import java.util.List;
 import java.util.Map;
 
-import tools.jackson.databind.json.JsonMapper;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.ServerParameters;
 import io.modelcontextprotocol.client.transport.StdioClientTransport;
 import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Builds {@link McpSyncClient} instances that spawn an <em>external</em> MCP server as a

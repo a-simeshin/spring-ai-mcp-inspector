@@ -23,7 +23,6 @@ import com.codeborne.selenide.Configuration;
 import com.codeborne.selenide.Selenide;
 import com.codeborne.selenide.SelenideElement;
 import io.github.bonigarcia.wdm.WebDriverManager;
-import io.inspector.mcp.demo.DemoApplication;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -41,6 +40,8 @@ import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
+
+import io.inspector.mcp.demo.DemoApplication;
 
 import static com.codeborne.selenide.Condition.text;
 import static com.codeborne.selenide.Condition.visible;
@@ -136,9 +137,9 @@ class UiBigDataIT {
 	/** Boots the demo on webmvc + STREAMABLE — full tool surface, /mcp proxy path. */
 	private void startApp() {
 		String exclude = String.join(",",
-				"org.springframework.ai.mcp.server.autoconfigure.McpServerSseWebFluxAutoConfiguration",
-				"org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration",
-				"org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebFluxAutoConfiguration",
+				"org.springframework.ai.mcp.server.webflux.autoconfigure.McpServerSseWebFluxAutoConfiguration",
+				"org.springframework.ai.mcp.server.webflux.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration",
+				"org.springframework.ai.mcp.server.webflux.autoconfigure.McpServerStatelessWebFluxAutoConfiguration",
 				"io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration");
 		String[] args = new String[] { "--server.port=0", "--spring.main.web-application-type=servlet",
 				"--spring.ai.mcp.server.protocol=STREAMABLE", "--spring.ai.mcp.inspector.auth-enabled=false",

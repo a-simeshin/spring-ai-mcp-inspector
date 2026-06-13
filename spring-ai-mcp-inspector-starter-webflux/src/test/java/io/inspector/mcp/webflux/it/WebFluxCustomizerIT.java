@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.webtestclient.autoconfigure.AutoConfigureWebTestClient;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.annotation.Order;
 import org.springframework.test.web.reactive.server.WebTestClient;
@@ -45,6 +46,7 @@ import io.inspector.mcp.core.bootstrap.InspectorBootstrapCustomizer;
  */
 @Epic("MCP Inspector WebFlux")
 @Feature("Bootstrap customizer integration (integration)")
+@AutoConfigureWebTestClient
 @SpringBootTest(classes = { TestMcpServerApp.class, WebFluxCustomizerIT.TestCustomizers.class },
 		webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
 		properties = { "spring.main.web-application-type=reactive", "spring.ai.mcp.server.protocol=SSE",

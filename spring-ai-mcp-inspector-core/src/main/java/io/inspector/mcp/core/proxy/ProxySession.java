@@ -19,10 +19,10 @@ package io.inspector.mcp.core.proxy;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import tools.jackson.databind.JsonNode;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
 import reactor.core.publisher.Sinks;
+import tools.jackson.databind.JsonNode;
 
 /**
  * A single inspector-proxy session: pairs a browser-facing SSE/HTTP channel with an
