@@ -216,14 +216,51 @@ public class ProxyHandler {
 		final String command = request.queryParam("command").orElse(null);
 		final String args = request.queryParam("args").orElse(null);
 		final String env = request.queryParam("env").orElse(null);
-		return openProxiedSession(transportType, url, command, args, env);
+		return openProxiedSession(transportType, url, command, args, env, inboundAuthorization(request),
+				inboundCustomHeaders(request));
 	}
 
 	public Mono<ServerResponse> openStdio(final ServerRequest request) {
 		final String command = request.queryParam("command").orElse(null);
 		final String args = request.queryParam("args").orElse(null);
 		final String env = request.queryParam("env").orElse(null);
-		return openProxiedSession("stdio", null, command, args, env);
+		return openProxiedSession("stdio", null, command, args, env, inboundAuthorization(request),
+				inboundCustomHeaders(request));
+	}
+
+	/**
+	 * Reads the inbound {@code Authorization} header value, or {@code null} when absent.
+	 * @param request the incoming request
+	 * @return the forwarded {@code Authorization} value, or {@code null}
+	 */
+	private static String inboundAuthorization(final ServerRequest request) {
+		return request.headers().firstHeader("Authorization");
+	}
+
+	/**
+	 * Reads the custom headers named by the {@code x-custom-auth-headers} request header
+	 * (comma-separated header names) and returns their inbound values, so they can be
+	 * forwarded verbatim to the upstream MCP server.
+	 * @param request the incoming request
+	 * @return a map of custom header name → value (never {@code null})
+	 */
+	private static Map<String, String> inboundCustomHeaders(final ServerRequest request) {
+		final String named = request.headers().firstHeader("x-custom-auth-headers");
+		if (named == null || named.isBlank()) {
+			return Map.of();
+		}
+		final Map<String, String> out = new LinkedHashMap<>();
+		for (final String raw : named.split(",")) {
+			final String name = raw.trim();
+			if (name.isEmpty()) {
+				continue;
+			}
+			final String value = request.headers().firstHeader(name);
+			if (value != null) {
+				out.put(name, value);
+			}
+		}
+		return out;
 	}
 
 	public Mono<ServerResponse> postMessage(final ServerRequest request) {
@@ -247,11 +284,11 @@ public class ProxyHandler {
 	}
 
 	private Mono<ServerResponse> openProxiedSession(final String transportType, final String url, final String command,
-			final String args, final String env) {
+			final String args, final String env, final String authorization, final Map<String, String> customHeaders) {
 		final String sessionId = UUID.randomUUID().toString();
 		final McpClientTransport target;
 		try {
-			target = buildTargetTransport(transportType, url, command, args, env);
+			target = buildTargetTransport(transportType, url, command, args, env, authorization, customHeaders);
 		}
 		catch (final Exception ex) {
 			LOG.warn("proxy[{}] failed to build target transport: {}", sessionId, ex.toString());
@@ -297,12 +334,16 @@ public class ProxyHandler {
 	}
 
 	private McpClientTransport buildTargetTransport(final String transportType, final String url, final String command,
-			final String args, final String env) {
+			final String args, final String env, final String authorization, final Map<String, String> customHeaders) {
 		final String type = (transportType != null) ? transportType.toLowerCase() : "sse";
+		final boolean noHeaders = authorization == null && (customHeaders == null || customHeaders.isEmpty());
 		return switch (type) {
-			case "sse" -> this.transportFactory.openSse(URI.create(requireUrl(url, "sse")));
+			case "sse" -> noHeaders ? this.transportFactory.openSse(URI.create(requireUrl(url, "sse")))
+					: this.transportFactory.openSse(URI.create(requireUrl(url, "sse")), authorization, customHeaders);
 			case "streamable-http" ->
-				this.transportFactory.openStreamable(URI.create(requireUrl(url, "streamable-http")));
+				noHeaders ? this.transportFactory.openStreamable(URI.create(requireUrl(url, "streamable-http")))
+						: this.transportFactory.openStreamable(URI.create(requireUrl(url, "streamable-http")),
+								authorization, customHeaders);
 			case "stdio" -> {
 				if (command == null || command.isBlank()) {
 					throw new IllegalArgumentException(
@@ -349,8 +390,10 @@ public class ProxyHandler {
 
 	public Mono<ServerResponse> postMcp(final ServerRequest request) {
 		final String mcpSessionId = request.headers().firstHeader(ProxyConstants.MCP_SESSION_ID_HEADER);
-		return readJsonBody(request)
-			.flatMap((body) -> handlePostMcp(mcpSessionId, request.queryParam("url").orElse(null), body));
+		final String authorization = inboundAuthorization(request);
+		final Map<String, String> customHeaders = inboundCustomHeaders(request);
+		return readJsonBody(request).flatMap((body) -> handlePostMcp(mcpSessionId,
+				request.queryParam("url").orElse(null), body, authorization, customHeaders));
 	}
 
 	/**
@@ -362,11 +405,16 @@ public class ProxyHandler {
 	 * @param mcpSessionId the {@code mcp-session-id} header value, may be {@code null}
 	 * @param url the upstream URL query parameter, may be {@code null}
 	 * @param body the JSON-RPC frame received from the browser
+	 * @param authorization the inbound {@code Authorization} header to forward upstream,
+	 * may be {@code null}
+	 * @param customHeaders extra headers (named by {@code x-custom-auth-headers}) to
+	 * forward upstream, may be empty
 	 * @return a {@link Mono} emitting the upstream response
 	 */
-	private Mono<ServerResponse> handlePostMcp(final String mcpSessionId, final String url, final JsonNode body) {
+	private Mono<ServerResponse> handlePostMcp(final String mcpSessionId, final String url, final JsonNode body,
+			final String authorization, final Map<String, String> customHeaders) {
 		if (mcpSessionId == null || mcpSessionId.isBlank()) {
-			return openSessionAndRelay(url, body);
+			return openSessionAndRelay(url, body, authorization, customHeaders);
 		}
 		final ProxySession session = this.registry.get(mcpSessionId);
 		if (session == null) {
@@ -380,17 +428,24 @@ public class ProxyHandler {
 	 * Builds a new {@link ProxySession} and dispatches the first frame.
 	 * @param url the upstream streamable-HTTP URL
 	 * @param body the first JSON-RPC frame to relay
+	 * @param authorization the inbound {@code Authorization} header to forward upstream,
+	 * may be {@code null}
+	 * @param customHeaders extra headers (named by {@code x-custom-auth-headers}) to
+	 * forward upstream, may be empty
 	 * @return a {@link Mono} emitting the upstream response
 	 */
-	private Mono<ServerResponse> openSessionAndRelay(final String url, final JsonNode body) {
+	private Mono<ServerResponse> openSessionAndRelay(final String url, final JsonNode body, final String authorization,
+			final Map<String, String> customHeaders) {
 		if (url == null || url.isBlank()) {
 			return ServerResponse.badRequest()
 				.bodyValue(Map.of("error", "missing required 'url' query parameter for streamable-http transport"));
 		}
 		final String sessionId = UUID.randomUUID().toString();
+		final boolean noHeaders = authorization == null && (customHeaders == null || customHeaders.isEmpty());
 		final McpClientTransport target;
 		try {
-			target = this.transportFactory.openStreamable(URI.create(url));
+			target = noHeaders ? this.transportFactory.openStreamable(URI.create(url))
+					: this.transportFactory.openStreamable(URI.create(url), authorization, customHeaders);
 		}
 		catch (final Exception ex) {
 			return ServerResponse.status(HttpStatus.BAD_GATEWAY)
@@ -456,19 +511,35 @@ public class ProxyHandler {
 			return ok.bodyValue(node);
 		}).onErrorResume((ex) -> {
 			LOG.warn("proxy[{}] await response failed: {}", session.sessionId(), ex.toString());
+			// A failed first POST (the initialize) never returned a session id to the
+			// client, so the session is orphaned — tear it down instead of leaking it.
+			if (includeSessionHeader) {
+				this.registry.removeAndClose(session.sessionId());
+			}
 			return ServerResponse.status(HttpStatus.GATEWAY_TIMEOUT)
 				.bodyValue(Map.of("error", "upstream did not respond within " + requestTimeout.toSeconds() + "s"));
 		});
 	}
 
 	/**
-	 * Returns the {@code id} node if {@code body} is a JSON-RPC request, else
-	 * {@code null}.
+	 * Returns the {@code id} node iff {@code body} is a JSON-RPC <em>request</em> — i.e.
+	 * it carries both a {@code method} and an {@code id}.
+	 *
+	 * <p>
+	 * A server→client JSON-RPC <em>response</em> (has {@code result}/{@code error} and an
+	 * {@code id} but <strong>no</strong> {@code method}) must take the fire-and-forget
+	 * 202-Accepted path, not relay-and-await; otherwise the proxy would block awaiting an
+	 * "answer" to a frame that is itself the answer. Returns {@code null} for responses
+	 * and notifications.
 	 * @param body the JSON node to inspect
-	 * @return the {@code id} field, or {@code null} if absent or not a request
+	 * @return the {@code id} field when {@code body} is a request, else {@code null}
 	 */
 	private static JsonNode extractRequestId(final JsonNode body) {
 		if (body == null || !body.isObject()) {
+			return null;
+		}
+		final JsonNode method = body.get("method");
+		if (method == null || !method.isTextual()) {
 			return null;
 		}
 		final JsonNode id = body.get("id");

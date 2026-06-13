@@ -16,8 +16,14 @@
 
 package io.inspector.mcp.core.proxy;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
 
 /**
  * In-memory map of active proxy sessions, keyed by web-app session id.
@@ -26,11 +32,28 @@ import java.util.concurrent.ConcurrentMap;
  * Thread-safe — the underlying {@link ConcurrentHashMap} permits concurrent lookups
  * (browser POSTs) and writes (new {@code GET /sse} requests, session closures).
  *
+ * <p>
+ * A scheduled {@link #reap()} sweep evicts dead sessions so the proxy does not leak
+ * sessions forever after an upstream loss or a {@code 504} (see
+ * {@link ProxySession#close()}). A session is reaped when it is already closed or when it
+ * has been idle longer than the configured inactivity budget
+ * ({@link #setInactivityBudget(Duration)}); an upstream-terminated session stops
+ * refreshing its activity timestamp and is reaped once it crosses that budget. Scheduling
+ * is enabled by the inspector auto-configurations via {@code @EnableScheduling}.
+ *
  * @author Artem Simeshin
  */
 public class ProxySessionRegistry {
 
+	private static final Logger LOG = LoggerFactory.getLogger(ProxySessionRegistry.class);
+
+	/** Default inactivity budget when none is configured. */
+	private static final Duration DEFAULT_INACTIVITY_BUDGET = Duration.ofMinutes(30);
+
 	private final ConcurrentMap<String, ProxySession> sessions = new ConcurrentHashMap<>();
+
+	/** Idle budget after which a quiet session is evicted; never {@code null}. */
+	private volatile Duration inactivityBudget = DEFAULT_INACTIVITY_BUDGET;
 
 	/**
 	 * Adds {@code session} under {@code session.sessionId()}.
@@ -78,6 +101,46 @@ public class ProxySessionRegistry {
 	 */
 	public int size() {
 		return this.sessions.size();
+	}
+
+	/**
+	 * Sets the inactivity budget used by {@link #reap()}. Falls back to the 30m default
+	 * when {@code budget} is {@code null} or non-positive.
+	 * @param budget the idle budget after which a quiet session is evicted
+	 */
+	public void setInactivityBudget(final Duration budget) {
+		this.inactivityBudget = (budget != null && !budget.isNegative() && !budget.isZero()) ? budget
+				: DEFAULT_INACTIVITY_BUDGET;
+	}
+
+	/**
+	 * Scheduled sweep that evicts dead or idle sessions. Runs on a fixed delay;
+	 * scheduling is activated by the inspector auto-configurations.
+	 *
+	 * <p>
+	 * Evicts every session that is already closed or that has been idle longer than the
+	 * configured inactivity budget. An upstream-terminated session stops refreshing its
+	 * activity timestamp (its sinks are already errored, so new requests fail fast), so
+	 * it is reaped once it crosses the idle budget — we deliberately do not evict purely
+	 * on {@link ProxySession#isUpstreamTerminated()} to avoid tearing down a session on a
+	 * single transient send failure. Each eviction routes through
+	 * {@link #removeAndClose(String)} so the upstream transport is torn down and the
+	 * sinks are completed.
+	 */
+	@Scheduled(fixedDelayString = "${spring.ai.mcp.inspector.timeouts.reaper-interval:PT1M}")
+	public void reap() {
+		final Instant now = Instant.now();
+		final Duration budget = this.inactivityBudget;
+		for (final ProxySession session : this.sessions.values()) {
+			final boolean closed = session.isClosed();
+			final boolean idle = session.lastActivity() != null
+					&& Duration.between(session.lastActivity(), now).compareTo(budget) > 0;
+			if (closed || idle) {
+				if (removeAndClose(session.sessionId())) {
+					LOG.debug("proxy[{}] reaped (closed={}, idle={})", session.sessionId(), closed, idle);
+				}
+			}
+		}
 	}
 
 }

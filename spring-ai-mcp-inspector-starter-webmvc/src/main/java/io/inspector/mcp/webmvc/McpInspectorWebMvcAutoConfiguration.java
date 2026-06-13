@@ -28,6 +28,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.Ordered;
 import org.springframework.core.env.Environment;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
@@ -80,6 +81,7 @@ import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
 @ConditionalOnProperty(prefix = "spring.ai.mcp.inspector", name = "enabled", havingValue = "true",
 		matchIfMissing = true)
 @EnableConfigurationProperties(McpInspectorProperties.class)
+@EnableScheduling
 @Import({ InspectorRestController.class, InspectorIndexController.class, InspectorConfigController.class,
 		SseProxyController.class, StreamableHttpProxyController.class, ProxyConfigController.class,
 		ProxyHealthController.class, ProxyFetchController.class })
@@ -177,7 +179,9 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 	@Bean
 	@ConditionalOnMissingBean
 	public ProxySessionRegistry mcpInspectorProxySessionRegistry() {
-		return new ProxySessionRegistry();
+		final ProxySessionRegistry registry = new ProxySessionRegistry();
+		registry.setInactivityBudget(this.properties.getTimeouts().getSessionReaper());
+		return registry;
 	}
 
 	@Bean

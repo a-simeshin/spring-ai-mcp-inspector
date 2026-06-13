@@ -90,6 +90,12 @@ final class ProxyAppHarness {
 			args.add("--spring.ai.mcp.inspector.auth-token=" + authToken);
 		}
 		args.add("--spring.autoconfigure.exclude=" + exclude);
+		// Tests tear apps down abruptly (notably ProxyTargetLossIT kills the upstream
+		// mid-session). Force immediate shutdown so a closing app does not run a 30s
+		// graceful shutdown that, on the reactive stack, starves the JVM-shared
+		// reactor-netty event loop and makes the sibling proxy app unreachable.
+		args.add("--server.shutdown=immediate");
+		args.add("--spring.lifecycle.timeout-per-shutdown-phase=1s");
 
 		return new SpringApplicationBuilder(DemoApplication.class).web(type).run(args.toArray(new String[0]));
 	}

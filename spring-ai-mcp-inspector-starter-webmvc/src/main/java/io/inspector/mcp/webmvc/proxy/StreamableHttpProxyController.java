@@ -19,10 +19,12 @@ package io.inspector.mcp.webmvc.proxy;
 import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,6 +39,8 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -172,6 +176,49 @@ public class StreamableHttpProxyController {
 	}
 
 	/**
+	 * Reads the inbound {@code Authorization} header value, or {@code null} when absent.
+	 * @return the forwarded {@code Authorization} value, or {@code null}
+	 */
+	private static String inboundAuthorization() {
+		final HttpServletRequest request = currentRequest();
+		return (request != null) ? request.getHeader("Authorization") : null;
+	}
+
+	/**
+	 * Reads the custom headers named by the {@code x-custom-auth-headers} request header
+	 * (comma-separated header names) and returns their inbound values, so they can be
+	 * forwarded verbatim to the upstream MCP server.
+	 * @return a map of custom header name → value (never {@code null})
+	 */
+	private static Map<String, String> inboundCustomHeaders() {
+		final HttpServletRequest request = currentRequest();
+		if (request == null) {
+			return Map.of();
+		}
+		final String named = request.getHeader("x-custom-auth-headers");
+		if (named == null || named.isBlank()) {
+			return Map.of();
+		}
+		final Map<String, String> out = new LinkedHashMap<>();
+		for (final String raw : named.split(",")) {
+			final String name = raw.trim();
+			if (name.isEmpty()) {
+				continue;
+			}
+			final String value = request.getHeader(name);
+			if (value != null) {
+				out.put(name, value);
+			}
+		}
+		return out;
+	}
+
+	private static HttpServletRequest currentRequest() {
+		final var attrs = RequestContextHolder.getRequestAttributes();
+		return (attrs instanceof ServletRequestAttributes sra) ? sra.getRequest() : null;
+	}
+
+	/**
 	 * Forwards a frame to an already-open session. Same request/notification split as
 	 * {@link #openSessionAndForward}, minus the session-id response header.
 	 * @param session the live proxy session
@@ -232,6 +279,11 @@ public class StreamableHttpProxyController {
 		}
 		catch (final RuntimeException ex) {
 			LOG.warn("proxy[{}] await response failed: {}", session.sessionId(), ex.toString());
+			// A failed first POST (the initialize) never returned a session id to the
+			// client, so the session is orphaned — tear it down instead of leaking it.
+			if (includeSessionHeader) {
+				this.registry.removeAndClose(session.sessionId());
+			}
 			return ResponseEntity.status(HttpStatus.GATEWAY_TIMEOUT)
 				.body(Map.of("error", "upstream did not respond within " + requestTimeout.toSeconds() + "s"));
 		}
@@ -246,9 +298,13 @@ public class StreamableHttpProxyController {
 	 */
 	private ProxySession openSession(final String url) {
 		final String sessionId = UUID.randomUUID().toString();
+		final String authorization = inboundAuthorization();
+		final Map<String, String> customHeaders = inboundCustomHeaders();
 		final McpClientTransport target;
 		try {
-			target = this.transportFactory.openStreamable(URI.create(url));
+			target = (authorization == null && customHeaders.isEmpty())
+					? this.transportFactory.openStreamable(URI.create(url))
+					: this.transportFactory.openStreamable(URI.create(url), authorization, customHeaders);
 		}
 		catch (final Exception ex) {
 			LOG.warn("proxy[{}] upstream connect failed: {}", sessionId, ex.toString());
@@ -267,13 +323,24 @@ public class StreamableHttpProxyController {
 	}
 
 	/**
-	 * Extracts {@code id} from a JSON-RPC frame if present; {@code null} →
-	 * notification/response.
+	 * Extracts {@code id} from a JSON-RPC frame iff the frame is a <em>request</em> —
+	 * i.e. it carries both a {@code method} and an {@code id}.
+	 *
+	 * <p>
+	 * A server→client JSON-RPC <em>response</em> (has {@code result}/{@code error} and an
+	 * {@code id} but <strong>no</strong> {@code method}) must take the fire-and-forget
+	 * 202-Accepted path, not the relay-and-await path; otherwise the proxy would block
+	 * waiting for an "answer" to a frame that is itself the answer. Returns {@code null}
+	 * for responses and notifications.
 	 * @param body the JSON-RPC frame
-	 * @return the {@code id} node, or {@code null} if absent or null
+	 * @return the {@code id} node when {@code body} is a request, else {@code null}
 	 */
 	private static JsonNode extractRequestId(final JsonNode body) {
 		if (body == null || !body.isObject()) {
+			return null;
+		}
+		final JsonNode method = body.get("method");
+		if (method == null || !method.isTextual()) {
 			return null;
 		}
 		final JsonNode id = body.get("id");

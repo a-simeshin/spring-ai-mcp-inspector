@@ -25,6 +25,7 @@ import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTranspor
 import io.modelcontextprotocol.client.transport.ServerParameters;
 import io.modelcontextprotocol.client.transport.SseMessageEndpointValidator;
 import io.modelcontextprotocol.client.transport.StdioClientTransport;
+import io.modelcontextprotocol.client.transport.customizer.McpSyncHttpClientRequestCustomizer;
 import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import tools.jackson.databind.json.JsonMapper;
@@ -69,16 +70,40 @@ public class ProxyTransportFactory {
 	 * @return a configured {@link McpClientTransport} for SSE
 	 */
 	public McpClientTransport openSse(final URI sseUri) {
+		return openSse(sseUri, null, null);
+	}
+
+	/**
+	 * Builds an SSE client transport that targets {@code sseUri} and forwards the
+	 * supplied {@code authorization} header plus any {@code customHeaders} to the
+	 * upstream MCP server on every outbound request.
+	 *
+	 * <p>
+	 * Same URI breakdown semantics as {@link #openSse(URI)}. Headers are injected via the
+	 * SDK's {@code httpRequestCustomizer} hook so they ride on both the SSE connect and
+	 * the message POSTs.
+	 * @param sseUri the full SSE endpoint URI (must not be {@code null})
+	 * @param authorization the inbound {@code Authorization} header value to forward, or
+	 * {@code null} / blank to omit
+	 * @param customHeaders additional headers to forward (may be {@code null} or empty)
+	 * @return a configured {@link McpClientTransport} for SSE
+	 */
+	public McpClientTransport openSse(final URI sseUri, final String authorization,
+			final Map<String, String> customHeaders) {
 		if (sseUri == null) {
 			throw new IllegalArgumentException("sseUri must not be null");
 		}
 		final String baseUri = stripPath(sseUri);
 		final String ssePath = (sseUri.getRawPath() == null || sseUri.getRawPath().isBlank()) ? "/sse"
 				: sseUri.getRawPath();
-		return HttpClientSseClientTransport.builder(baseUri)
+		final HttpClientSseClientTransport.Builder builder = HttpClientSseClientTransport.builder(baseUri)
 			.sseEndpoint(ssePath)
-			.messageEndpointValidator(noopValidator())
-			.build();
+			.messageEndpointValidator(noopValidator());
+		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(authorization, customHeaders);
+		if (customizer != null) {
+			builder.httpRequestCustomizer(customizer);
+		}
+		return builder.build();
 	}
 
 	/**
@@ -90,13 +115,38 @@ public class ProxyTransportFactory {
 	 * @return a configured {@link McpClientTransport} for streamable-HTTP
 	 */
 	public McpClientTransport openStreamable(final URI mcpUri) {
+		return openStreamable(mcpUri, null, null);
+	}
+
+	/**
+	 * Builds a streamable-HTTP transport that targets {@code mcpUri} and forwards the
+	 * supplied {@code authorization} header plus any {@code customHeaders} to the
+	 * upstream MCP server on every outbound request.
+	 *
+	 * <p>
+	 * Same URI breakdown semantics as {@link #openStreamable(URI)}. Headers are injected
+	 * via the SDK's {@code httpRequestCustomizer} hook.
+	 * @param mcpUri the full MCP endpoint URI (must not be {@code null})
+	 * @param authorization the inbound {@code Authorization} header value to forward, or
+	 * {@code null} / blank to omit
+	 * @param customHeaders additional headers to forward (may be {@code null} or empty)
+	 * @return a configured {@link McpClientTransport} for streamable-HTTP
+	 */
+	public McpClientTransport openStreamable(final URI mcpUri, final String authorization,
+			final Map<String, String> customHeaders) {
 		if (mcpUri == null) {
 			throw new IllegalArgumentException("mcpUri must not be null");
 		}
 		final String baseUri = stripPath(mcpUri);
 		final String path = (mcpUri.getRawPath() == null || mcpUri.getRawPath().isBlank()) ? "/mcp"
 				: mcpUri.getRawPath();
-		return HttpClientStreamableHttpTransport.builder(baseUri).endpoint(path).build();
+		final HttpClientStreamableHttpTransport.Builder builder = HttpClientStreamableHttpTransport.builder(baseUri)
+			.endpoint(path);
+		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(authorization, customHeaders);
+		if (customizer != null) {
+			builder.httpRequestCustomizer(customizer);
+		}
+		return builder.build();
 	}
 
 	/**
@@ -119,6 +169,42 @@ public class ProxyTransportFactory {
 		}
 		final ServerParameters parameters = builder.build();
 		return new StdioClientTransport(parameters, new JacksonMcpJsonMapper(this.objectMapper));
+	}
+
+	/**
+	 * Builds an {@link McpSyncHttpClientRequestCustomizer} that sets the forwarded
+	 * {@code Authorization} header and any custom headers on every outbound request to
+	 * the upstream MCP server. Returns {@code null} when there is nothing to forward so
+	 * callers can skip installing a customizer entirely.
+	 * @param authorization the {@code Authorization} value to forward (ignored when
+	 * blank)
+	 * @param customHeaders extra headers to forward (ignored when {@code null} / empty)
+	 * @return a customizer, or {@code null} when no headers need forwarding
+	 */
+	private static McpSyncHttpClientRequestCustomizer headerCustomizer(final String authorization,
+			final Map<String, String> customHeaders) {
+		final boolean hasAuth = authorization != null && !authorization.isBlank();
+		final boolean hasCustom = customHeaders != null && !customHeaders.isEmpty();
+		if (!hasAuth && !hasCustom) {
+			return null;
+		}
+		return (builder, method, endpoint, body, context) -> {
+			if (hasAuth) {
+				builder.setHeader("Authorization", authorization);
+			}
+			if (hasCustom) {
+				customHeaders.forEach((name, value) -> {
+					if (name != null && !name.isBlank() && value != null) {
+						try {
+							builder.setHeader(name, value);
+						}
+						catch (final IllegalArgumentException ignored) {
+							// restricted header names are silently skipped
+						}
+					}
+				});
+			}
+		};
 	}
 
 	/**

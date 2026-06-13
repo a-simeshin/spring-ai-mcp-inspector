@@ -185,6 +185,14 @@ public class McpInspectorProperties {
 		 */
 		private Duration serverRequest = Duration.ofSeconds(120);
 
+		/**
+		 * Inactivity budget after which the session reaper evicts a proxy session that
+		 * has seen no traffic. Sessions whose upstream transport has already terminated
+		 * are reaped immediately regardless of this value. Default 30m, matching
+		 * {@link #sseSession}.
+		 */
+		private Duration sessionReaper = Duration.ofMinutes(30);
+
 		public Duration getSseSession() {
 			return this.sseSession;
 		}
@@ -223,6 +231,14 @@ public class McpInspectorProperties {
 
 		public void setServerRequest(final Duration serverRequest) {
 			this.serverRequest = serverRequest;
+		}
+
+		public Duration getSessionReaper() {
+			return this.sessionReaper;
+		}
+
+		public void setSessionReaper(final Duration sessionReaper) {
+			this.sessionReaper = sessionReaper;
 		}
 
 	}

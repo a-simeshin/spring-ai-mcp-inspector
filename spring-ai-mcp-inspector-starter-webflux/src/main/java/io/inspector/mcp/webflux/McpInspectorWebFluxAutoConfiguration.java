@@ -26,6 +26,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.env.Environment;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.web.reactive.config.CorsRegistry;
 import org.springframework.web.reactive.config.WebFluxConfigurer;
 import tools.jackson.databind.json.JsonMapper;
@@ -72,6 +73,7 @@ import io.inspector.mcp.webflux.router.InspectorRouterConfig;
 @ConditionalOnProperty(prefix = "spring.ai.mcp.inspector", name = "enabled", havingValue = "true",
 		matchIfMissing = true)
 @EnableConfigurationProperties(McpInspectorProperties.class)
+@EnableScheduling
 @Import(InspectorRouterConfig.class)
 public class McpInspectorWebFluxAutoConfiguration {
 
@@ -155,8 +157,10 @@ public class McpInspectorWebFluxAutoConfiguration {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxySessionRegistry mcpInspectorProxySessionRegistry() {
-		return new ProxySessionRegistry();
+	public ProxySessionRegistry mcpInspectorProxySessionRegistry(final McpInspectorProperties properties) {
+		final ProxySessionRegistry registry = new ProxySessionRegistry();
+		registry.setInactivityBudget(properties.getTimeouts().getSessionReaper());
+		return registry;
 	}
 
 	@Bean

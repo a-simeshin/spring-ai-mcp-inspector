@@ -83,18 +83,35 @@ public final class McpProxy {
 			if (typed == null) {
 				return Mono.empty();
 			}
-			return session.targetTransport()
-				.sendMessage(typed)
-				.doOnError((err) -> LOG.warn("proxy[{}] sendMessage failed: {}", session.sessionId(), err.toString()));
+			return session.targetTransport().sendMessage(typed).doOnError((err) -> {
+				LOG.warn("proxy[{}] sendMessage failed: {}", session.sessionId(), err.toString());
+				// A failed send to a dead upstream must release any per-request awaiter
+				// and the SSE backchannel immediately rather than waiting for the
+				// streamable-request timeout.
+				session.failUpstream(err);
+			});
 		})
 			.onErrorContinue((err, obj) -> LOG.warn("proxy[{}] browser->target stream error: {}", session.sessionId(),
 					err.toString()))
 			.subscribe();
 
+		// Route any terminal transport failure (e.g. the upstream MCP server dies
+		// mid-session) onto the targetToBrowser sink so the per-request POST awaiter
+		// and the SSE backchannel subscriber fail fast instead of blocking to the
+		// streamable-request timeout.
+		session.targetTransport().setExceptionHandler((err) -> {
+			LOG.warn("proxy[{}] upstream transport error: {}", session.sessionId(), String.valueOf(err));
+			session.failUpstream(err);
+		});
+
 		// Target → browser: the connect handler is called once per inbound frame.
 		// We serialize the typed frame back to a JsonNode and emit it on the
 		// targetToBrowser sink. Returning Mono.empty() tells the SDK we have no
 		// further response to send.
+		//
+		// The inbound flux's terminal signals are surfaced too: an upstream
+		// disconnect that completes/errors the inbound stream is propagated via
+		// failUpstream so awaiters and the SSE subscriber are released promptly.
 		return session.targetTransport().connect((inbound) -> inbound.flatMap((message) -> {
 			final JsonNode body = toJsonNode(message);
 			if (body != null) {
@@ -105,7 +122,7 @@ public final class McpProxy {
 				session.touch();
 			}
 			return Mono.<JSONRPCMessage>empty();
-		}));
+		}).doOnError((err) -> session.failUpstream(err))).doOnError((err) -> session.failUpstream(err));
 	}
 
 	/**

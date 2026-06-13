@@ -108,6 +108,13 @@ public final class ProxySession {
 
 	private final AtomicBoolean closed = new AtomicBoolean(false);
 
+	/**
+	 * Set once the upstream transport has terminated (connect / inbound error or
+	 * exception-handler callback). Guards a single terminal emission on
+	 * {@link #targetToBrowser} and lets the reaper evict dead sessions promptly.
+	 */
+	private final AtomicBoolean upstreamTerminated = new AtomicBoolean(false);
+
 	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
 			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser) {
 		this.sessionId = sessionId;
@@ -152,6 +159,46 @@ public final class ProxySession {
 
 	public boolean isClosed() {
 		return this.closed.get();
+	}
+
+	/**
+	 * Returns {@code true} once the upstream transport has signalled terminal failure
+	 * (its {@code connect()} Mono errored, an inbound frame errored, or its
+	 * exception-handler fired). Used by the session reaper to evict dead sessions.
+	 * @return {@code true} if the upstream transport has terminated
+	 */
+	public boolean isUpstreamTerminated() {
+		return this.upstreamTerminated.get();
+	}
+
+	/**
+	 * Propagates an upstream-transport terminal failure to the browser side. Idempotent —
+	 * only the first call fails the {@link #targetToBrowser} sink; subsequent calls are
+	 * no-ops. After this call {@link #isUpstreamTerminated()} returns {@code true}, so
+	 * the reaper can evict the session.
+	 *
+	 * <p>
+	 * Failing the {@code targetToBrowser} sink makes both the long-lived SSE backchannel
+	 * subscriber and every per-request POST awaiter fail fast instead of blocking to the
+	 * streamable-request timeout.
+	 * @param error the terminal error from the upstream transport (may be {@code null},
+	 * in which case the sink is completed rather than errored)
+	 */
+	public void failUpstream(final Throwable error) {
+		if (!this.upstreamTerminated.compareAndSet(false, true)) {
+			return;
+		}
+		try {
+			if (error != null) {
+				this.targetToBrowser.tryEmitError(error);
+			}
+			else {
+				this.targetToBrowser.tryEmitComplete();
+			}
+		}
+		catch (final Exception ignored) {
+			// tryEmitError / tryEmitComplete never throw; defensive only
+		}
 	}
 
 	/**

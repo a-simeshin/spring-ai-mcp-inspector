@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -37,6 +38,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
@@ -244,19 +247,24 @@ public class SseProxyController {
 	private McpClientTransport buildTargetTransport(final String transportType, final String url, final String command,
 			final String args, final String env) throws Exception {
 		final String type = (transportType != null) ? transportType.toLowerCase() : "sse";
+		final String authorization = inboundAuthorization();
+		final Map<String, String> customHeaders = inboundCustomHeaders();
+		final boolean noHeaders = authorization == null && customHeaders.isEmpty();
 		return switch (type) {
 			case "sse" -> {
 				if (url == null || url.isBlank()) {
 					throw new IllegalArgumentException("missing required 'url' query parameter for SSE transport");
 				}
-				yield this.transportFactory.openSse(URI.create(url));
+				yield noHeaders ? this.transportFactory.openSse(URI.create(url))
+						: this.transportFactory.openSse(URI.create(url), authorization, customHeaders);
 			}
 			case "streamable-http" -> {
 				if (url == null || url.isBlank()) {
 					throw new IllegalArgumentException(
 							"missing required 'url' query parameter for streamable-http transport");
 				}
-				yield this.transportFactory.openStreamable(URI.create(url));
+				yield noHeaders ? this.transportFactory.openStreamable(URI.create(url))
+						: this.transportFactory.openStreamable(URI.create(url), authorization, customHeaders);
 			}
 			case "stdio" -> {
 				if (command == null || command.isBlank()) {
@@ -269,6 +277,49 @@ public class SseProxyController {
 			}
 			default -> throw new IllegalArgumentException("unsupported transportType: " + transportType);
 		};
+	}
+
+	/**
+	 * Reads the inbound {@code Authorization} header value, or {@code null} when absent.
+	 * @return the forwarded {@code Authorization} value, or {@code null}
+	 */
+	private static String inboundAuthorization() {
+		final HttpServletRequest request = currentRequest();
+		return (request != null) ? request.getHeader("Authorization") : null;
+	}
+
+	/**
+	 * Reads the custom headers named by the {@code x-custom-auth-headers} request header
+	 * (comma-separated header names) and returns their inbound values, so they can be
+	 * forwarded verbatim to the upstream MCP server.
+	 * @return a map of custom header name → value (never {@code null})
+	 */
+	private static Map<String, String> inboundCustomHeaders() {
+		final HttpServletRequest request = currentRequest();
+		if (request == null) {
+			return Map.of();
+		}
+		final String named = request.getHeader("x-custom-auth-headers");
+		if (named == null || named.isBlank()) {
+			return Map.of();
+		}
+		final Map<String, String> out = new LinkedHashMap<>();
+		for (final String raw : named.split(",")) {
+			final String name = raw.trim();
+			if (name.isEmpty()) {
+				continue;
+			}
+			final String value = request.getHeader(name);
+			if (value != null) {
+				out.put(name, value);
+			}
+		}
+		return out;
+	}
+
+	private static HttpServletRequest currentRequest() {
+		final var attrs = RequestContextHolder.getRequestAttributes();
+		return (attrs instanceof ServletRequestAttributes sra) ? sra.getRequest() : null;
 	}
 
 	/**
