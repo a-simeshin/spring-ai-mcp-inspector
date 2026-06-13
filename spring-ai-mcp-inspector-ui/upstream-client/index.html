@@ -12,17 +12,21 @@
     <!--
       Spring AI MCP Inspector bootstrap.
 
-      The <!--MCP_INSPECTOR_BOOTSTRAP--> placeholder in <head> is replaced
+      The MCP_INSPECTOR_BOOTSTRAP placeholder in the head is replaced
       server-side by InspectorIndexController (webmvc) / InspectorHandler.index()
-      (webflux) via BootstrapHtmlRenderer with an inline:
+      (webflux) via BootstrapHtmlRenderer with an inline script that assigns:
 
-        <script>window.__MCP_INSPECTOR_BOOTSTRAP = { ... };</script>
+        window.__MCP_INSPECTOR_BOOTSTRAP = { ... };
 
       carrying the typed InspectorBootstrap payload (authToken, proxyAddress,
       detectedTransport, detectedUrl, defaultUrl, defaultTransport, ...).
 
       Because that injection is inline and synchronous, by the time the seed
-      <script> below executes, window.__MCP_INSPECTOR_BOOTSTRAP is populated.
+      script below executes, window.__MCP_INSPECTOR_BOOTSTRAP is populated.
+
+      NOTE: keep this comment free of the literal HTML comment-close sequence and
+      of raw script tags — an embedded close sequence would terminate this comment
+      early and leak the rest as live DOM (and execute the example as script).
 
       The seed script writes into THREE upstream storage surfaces:
 
