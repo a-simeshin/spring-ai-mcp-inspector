@@ -17,6 +17,8 @@
 package io.inspector.mcp.webmvc.proxy;
 
 import java.net.URI;
+import java.time.Duration;
+import java.util.Map;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
@@ -25,18 +27,23 @@ import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
@@ -44,6 +51,7 @@ import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -78,6 +86,11 @@ class StreamableHttpProxyControllerTests {
 		given(this.mcpProxy.start(any())).willReturn(Mono.empty());
 		this.controller = new StreamableHttpProxyController(this.registry, this.transportFactory, this.mcpProxy,
 				this.objectMapper);
+	}
+
+	@AfterEach
+	void tearDown() {
+		RequestContextHolder.resetRequestAttributes();
 	}
 
 	private ProxySession newSession(final String id, final McpClientTransport target) {
@@ -432,6 +445,169 @@ class StreamableHttpProxyControllerTests {
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("openSession() — inbound header forwarding")
+	class HeaderForwarding {
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSession() with no request attributes uses the single-arg transport factory overload")
+		void openSession_withoutRequestAttributes_usesSingleArgOverload() throws Exception {
+			// given — no RequestContextHolder bound (tearDown clears it)
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"method\":\"notify\"}");
+
+			// when
+			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", body);
+
+			// then
+			verify(StreamableHttpProxyControllerTests.this.transportFactory)
+				.openStreamable(URI.create("http://target/mcp"));
+			verify(StreamableHttpProxyControllerTests.this.transportFactory, never()).openStreamable(any(URI.class),
+					any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSession() forwards the inbound Authorization and custom headers via the header-aware overload")
+		void openSession_withInboundHeaders_usesHeaderAwareOverload() throws Exception {
+			// given
+			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
+			request.addHeader("Authorization", "Bearer tok");
+			request.addHeader("x-custom-auth-headers", "X-Tenant, X-Trace");
+			request.addHeader("X-Tenant", "acme");
+			request.addHeader("X-Trace", "abc123");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class), any(), any()))
+				.willReturn(target);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"method\":\"notify\"}");
+
+			// when
+			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", body);
+
+			// then
+			verify(StreamableHttpProxyControllerTests.this.transportFactory).openStreamable(
+					eq(URI.create("http://target/mcp")), eq("Bearer tok"),
+					eq(Map.of("X-Tenant", "acme", "X-Trace", "abc123")));
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.MINOR)
+		@Description("openSession() with request attributes but no relevant headers falls back to the single-arg overload")
+		void openSession_withRequestButNoHeaders_usesSingleArgOverload() throws Exception {
+			// given — a bound request that carries neither Authorization nor the
+			// custom-header list
+			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"method\":\"notify\"}");
+
+			// when
+			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", body);
+
+			// then
+			verify(StreamableHttpProxyControllerTests.this.transportFactory)
+				.openStreamable(URI.create("http://target/mcp"));
+			verify(StreamableHttpProxyControllerTests.this.transportFactory, never()).openStreamable(any(URI.class),
+					any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.MINOR)
+		@Description("openSession() with a blank x-custom-auth-headers list forwards only the Authorization header")
+		void openSession_withBlankCustomHeaderList_forwardsAuthorizationOnly() throws Exception {
+			// given
+			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
+			request.addHeader("Authorization", "Bearer tok");
+			request.addHeader("x-custom-auth-headers", "  ");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class), any(), any()))
+				.willReturn(target);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"method\":\"notify\"}");
+
+			// when
+			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", body);
+
+			// then
+			verify(StreamableHttpProxyControllerTests.this.transportFactory)
+				.openStreamable(eq(URI.create("http://target/mcp")), eq("Bearer tok"), eq(Map.of()));
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.MINOR)
+		@Description("openSession() skips blank and absent custom header names from the x-custom-auth-headers list")
+		void openSession_skipsBlankAndAbsentCustomHeaderNames() throws Exception {
+			// given — empty token, a present header and a named-but-absent header
+			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
+			request.addHeader("x-custom-auth-headers", "X-Present, , X-Missing");
+			request.addHeader("X-Present", "yes");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class), any(), any()))
+				.willReturn(target);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"method\":\"notify\"}");
+
+			// when
+			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", body);
+
+			// then — only the present header survives; null authorization is forwarded
+			verify(StreamableHttpProxyControllerTests.this.transportFactory)
+				.openStreamable(eq(URI.create("http://target/mcp")), eq(null), eq(Map.of("X-Present", "yes")));
+		}
+
+	}
+
+	@Nested
+	@DisplayName("new-session await failure")
+	class NewSessionAwaitFailure {
+
+		@Test
+		@Story("New session")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() new-session request that times out tears down the orphaned session and returns 504")
+		void postMcp_newSessionRequestTimesOut_closesSessionAndReturns504() throws Exception {
+			// given — a short request timeout so the await fails fast, and a transport
+			// that
+			// builds but whose proxy never emits a matching response
+			final McpInspectorProperties props = new McpInspectorProperties();
+			props.getTimeouts().setStreamableRequest(Duration.ofMillis(200));
+			final StreamableHttpProxyController shortTimeoutController = new StreamableHttpProxyController(
+					StreamableHttpProxyControllerTests.this.registry,
+					StreamableHttpProxyControllerTests.this.transportFactory,
+					StreamableHttpProxyControllerTests.this.mcpProxy,
+					StreamableHttpProxyControllerTests.this.objectMapper, props);
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> entity = shortTimeoutController.postMcp(null, "http://target/mcp", body);
+
+			// then
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+			verify(StreamableHttpProxyControllerTests.this.registry).removeAndClose(any(String.class));
 		}
 
 	}

@@ -1305,4 +1305,259 @@ class ProxyHandlerTests {
 
 	}
 
+	@Nested
+	@DisplayName("relayAndAwait() — JSON-RPC response framing + new-session timeout")
+	class RelayResponseFramingAndTimeout {
+
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() relaying a server->client JSON-RPC response (id + result, no method) is fire-and-forget 202, not relay-and-await")
+		void postMcp_jsonRpcResponseFrame_treatedAsFireAndForget() {
+			// given — a frame that carries an id and a result but NO method: a response,
+			// so extractRequestId returns null and the 202 fire-and-forget path is taken
+			final ProxySession session = newSession("s-response");
+			given(ProxyHandlerTests.this.registry.get("s-response")).willReturn(session);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s-response")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"ok\":true}}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.ACCEPTED);
+		}
+
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() opening a new session whose upstream never replies times out with a 504 and tears down the orphaned session")
+		void postMcp_newSessionTimeout_returnsGatewayTimeoutAndRemovesSession() {
+			// given — a fast streamable request timeout so the awaiter trips quickly, and
+			// a
+			// brand-new session (includeSessionHeader == true) whose upstream stays
+			// silent
+			final McpInspectorProperties fastProps = new McpInspectorProperties();
+			fastProps.getTimeouts().setStreamableRequest(java.time.Duration.ofMillis(100));
+			final ProxyHandler fastHandler = new ProxyHandler(ProxyHandlerTests.this.registry,
+					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
+					ProxyHandlerTests.this.transportDetector, ProxyHandlerTests.this.objectMapper, fastProps);
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://up/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"ping\"}"));
+
+			// when — never feed a reply, so the awaiter times out
+			final ServerResponse response = fastHandler.postMcp(request).block();
+
+			// then — 504 gateway timeout and the orphaned new session is removed
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+			assertThat(entityBody(response).get("error").toString()).contains("did not respond");
+			verify(ProxyHandlerTests.this.registry).removeAndClose(captured[0].sessionId());
+		}
+
+	}
+
+	@Nested
+	@DisplayName("inbound header forwarding")
+	class HeaderForwarding {
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() forwards the inbound Authorization header into the header-aware openSse factory overload")
+		void openSse_withAuthorizationHeader_usesHeaderAwareSseFactory() {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class), any(), any())).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
+						.header("Authorization", "Bearer abc")
+						.build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then — the 3-arg header-aware overload is used, not the bare single-arg one
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			verify(ProxyHandlerTests.this.transportFactory).openSse(any(URI.class),
+					org.mockito.ArgumentMatchers.eq("Bearer abc"), org.mockito.ArgumentMatchers.eq(Map.of()));
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() without any inbound auth headers uses the bare single-arg openSse factory overload")
+		void openSse_withoutHeaders_usesBareSseFactory() {
+			// given — no Authorization, no x-custom-auth-headers: inboundAuthorization
+			// null
+			// and inboundCustomHeaders empty, so the noHeaders branch picks the 1-arg
+			// overload
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			verify(ProxyHandlerTests.this.transportFactory).openSse(any(URI.class));
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() forwards the named custom headers (x-custom-auth-headers) into the header-aware factory and skips blank / absent names")
+		void openSse_withCustomHeaders_forwardsNamedValuesOnly() {
+			// given — x-custom-auth-headers names two headers (one with surrounding
+			// blanks)
+			// plus a blank entry and an unset name, exercising inboundCustomHeaders' trim
+			// /
+			// isEmpty / null-value branches
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class), any(), any())).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
+						.header("x-custom-auth-headers", " X-Tenant , , X-Absent ,X-Trace")
+						.header("X-Tenant", "acme")
+						.header("X-Trace", "t-1")
+						.build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then — only the present named headers are forwarded; the blank token and
+			// the
+			// unset X-Absent name are dropped; no Authorization is present
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			verify(ProxyHandlerTests.this.transportFactory).openSse(any(URI.class),
+					org.mockito.ArgumentMatchers.isNull(),
+					org.mockito.ArgumentMatchers.eq(Map.of("X-Tenant", "acme", "X-Trace", "t-1")));
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.MINOR)
+		@Description("openSse() with a blank x-custom-auth-headers value forwards no custom headers (named isBlank branch)")
+		void openSse_withBlankCustomHeaderList_forwardsNoCustomHeaders() {
+			// given — a present but blank x-custom-auth-headers triggers the
+			// named.isBlank()
+			// early return of an empty map; the Authorization header keeps the
+			// header-aware
+			// overload selected
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class), any(), any())).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
+						.header("Authorization", "Bearer z")
+						.header("x-custom-auth-headers", "  ")
+						.build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			verify(ProxyHandlerTests.this.transportFactory).openSse(any(URI.class),
+					org.mockito.ArgumentMatchers.eq("Bearer z"), org.mockito.ArgumentMatchers.eq(Map.of()));
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openStdio() with an inbound Authorization header still opens via the stdio factory (stdio ignores forwarded headers)")
+		void openStdio_withAuthorizationHeader_opensStdioTransport() {
+			// given — stdio's switch arm ignores the forwarded headers, but the header
+			// plumbing (inboundAuthorization / inboundCustomHeaders) still runs through
+			// openProxiedSession
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStdio(any(), any())).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/stdio?command=node")
+						.header("Authorization", "Bearer abc")
+						.header("x-custom-auth-headers", "X-Tenant")
+						.header("X-Tenant", "acme")
+						.build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openStdio(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			verify(ProxyHandlerTests.this.transportFactory).openStdio(any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() opening a new session forwards the inbound Authorization header into the header-aware openStreamable overload")
+		void postMcp_newSessionWithAuthorizationHeader_usesHeaderAwareStreamableFactory() {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class), any(), any()))
+				.willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://up/mcp")
+						.header("Authorization", "Bearer abc")
+						.header("x-custom-auth-headers", "X-Tenant")
+						.header("X-Tenant", "acme")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"));
+
+			// when — a notification frame keeps the relay on the 202 path (no awaiter)
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then — the 3-arg header-aware streamable overload is used for the new
+			// session
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.ACCEPTED);
+			verify(ProxyHandlerTests.this.transportFactory).openStreamable(any(URI.class),
+					org.mockito.ArgumentMatchers.eq("Bearer abc"),
+					org.mockito.ArgumentMatchers.eq(Map.of("X-Tenant", "acme")));
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() opening a new session without inbound auth headers uses the bare single-arg openStreamable overload")
+		void postMcp_newSessionWithoutHeaders_usesBareStreamableFactory() {
+			// given — no inbound auth headers: openSessionAndRelay's noHeaders branch
+			// picks
+			// the 1-arg openStreamable overload
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://up/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.ACCEPTED);
+			verify(ProxyHandlerTests.this.transportFactory).openStreamable(any(URI.class));
+		}
+
+	}
+
 }

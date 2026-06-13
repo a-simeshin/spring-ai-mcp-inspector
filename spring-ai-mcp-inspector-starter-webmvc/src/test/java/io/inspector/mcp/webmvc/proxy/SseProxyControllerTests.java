@@ -28,12 +28,16 @@ import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -48,6 +52,7 @@ import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -84,6 +89,11 @@ class SseProxyControllerTests {
 		given(this.mcpProxy.start(any())).willReturn(Mono.empty());
 		this.controller = new SseProxyController(this.registry, this.transportFactory, this.mcpProxy, this.objectMapper,
 				this.properties);
+	}
+
+	@AfterEach
+	void tearDown() {
+		RequestContextHolder.resetRequestAttributes();
 	}
 
 	private ProxySession newSession(final String id, final McpClientTransport target) {
@@ -296,6 +306,91 @@ class SseProxyControllerTests {
 			// then
 			assertThat(emitter).isNotNull();
 			verify(SseProxyControllerTests.this.registry, never()).put(any());
+		}
+
+	}
+
+	@Nested
+	@DisplayName("buildTargetTransport() — inbound header forwarding")
+	class HeaderForwarding {
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with no request attributes uses the single-arg SSE factory overload")
+		void openSse_withoutRequestAttributes_usesSingleArgOverload() {
+			// given — no RequestContextHolder bound (tearDown clears it)
+			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class)))
+				.willReturn(mock(McpClientTransport.class));
+
+			// when
+			SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null, null, null);
+
+			// then
+			verify(SseProxyControllerTests.this.transportFactory).openSse(URI.create("http://target/sse"));
+			verify(SseProxyControllerTests.this.transportFactory, never()).openSse(any(URI.class), any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() forwards the inbound Authorization and custom headers via the header-aware SSE overload")
+		void openSse_withInboundHeaders_usesHeaderAwareSseOverload() {
+			// given
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
+			request.addHeader("Authorization", "Bearer tok");
+			request.addHeader("x-custom-auth-headers", "X-Tenant");
+			request.addHeader("X-Tenant", "acme");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class), any(), any()))
+				.willReturn(mock(McpClientTransport.class));
+
+			// when
+			SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null, null, null);
+
+			// then
+			verify(SseProxyControllerTests.this.transportFactory).openSse(eq(URI.create("http://target/sse")),
+					eq("Bearer tok"), eq(Map.of("X-Tenant", "acme")));
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with streamable-http forwards inbound headers via the header-aware streamable overload")
+		void openSse_streamableWithInboundHeaders_usesHeaderAwareStreamableOverload() {
+			// given
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
+			request.addHeader("Authorization", "Bearer tok");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			given(SseProxyControllerTests.this.transportFactory.openStreamable(any(URI.class), any(), any()))
+				.willReturn(mock(McpClientTransport.class));
+
+			// when
+			SseProxyControllerTests.this.controller.openSse("streamable-http", "http://target/mcp", null, null, null);
+
+			// then
+			verify(SseProxyControllerTests.this.transportFactory).openStreamable(eq(URI.create("http://target/mcp")),
+					eq("Bearer tok"), eq(Map.of()));
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.MINOR)
+		@Description("openSse() with a bound request but no relevant headers falls back to the single-arg overload")
+		void openSse_withRequestButNoHeaders_usesSingleArgOverload() {
+			// given — bound request that carries neither Authorization nor the
+			// custom-header list
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class)))
+				.willReturn(mock(McpClientTransport.class));
+
+			// when
+			SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null, null, null);
+
+			// then
+			verify(SseProxyControllerTests.this.transportFactory).openSse(URI.create("http://target/sse"));
+			verify(SseProxyControllerTests.this.transportFactory, never()).openSse(any(URI.class), any(), any());
 		}
 
 	}

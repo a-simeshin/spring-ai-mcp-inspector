@@ -212,7 +212,8 @@ class ProxyTargetLossIT {
 				.isEqualTo(404);
 		}
 		catch (java.net.ConnectException | java.net.http.HttpConnectTimeoutException ex) {
-			// Reactive co-tenancy: proxy connector unreachable after upstream loss — session is gone.
+			// Reactive co-tenancy: proxy connector unreachable after upstream loss —
+			// session is gone.
 		}
 	}
 
