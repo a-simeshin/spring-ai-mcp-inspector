@@ -19,8 +19,8 @@ package io.inspector.mcp.webflux.it;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -67,7 +67,7 @@ class WebFluxBootstrapInlineIT {
 	private WebTestClient webTestClient;
 
 	@Autowired
-	private ObjectMapper objectMapper;
+	private JsonMapper objectMapper;
 
 	@Test
 	@Story("Inline bootstrap")

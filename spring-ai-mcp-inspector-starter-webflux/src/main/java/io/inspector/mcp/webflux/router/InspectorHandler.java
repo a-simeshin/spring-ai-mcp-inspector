@@ -32,9 +32,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
 import org.slf4j.Logger;
@@ -99,7 +99,7 @@ public class InspectorHandler {
 
 	private final InspectorAuthTokenProvider tokenProvider;
 
-	private final ObjectMapper objectMapper;
+	private final JsonMapper objectMapper;
 
 	private final InspectorOAuthClient oauthClient;
 
@@ -115,21 +115,21 @@ public class InspectorHandler {
 
 	public InspectorHandler(final TransportDetector transportDetector, final LoopbackMcpClientFactory loopbackFactory,
 			final ExternalStdioClientFactory externalStdioFactory, final InspectorAuthTokenProvider tokenProvider,
-			final ObjectMapper objectMapper) {
+			final JsonMapper objectMapper) {
 		this(transportDetector, loopbackFactory, externalStdioFactory, tokenProvider, objectMapper, null, null, null,
 				null);
 	}
 
 	public InspectorHandler(final TransportDetector transportDetector, final LoopbackMcpClientFactory loopbackFactory,
 			final ExternalStdioClientFactory externalStdioFactory, final InspectorAuthTokenProvider tokenProvider,
-			final ObjectMapper objectMapper, final InspectorOAuthClient oauthClient) {
+			final JsonMapper objectMapper, final InspectorOAuthClient oauthClient) {
 		this(transportDetector, loopbackFactory, externalStdioFactory, tokenProvider, objectMapper, oauthClient, null,
 				null, null);
 	}
 
 	public InspectorHandler(final TransportDetector transportDetector, final LoopbackMcpClientFactory loopbackFactory,
 			final ExternalStdioClientFactory externalStdioFactory, final InspectorAuthTokenProvider tokenProvider,
-			final ObjectMapper objectMapper, final InspectorOAuthClient oauthClient,
+			final JsonMapper objectMapper, final InspectorOAuthClient oauthClient,
 			final McpInspectorProperties properties) {
 		this(transportDetector, loopbackFactory, externalStdioFactory, tokenProvider, objectMapper, oauthClient,
 				properties, null, null);
@@ -137,14 +137,14 @@ public class InspectorHandler {
 
 	public InspectorHandler(final TransportDetector transportDetector, final LoopbackMcpClientFactory loopbackFactory,
 			final ExternalStdioClientFactory externalStdioFactory, final InspectorAuthTokenProvider tokenProvider,
-			final ObjectMapper objectMapper, final InspectorOAuthClient oauthClient,
+			final JsonMapper objectMapper, final InspectorOAuthClient oauthClient,
 			final McpInspectorProperties properties, final InspectorBootstrapAssembler bootstrapAssembler,
 			final BootstrapHtmlRenderer bootstrapHtmlRenderer) {
 		this.transportDetector = transportDetector;
 		this.loopbackFactory = loopbackFactory;
 		this.externalStdioFactory = externalStdioFactory;
 		this.tokenProvider = tokenProvider;
-		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
+		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.oauthClient = (oauthClient != null) ? oauthClient : new InspectorOAuthClient();
 		this.properties = properties;
 		this.bootstrapAssembler = bootstrapAssembler;
@@ -340,13 +340,14 @@ public class InspectorHandler {
 	 * <p>
 	 * Spring Framework 7 routes {@code bodyToMono(JsonNode.class)} through the Jackson 3
 	 * reactive codec, which cannot bind to the Jackson 2 {@code com.fasterxml} node tree
-	 * the inspector is built on. Decode the raw text and parse it with the inspector's own
-	 * Jackson 2 {@link ObjectMapper} instead.
+	 * the inspector is built on. Decode the raw text and parse it with the inspector's
+	 * own Jackson 2 {@link JsonMapper} instead.
 	 * @param request the incoming request
 	 * @return the parsed body, or an empty {@link Mono} when the request has no body
 	 */
 	private Mono<JsonNode> readJsonBody(final ServerRequest request) {
-		return request.bodyToMono(String.class).flatMap((raw) -> Mono.fromCallable(() -> this.objectMapper.readTree(raw)));
+		return request.bodyToMono(String.class)
+			.flatMap((raw) -> Mono.fromCallable(() -> this.objectMapper.readTree(raw)));
 	}
 
 	public Mono<ServerResponse> respond(final ServerRequest request) {
@@ -359,24 +360,22 @@ public class InspectorHandler {
 		if (requestId == null || requestId.isBlank()) {
 			return ServerResponse.badRequest().bodyValue(Map.of("error", "missing requestId"));
 		}
-		return readJsonBody(request)
-			.defaultIfEmpty(this.objectMapper.createObjectNode())
-			.flatMap((body) -> {
-				final boolean completed;
-				if (body.has("error")) {
-					completed = ctx.pendingServerRequests()
-						.completeExceptionally(requestId,
-								new RuntimeException(body.path("error").path("message").asText("rejected")));
-				}
-				else {
-					final JsonNode result = body.has("result") ? body.get("result") : body;
-					completed = ctx.pendingServerRequests().complete(requestId, result);
-				}
-				if (!completed) {
-					return ServerResponse.status(410).bodyValue(Map.of("error", "no pending request: " + requestId));
-				}
-				return ServerResponse.ok().bodyValue(Map.of("ok", true));
-			});
+		return readJsonBody(request).defaultIfEmpty(this.objectMapper.createObjectNode()).flatMap((body) -> {
+			final boolean completed;
+			if (body.has("error")) {
+				completed = ctx.pendingServerRequests()
+					.completeExceptionally(requestId,
+							new RuntimeException(body.path("error").path("message").asText("rejected")));
+			}
+			else {
+				final JsonNode result = body.has("result") ? body.get("result") : body;
+				completed = ctx.pendingServerRequests().complete(requestId, result);
+			}
+			if (!completed) {
+				return ServerResponse.status(410).bodyValue(Map.of("error", "no pending request: " + requestId));
+			}
+			return ServerResponse.ok().bodyValue(Map.of("ok", true));
+		});
 	}
 
 	/**

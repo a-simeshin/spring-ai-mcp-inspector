@@ -29,8 +29,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -84,7 +84,7 @@ public class ProxyHandler {
 
 	private final TransportDetector transportDetector;
 
-	private final ObjectMapper objectMapper;
+	private final JsonMapper objectMapper;
 
 	private final McpInspectorProperties properties;
 
@@ -95,18 +95,18 @@ public class ProxyHandler {
 	private final AtomicInteger listeningPort = new AtomicInteger(-1);
 
 	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
-			final McpProxy mcpProxy, final TransportDetector transportDetector, final ObjectMapper objectMapper) {
+			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper) {
 		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, null);
 	}
 
 	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
-			final McpProxy mcpProxy, final TransportDetector transportDetector, final ObjectMapper objectMapper,
+			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper,
 			final McpInspectorProperties properties) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
 		this.transportDetector = transportDetector;
-		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
+		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.properties = properties;
 		this.timeouts = (properties != null) ? properties.getTimeouts() : new McpInspectorProperties.Timeouts();
 		this.outboundHttpClient = HttpClient.newBuilder().connectTimeout(this.timeouts.getFetchConnect()).build();
@@ -142,22 +142,23 @@ public class ProxyHandler {
 	 * <p>
 	 * Spring Framework 7 routes {@code bodyToMono(JsonNode.class)} through the Jackson 3
 	 * reactive codec, which cannot bind to the Jackson 2 {@code com.fasterxml} node tree
-	 * this proxy is built on. Decode the raw text instead and parse it with the inspector's
-	 * own Jackson 2 {@link ObjectMapper} so the whole proxy stays on a single Jackson.
+	 * this proxy is built on. Decode the raw text instead and parse it with the
+	 * inspector's own Jackson 2 {@link JsonMapper} so the whole proxy stays on a single
+	 * Jackson.
 	 * @param request the incoming request
 	 * @return the parsed body, or an empty {@link Mono} when the request has no body
 	 */
 	private Mono<JsonNode> readJsonBody(final ServerRequest request) {
-		return request.bodyToMono(String.class).flatMap((raw) -> Mono.fromCallable(() -> this.objectMapper.readTree(raw)));
+		return request.bodyToMono(String.class)
+			.flatMap((raw) -> Mono.fromCallable(() -> this.objectMapper.readTree(raw)));
 	}
 
 	public Mono<ServerResponse> fetch(final ServerRequest request) {
-		return readJsonBody(request)
-			.flatMap((body) -> Mono.fromCallable(() -> doFetch(body))
-				.flatMap((envelope) -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(envelope))
-				.onErrorResume((ex) -> ServerResponse.status(502)
-					.bodyValue(Map.of("error",
-							(ex.getMessage() != null) ? ex.getMessage() : ex.getClass().getSimpleName()))));
+		return readJsonBody(request).flatMap((body) -> Mono.fromCallable(() -> doFetch(body))
+			.flatMap((envelope) -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(envelope))
+			.onErrorResume((ex) -> ServerResponse.status(502)
+				.bodyValue(
+						Map.of("error", (ex.getMessage() != null) ? ex.getMessage() : ex.getClass().getSimpleName()))));
 	}
 
 	private Map<String, Object> doFetch(final JsonNode body) throws Exception {
@@ -179,7 +180,7 @@ public class ProxyHandler {
 			.method(method.toUpperCase(), reqBody.isEmpty() ? HttpRequest.BodyPublishers.noBody()
 					: HttpRequest.BodyPublishers.ofString(reqBody));
 		if (init != null && init.has("headers")) {
-			init.get("headers").fields().forEachRemaining((e) -> {
+			init.get("headers").properties().forEach((e) -> {
 				try {
 					rb.header(e.getKey(), e.getValue().asText());
 				}
@@ -333,7 +334,7 @@ public class ProxyHandler {
 		try {
 			final JsonNode node = this.objectMapper.readTree(env);
 			final Map<String, String> out = new LinkedHashMap<>();
-			node.fields().forEachRemaining((e) -> out.put(e.getKey(), e.getValue().asText()));
+			node.properties().forEach((e) -> out.put(e.getKey(), e.getValue().asText()));
 			return out;
 		}
 		catch (final Exception ex) {

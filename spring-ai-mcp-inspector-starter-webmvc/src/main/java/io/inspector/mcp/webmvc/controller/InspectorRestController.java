@@ -28,9 +28,9 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
 import org.slf4j.Logger;
@@ -106,7 +106,7 @@ public class InspectorRestController {
 
 	private final InspectorServerPortHolder portHolder;
 
-	private final ObjectMapper objectMapper;
+	private final JsonMapper objectMapper;
 
 	private final InspectorOAuthClient oauthClient;
 
@@ -117,7 +117,7 @@ public class InspectorRestController {
 	public InspectorRestController(final McpInspectorProperties properties, final TransportDetector transportDetector,
 			final LoopbackMcpClientFactory loopbackFactory, final InspectorAuthTokenProvider authTokenProvider,
 			final InspectorSseEmitterRegistry emitterRegistry, final InspectorServerPortHolder portHolder,
-			final ObjectMapper objectMapper, final InspectorOAuthClient oauthClient,
+			final JsonMapper objectMapper, final InspectorOAuthClient oauthClient,
 			@Value("${spring.application.name:mcp-server}") final String serverName) {
 		this.properties = properties;
 		this.transportDetector = transportDetector;

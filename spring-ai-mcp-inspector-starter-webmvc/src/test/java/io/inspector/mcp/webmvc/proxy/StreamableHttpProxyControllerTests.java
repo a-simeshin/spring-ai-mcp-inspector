@@ -18,8 +18,8 @@ package io.inspector.mcp.webmvc.proxy;
 
 import java.net.URI;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -65,7 +65,7 @@ class StreamableHttpProxyControllerTests {
 
 	private McpProxy mcpProxy;
 
-	private ObjectMapper objectMapper;
+	private JsonMapper objectMapper;
 
 	private StreamableHttpProxyController controller;
 
@@ -74,7 +74,7 @@ class StreamableHttpProxyControllerTests {
 		this.registry = mock(ProxySessionRegistry.class);
 		this.transportFactory = mock(ProxyTransportFactory.class);
 		this.mcpProxy = mock(McpProxy.class);
-		this.objectMapper = new ObjectMapper();
+		this.objectMapper = new JsonMapper();
 		given(this.mcpProxy.start(any())).willReturn(Mono.empty());
 		this.controller = new StreamableHttpProxyController(this.registry, this.transportFactory, this.mcpProxy,
 				this.objectMapper);
@@ -443,7 +443,7 @@ class StreamableHttpProxyControllerTests {
 		@Test
 		@Story("Construction")
 		@Severity(SeverityLevel.MINOR)
-		@Description("constructor falls back to a default ObjectMapper when none supplied")
+		@Description("constructor falls back to a default JsonMapper when none supplied")
 		void constructor_withNullMapper_usesDefault() {
 			// given / when
 			final StreamableHttpProxyController c = new StreamableHttpProxyController(

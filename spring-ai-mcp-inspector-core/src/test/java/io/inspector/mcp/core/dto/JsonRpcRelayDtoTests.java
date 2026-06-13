@@ -18,7 +18,7 @@ package io.inspector.mcp.core.dto;
 
 import java.util.Map;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -36,7 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Feature("JSON-RPC relay DTO")
 class JsonRpcRelayDtoTests {
 
-	private final ObjectMapper mapper = new ObjectMapper();
+	private final JsonMapper mapper = new JsonMapper();
 
 	@Nested
 	@DisplayName("Jackson round-trip")

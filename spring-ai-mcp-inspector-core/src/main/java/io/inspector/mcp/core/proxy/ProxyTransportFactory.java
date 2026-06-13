@@ -20,13 +20,13 @@ import java.net.URI;
 import java.util.List;
 import java.util.Map;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
 import io.modelcontextprotocol.client.transport.ServerParameters;
 import io.modelcontextprotocol.client.transport.SseMessageEndpointValidator;
 import io.modelcontextprotocol.client.transport.StdioClientTransport;
-import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
+import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
 
 /**
@@ -48,14 +48,14 @@ import io.modelcontextprotocol.spec.McpClientTransport;
  */
 public class ProxyTransportFactory {
 
-	private final ObjectMapper objectMapper;
+	private final JsonMapper objectMapper;
 
 	public ProxyTransportFactory() {
-		this(new ObjectMapper());
+		this(new JsonMapper());
 	}
 
-	public ProxyTransportFactory(final ObjectMapper objectMapper) {
-		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
+	public ProxyTransportFactory(final JsonMapper objectMapper) {
+		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 	}
 
 	/**

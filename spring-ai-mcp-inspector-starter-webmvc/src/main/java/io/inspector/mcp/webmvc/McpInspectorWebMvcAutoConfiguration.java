@@ -18,7 +18,7 @@ package io.inspector.mcp.webmvc;
 
 import java.util.List;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -91,6 +91,22 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 		this.properties = properties;
 	}
 
+	/**
+	 * Jackson 2 {@link JsonMapper} backing the inspector's proxy relay, bootstrap
+	 * rendering and MCP {@code json-jackson2} bridge.
+	 *
+	 * <p>
+	 * Spring Boot 4 auto-configures a Jackson 3 mapper by default and no longer exposes a
+	 * {@code tools.jackson.databind.json.JsonMapper} bean, so provide one for the
+	 * inspector internals unless the application already defines its own.
+	 * @return a Jackson 2 object mapper
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	public JsonMapper mcpInspectorObjectMapper() {
+		return new JsonMapper();
+	}
+
 	@Bean
 	@ConditionalOnMissingBean
 	public TransportDetector mcpInspectorTransportDetector(final Environment environment) {
@@ -125,7 +141,7 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public BootstrapHtmlRenderer mcpInspectorBootstrapHtmlRenderer(final ObjectMapper objectMapper) {
+	public BootstrapHtmlRenderer mcpInspectorBootstrapHtmlRenderer(final JsonMapper objectMapper) {
 		return new BootstrapHtmlRenderer(objectMapper);
 	}
 
@@ -166,13 +182,13 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxyTransportFactory mcpInspectorProxyTransportFactory(final ObjectMapper objectMapper) {
+	public ProxyTransportFactory mcpInspectorProxyTransportFactory(final JsonMapper objectMapper) {
 		return new ProxyTransportFactory(objectMapper);
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public McpProxy mcpInspectorMcpProxy(final ObjectMapper objectMapper) {
+	public McpProxy mcpInspectorMcpProxy(final JsonMapper objectMapper) {
 		return new McpProxy(objectMapper);
 	}
 

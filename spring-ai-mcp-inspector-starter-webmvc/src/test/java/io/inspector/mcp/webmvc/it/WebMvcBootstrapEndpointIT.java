@@ -16,8 +16,8 @@
 
 package io.inspector.mcp.webmvc.it;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -60,7 +60,7 @@ class WebMvcBootstrapEndpointIT {
 	private TestRestTemplate restTemplate;
 
 	@Autowired
-	private ObjectMapper objectMapper;
+	private JsonMapper objectMapper;
 
 	@LocalServerPort
 	private int port;

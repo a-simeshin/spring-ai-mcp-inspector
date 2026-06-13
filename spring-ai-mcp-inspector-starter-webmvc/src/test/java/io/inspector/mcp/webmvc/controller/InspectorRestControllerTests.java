@@ -20,8 +20,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentMap;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.qameta.allure.Description;
@@ -89,7 +89,7 @@ class InspectorRestControllerTests {
 
 	private InspectorServerPortHolder portHolder;
 
-	private ObjectMapper objectMapper;
+	private JsonMapper objectMapper;
 
 	private InspectorOAuthClient oauthClient;
 
@@ -104,7 +104,7 @@ class InspectorRestControllerTests {
 		this.authTokenProvider = new InspectorAuthTokenProvider(this.properties);
 		this.emitterRegistry = mock(InspectorSseEmitterRegistry.class);
 		this.portHolder = mock(InspectorServerPortHolder.class);
-		this.objectMapper = new ObjectMapper();
+		this.objectMapper = new JsonMapper();
 		this.oauthClient = mock(InspectorOAuthClient.class);
 		this.controller = new InspectorRestController(this.properties, this.transportDetector, this.loopbackFactory,
 				this.authTokenProvider, this.emitterRegistry, this.portHolder, this.objectMapper, this.oauthClient,

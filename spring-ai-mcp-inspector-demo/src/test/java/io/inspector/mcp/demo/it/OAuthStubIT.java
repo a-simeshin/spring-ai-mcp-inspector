@@ -17,8 +17,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Base64;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 import io.inspector.mcp.demo.DemoApplication;
 import io.qameta.allure.Description;
@@ -65,7 +65,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Feature("Authorization code flow with PKCE")
 class OAuthStubIT {
 
-	private static final ObjectMapper MAPPER = new ObjectMapper();
+	private static final JsonMapper MAPPER = new JsonMapper();
 
 	private static HttpClient http;
 

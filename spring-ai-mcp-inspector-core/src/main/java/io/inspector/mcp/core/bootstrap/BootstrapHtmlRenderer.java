@@ -18,7 +18,8 @@ package io.inspector.mcp.core.bootstrap;
 
 import java.io.IOException;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Shared helper that injects a serialised {@link InspectorBootstrap} into the inspector
@@ -37,9 +38,9 @@ public class BootstrapHtmlRenderer {
 	/** Placeholder literal substituted in {@code index.html}. */
 	public static final String PLACEHOLDER = "<!--MCP_INSPECTOR_BOOTSTRAP-->";
 
-	private final ObjectMapper objectMapper;
+	private final JsonMapper objectMapper;
 
-	public BootstrapHtmlRenderer(final ObjectMapper objectMapper) {
+	public BootstrapHtmlRenderer(final JsonMapper objectMapper) {
 		this.objectMapper = objectMapper;
 	}
 
@@ -52,7 +53,15 @@ public class BootstrapHtmlRenderer {
 	 * @throws IOException if Jackson serialisation fails
 	 */
 	public String renderIndexHtml(final String htmlTemplate, final InspectorBootstrap bootstrap) throws IOException {
-		final String json = this.objectMapper.writeValueAsString(bootstrap);
+		final String json;
+		try {
+			json = this.objectMapper.writeValueAsString(bootstrap);
+		}
+		catch (final JacksonException ex) {
+			// Jackson 3 surfaces serialization failures as an unchecked JacksonException;
+			// preserve this renderer's IOException contract for callers.
+			throw new IOException("Failed to serialize inspector bootstrap", ex);
+		}
 		// Escape any "</" sequence (notably "</script>") so injected JSON cannot
 		// terminate the surrounding <script> element. The JS parser treats
 		// "<\/" as the same character sequence as "</" inside a string literal.

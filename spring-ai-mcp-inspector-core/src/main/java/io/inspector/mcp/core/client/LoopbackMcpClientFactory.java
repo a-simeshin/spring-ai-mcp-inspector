@@ -160,8 +160,10 @@ public class LoopbackMcpClientFactory {
 		}
 		if (handlers.elicitation() != null) {
 			// SDK 2.0 split elicitation into form-mode and url-mode (SEP-1036). Both
-			// ElicitFormRequest and ElicitUrlRequest implement the ElicitRequest interface,
-			// so the single inspector bridge (typed on ElicitRequest) serves either channel;
+			// ElicitFormRequest and ElicitUrlRequest implement the ElicitRequest
+			// interface,
+			// so the single inspector bridge (typed on ElicitRequest) serves either
+			// channel;
 			// the UI branches on the request's mode().
 			final Function<McpSchema.ElicitRequest, McpSchema.ElicitResult> elicitation = handlers.elicitation();
 			spec = spec.elicitation(elicitation::apply);

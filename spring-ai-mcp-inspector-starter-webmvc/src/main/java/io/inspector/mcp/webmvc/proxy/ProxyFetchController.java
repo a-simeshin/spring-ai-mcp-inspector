@@ -23,7 +23,7 @@ import java.net.http.HttpResponse;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -107,7 +107,7 @@ public class ProxyFetchController {
 					: HttpRequest.BodyPublishers.ofString(reqBody));
 		if (init != null && init.has("headers")) {
 			final JsonNode headers = init.get("headers");
-			headers.fields().forEachRemaining((e) -> {
+			headers.properties().forEach((e) -> {
 				try {
 					reqBuilder.header(e.getKey(), e.getValue().asText());
 				}

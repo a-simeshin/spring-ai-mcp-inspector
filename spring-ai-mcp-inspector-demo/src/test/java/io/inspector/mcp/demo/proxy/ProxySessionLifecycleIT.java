@@ -19,8 +19,8 @@ import java.time.Duration;
 import java.util.HashSet;
 import java.util.Set;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.qameta.allure.Description;
@@ -67,7 +67,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Feature("Session lifecycle")
 class ProxySessionLifecycleIT {
 
-	private static final ObjectMapper MAPPER = new ObjectMapper();
+	private static final JsonMapper MAPPER = new JsonMapper();
 
 	private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
 

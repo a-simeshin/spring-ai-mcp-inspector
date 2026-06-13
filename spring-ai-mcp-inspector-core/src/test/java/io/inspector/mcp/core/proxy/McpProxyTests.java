@@ -19,8 +19,8 @@ package io.inspector.mcp.core.proxy;
 import java.time.Duration;
 import java.util.function.Function;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
@@ -52,7 +52,7 @@ import static org.mockito.Mockito.verify;
 @Feature("MCP JSON-RPC frame relay")
 class McpProxyTests {
 
-	private final ObjectMapper mapper = new ObjectMapper();
+	private final JsonMapper mapper = new JsonMapper();
 
 	private McpProxy proxy;
 
@@ -252,9 +252,9 @@ class McpProxyTests {
 	class Constructor {
 
 		@Test
-		@Story("Null ObjectMapper fallback")
+		@Story("Null JsonMapper fallback")
 		@Severity(SeverityLevel.MINOR)
-		@Description("a null ObjectMapper falls back to a default instance and the proxy still wires connect()")
+		@Description("a null JsonMapper falls back to a default instance and the proxy still wires connect()")
 		void constructor_withNullMapper_stillWiresProxy() {
 			// given
 			final McpProxy nullMapperProxy = new McpProxy(null);

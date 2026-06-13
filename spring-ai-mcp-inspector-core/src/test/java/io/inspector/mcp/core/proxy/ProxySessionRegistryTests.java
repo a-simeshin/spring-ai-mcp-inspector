@@ -16,7 +16,7 @@
 
 package io.inspector.mcp.core.proxy;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;

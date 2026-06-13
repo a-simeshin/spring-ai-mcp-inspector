@@ -16,9 +16,9 @@
 
 package io.inspector.mcp.core.proxy;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
@@ -53,12 +53,12 @@ public final class McpProxy {
 
 	private static final Logger LOG = LoggerFactory.getLogger(McpProxy.class);
 
-	private final ObjectMapper objectMapper;
+	private final JsonMapper objectMapper;
 
 	private final JacksonMcpJsonMapper mcpJsonMapper;
 
-	public McpProxy(final ObjectMapper objectMapper) {
-		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
+	public McpProxy(final JsonMapper objectMapper) {
+		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.mcpJsonMapper = new JacksonMcpJsonMapper(this.objectMapper);
 	}
 

@@ -12,9 +12,9 @@ package io.inspector.mcp.demo.stress;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import io.modelcontextprotocol.client.McpSyncClient;
-import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
+import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.Content;
@@ -96,7 +96,7 @@ final class StressTestSupport {
 		}
 	}
 
-	private static final ObjectMapper JSON = new ObjectMapper();
+	private static final JsonMapper JSON = new JsonMapper();
 
 	private static final JacksonMcpJsonMapper MCP_JSON = new JacksonMcpJsonMapper(JSON);
 

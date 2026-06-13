@@ -19,12 +19,12 @@ package io.inspector.mcp.core.client;
 import java.util.List;
 import java.util.Map;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.ServerParameters;
 import io.modelcontextprotocol.client.transport.StdioClientTransport;
-import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
+import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
 
 /**
  * Builds {@link McpSyncClient} instances that spawn an <em>external</em> MCP server as a
@@ -35,14 +35,14 @@ import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
  */
 public class ExternalStdioClientFactory {
 
-	private final ObjectMapper objectMapper;
+	private final JsonMapper objectMapper;
 
 	public ExternalStdioClientFactory() {
-		this(new ObjectMapper());
+		this(new JsonMapper());
 	}
 
-	public ExternalStdioClientFactory(final ObjectMapper objectMapper) {
-		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
+	public ExternalStdioClientFactory(final JsonMapper objectMapper) {
+		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 	}
 
 	/**

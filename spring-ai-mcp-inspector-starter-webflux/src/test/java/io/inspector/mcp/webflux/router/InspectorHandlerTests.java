@@ -19,8 +19,8 @@ package io.inspector.mcp.webflux.router;
 import java.util.List;
 import java.util.Map;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.qameta.allure.Description;
@@ -94,7 +94,7 @@ class InspectorHandlerTests {
 
 	private McpInspectorProperties properties;
 
-	private ObjectMapper objectMapper;
+	private JsonMapper objectMapper;
 
 	private InspectorHandler handler;
 
@@ -106,7 +106,7 @@ class InspectorHandlerTests {
 		this.oauthClient = mock(InspectorOAuthClient.class);
 		this.bootstrapAssembler = mock(InspectorBootstrapAssembler.class);
 		this.bootstrapHtmlRenderer = mock(BootstrapHtmlRenderer.class);
-		this.objectMapper = new ObjectMapper();
+		this.objectMapper = new JsonMapper();
 		this.properties = new McpInspectorProperties();
 		this.properties.setAuthToken("fixed-test-token");
 		this.tokenProvider = new InspectorAuthTokenProvider(this.properties);
@@ -1163,9 +1163,9 @@ class InspectorHandlerTests {
 		@Test
 		@Story("Construction")
 		@Severity(SeverityLevel.MINOR)
-		@Description("a null objectMapper falls back to a fresh ObjectMapper (defensive null branch) and still dispatches JSON-RPC")
+		@Description("a null objectMapper falls back to a fresh JsonMapper (defensive null branch) and still dispatches JSON-RPC")
 		void constructor_withNullObjectMapper_fallsBackToDefaultMapper() {
-			// given — null objectMapper triggers the defensive `new ObjectMapper()`
+			// given — null objectMapper triggers the defensive `new JsonMapper()`
 			// branch
 			final InspectorHandler nullMapperHandler = new InspectorHandler(
 					InspectorHandlerTests.this.transportDetector, InspectorHandlerTests.this.loopbackFactory,

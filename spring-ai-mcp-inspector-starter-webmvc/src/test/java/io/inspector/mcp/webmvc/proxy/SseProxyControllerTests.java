@@ -21,8 +21,8 @@ import java.net.URI;
 import java.util.List;
 import java.util.Map;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -68,7 +68,7 @@ class SseProxyControllerTests {
 
 	private McpProxy mcpProxy;
 
-	private ObjectMapper objectMapper;
+	private JsonMapper objectMapper;
 
 	private McpInspectorProperties properties;
 
@@ -79,7 +79,7 @@ class SseProxyControllerTests {
 		this.registry = mock(ProxySessionRegistry.class);
 		this.transportFactory = mock(ProxyTransportFactory.class);
 		this.mcpProxy = mock(McpProxy.class);
-		this.objectMapper = new ObjectMapper();
+		this.objectMapper = new JsonMapper();
 		this.properties = new McpInspectorProperties();
 		given(this.mcpProxy.start(any())).willReturn(Mono.empty());
 		this.controller = new SseProxyController(this.registry, this.transportFactory, this.mcpProxy, this.objectMapper,
@@ -384,7 +384,7 @@ class SseProxyControllerTests {
 		@Test
 		@Story("Construction")
 		@Severity(SeverityLevel.MINOR)
-		@Description("constructor falls back to a default ObjectMapper when none supplied")
+		@Description("constructor falls back to a default JsonMapper when none supplied")
 		void constructor_withNullMapper_usesDefault() {
 			// given / when
 			final SseProxyController c = new SseProxyController(SseProxyControllerTests.this.registry,

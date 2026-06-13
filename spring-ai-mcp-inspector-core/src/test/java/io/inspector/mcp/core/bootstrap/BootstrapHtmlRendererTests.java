@@ -18,7 +18,7 @@ package io.inspector.mcp.core.bootstrap;
 
 import java.io.IOException;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -39,7 +39,7 @@ import static org.mockito.Mockito.mock;
 @Feature("Bootstrap HTML renderer")
 class BootstrapHtmlRendererTests {
 
-	private final BootstrapHtmlRenderer renderer = new BootstrapHtmlRenderer(new ObjectMapper());
+	private final BootstrapHtmlRenderer renderer = new BootstrapHtmlRenderer(new JsonMapper());
 
 	@Nested
 	@DisplayName("renderIndexHtml()")
@@ -105,9 +105,9 @@ class BootstrapHtmlRendererTests {
 		@Description("renderIndexHtml() propagates a Jackson serialization failure as IOException")
 		void render_whenSerializationFails_throwsIoException() throws Exception {
 			// given
-			final ObjectMapper failing = mock(ObjectMapper.class);
+			final JsonMapper failing = mock(JsonMapper.class);
 			given(failing.writeValueAsString(org.mockito.ArgumentMatchers.any()))
-				.willThrow(new com.fasterxml.jackson.core.JsonProcessingException("boom") {
+				.willThrow(new tools.jackson.core.JacksonException("boom") {
 				});
 			final BootstrapHtmlRenderer failingRenderer = new BootstrapHtmlRenderer(failing);
 

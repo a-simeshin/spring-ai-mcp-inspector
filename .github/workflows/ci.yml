@@ -1,0 +1,53 @@
+name: CI
+
+# Build + test gate for the development branches. Runs the full `mvn verify`
+# (unit + integration tests and the quality gates: spring-javaformat, checkstyle,
+# SpotBugs and the JaCoCo coverage check) so breakages surface per-commit rather
+# than only at release time.
+#
+# The 2.x line (Spring Boot 4 / Spring AI 2.0) is proven on both the Java 17
+# baseline and the recommended Java 21; the 1.x maintenance line only needs 17.
+
+on:
+  push:
+    branches:
+      - main
+      - 'develop/**'
+  pull_request:
+    branches:
+      - main
+      - 'develop/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (JDK ${{ matrix.java }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['17', '21']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Selenide UI integration tests (InspectorUiIT, UiBigDataIT) and the -Pe2e
+      # E2E tests drive a real browser via WebDriverManager; provide one.
+      - name: Set up Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+
+      - name: Build, test and gates
+        run: ./mvnw -B -ntp verify

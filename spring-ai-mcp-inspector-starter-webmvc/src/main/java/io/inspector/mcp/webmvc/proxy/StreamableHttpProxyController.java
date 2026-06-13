@@ -22,8 +22,8 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -88,23 +88,23 @@ public class StreamableHttpProxyController {
 
 	private final McpProxy mcpProxy;
 
-	private final ObjectMapper objectMapper;
+	private final JsonMapper objectMapper;
 
 	private final McpInspectorProperties properties;
 
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
-			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final ObjectMapper objectMapper) {
+			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper) {
 		this(registry, transportFactory, mcpProxy, objectMapper, null);
 	}
 
 	@Autowired
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
-			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final ObjectMapper objectMapper,
+			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
 			final McpInspectorProperties properties) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
-		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
+		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.properties = properties;
 	}
 

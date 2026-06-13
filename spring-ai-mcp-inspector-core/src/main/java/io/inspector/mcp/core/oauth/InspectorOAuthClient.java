@@ -27,7 +27,7 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.springframework.util.Assert;
 
 /**
@@ -45,15 +45,15 @@ public class InspectorOAuthClient {
 
 	private final HttpClient httpClient;
 
-	private final ObjectMapper objectMapper;
+	private final JsonMapper objectMapper;
 
 	public InspectorOAuthClient() {
-		this(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(), new ObjectMapper());
+		this(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build(), new JsonMapper());
 	}
 
-	public InspectorOAuthClient(final HttpClient httpClient, final ObjectMapper objectMapper) {
+	public InspectorOAuthClient(final HttpClient httpClient, final JsonMapper objectMapper) {
 		this.httpClient = (httpClient != null) ? httpClient : HttpClient.newHttpClient();
-		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
+		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 	}
 
 	/**

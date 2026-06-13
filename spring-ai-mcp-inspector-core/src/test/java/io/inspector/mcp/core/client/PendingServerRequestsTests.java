@@ -19,8 +19,8 @@ package io.inspector.mcp.core.client;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.node.TextNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.StringNode;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -41,7 +41,7 @@ class PendingServerRequestsTests {
 
 	private final PendingServerRequests pending = new PendingServerRequests();
 
-	private static final JsonNode RESULT = new TextNode("answer");
+	private static final JsonNode RESULT = new StringNode("answer");
 
 	@Nested
 	@DisplayName("create()")

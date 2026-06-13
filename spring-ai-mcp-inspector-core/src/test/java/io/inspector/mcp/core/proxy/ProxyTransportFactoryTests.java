@@ -20,7 +20,7 @@ import java.net.URI;
 import java.util.List;
 import java.util.Map;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
 import io.modelcontextprotocol.client.transport.StdioClientTransport;
@@ -45,7 +45,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Feature("Proxy transport factory")
 class ProxyTransportFactoryTests {
 
-	private final ProxyTransportFactory factory = new ProxyTransportFactory(new ObjectMapper());
+	private final ProxyTransportFactory factory = new ProxyTransportFactory(new JsonMapper());
 
 	@Nested
 	@DisplayName("openSse()")
@@ -207,7 +207,7 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Construction")
 		@Severity(SeverityLevel.MINOR)
-		@Description("the no-arg constructor builds a usable factory with a default ObjectMapper")
+		@Description("the no-arg constructor builds a usable factory with a default JsonMapper")
 		void noArgConstructor_buildsUsableFactory() {
 			// given
 			final ProxyTransportFactory defaultFactory = new ProxyTransportFactory();

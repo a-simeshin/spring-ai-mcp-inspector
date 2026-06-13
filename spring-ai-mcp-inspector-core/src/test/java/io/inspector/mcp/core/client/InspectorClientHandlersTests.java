@@ -107,7 +107,8 @@ class InspectorClientHandlersTests {
 		void elicitation_whenInvoked_dispatchesRequestAndShapesResult() {
 			// given
 			final Function<McpSchema.ElicitRequest, McpSchema.ElicitResult> elicitation = mock(Function.class);
-			final McpSchema.ElicitRequest request = McpSchema.ElicitRequest.builder("name?", java.util.Map.of()).build();
+			final McpSchema.ElicitRequest request = McpSchema.ElicitRequest.builder("name?", java.util.Map.of())
+				.build();
 			final McpSchema.ElicitResult result = McpSchema.ElicitResult.builder()
 				.message(McpSchema.ElicitResult.Action.ACCEPT)
 				.content(java.util.Map.of("name", "value"))

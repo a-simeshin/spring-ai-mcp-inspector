@@ -22,7 +22,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Optional;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -49,7 +49,7 @@ class InspectorOAuthClientTests {
 
 	private final HttpClient httpClient = mock(HttpClient.class);
 
-	private final InspectorOAuthClient client = new InspectorOAuthClient(this.httpClient, new ObjectMapper());
+	private final InspectorOAuthClient client = new InspectorOAuthClient(this.httpClient, new JsonMapper());
 
 	@SuppressWarnings("unchecked")
 	private static HttpResponse<String> response(final int status, final String body) {
@@ -213,7 +213,7 @@ class InspectorOAuthClientTests {
 		@Test
 		@Story("Null collaborators fallback")
 		@Severity(SeverityLevel.MINOR)
-		@Description("null HttpClient/ObjectMapper fall back to defaults and the client still builds URLs")
+		@Description("null HttpClient/JsonMapper fall back to defaults and the client still builds URLs")
 		void constructor_withNulls_buildsUsableClient() {
 			// given
 			final InspectorOAuthClient defaulted = new InspectorOAuthClient(null, null);

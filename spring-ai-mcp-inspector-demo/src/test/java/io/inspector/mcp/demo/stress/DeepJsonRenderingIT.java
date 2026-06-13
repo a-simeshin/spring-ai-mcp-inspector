@@ -12,8 +12,8 @@ package io.inspector.mcp.demo.stress;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
 import io.inspector.mcp.demo.DemoApplication;
@@ -59,7 +59,7 @@ class DeepJsonRenderingIT {
 
 	private static final int EXPECTED_DEPTH = 50;
 
-	private final ObjectMapper mapper = new ObjectMapper();
+	private final JsonMapper mapper = new JsonMapper();
 
 	@Autowired
 	private LoopbackMcpClientFactory loopbackFactory;

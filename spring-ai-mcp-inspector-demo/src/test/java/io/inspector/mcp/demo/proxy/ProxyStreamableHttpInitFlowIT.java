@@ -17,9 +17,9 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -66,7 +66,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ProxyStreamableHttpInitFlowIT {
 
 	/** Jackson instance reused across requests; the proxy returns/parses JSON only. */
-	private static final ObjectMapper MAPPER = new ObjectMapper();
+	private static final JsonMapper MAPPER = new JsonMapper();
 
 	/**
 	 * Shared HTTP client; bound to a short connect-timeout to fail fast on bring-up

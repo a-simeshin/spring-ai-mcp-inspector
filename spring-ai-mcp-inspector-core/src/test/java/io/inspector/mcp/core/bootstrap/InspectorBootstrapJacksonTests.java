@@ -19,7 +19,7 @@ package io.inspector.mcp.core.bootstrap;
 import java.util.List;
 import java.util.Map;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -54,7 +54,7 @@ class InspectorBootstrapJacksonTests {
 		bootstrap.getExtra().put("featureFlag", "on");
 
 		// when
-		final String json = new ObjectMapper().writeValueAsString(bootstrap);
+		final String json = new JsonMapper().writeValueAsString(bootstrap);
 
 		// then
 		assertThat(json).contains("\"authToken\":\"token-abc\"")

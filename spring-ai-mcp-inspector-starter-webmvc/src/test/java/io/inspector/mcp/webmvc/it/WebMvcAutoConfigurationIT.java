@@ -19,8 +19,8 @@ package io.inspector.mcp.webmvc.it;
 import java.util.List;
 import java.util.Map;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -71,7 +71,7 @@ class WebMvcAutoConfigurationIT {
 	private TestRestTemplate restTemplate;
 
 	@Autowired
-	private ObjectMapper objectMapper;
+	private JsonMapper objectMapper;
 
 	@Autowired
 	private InspectorServerPortHolder portHolder;
