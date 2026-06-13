@@ -92,6 +92,90 @@ class ProxyTransportFactoryTests {
 				.hasMessageContaining("sseUri");
 		}
 
+		@Test
+		@Story("Header forwarding — auth only")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() three-arg overload with an authorization value and no custom headers "
+				+ "returns a non-null SSE transport")
+		void openSse_withAuthorizationOnly_returnsSseTransport() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri,
+					"Bearer tok-123", null);
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Header forwarding — custom headers only")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() three-arg overload with no authorization but with custom headers "
+				+ "returns a non-null SSE transport")
+		void openSse_withCustomHeadersOnly_returnsSseTransport() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+					Map.of("X-Tenant", "acme"));
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Header forwarding — auth and custom headers")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() three-arg overload with both authorization and custom headers "
+				+ "returns a non-null SSE transport")
+		void openSse_withAuthAndCustomHeaders_returnsSseTransport() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri,
+					"Bearer tok-abc", Map.of("X-Tenant", "acme"));
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Header forwarding — both null/empty")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() three-arg overload with null authorization and empty custom headers "
+				+ "behaves like the single-arg overload and returns a non-null SSE transport")
+		void openSse_withNullAuthAndEmptyCustomHeaders_returnsSseTransport() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+					Map.of());
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Restricted header swallowed")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() does not propagate an IllegalArgumentException caused by a restricted "
+				+ "custom header name — the transport is still returned")
+		void openSse_withRestrictedCustomHeaderName_doesNotThrow() {
+			// given — "host" is a restricted header in Java's HttpClient
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when & then — must not throw
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+					Map.of("host", "evil.example.com"));
+
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
 	}
 
 	@Nested
@@ -137,6 +221,90 @@ class ProxyTransportFactoryTests {
 			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openStreamable(null))
 				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("mcpUri");
+		}
+
+		@Test
+		@Story("Header forwarding — auth only")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openStreamable() three-arg overload with an authorization value and no custom headers "
+				+ "returns a non-null streamable transport")
+		void openStreamable_withAuthorizationOnly_returnsStreamableTransport() {
+			// given
+			final URI mcpUri = URI.create("http://127.0.0.1:8080/mcp");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri,
+					"Bearer tok-123", null);
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientStreamableHttpTransport.class);
+		}
+
+		@Test
+		@Story("Header forwarding — custom headers only")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openStreamable() three-arg overload with no authorization but with custom headers "
+				+ "returns a non-null streamable transport")
+		void openStreamable_withCustomHeadersOnly_returnsStreamableTransport() {
+			// given
+			final URI mcpUri = URI.create("http://127.0.0.1:8080/mcp");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri, null,
+					Map.of("X-Tenant", "acme"));
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientStreamableHttpTransport.class);
+		}
+
+		@Test
+		@Story("Header forwarding — auth and custom headers")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openStreamable() three-arg overload with both authorization and custom headers "
+				+ "returns a non-null streamable transport")
+		void openStreamable_withAuthAndCustomHeaders_returnsStreamableTransport() {
+			// given
+			final URI mcpUri = URI.create("http://127.0.0.1:8080/mcp");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri,
+					"Bearer tok-abc", Map.of("X-Tenant", "acme"));
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientStreamableHttpTransport.class);
+		}
+
+		@Test
+		@Story("Header forwarding — both null/empty")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openStreamable() three-arg overload with null authorization and empty custom headers "
+				+ "behaves like the single-arg overload and returns a non-null streamable transport")
+		void openStreamable_withNullAuthAndEmptyCustomHeaders_returnsStreamableTransport() {
+			// given
+			final URI mcpUri = URI.create("http://127.0.0.1:8080/mcp");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri, null,
+					Map.of());
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientStreamableHttpTransport.class);
+		}
+
+		@Test
+		@Story("Restricted header swallowed")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openStreamable() does not propagate an IllegalArgumentException caused by a restricted "
+				+ "custom header name — the transport is still returned")
+		void openStreamable_withRestrictedCustomHeaderName_doesNotThrow() {
+			// given — "host" is a restricted header in Java's HttpClient
+			final URI mcpUri = URI.create("http://127.0.0.1:8080/mcp");
+
+			// when & then — must not throw
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri, null,
+					Map.of("host", "evil.example.com"));
+
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientStreamableHttpTransport.class);
 		}
 
 	}

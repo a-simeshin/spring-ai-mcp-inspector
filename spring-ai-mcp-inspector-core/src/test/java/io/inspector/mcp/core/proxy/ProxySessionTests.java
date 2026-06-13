@@ -186,4 +186,83 @@ class ProxySessionTests {
 
 	}
 
+	@Nested
+	@DisplayName("failUpstream()")
+	class FailUpstream {
+
+		@Test
+		@Story("Error propagation")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("failUpstream(error) errors the targetToBrowser sink with the supplied throwable "
+				+ "and sets isUpstreamTerminated() to true")
+		void failUpstream_withError_errorsSinkAndSetsTerminatedFlag() {
+			// given
+			final ProxySession session = newSession();
+			final RuntimeException cause = new RuntimeException("upstream gone");
+
+			// when
+			session.failUpstream(cause);
+
+			// then
+			assertThat(session.isUpstreamTerminated()).isTrue();
+			StepVerifier.create(ProxySessionTests.this.targetToBrowser.asFlux())
+				.expectErrorMatches(
+						(err) -> err instanceof RuntimeException && "upstream gone".equals(err.getMessage()))
+				.verify();
+		}
+
+		@Test
+		@Story("Null completes sink")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("failUpstream(null) completes the targetToBrowser sink gracefully "
+				+ "and sets isUpstreamTerminated() to true")
+		void failUpstream_withNull_completesSinkAndSetsTerminatedFlag() {
+			// given
+			final ProxySession session = newSession();
+
+			// when
+			session.failUpstream(null);
+
+			// then
+			assertThat(session.isUpstreamTerminated()).isTrue();
+			StepVerifier.create(ProxySessionTests.this.targetToBrowser.asFlux()).verifyComplete();
+		}
+
+		@Test
+		@Story("Idempotency")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a second failUpstream() call is a no-op: the flag stays true and the sink is signalled only once")
+		void failUpstream_calledTwice_isIdempotent() {
+			// given
+			final ProxySession session = newSession();
+			final RuntimeException first = new RuntimeException("first");
+			final RuntimeException second = new RuntimeException("second");
+
+			// when
+			session.failUpstream(first);
+			session.failUpstream(second); // must be a no-op
+
+			// then
+			assertThat(session.isUpstreamTerminated()).isTrue();
+			// the sink was errored by the first call; the flux sees exactly one terminal
+			// signal
+			StepVerifier.create(ProxySessionTests.this.targetToBrowser.asFlux())
+				.expectErrorMatches((err) -> "first".equals(err.getMessage()))
+				.verify();
+		}
+
+		@Test
+		@Story("isUpstreamTerminated initial state")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("isUpstreamTerminated() returns false on a freshly constructed session")
+		void isUpstreamTerminated_initiallyFalse() {
+			// given / when
+			final ProxySession session = newSession();
+
+			// then
+			assertThat(session.isUpstreamTerminated()).isFalse();
+		}
+
+	}
+
 }

@@ -16,6 +16,8 @@
 
 package io.inspector.mcp.core.proxy;
 
+import java.time.Duration;
+
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -200,6 +202,151 @@ class ProxySessionRegistryTests {
 
 			// then
 			assertThat(size).isEqualTo(2);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("setInactivityBudget()")
+	class SetInactivityBudget {
+
+		@Test
+		@Story("Valid budget")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("setInactivityBudget() with a positive Duration is accepted; reap() uses it to evict idle sessions")
+		void setInactivityBudget_withPositiveDuration_isAccepted() throws InterruptedException {
+			// given — 1 ms budget so any session is immediately idle
+			ProxySessionRegistryTests.this.registry.setInactivityBudget(Duration.ofMillis(1));
+			ProxySessionRegistryTests.this.registry.put(sessionWith("s-1", mockTransport()));
+			Thread.sleep(5);
+
+			// when
+			ProxySessionRegistryTests.this.registry.reap();
+
+			// then — session was idle past the 1 ms budget and was evicted
+			assertThat(ProxySessionRegistryTests.this.registry.size()).isZero();
+		}
+
+		@Test
+		@Story("Null falls back to default")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("setInactivityBudget(null) falls back to the 30-minute default so reap() keeps a recent session")
+		void setInactivityBudget_withNull_fallsBackToThirtyMinuteDefault() {
+			// given
+			ProxySessionRegistryTests.this.registry.setInactivityBudget(null);
+			ProxySessionRegistryTests.this.registry.put(sessionWith("s-1", mockTransport()));
+
+			// when — reap immediately; the session was just created so it is not idle
+			ProxySessionRegistryTests.this.registry.reap();
+
+			// then — session was kept because the 30-minute default budget is not
+			// exceeded
+			assertThat(ProxySessionRegistryTests.this.registry.size()).isEqualTo(1);
+		}
+
+		@Test
+		@Story("Zero falls back to default")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("setInactivityBudget(Duration.ZERO) falls back to the 30-minute default")
+		void setInactivityBudget_withZero_fallsBackToDefault() {
+			// given
+			ProxySessionRegistryTests.this.registry.setInactivityBudget(Duration.ZERO);
+			ProxySessionRegistryTests.this.registry.put(sessionWith("s-1", mockTransport()));
+
+			// when
+			ProxySessionRegistryTests.this.registry.reap();
+
+			// then — default 30-minute budget keeps the freshly-created session alive
+			assertThat(ProxySessionRegistryTests.this.registry.size()).isEqualTo(1);
+		}
+
+		@Test
+		@Story("Negative falls back to default")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("setInactivityBudget() with a negative Duration falls back to the 30-minute default")
+		void setInactivityBudget_withNegative_fallsBackToDefault() {
+			// given
+			ProxySessionRegistryTests.this.registry.setInactivityBudget(Duration.ofSeconds(-1));
+			ProxySessionRegistryTests.this.registry.put(sessionWith("s-1", mockTransport()));
+
+			// when
+			ProxySessionRegistryTests.this.registry.reap();
+
+			// then — default 30-minute budget keeps the freshly-created session alive
+			assertThat(ProxySessionRegistryTests.this.registry.size()).isEqualTo(1);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("reap()")
+	class Reap {
+
+		@Test
+		@Story("Closed session eviction")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("reap() evicts a session that is already closed, routing eviction through removeAndClose()")
+		void reap_withClosedSession_evictsItViaRemoveAndClose() {
+			// given
+			final McpClientTransport transport = mockTransport();
+			final ProxySession session = sessionWith("s-1", transport);
+			ProxySessionRegistryTests.this.registry.put(session);
+			session.close();
+
+			// when
+			ProxySessionRegistryTests.this.registry.reap();
+
+			// then — the session was removed from the registry
+			assertThat(ProxySessionRegistryTests.this.registry.size()).isZero();
+			assertThat(ProxySessionRegistryTests.this.registry.get("s-1")).isNull();
+		}
+
+		@Test
+		@Story("Idle session eviction")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("reap() evicts a live session whose lastActivity is older than the inactivity budget")
+		void reap_withIdleSession_evictsIt() throws InterruptedException {
+			// given
+			ProxySessionRegistryTests.this.registry.setInactivityBudget(Duration.ofMillis(1));
+			final McpClientTransport transport = mockTransport();
+			ProxySessionRegistryTests.this.registry.put(sessionWith("s-idle", transport));
+			Thread.sleep(5);
+
+			// when
+			ProxySessionRegistryTests.this.registry.reap();
+
+			// then
+			assertThat(ProxySessionRegistryTests.this.registry.size()).isZero();
+			// removeAndClose closed the transport a second time (session.close() is
+			// idempotent)
+			verify(transport).closeGracefully();
+		}
+
+		@Test
+		@Story("Live session kept")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("reap() keeps a session that is open and whose lastActivity is within the budget")
+		void reap_withRecentlyActiveSession_keepsIt() {
+			// given — default 30-minute budget; session was just created
+			ProxySessionRegistryTests.this.registry.put(sessionWith("s-live", mockTransport()));
+
+			// when
+			ProxySessionRegistryTests.this.registry.reap();
+
+			// then
+			assertThat(ProxySessionRegistryTests.this.registry.size()).isEqualTo(1);
+		}
+
+		@Test
+		@Story("Empty registry")
+		@Severity(SeverityLevel.MINOR)
+		@Description("reap() on an empty registry is a no-op and leaves size at zero")
+		void reap_withEmptyRegistry_isNoOp() {
+			// when
+			ProxySessionRegistryTests.this.registry.reap();
+
+			// then
+			assertThat(ProxySessionRegistryTests.this.registry.size()).isZero();
 		}
 
 	}
