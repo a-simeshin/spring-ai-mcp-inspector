@@ -62,6 +62,14 @@ import static org.mockito.Mockito.verify;
  * assertions cover the request/notification split on {@code POST /mcp}, the
  * session-id-header behaviour, the {@code GET}/{@code DELETE} branches and the
  * request/response correlation via the replay sink.
+ *
+ * <p>
+ * After the WAF-safe loopback fix, a {@code null} url is resolved to the loopback
+ * {@code /mcp} endpoint server-side (via {@code ProxyTargetResolver}). In unit tests the
+ * controller is constructed without a {@code portHolder}, so {@code loopbackPort()} falls
+ * back to 8080. Consequently, calling {@code postMcp(null, null, body)} no longer returns
+ * 400; instead the resolver produces {@code http://127.0.0.1:8080/mcp} and the mocked
+ * factory is invoked.
  */
 @Epic("WebMvc Inspector")
 @Feature("StreamableHttpProxyController")
@@ -106,18 +114,36 @@ class StreamableHttpProxyControllerTests {
 		@Test
 		@Story("New session")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("postMcp() without a session id and without url returns 400")
-		void postMcp_withoutSessionAndUrl_returns400() throws Exception {
-			// given
+		@Description("postMcp() without a session id and without url resolves to loopback and calls the transport factory")
+		void postMcp_withoutSessionAndUrl_resolvesToLoopbackAndOpensSession() throws Exception {
+			// given — null url is resolved to http://127.0.0.1:8080/mcp by
+			// ProxyTargetResolver;
+			// the factory is stubbed to return a transport so the session opens cleanly
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode answer = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}");
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(answer);
+				return Mono.empty();
+			});
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
 
-			// when
+			// when — no url: ProxyTargetResolver resolves blank to
+			// http://127.0.0.1:8080/mcp
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
 					null, body);
 
-			// then
-			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			// then — NOT 400; the factory is called with the loopback URI and a session
+			// is
+			// opened
+			assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.BAD_REQUEST);
+			verify(StreamableHttpProxyControllerTests.this.transportFactory)
+				.openStreamable(URI.create("http://127.0.0.1:8080/mcp"));
+			verify(StreamableHttpProxyControllerTests.this.registry).put(any(ProxySession.class));
 		}
 
 		@Test

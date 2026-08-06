@@ -48,6 +48,7 @@ import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
+import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
@@ -115,6 +116,11 @@ public class ProxyHandler {
 	@EventListener
 	public void onWebServerStarted(final WebServerInitializedEvent event) {
 		this.listeningPort.set(event.getWebServer().getPort());
+	}
+
+	private int loopbackPort() {
+		final int port = this.listeningPort.get();
+		return (port > 0) ? port : 8080;
 	}
 
 	// ---------------------------------------------------------------------
@@ -338,12 +344,16 @@ public class ProxyHandler {
 		final String type = (transportType != null) ? transportType.toLowerCase() : "sse";
 		final boolean noHeaders = authorization == null && (customHeaders == null || customHeaders.isEmpty());
 		return switch (type) {
-			case "sse" -> noHeaders ? this.transportFactory.openSse(URI.create(requireUrl(url, "sse")))
-					: this.transportFactory.openSse(URI.create(requireUrl(url, "sse")), authorization, customHeaders);
-			case "streamable-http" ->
-				noHeaders ? this.transportFactory.openStreamable(URI.create(requireUrl(url, "streamable-http")))
-						: this.transportFactory.openStreamable(URI.create(requireUrl(url, "streamable-http")),
-								authorization, customHeaders);
+			case "sse" -> {
+				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/sse");
+				yield noHeaders ? this.transportFactory.openSse(target)
+						: this.transportFactory.openSse(target, authorization, customHeaders);
+			}
+			case "streamable-http" -> {
+				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
+				yield noHeaders ? this.transportFactory.openStreamable(target)
+						: this.transportFactory.openStreamable(target, authorization, customHeaders);
+			}
 			case "stdio" -> {
 				if (command == null || command.isBlank()) {
 					throw new IllegalArgumentException(
@@ -359,13 +369,6 @@ public class ProxyHandler {
 			}
 			default -> throw new IllegalArgumentException("unsupported transportType: " + transportType);
 		};
-	}
-
-	private static String requireUrl(final String url, final String type) {
-		if (url == null || url.isBlank()) {
-			throw new IllegalArgumentException("missing required 'url' query parameter for " + type + " transport");
-		}
-		return url;
 	}
 
 	private Map<String, String> parseEnv(final String env) {
@@ -436,16 +439,16 @@ public class ProxyHandler {
 	 */
 	private Mono<ServerResponse> openSessionAndRelay(final String url, final JsonNode body, final String authorization,
 			final Map<String, String> customHeaders) {
-		if (url == null || url.isBlank()) {
-			return ServerResponse.badRequest()
-				.bodyValue(Map.of("error", "missing required 'url' query parameter for streamable-http transport"));
-		}
+		// Blank/relative url is the WAF-safe same-origin default — resolved to the
+		// loopback MCP endpoint server-side (ProxyTargetResolver); only an explicit
+		// absolute url targets a non-loopback server.
 		final String sessionId = UUID.randomUUID().toString();
 		final boolean noHeaders = authorization == null && (customHeaders == null || customHeaders.isEmpty());
 		final McpClientTransport target;
 		try {
-			target = noHeaders ? this.transportFactory.openStreamable(URI.create(url))
-					: this.transportFactory.openStreamable(URI.create(url), authorization, customHeaders);
+			final URI resolved = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
+			target = noHeaders ? this.transportFactory.openStreamable(resolved)
+					: this.transportFactory.openStreamable(resolved, authorization, customHeaders);
 		}
 		catch (final Exception ex) {
 			return ServerResponse.status(HttpStatus.BAD_GATEWAY)
@@ -616,7 +619,11 @@ public class ProxyHandler {
 		if (path == null || path.isBlank()) {
 			path = "/mcp";
 		}
-		return "http://localhost:" + port + path;
+		// Relative same-origin path (e.g. "/mcp"), not an absolute
+		// http://localhost:<port>
+		// — keeps the proxy ?url= WAF-safe; the proxy resolves it to loopback
+		// server-side.
+		return path;
 	}
 
 }

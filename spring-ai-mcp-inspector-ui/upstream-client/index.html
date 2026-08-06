@@ -138,7 +138,17 @@
         if (transport) {
           try { localStorage.setItem('lastTransportType', transport); } catch (e) {}
         }
-        var sseUrl = b.detectedUrl || b.defaultUrl;
+        // [spring-ai-mcp-inspector PATCH] Seed a WAF-safe, relative same-origin target.
+        // detectedUrl is already relative ('/mcp'); default to '/mcp' and, defensively,
+        // strip an injected absolute same-origin origin back to a relative path so the
+        // proxy ?url= never carries an absolute http://localhost (OWASP CRS 934110 SSRF).
+        // The backend resolves the relative path to the loopback MCP endpoint server-side.
+        var sseUrl = b.detectedUrl || b.defaultUrl || '/mcp';
+        try {
+          if (sseUrl && sseUrl.indexOf(window.location.origin) === 0) {
+            sseUrl = sseUrl.slice(window.location.origin.length) || '/';
+          }
+        } catch (e) { /* leave sseUrl as-is */ }
         if (sseUrl) {
           try { localStorage.setItem('lastSseUrl', sseUrl); } catch (e) {}
         }

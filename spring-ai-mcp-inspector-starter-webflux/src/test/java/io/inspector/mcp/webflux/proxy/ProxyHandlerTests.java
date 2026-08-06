@@ -65,6 +65,16 @@ import static org.mockito.Mockito.verify;
  * Unit tests for {@link ProxyHandler}. Exercises the upstream-compatible reactive proxy
  * surface (health, config, fetch, SSE open, postMessage, Streamable-HTTP post/get/delete)
  * with the registry / transport factory / proxy collaborators mocked — no live sockets.
+ *
+ * <p>
+ * After the WAF-safe loopback fix:
+ * <ul>
+ * <li>{@code buildServerUrl} returns the detected endpoint as a <em>relative path</em>
+ * (e.g. {@code /sse}, {@code /mcp}) rather than {@code http://localhost:<port>/...}.</li>
+ * <li>A missing or blank {@code url} in {@code openSse} / {@code postMcp} is resolved to
+ * the loopback {@code /sse} or {@code /mcp} endpoint server-side (port defaults to 8080
+ * when the server has not yet started); the request is no longer rejected with 400.</li>
+ * </ul>
  */
 @Epic("MCP Inspector WebFlux")
 @Feature("ProxyHandler reactive proxy surface")
@@ -162,7 +172,7 @@ class ProxyHandlerTests {
 		@Test
 		@Story("Client form defaults")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("config() maps an SSE detected transport into defaultTransport=sse and a server URL")
+		@Description("config() maps an SSE detected transport into defaultTransport=sse and the relative /sse path")
 		void config_withSseTransport_mapsDefaultsAndServerUrl() {
 			// given
 			ProxyHandlerTests.this.handler.onWebServerStarted(webServerStartedEvent(7000));
@@ -174,12 +184,13 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.config(request).block();
 
-			// then
+			// then — defaultServerUrl is now the WAF-safe relative path "/sse", not
+			// "http://localhost:7000/sse"
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			final Map<String, Object> body = entityBody(response);
 			assertThat(body).containsEntry("defaultTransport", "sse");
-			assertThat(body.get("defaultServerUrl").toString()).contains("http://localhost:7000");
+			assertThat(body).containsEntry("defaultServerUrl", "/sse");
 		}
 
 		@Test
@@ -257,8 +268,8 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.config(request).block();
 
-			// then
-			assertThat(entityBody(response).get("defaultServerUrl").toString()).endsWith(":7000/mcp");
+			// then — blank endpoint falls back to "/mcp" (relative), not ":7000/mcp"
+			assertThat(entityBody(response)).containsEntry("defaultServerUrl", "/mcp");
 		}
 
 	}
@@ -450,18 +461,25 @@ class ProxyHandlerTests {
 		@Test
 		@Story("SSE proxy open")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() with an sse transport but missing url returns 400 bad request")
-		void openSse_withMissingUrl_returnsBadRequest() {
-			// given
+		@Description("openSse() with a missing url resolves to the loopback /sse endpoint and opens a session")
+		void openSse_withMissingUrl_resolvesToLoopbackAndOpensSession() {
+			// given — no url param; ProxyTargetResolver resolves null to
+			// http://127.0.0.1:8080/sse (loopback port defaults to 8080 before server
+			// start)
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse").build());
 
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
 
-			// then
+			// then — NOT 400; the resolver produces a valid loopback URI, session IS
+			// opened
 			assertThat(response).isNotNull();
-			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
+			verify(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 		}
 
 		@Test
@@ -594,7 +612,8 @@ class ProxyHandlerTests {
 		@Description("postMessage() maps a sink emit failure into a 500 error envelope")
 		void postMessage_whenEmitFails_returns500() {
 			// given — a session whose browser->target sink is already terminated, so
-			// emits fail
+			// emits
+			// fail
 			final ProxySession session = newSession("s-fail");
 			session.browserToTarget().tryEmitComplete();
 			given(ProxyHandlerTests.this.registry.get("s-fail")).willReturn(session);
@@ -621,19 +640,31 @@ class ProxyHandlerTests {
 		@Test
 		@Story("Streamable-HTTP relay")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("postMcp() opening a new session without a url returns 400 bad request")
-		void postMcp_newSessionWithoutUrl_returnsBadRequest() {
-			// given
+		@Description("postMcp() opening a new session without a url resolves to loopback and opens a session")
+		void postMcp_newSessionWithoutUrl_resolvesToLoopbackAndOpensSession() {
+			// given — null url: ProxyTargetResolver produces http://127.0.0.1:8080/mcp
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final ProxySession[] captured = new ProxySession[1];
+			given(ProxyHandlerTests.this.registry.get(any())).willAnswer((inv) -> captured[0]);
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
 				.contentType(MediaType.APPLICATION_JSON)
-				.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+				.body("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"));
 
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
 
-			// then
+			// then — resolver succeeds, session is opened (not 400); notification body →
+			// 202
 			assertThat(response).isNotNull();
-			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(response.statusCode()).isNotEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.ACCEPTED);
+			verify(ProxyHandlerTests.this.transportFactory).openStreamable(URI.create("http://127.0.0.1:8080/mcp"));
+			verify(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 		}
 
 		@Test
@@ -915,12 +946,12 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.config(request).block();
 
-			// then — mapTransport's null arm yields "", while buildServerUrl still builds
-			// a
-			// URL because a null type is neither UNKNOWN nor STDIO_NO_HTTP
+			// then — mapTransport's null arm yields ""; buildServerUrl returns relative
+			// "/mcp"
+			// because a null type is neither UNKNOWN nor STDIO_NO_HTTP
 			final Map<String, Object> body = entityBody(response);
 			assertThat(body).containsEntry("defaultTransport", "");
-			assertThat(body.get("defaultServerUrl").toString()).isEqualTo("http://localhost:7000/mcp");
+			assertThat(body).containsEntry("defaultServerUrl", "/mcp");
 		}
 
 		@Test
@@ -1112,18 +1143,23 @@ class ProxyHandlerTests {
 		@Test
 		@Story("SSE proxy open")
 		@Severity(SeverityLevel.MINOR)
-		@Description("openSse() with a present but blank url returns 400 (requireUrl isBlank branch)")
-		void openSse_withBlankUrl_returnsBadRequest() {
-			// given
+		@Description("openSse() with a present but blank url resolves to the loopback /sse endpoint (blank resolves, not rejected)")
+		void openSse_withBlankUrl_resolvesToLoopback() {
+			// given — blank url (trimmed to "") is treated as a blank by
+			// ProxyTargetResolver
+			// and resolved to http://127.0.0.1:8080/sse (default path for sse transport)
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url= ").build());
 
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
 
-			// then
+			// then — resolver handles blank url as loopback default, session IS opened
 			assertThat(response).isNotNull();
-			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
 		}
 
 	}
@@ -1135,19 +1171,29 @@ class ProxyHandlerTests {
 		@Test
 		@Story("Streamable-HTTP relay")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("postMcp() opening a new session with a blank url returns 400 (url isBlank branch)")
-		void postMcp_newSessionWithBlankUrl_returnsBadRequest() {
-			// given — blank url query parameter
+		@Description("postMcp() opening a new session with a blank url resolves to the loopback /mcp endpoint")
+		void postMcp_newSessionWithBlankUrl_resolvesToLoopback() {
+			// given — blank url (space) is resolved to http://127.0.0.1:8080/mcp by
+			// ProxyTargetResolver
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final ProxySession[] captured = new ProxySession[1];
+			given(ProxyHandlerTests.this.registry.get(any())).willAnswer((inv) -> captured[0]);
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp?url= ")
 				.contentType(MediaType.APPLICATION_JSON)
-				.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+				.body("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"));
 
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
 
-			// then
+			// then — resolver resolves blank to loopback, session IS opened (not 400)
 			assertThat(response).isNotNull();
-			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(response.statusCode()).isNotEqualTo(HttpStatus.BAD_REQUEST);
+			verify(ProxyHandlerTests.this.transportFactory).openStreamable(URI.create("http://127.0.0.1:8080/mcp"));
 		}
 
 		@Test
@@ -1156,18 +1202,27 @@ class ProxyHandlerTests {
 		@Description("postMcp() with a present but blank mcp-session-id opens a new session (mcpSessionId isBlank branch)")
 		void postMcp_withBlankSessionHeader_opensNewSession() {
 			// given — a blank session header must NOT be treated as an existing session;
-			// with no url it must take the open-new-session path and 400 on missing url
+			// null url resolves to loopback, session is opened with a notification (202)
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final ProxySession[] captured = new ProxySession[1];
+			given(ProxyHandlerTests.this.registry.get(any())).willAnswer((inv) -> captured[0]);
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
 				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "   ")
 				.contentType(MediaType.APPLICATION_JSON)
-				.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+				.body("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"));
 
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
 
-			// then
+			// then — blank header → open new session; null url resolves to loopback → 202
 			assertThat(response).isNotNull();
-			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.ACCEPTED);
+			verify(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 		}
 
 		@Test
