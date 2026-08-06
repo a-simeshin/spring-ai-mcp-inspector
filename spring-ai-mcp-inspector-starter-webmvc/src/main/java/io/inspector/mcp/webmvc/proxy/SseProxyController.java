@@ -17,7 +17,6 @@
 package io.inspector.mcp.webmvc.proxy;
 
 import java.io.IOException;
-import java.net.URI;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -30,6 +29,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -46,7 +46,9 @@ import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
+import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.webmvc.InspectorServerPortHolder;
 
 /**
  * Upstream-compatible proxy endpoints for SSE-style sessions.
@@ -87,13 +89,27 @@ public class SseProxyController {
 
 	private final McpInspectorProperties properties;
 
+	private final InspectorServerPortHolder portHolder;
+
 	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final ObjectMapper objectMapper, final McpInspectorProperties properties) {
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, null);
+	}
+
+	@Autowired
+	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
+			final McpProxy mcpProxy, final ObjectMapper objectMapper, final McpInspectorProperties properties,
+			final InspectorServerPortHolder portHolder) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
 		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
 		this.properties = properties;
+		this.portHolder = portHolder;
+	}
+
+	private int loopbackPort() {
+		return (this.portHolder != null) ? this.portHolder.port() : 8080;
 	}
 
 	private McpInspectorProperties.Timeouts resolveTimeouts() {
@@ -245,19 +261,9 @@ public class SseProxyController {
 			final String args, final String env) throws Exception {
 		final String type = (transportType != null) ? transportType.toLowerCase() : "sse";
 		return switch (type) {
-			case "sse" -> {
-				if (url == null || url.isBlank()) {
-					throw new IllegalArgumentException("missing required 'url' query parameter for SSE transport");
-				}
-				yield this.transportFactory.openSse(URI.create(url));
-			}
-			case "streamable-http" -> {
-				if (url == null || url.isBlank()) {
-					throw new IllegalArgumentException(
-							"missing required 'url' query parameter for streamable-http transport");
-				}
-				yield this.transportFactory.openStreamable(URI.create(url));
-			}
+			case "sse" -> this.transportFactory.openSse(ProxyTargetResolver.resolve(url, loopbackPort(), "/sse"));
+			case "streamable-http" ->
+				this.transportFactory.openStreamable(ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp"));
 			case "stdio" -> {
 				if (command == null || command.isBlank()) {
 					throw new IllegalArgumentException(

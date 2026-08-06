@@ -17,7 +17,6 @@
 package io.inspector.mcp.webmvc.proxy;
 
 import java.io.IOException;
-import java.net.URI;
 import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
@@ -47,7 +46,9 @@ import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
+import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.webmvc.InspectorServerPortHolder;
 
 /**
  * Streamable-HTTP transport ports.
@@ -92,20 +93,33 @@ public class StreamableHttpProxyController {
 
 	private final McpInspectorProperties properties;
 
+	private final InspectorServerPortHolder portHolder;
+
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final ObjectMapper objectMapper) {
-		this(registry, transportFactory, mcpProxy, objectMapper, null);
+		this(registry, transportFactory, mcpProxy, objectMapper, null, null);
+	}
+
+	public StreamableHttpProxyController(final ProxySessionRegistry registry,
+			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final ObjectMapper objectMapper,
+			final McpInspectorProperties properties) {
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, null);
 	}
 
 	@Autowired
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final ObjectMapper objectMapper,
-			final McpInspectorProperties properties) {
+			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
 		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
 		this.properties = properties;
+		this.portHolder = portHolder;
+	}
+
+	private int loopbackPort() {
+		return (this.portHolder != null) ? this.portHolder.port() : 8080;
 	}
 
 	private McpInspectorProperties.Timeouts resolveTimeouts() {
@@ -160,10 +174,10 @@ public class StreamableHttpProxyController {
 	 * @return the HTTP response entity
 	 */
 	private ResponseEntity<Object> openSessionAndForward(final String url, final JsonNode body) {
-		if (url == null || url.isBlank()) {
-			return ResponseEntity.badRequest()
-				.body("missing required 'url' query parameter for streamable-http transport");
-		}
+		// A blank/relative url is the WAF-safe same-origin default — the proxy resolves
+		// it
+		// to the loopback MCP endpoint server-side (see ProxyTargetResolver). Only an
+		// explicit absolute url targets a non-loopback server.
 		final ProxySession session = openSession(url);
 		if (session == null) {
 			return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body("upstream connect failed");
@@ -248,7 +262,7 @@ public class StreamableHttpProxyController {
 		final String sessionId = UUID.randomUUID().toString();
 		final McpClientTransport target;
 		try {
-			target = this.transportFactory.openStreamable(URI.create(url));
+			target = this.transportFactory.openStreamable(ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp"));
 		}
 		catch (final Exception ex) {
 			LOG.warn("proxy[{}] upstream connect failed: {}", sessionId, ex.toString());

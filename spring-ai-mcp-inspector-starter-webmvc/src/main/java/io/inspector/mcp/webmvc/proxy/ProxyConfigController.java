@@ -38,13 +38,18 @@ import io.inspector.mcp.webmvc.InspectorServerPortHolder;
  *   "defaultCommand": "",
  *   "defaultArgs": "",
  *   "defaultTransport": "streamable-http" | "sse" | "",
- *   "defaultServerUrl": "http://localhost:&lt;port&gt;/mcp"
+ *   "defaultServerUrl": "/mcp"
  * }
  * </pre>
  *
  * <p>
- * {@code defaultServerUrl} is composed from the local server port (captured at boot via
- * {@link InspectorServerPortHolder}) and the detected MCP endpoint path.
+ * {@code defaultServerUrl} is the <em>relative</em> same-origin path of the detected MCP
+ * endpoint (e.g. {@code /mcp}). It is intentionally not an absolute
+ * {@code http://localhost:<port>/mcp} URL: the SPA echoes it into the proxy {@code ?url=}
+ * query, where an absolute localhost value trips reverse-proxy WAF SSRF rules. The proxy
+ * resolves the relative path back to the loopback server-side.
+ * {@link InspectorServerPortHolder} is still used to tell whether the embedded server has
+ * started.
  *
  * @author Artem Simeshin
  */
@@ -97,7 +102,13 @@ public class ProxyConfigController {
 		if (path == null || path.isBlank()) {
 			path = "/mcp";
 		}
-		return "http://localhost:" + port + path;
+		// Advertise a RELATIVE same-origin path (e.g. "/mcp"), not an absolute
+		// "http://localhost:<port>/mcp". The SPA echoes this value into the proxy
+		// ?url= query; an absolute localhost target trips reverse-proxy WAF SSRF rules
+		// (OWASP CRS 934110). The proxy resolves the relative path back to the loopback
+		// server-side (ProxyTargetResolver) — mirroring how springdoc serves the spec
+		// same-origin instead of pointing Swagger UI at an absolute ?url=.
+		return path;
 	}
 
 }

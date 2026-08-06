@@ -41,6 +41,12 @@ import static org.mockito.Mockito.mock;
 /**
  * Unit tests for {@link ProxyConfigController}. Asserts the {@code /config} body shape
  * and the transport-name / server-url mapping branches.
+ *
+ * <p>
+ * After the WAF-safe loopback fix, {@code buildServerUrl} returns the detected endpoint
+ * as a <em>relative path</em> (e.g. {@code /mcp}) rather than an absolute
+ * {@code http://localhost:<port>/mcp}. The port-not-yet-resolved, UNKNOWN, and STDIO
+ * guards still return {@code ""}.
  */
 @Epic("WebMvc Inspector")
 @Feature("ProxyConfigController")
@@ -66,7 +72,7 @@ class ProxyConfigControllerTests {
 		@Test
 		@Story("Config defaults")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("config() returns streamable-http and a server url for a STREAMABLE transport")
+		@Description("config() returns streamable-http and the relative /mcp path for a STREAMABLE transport")
 		void config_withStreamableTransport_returnsStreamableDefaults() {
 			// given
 			given(ProxyConfigControllerTests.this.transportDetector.detect())
@@ -76,18 +82,19 @@ class ProxyConfigControllerTests {
 			// when
 			final Map<String, Object> body = ProxyConfigControllerTests.this.controller.config();
 
-			// then
+			// then — defaultServerUrl is now the WAF-safe relative path, not an absolute
+			// URL
 			assertThat(body).containsEntry("defaultEnvironment", Map.of())
 				.containsEntry("defaultCommand", "")
 				.containsEntry("defaultArgs", "")
 				.containsEntry("defaultTransport", "streamable-http")
-				.containsEntry("defaultServerUrl", "http://localhost:8123/mcp");
+				.containsEntry("defaultServerUrl", "/mcp");
 		}
 
 		@Test
 		@Story("Config defaults")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("config() maps an SSE transport to defaultTransport=sse")
+		@Description("config() maps an SSE transport to defaultTransport=sse and the relative /sse path")
 		void config_withSseTransport_returnsSseDefault() {
 			// given
 			given(ProxyConfigControllerTests.this.transportDetector.detect())
@@ -97,9 +104,8 @@ class ProxyConfigControllerTests {
 			// when
 			final Map<String, Object> body = ProxyConfigControllerTests.this.controller.config();
 
-			// then
-			assertThat(body).containsEntry("defaultTransport", "sse")
-				.containsEntry("defaultServerUrl", "http://localhost:9000/sse");
+			// then — relative path, not http://localhost:9000/sse
+			assertThat(body).containsEntry("defaultTransport", "sse").containsEntry("defaultServerUrl", "/sse");
 		}
 
 		@Test
@@ -156,7 +162,7 @@ class ProxyConfigControllerTests {
 		@Test
 		@Story("Config defaults")
 		@Severity(SeverityLevel.MINOR)
-		@Description("config() falls back to /mcp when a streamable transport reports a blank endpoint")
+		@Description("config() falls back to the relative /mcp path when a streamable transport reports a blank endpoint")
 		void config_withBlankEndpoint_fallsBackToMcp() {
 			// given
 			given(ProxyConfigControllerTests.this.transportDetector.detect())
@@ -166,8 +172,9 @@ class ProxyConfigControllerTests {
 			// when
 			final Map<String, Object> body = ProxyConfigControllerTests.this.controller.config();
 
-			// then
-			assertThat(body).containsEntry("defaultServerUrl", "http://localhost:7777/mcp");
+			// then — blank endpoint falls back to "/mcp" (the relative default), not an
+			// absolute URL
+			assertThat(body).containsEntry("defaultServerUrl", "/mcp");
 		}
 
 	}
