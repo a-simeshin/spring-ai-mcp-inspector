@@ -77,7 +77,12 @@ export const getInitialTransportType = ():
 export const getInitialSseUrl = (): string => {
   const param = getSearchParam("serverUrl");
   if (param) return param;
-  return localStorage.getItem("lastSseUrl") || "http://localhost:3001/sse";
+  // [spring-ai-mcp-inspector PATCH] Default to the relative same-origin "/mcp" instead of
+  // the upstream absolute "http://localhost:3001/sse". The proxy branch only puts this
+  // value into searchParams.append("url", ...), so a relative path keeps the proxy ?url=
+  // free of an absolute http://localhost (which a reverse-proxy WAF flags as SSRF). The
+  // backend resolves the relative path to the loopback MCP endpoint server-side.
+  return localStorage.getItem("lastSseUrl") || "/mcp";
 };
 
 export const getInitialCommand = (): string => {

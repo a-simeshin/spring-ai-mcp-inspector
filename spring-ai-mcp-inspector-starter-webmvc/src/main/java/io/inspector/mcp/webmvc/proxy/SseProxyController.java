@@ -29,6 +29,7 @@ import io.modelcontextprotocol.spec.McpClientTransport;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -49,7 +50,9 @@ import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
+import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.webmvc.InspectorServerPortHolder;
 
 /**
  * Upstream-compatible proxy endpoints for SSE-style sessions.
@@ -90,13 +93,27 @@ public class SseProxyController {
 
 	private final McpInspectorProperties properties;
 
+	private final InspectorServerPortHolder portHolder;
+
 	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final JsonMapper objectMapper, final McpInspectorProperties properties) {
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, null);
+	}
+
+	@Autowired
+	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
+			final McpProxy mcpProxy, final JsonMapper objectMapper, final McpInspectorProperties properties,
+			final InspectorServerPortHolder portHolder) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.properties = properties;
+		this.portHolder = portHolder;
+	}
+
+	private int loopbackPort() {
+		return (this.portHolder != null) ? this.portHolder.port() : 8080;
 	}
 
 	private McpInspectorProperties.Timeouts resolveTimeouts() {
@@ -252,19 +269,14 @@ public class SseProxyController {
 		final boolean noHeaders = authorization == null && customHeaders.isEmpty();
 		return switch (type) {
 			case "sse" -> {
-				if (url == null || url.isBlank()) {
-					throw new IllegalArgumentException("missing required 'url' query parameter for SSE transport");
-				}
-				yield noHeaders ? this.transportFactory.openSse(URI.create(url))
-						: this.transportFactory.openSse(URI.create(url), authorization, customHeaders);
+				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/sse");
+				yield noHeaders ? this.transportFactory.openSse(target)
+						: this.transportFactory.openSse(target, authorization, customHeaders);
 			}
 			case "streamable-http" -> {
-				if (url == null || url.isBlank()) {
-					throw new IllegalArgumentException(
-							"missing required 'url' query parameter for streamable-http transport");
-				}
-				yield noHeaders ? this.transportFactory.openStreamable(URI.create(url))
-						: this.transportFactory.openStreamable(URI.create(url), authorization, customHeaders);
+				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
+				yield noHeaders ? this.transportFactory.openStreamable(target)
+						: this.transportFactory.openStreamable(target, authorization, customHeaders);
 			}
 			case "stdio" -> {
 				if (command == null || command.isBlank()) {

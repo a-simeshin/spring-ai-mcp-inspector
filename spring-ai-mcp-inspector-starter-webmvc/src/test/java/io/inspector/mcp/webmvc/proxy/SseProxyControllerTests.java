@@ -62,6 +62,14 @@ import static org.mockito.Mockito.verify;
  * Unit tests for {@link SseProxyController}. Collaborators are mocked; assertions cover
  * the {@code POST /message} status branches, transport-type selection (incl. validation
  * errors) and session bring-up via the registry / proxy.
+ *
+ * <p>
+ * After the WAF-safe loopback fix, a {@code null} or blank {@code url} is resolved to the
+ * loopback origin server-side (via {@code ProxyTargetResolver}). In unit tests the
+ * controller is constructed without a {@code portHolder}, so {@code loopbackPort()} falls
+ * back to 8080 and the resolver always produces a valid URI. Consequently tests that
+ * previously asserted "blank url → no session registered" now assert that a session IS
+ * opened (the mocked factory is called and {@code registry.put} is invoked).
  */
 @Epic("WebMvc Inspector")
 @Feature("SseProxyController")
@@ -204,15 +212,23 @@ class SseProxyControllerTests {
 		@Test
 		@Story("Open SSE session")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() with a missing url for sse never registers a session (transport build fails)")
-		void openSse_withMissingUrl_doesNotRegisterSession() {
-			// when
+		@Description("openSse() with a missing (null) url resolves to the loopback /sse endpoint and registers a session")
+		void openSse_withMissingUrl_resolvesToLoopbackAndRegistersSession() {
+			// given — no url stub: the mock returns null from openSse(URI), which is a
+			// valid (if inert) target for the session in unit-test context
+			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class)))
+				.willReturn(mock(McpClientTransport.class));
+
+			// when — null url is now resolved to http://127.0.0.1:8080/sse by
+			// ProxyTargetResolver (loopbackPort() falls back to 8080 when portHolder is
+			// null)
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", null, null, null, null);
 
-			// then
+			// then — the resolver succeeds, a session IS opened and registered
 			assertThat(emitter).isNotNull();
-			verify(SseProxyControllerTests.this.registry, never()).put(any());
-			verify(SseProxyControllerTests.this.mcpProxy, never()).start(any());
+			verify(SseProxyControllerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
+			verify(SseProxyControllerTests.this.registry).put(any(ProxySession.class));
+			verify(SseProxyControllerTests.this.mcpProxy).start(any(ProxySession.class));
 		}
 
 		@Test
@@ -297,15 +313,22 @@ class SseProxyControllerTests {
 		@Test
 		@Story("Open SSE session")
 		@Severity(SeverityLevel.MINOR)
-		@Description("openSse() with a blank streamable url skips registration (transport build fails)")
-		void openSse_withBlankStreamableUrl_doesNotRegister() {
+		@Description("openSse() with a blank streamable url resolves to the loopback /mcp endpoint and registers a session")
+		void openSse_withBlankStreamableUrl_resolvesToLoopbackAndRegisters() {
+			// given — blank url is now resolved to http://127.0.0.1:8080/mcp by
+			// ProxyTargetResolver
+			given(SseProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(mock(McpClientTransport.class));
+
 			// when
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("streamable-http", "", null,
 					null, null);
 
-			// then
+			// then — resolver produces a valid loopback URI, session IS registered
 			assertThat(emitter).isNotNull();
-			verify(SseProxyControllerTests.this.registry, never()).put(any());
+			verify(SseProxyControllerTests.this.transportFactory)
+				.openStreamable(URI.create("http://127.0.0.1:8080/mcp"));
+			verify(SseProxyControllerTests.this.registry).put(any(ProxySession.class));
 		}
 
 	}
