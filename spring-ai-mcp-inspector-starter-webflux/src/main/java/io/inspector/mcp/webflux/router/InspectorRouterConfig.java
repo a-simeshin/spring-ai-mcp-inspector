@@ -23,6 +23,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.RouterFunctions;
+import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
@@ -64,9 +65,10 @@ public class InspectorRouterConfig {
 			final McpInspectorProperties properties) {
 		final String basePath = properties.getPath();
 		final String apiPath = basePath + "/api";
-		final URI indexRedirect = URI.create(basePath + "/index.html");
-		return route(GET(basePath), (req) -> ServerResponse.temporaryRedirect(indexRedirect).build())
-			.andRoute(GET(basePath + "/"), (req) -> ServerResponse.temporaryRedirect(indexRedirect).build())
+		final String indexPath = basePath + "/index.html";
+		return route(GET(basePath), (req) -> ServerResponse.temporaryRedirect(indexRedirect(req, indexPath)).build())
+			.andRoute(GET(basePath + "/"),
+					(req) -> ServerResponse.temporaryRedirect(indexRedirect(req, indexPath)).build())
 			.andRoute(GET(basePath + "/index.html"), handler::index)
 			// Top-level OAuth callback routes serve the same templated SPA so the
 			// upstream React client's App.tsx pathname checks
@@ -110,6 +112,19 @@ public class InspectorRouterConfig {
 			.andRoute(POST(proxyBase + "/mcp"), proxy::postMcp)
 			.andRoute(GET(proxyBase + "/mcp"), proxy::getMcp)
 			.andRoute(DELETE(proxyBase + "/mcp"), proxy::deleteMcp);
+	}
+
+	/**
+	 * Builds the {@code index.html} redirect target for a request. A manually set
+	 * {@code Location} is not base-path-prepended by the framework, so the request's
+	 * context path (WebFlux base path or reverse-proxy prefix) is prepended here.
+	 * @param request the incoming request
+	 * @param indexPath the inspector-relative index path
+	 * @return the absolute-path redirect target
+	 */
+	private static URI indexRedirect(final ServerRequest request, final String indexPath) {
+		final String contextPath = request.requestPath().contextPath().value();
+		return URI.create(("/".equals(contextPath) ? "" : contextPath) + indexPath);
 	}
 
 }
