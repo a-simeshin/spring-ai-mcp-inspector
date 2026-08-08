@@ -24,6 +24,10 @@ on:
     branches:
       - main
       - 'develop/**'
+    # `labeled` is required for the e2e job's label gate to be usable: without it
+    # the default activity types never re-evaluate the condition, so adding the
+    # label to an open PR does nothing.
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
 
 permissions:
