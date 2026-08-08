@@ -184,19 +184,21 @@ class BootstrapHtmlRendererTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("The rewrite runs on the raw template so the injected proxy address is never prefixed twice")
 		void render_withDefaultAssetBase_leavesInjectedProxyAddressIntact() throws IOException {
-			// given — the injected JSON carries "/mcp-inspector-api", which must not be
-			// touched by the slash-terminated asset literal
+			// given — a proxy path that itself starts with the asset base
+			// (spring.ai.mcp.inspector.proxy-path=/mcp-inspector/api under /app), so the
+			// injected value collides with the slash-terminated rewrite literal
 			final String template = "<script src=\"/mcp-inspector/assets/index-abc.js\"></script>"
 					+ BootstrapHtmlRenderer.PLACEHOLDER;
 			final InspectorBootstrap bootstrap = new InspectorBootstrap();
-			bootstrap.setProxyAddress("/app/mcp-inspector-api");
+			bootstrap.setProxyAddress("/app/mcp-inspector/api");
 
 			// when
 			final String html = BootstrapHtmlRendererTests.this.renderer.renderIndexHtml(template, bootstrap,
 					"/app/mcp-inspector");
 
-			// then
-			assertThat(html).contains("\"proxyAddress\":\"/app/mcp-inspector-api\"");
+			// then — rewriting after the injection would yield
+			// "/app/app/mcp-inspector/api"
+			assertThat(html).contains("\"proxyAddress\":\"/app/mcp-inspector/api\"");
 		}
 
 		@Test

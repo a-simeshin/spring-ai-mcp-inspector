@@ -234,6 +234,24 @@ class TransportDetectorTests {
 		}
 
 		@Test
+		@Story("WebFlux base path")
+		@Severity(SeverityLevel.BLOCKER)
+		@Description("detect() honours spring.webflux.base-path on a stock WebFlux app, which leaves web-application-type unset")
+		void detect_withBasePathAndNoWebApplicationType_prefixesEndpoint() {
+			// given — Boot deduces REACTIVE from the classpath, so real WebFlux
+			// applications never set spring.main.web-application-type
+			final MockEnvironment env = new MockEnvironment()
+				.withProperty(TransportDetector.PROP_PROTOCOL, "STREAMABLE")
+				.withProperty(TransportDetector.PROP_WEBFLUX_BASE_PATH, "/app");
+
+			// when
+			final DetectedTransport detected = new TransportDetector(env).detect();
+
+			// then
+			assertThat(detected.endpoint()).isEqualTo("/app/mcp");
+		}
+
+		@Test
 		@Story("No prefix")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("detect() leaves endpoints untouched for a root-mounted application")

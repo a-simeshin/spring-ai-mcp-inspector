@@ -74,9 +74,15 @@ public class BootstrapHtmlRenderer {
 	 * <p>
 	 * Needed whenever the bundle is not served from {@value #BUNDLE_ASSET_BASE} — under a
 	 * servlet context path, a WebFlux base path, a reverse-proxy prefix, or a customised
-	 * {@code spring.ai.mcp.inspector.path}. Every emitted link in the bundle is
+	 * {@code spring.ai.mcp.inspector.path}. Every link the template emits is
 	 * path-absolute, so a {@code <base href>} would be inert; the URLs themselves have to
 	 * be rewritten.
+	 *
+	 * <p>
+	 * Scope: the served HTML only. The bundle's JS keeps its build-time base for
+	 * dynamically imported chunks (Vite's {@code assetsURL} helper), so the code-split
+	 * OAuth callback chunks are still fetched from {@value #BUNDLE_ASSET_BASE} — matching
+	 * the documented limitation that OAuth does not work under a deployment prefix.
 	 * @param htmlTemplate the raw {@code index.html} contents
 	 * @param bootstrap the bootstrap payload to embed
 	 * @param assetBasePath the path the bundle is actually served from, e.g.
@@ -87,9 +93,9 @@ public class BootstrapHtmlRenderer {
 	public String renderIndexHtml(final String htmlTemplate, final InspectorBootstrap bootstrap,
 			final String assetBasePath) throws IOException {
 		// Rewrite the RAW template, before the bootstrap script is injected. Doing it
-		// afterwards would also hit the injected proxyAddress ("/mcp-inspector-api"
-		// becomes "/mcp-inspector/..." once the slash-terminated literal is replaced),
-		// producing a doubly prefixed proxy address even on default configuration.
+		// afterwards would also hit any injected value containing the asset base — a
+		// proxy path such as "/mcp-inspector/api" under context path "/app" would be
+		// advertised as "/app/app/mcp-inspector/api" and every proxy call would 404.
 		final String template = rewriteAssetUrls(htmlTemplate, assetBasePath);
 		final String json = this.objectMapper.writeValueAsString(bootstrap);
 		// Escape any "</" sequence (notably "</script>") so injected JSON cannot

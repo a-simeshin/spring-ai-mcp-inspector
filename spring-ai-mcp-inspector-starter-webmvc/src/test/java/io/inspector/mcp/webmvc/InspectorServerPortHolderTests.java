@@ -65,12 +65,13 @@ class InspectorServerPortHolderTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("onWebServerInitialized() captures the actual port and port() returns it")
 		void port_afterEvent_returnsCapturedPort() {
-			// given
+			// given — the primary context reports no server namespace
 			final InspectorServerPortHolder holder = new InspectorServerPortHolder();
 			final WebServer webServer = mock(WebServer.class);
 			given(webServer.getPort()).willReturn(54321);
 			final WebServerInitializedEvent event = mock(WebServerInitializedEvent.class);
 			given(event.getWebServer()).willReturn(webServer);
+			given(event.getApplicationContext()).willReturn(mock(WebServerApplicationContext.class));
 
 			// when
 			holder.onWebServerInitialized(event);

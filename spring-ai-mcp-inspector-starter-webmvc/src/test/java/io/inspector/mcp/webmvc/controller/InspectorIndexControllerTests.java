@@ -212,6 +212,22 @@ class InspectorIndexControllerTests {
 					org.mockito.ArgumentMatchers.eq("/app/mcp-inspector"));
 		}
 
+		@Test
+		@Story("Context path")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("redirectRoot() treats a \"/\" context path as no prefix, so the Location never becomes protocol-relative")
+		void redirectRoot_withRootContextPath_doesNotDoubleSlash() {
+			// given
+			InspectorIndexControllerTests.this.request.setContextPath("/");
+
+			// when
+			final ResponseEntity<Void> response = InspectorIndexControllerTests.this.controller
+				.redirectRoot(InspectorIndexControllerTests.this.request);
+
+			// then
+			assertThat(response.getHeaders().getLocation()).hasToString("/mcp-inspector/index.html");
+		}
+
 	}
 
 }

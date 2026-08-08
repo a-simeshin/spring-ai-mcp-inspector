@@ -428,15 +428,15 @@ class InspectorHandlerTests {
 		@Test
 		@Story("Open session")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("connect() with an SSE detected transport builds the loopback client via the SSE factory branch")
+		@Description("connect() dials the detected SSE endpoint, base path included, via the SSE factory branch")
 		void connect_withSseTransport_usesSseLoopbackBranch() {
-			// given
+			// given — the detected endpoints already carry the base path
 			InspectorHandlerTests.this.handler.onWebServerStarted(webServerStartedEvent(8081));
 			given(InspectorHandlerTests.this.transportDetector.detect())
-				.willReturn(new DetectedTransport(TransportType.SSE, "/sse", "/mcp/message", "WEBFLUX"));
+				.willReturn(new DetectedTransport(TransportType.SSE, "/app/sse", "/app/mcp/message", "WEBFLUX"));
 			final McpSyncClient client = connectedClient();
-			given(InspectorHandlerTests.this.loopbackFactory.forSse(any(), org.mockito.ArgumentMatchers.eq(8081), any(),
-					any(), any()))
+			given(InspectorHandlerTests.this.loopbackFactory.forSse(any(), org.mockito.ArgumentMatchers.eq(8081),
+					org.mockito.ArgumentMatchers.eq("/app/sse"), any()))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -449,7 +449,7 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			verify(InspectorHandlerTests.this.loopbackFactory).forSse(any(), org.mockito.ArgumentMatchers.eq(8081),
-					any(), any(), any());
+					org.mockito.ArgumentMatchers.eq("/app/sse"), any());
 		}
 
 		@Test
