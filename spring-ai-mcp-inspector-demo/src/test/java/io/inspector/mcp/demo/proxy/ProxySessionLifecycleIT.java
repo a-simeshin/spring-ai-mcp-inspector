@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -31,6 +32,7 @@ import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -76,12 +78,15 @@ class ProxySessionLifecycleIT {
 	 *
 	 * <p>
 	 * Deliberately generous: this IT is a <em>registry leak guard</em>, not a latency
-	 * SLA. On a contended CI runner (two full Spring Boot apps, JaCoCo instrumentation,
-	 * Chromium co-tenancy from sibling e2e ITs) a single one of the 100 sequential
-	 * proxied handshakes can stall for tens of seconds before the scheduler/GC clears.
-	 * The happy path is tens of milliseconds, so a wide budget never slows a green run —
-	 * it only stops a transient stall from failing the leak assertion. A genuine hang
-	 * still fails the test.
+	 * SLA. On a contended two-core CI runner (a full Spring Boot app plus JaCoCo
+	 * instrumentation) a single one of the 100 sequential proxied handshakes can stall
+	 * for tens of seconds before the scheduler/GC clears. The happy path is tens of
+	 * milliseconds, so a wide per-request budget never slows a green run — it only stops
+	 * a transient stall from failing the leak assertion.
+	 *
+	 * <p>
+	 * The cost of that width is bounded by the method-level {@code @Timeout}: 100 cycles
+	 * x (60 s + 20 s) would otherwise let a wedged proxy burn over two hours per stack.
 	 */
 	private static final Duration BUDGET = Duration.ofSeconds(60);
 
@@ -109,6 +114,10 @@ class ProxySessionLifecycleIT {
 
 	@ParameterizedTest(name = "{0}")
 	@EnumSource(ProxyAppHarness.Stack.class)
+	// Whole-test cap. The per-request BUDGET is intentionally wide, so without this a
+	// wedged proxy would fail only after 100 x 80 s per stack. Green runs finish in
+	// well under a minute; 10 min is pure headroom.
+	@Timeout(value = 10, unit = TimeUnit.MINUTES)
 	@DisplayName("100 open/close cycles drain the registry back to its initial size")
 	@Story("Registry leak guard")
 	@Severity(SeverityLevel.CRITICAL)

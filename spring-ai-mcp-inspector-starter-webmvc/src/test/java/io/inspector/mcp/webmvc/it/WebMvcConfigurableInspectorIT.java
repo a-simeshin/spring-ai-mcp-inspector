@@ -16,6 +16,9 @@
 
 package io.inspector.mcp.webmvc.it;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -58,6 +61,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 				"spring.ai.mcp.inspector.auth-enabled=false", "spring.application.name=mcp-inspector-itest-cfg" })
 class WebMvcConfigurableInspectorIT {
 
+	/**
+	 * Extracts the first hashed bundle asset URL from the served HTML. The hash changes
+	 * on every UI build, so it is read back from the response instead of hardcoded.
+	 */
+	private static final Pattern ASSET_PATTERN = Pattern.compile("(?:src|href)=\"(/[^\"]*/assets/[^\"]+)\"");
+
 	@Autowired
 	private TestRestTemplate restTemplate;
 
@@ -77,6 +86,30 @@ class WebMvcConfigurableInspectorIT {
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getHeaders().getContentType()).isNotNull()
 			.matches((mt) -> MediaType.TEXT_HTML.isCompatibleWith(mt));
+	}
+
+	@Test
+	@DisplayName("a hashed asset referenced by index.html is served under the custom prefix")
+	@Story("Custom path")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("index.html rewrites bundle asset URLs to the custom prefix, and those URLs return 200 with a body")
+	void customPath_assetUrl_isFetchable() {
+		// given — status/content-type of index.html alone cannot see a wrong assetBase
+		// or a resource handler still mounted at the default prefix: the browser only
+		// 404s when it follows the asset URL, so follow it here.
+		final ResponseEntity<String> index = this.restTemplate.getForEntity(url("/custom/index.html"), String.class);
+		assertThat(index.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+		// when
+		final Matcher matcher = ASSET_PATTERN.matcher(index.getBody());
+		assertThat(matcher.find()).as("index.html must reference at least one hashed bundle asset").isTrue();
+		final String assetPath = matcher.group(1);
+		final ResponseEntity<String> asset = this.restTemplate.getForEntity(url(assetPath), String.class);
+
+		// then
+		assertThat(assetPath).as("asset URLs must carry the custom prefix").startsWith("/custom/assets/");
+		assertThat(asset.getStatusCode()).isEqualTo(HttpStatus.OK);
+		assertThat(asset.getBody()).as("the asset must not be served empty").isNotEmpty();
 	}
 
 	@Test

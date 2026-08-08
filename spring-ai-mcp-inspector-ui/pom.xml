@@ -59,6 +59,20 @@
                             <arguments>install</arguments>
                         </configuration>
                     </execution>
+                    <!-- Jest suite of the vendored client. Bound to `test` on purpose:
+                         frontend-maven-plugin only honors -DskipTests for executions in
+                         the test/integration-test phase, and the release job builds with
+                         -DskipTests. -->
+                    <execution>
+                        <id>npm-test</id>
+                        <goals>
+                            <goal>npm</goal>
+                        </goals>
+                        <phase>test</phase>
+                        <configuration>
+                            <arguments>test</arguments>
+                        </configuration>
+                    </execution>
                     <execution>
                         <id>npm-build</id>
                         <goals>
