@@ -72,6 +72,15 @@
             </exclusions>
         </dependency>
 
+        <!-- SLF4J binding for tests only: the excluded spring-boot-starter would
+             normally supply it, and without a binding no log output reaches
+             OutputCaptureExtension. -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- Allure JUnit 5 listener (version from allure-bom) + aspectjweaver
              for Allure @Step weaving (version managed by the parent property). -->
         <dependency>
