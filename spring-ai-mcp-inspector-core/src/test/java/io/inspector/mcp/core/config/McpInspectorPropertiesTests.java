@@ -17,6 +17,7 @@
 package io.inspector.mcp.core.config;
 
 import java.time.Duration;
+import java.util.List;
 
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -246,6 +247,48 @@ class McpInspectorPropertiesTests {
 
 			// when & then
 			assertThat(props.getProxyPath()).isEqualTo("/foo-api");
+		}
+
+	}
+
+	@Nested
+	@DisplayName("securityPathPatterns()")
+	class SecurityPathPatterns {
+
+		@Test
+		@Story("Security path patterns")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("securityPathPatterns() covers the default UI, proxy and OAuth callback mount points")
+		void patterns_withDefaultPath_coverAllMountPoints() {
+			// when & then
+			assertThat(new McpInspectorProperties().securityPathPatterns()).containsExactly("/mcp-inspector/**",
+					"/mcp-inspector-api/**", "/oauth/callback", "/oauth/callback/debug");
+		}
+
+		@Test
+		@Story("Security path patterns")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("securityPathPatterns() follows a custom path while keeping the fixed OAuth callback routes")
+		void patterns_withCustomPath_followThePath() {
+			// given
+			final McpInspectorProperties props = new McpInspectorProperties();
+			props.setPath("/admin/inspector");
+
+			// when & then
+			assertThat(props.securityPathPatterns()).containsExactly("/admin/inspector/**", "/admin/inspector-api/**",
+					"/oauth/callback", "/oauth/callback/debug");
+		}
+
+		@Test
+		@Story("Security path patterns")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("securityPathPatterns() returns an immutable list and is not bindable as a configuration property")
+		void patterns_areImmutable() {
+			// given
+			final List<String> patterns = new McpInspectorProperties().securityPathPatterns();
+
+			// when & then
+			assertThatThrownBy(() -> patterns.add("/nope")).isInstanceOf(UnsupportedOperationException.class);
 		}
 
 	}
