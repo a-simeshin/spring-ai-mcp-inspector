@@ -351,11 +351,12 @@ class InspectorUiIT {
 					"io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration");
 		}
 
+		// See startApp: immediate shutdown, same reason.
 		String[] args = new String[] { "--server.port=0",
 				"--spring.main.web-application-type=" + (reactive ? "reactive" : "servlet"),
 				"--spring.ai.mcp.server.protocol=" + combo.protocol.toUpperCase(),
 				"--spring.ai.mcp.inspector.auth-enabled=false", "--demo.oauth-stub.enabled=true",
-				"--spring.autoconfigure.exclude=" + exclude, };
+				"--server.shutdown=immediate", "--spring.autoconfigure.exclude=" + exclude, };
 		app = new SpringApplicationBuilder(DemoApplication.class).web(type).run(args);
 
 		int port = ((WebServerApplicationContext) app).getWebServer().getPort();
@@ -389,10 +390,15 @@ class InspectorUiIT {
 					"io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration");
 		}
 
+		// Every connected test leaves the proxy SseEmitter and the MCP /sse stream open;
+		// the web server only learns the peer is gone on its next write, so graceful
+		// shutdown blocks app.close() until the 30s per-shutdown-phase timeout expires.
+		// These contexts are per-group and disposable — drop the connections instead.
 		String[] args = new String[] { "--server.port=0",
 				"--spring.main.web-application-type=" + (reactive ? "reactive" : "servlet"),
 				"--spring.ai.mcp.server.protocol=" + combo.protocol.toUpperCase(),
-				"--spring.ai.mcp.inspector.auth-enabled=false", "--spring.autoconfigure.exclude=" + exclude, };
+				"--spring.ai.mcp.inspector.auth-enabled=false", "--server.shutdown=immediate",
+				"--spring.autoconfigure.exclude=" + exclude, };
 		app = new SpringApplicationBuilder(DemoApplication.class).web(type).run(args);
 
 		int port = ((WebServerApplicationContext) app).getWebServer().getPort();
