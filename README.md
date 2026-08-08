@@ -43,6 +43,27 @@ The table below records the exact stack a given inspector release was verified w
 |---------------------------|-------------|-----------|--------------|--------------------------|
 | `1.0.0`                   | `3.5.15`    | `1.1.8`   | `0.18.3`     | `0.21.2`                 |
 
+### Upgrading to `1.0.1`
+
+`LoopbackMcpClientFactory.forSse` takes the full SSE endpoint path instead of a base path
+plus a message path:
+
+```java
+// 1.0.0
+factory.forSse("127.0.0.1", port, "/app", "/mcp/message");
+// 1.0.1
+factory.forSse("127.0.0.1", port, "/app/sse");
+```
+
+The message path argument never had an effect — the server advertises its message endpoint
+on the stream itself and the client follows what it advertises — so the new form drops it.
+The old signature cannot be kept as an overload: it is ambiguous against
+`forSse(host, port, sseEndpoint, InspectorClientHandlers)` whenever the fourth argument is
+`null`.
+
+This only affects code calling the factory directly. The starters wire it internally, so
+applications that just add the dependency are unaffected.
+
 ## Quickstart
 
 ### WebMVC
