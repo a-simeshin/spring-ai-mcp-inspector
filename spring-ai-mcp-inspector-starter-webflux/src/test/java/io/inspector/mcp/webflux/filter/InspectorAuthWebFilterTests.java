@@ -144,6 +144,27 @@ class InspectorAuthWebFilterTests {
 		}
 
 		@Test
+		@Story("Short-circuit branches")
+		@Severity(SeverityLevel.BLOCKER)
+		@Description("filter() still guards the REST API when the application runs under a base path or forwarded prefix")
+		void filter_underBasePathWithoutToken_returns401() {
+			// given — the prefix lives in contextPath, so the raw URI path is
+			// /app/mcp-inspector/api/connect while the application-relative path is not
+			final MockServerHttpRequest request = MockServerHttpRequest.post("/app/mcp-inspector/api/connect")
+				.contextPath("/app")
+				.build();
+			final MockServerWebExchange exchange = MockServerWebExchange.from(request);
+			final ChainSpy chain = new ChainSpy();
+
+			// when
+			StepVerifier.create(InspectorAuthWebFilterTests.this.filter.filter(exchange, chain)).verifyComplete();
+
+			// then
+			assertThat(chain.invoked).isFalse();
+			assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+		}
+
+		@Test
 		@Story("Allow branches")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("filter() skips non-/api/ paths (e.g. the SPA index) without inspecting any token")

@@ -144,6 +144,56 @@ Setting `spring.ai.mcp.inspector.auth-enabled=false` drops the built-in token ch
 entirely and logs a `WARN` at startup. Only do that when something else — Spring Security,
 a network boundary — already guards the path.
 
+## Under a context path or behind a reverse proxy
+
+A `server.servlet.context-path` (or `spring.webflux.base-path`) needs no extra
+configuration: asset URLs, the root redirect, the advertised proxy address and the
+detected MCP endpoint are all prefixed with it.
+
+### Behind a reverse proxy
+
+When a gateway serves the app under a prefix that the app itself does not know about, let
+Spring read the forwarded headers:
+
+```yaml
+server:
+  forward-headers-strategy: framework
+```
+
+The gateway then sends `X-Forwarded-Prefix` and the inspector emits links under that
+prefix.
+
+One sharp edge: **`X-Forwarded-Prefix` replaces the context path, it does not concatenate
+with it.** An app on `context-path=/app` behind a gateway that routes `/tools/*` to it must
+receive `X-Forwarded-Prefix: /tools/app` — the combined prefix. Sending `/tools` alone
+produces links that drop `/app`.
+
+### Known limitations under a prefix
+
+- **OAuth does not work under a context path.** The SPA hardcodes
+  `window.location.origin + "/oauth/callback"` as its `redirect_uri` and compares
+  `window.location.pathname` against that same literal, so both halves of the flow break
+  once the app is not mounted at the root. Fixing it requires patching the upstream
+  bundle; the inspector serves those two callback routes at the top level on purpose.
+  Its code-split callback chunks are likewise still fetched from `/mcp-inspector/assets/`.
+- **The SSE transport needs one extra Spring AI property.** Spring AI advertises the
+  message endpoint as `spring.ai.mcp.server.base-url` + `sse-message-endpoint`; left empty
+  (the default) it is advertised without the prefix and the first client-to-server frame
+  404s. Set it to the prefix:
+
+  ```yaml
+  server:
+    servlet:
+      context-path: /app
+  spring:
+    ai:
+      mcp:
+        server:
+          base-url: /app
+  ```
+
+  `STREAMABLE` needs nothing extra.
+
 ## Ported 95% of original MCP Inspector
 
 #### Transport

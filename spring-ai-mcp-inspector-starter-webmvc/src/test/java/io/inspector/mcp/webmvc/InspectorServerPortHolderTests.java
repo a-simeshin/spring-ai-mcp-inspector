@@ -25,6 +25,7 @@ import io.qameta.allure.Story;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.web.context.WebServerApplicationContext;
 import org.springframework.boot.web.context.WebServerInitializedEvent;
 import org.springframework.boot.web.server.WebServer;
 
@@ -64,12 +65,13 @@ class InspectorServerPortHolderTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("onWebServerInitialized() captures the actual port and port() returns it")
 		void port_afterEvent_returnsCapturedPort() {
-			// given
+			// given — the primary context reports no server namespace
 			final InspectorServerPortHolder holder = new InspectorServerPortHolder();
 			final WebServer webServer = mock(WebServer.class);
 			given(webServer.getPort()).willReturn(54321);
 			final WebServerInitializedEvent event = mock(WebServerInitializedEvent.class);
 			given(event.getWebServer()).willReturn(webServer);
+			given(event.getApplicationContext()).willReturn(mock(WebServerApplicationContext.class));
 
 			// when
 			holder.onWebServerInitialized(event);
@@ -95,6 +97,34 @@ class InspectorServerPortHolderTests {
 
 			// then
 			assertThat(holder.port()).isEqualTo(8080);
+		}
+
+		@Test
+		@Story("Management server guard")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("An event from the management context is ignored so the actuator port never becomes the loopback port")
+		void onWebServerInitialized_withManagementNamespace_isIgnored() {
+			// given — the main server started on 54321, the actuator on 9999
+			final InspectorServerPortHolder holder = new InspectorServerPortHolder();
+			final WebServer mainServer = mock(WebServer.class);
+			given(mainServer.getPort()).willReturn(54321);
+			final WebServerInitializedEvent mainEvent = mock(WebServerInitializedEvent.class);
+			given(mainEvent.getWebServer()).willReturn(mainServer);
+
+			final WebServer managementServer = mock(WebServer.class);
+			given(managementServer.getPort()).willReturn(9999);
+			final WebServerApplicationContext managementContext = mock(WebServerApplicationContext.class);
+			given(managementContext.getServerNamespace()).willReturn("management");
+			final WebServerInitializedEvent managementEvent = mock(WebServerInitializedEvent.class);
+			given(managementEvent.getWebServer()).willReturn(managementServer);
+			given(managementEvent.getApplicationContext()).willReturn(managementContext);
+
+			// when — the management event arrives last
+			holder.onWebServerInitialized(mainEvent);
+			holder.onWebServerInitialized(managementEvent);
+
+			// then
+			assertThat(holder.port()).isEqualTo(54321);
 		}
 
 	}

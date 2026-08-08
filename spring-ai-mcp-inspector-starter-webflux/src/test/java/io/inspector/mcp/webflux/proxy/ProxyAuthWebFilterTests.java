@@ -214,6 +214,25 @@ class ProxyAuthWebFilterTests {
 		}
 
 		@Test
+		@Story("Short-circuit branches")
+		@Severity(SeverityLevel.BLOCKER)
+		@Description("filter() still guards the proxy when the application runs under a base path or forwarded prefix")
+		void filter_underBasePathWithoutToken_returns401() {
+			// given — the prefix lives in contextPath, so the raw URI path is
+			// /app/mcp-inspector-api/mcp while the application-relative path is not
+			final MockServerWebExchange exchange = MockServerWebExchange
+				.from(MockServerHttpRequest.post("/app/mcp-inspector-api/mcp").contextPath("/app").build());
+			final ChainSpy chain = new ChainSpy();
+
+			// when
+			StepVerifier.create(ProxyAuthWebFilterTests.this.filter.filter(exchange, chain)).verifyComplete();
+
+			// then
+			assertThat(chain.invoked).isFalse();
+			assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+		}
+
+		@Test
 		@Story("Allow branches")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("filter() passes through unconditionally when constructed with no properties bean (properties == null branch)")
