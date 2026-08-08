@@ -87,42 +87,22 @@ class DeepJsonRenderingIT {
 	@DisplayName("deepJson returns a parseable nested object")
 	void deepJson_overProxy_returnsParseableNestedObject() throws Exception {
 		// given
-		// BACKEND BUG (see run report): the `int depth` parameter of `deepJson`
-		// cannot be bound (demo compiled without -parameters → mcp-annotations
-		// 0.9 falls back to `arg0`/`arg1` argument names that never match
-		// user-supplied JSON keys). Passing primitive int triggers an NPE on
-		// server-side method invocation. Workaround: invoke with no arguments
-		// and accept whatever default depth the binder happens to produce; the
-		// proxy-wire question is "is the resulting JSON well-formed and
-		// parseable?", which is still answered.
+		// `depth` binds by name: the root pom compiles with -parameters, which
+		// mcp-annotations needs to see declared parameter names instead of arg0.
 		Map<String, Object> args = new LinkedHashMap<>();
-		// Empty arguments — see comment above. With the binding bug, server-side
-		// int param will produce an NPE; we tolerate isError=true and only
-		// assert wire well-formedness.
+		args.put("depth", EXPECTED_DEPTH);
 
 		// when
 		CallToolResult result = client.callTool(StressTestSupport.buildRequest("deepJson", args));
 
 		// then
-		if (Boolean.TRUE.equals(result.isError())) {
-			// Document, do not fail: this is the -parameters bug surface.
-			// The TextContent body still arrives intact — which is what the
-			// big-data wire test cares about.
-			assertThat(result.content()).as("error result still contains content").isNotEmpty();
-			return;
-		}
+		assertThat(result.isError()).as("deepJson must succeed when depth is supplied").isNotEqualTo(true);
 
 		JsonNode root = resolveTree(result);
 		assertThat(root).as("deepJson must yield a JSON object").isNotNull();
-		assertThat(root.isObject() || root.isArray() || root.isValueNode())
-			.as("deepJson returned a parseable JSON tree")
-			.isTrue();
-		// When the (binding-bug-affected) default executes, depth=1; assert at
-		// least one level of structure so we still catch wire truncation.
-		if (root.isObject()) {
-			assertThat(measureDepth(root)).as("nesting depth ≥ 1 (50 is unreachable until -parameters lands)")
-				.isGreaterThanOrEqualTo(1);
-		}
+		assertThat(root.isObject()).as("deepJson returned a parseable JSON object").isTrue();
+		assertThat(measureDepth(root)).as("the whole nested tree survives the proxy round-trip")
+			.isEqualTo(EXPECTED_DEPTH);
 	}
 
 	/**
