@@ -16,6 +16,9 @@
 
 package io.inspector.mcp.webflux.it;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -26,6 +29,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.web.reactive.server.WebTestClient;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Reactive parallel of {@code WebMvcConfigurableInspectorIT}: verifies that
@@ -52,8 +57,52 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 				"spring.application.name=mcp-inspector-itest-flux-cfg" })
 class WebFluxConfigurableInspectorIT {
 
+	/**
+	 * Extracts the first hashed bundle asset URL from the served HTML. The hash changes
+	 * on every UI build, so it is read back from the response instead of hardcoded.
+	 */
+	private static final Pattern ASSET_PATTERN = Pattern.compile("(?:src|href)=\"(/[^\"]*/assets/[^\"]+)\"");
+
 	@Autowired
 	private WebTestClient webTestClient;
+
+	@Test
+	@Story("Custom path remount")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("index.html rewrites bundle asset URLs to the custom prefix, and those URLs return 200 with a body")
+	void customPath_assetUrl_isFetchable() {
+		// given — status/content-type of index.html alone cannot see a wrong assetBase
+		// or a resource route still mounted at the default prefix: the browser only
+		// 404s when it follows the asset URL, so follow it here.
+		final String index = this.webTestClient.get()
+			.uri("/custom/index.html")
+			.exchange()
+			.expectStatus()
+			.isOk()
+			.expectBody(String.class)
+			.returnResult()
+			.getResponseBody();
+		assertThat(index).isNotNull();
+
+		// when
+		final Matcher matcher = ASSET_PATTERN.matcher(index);
+		assertThat(matcher.find()).as("index.html must reference at least one hashed bundle asset").isTrue();
+		final String assetPath = matcher.group(1);
+
+		// then
+		assertThat(assetPath).as("asset URLs must carry the custom prefix").startsWith("/custom/assets/");
+		// The hashed JS chunk is larger than the default 256 KB in-memory codec limit.
+		this.webTestClient.mutate()
+			.codecs((codecs) -> codecs.defaultCodecs().maxInMemorySize(8 * 1024 * 1024))
+			.build()
+			.get()
+			.uri(assetPath)
+			.exchange()
+			.expectStatus()
+			.isOk()
+			.expectBody(String.class)
+			.value((body) -> assertThat(body).as("the asset must not be served empty").isNotEmpty());
+	}
 
 	@Test
 	@Story("Custom path remount")
@@ -125,9 +174,7 @@ class WebFluxConfigurableInspectorIT {
 			.expectStatus()
 			// Either 4xx from our handler (route matched) or 200 — both prove the route
 			// is reachable.
-			.value((status) -> org.assertj.core.api.Assertions.assertThat(status)
-				.as("internal API at new prefix")
-				.isIn(200, 400, 401, 404));
+			.value((status) -> assertThat(status).as("internal API at new prefix").isIn(200, 400, 401, 404));
 
 		// Default prefix must be unmapped now.
 		this.webTestClient.get()

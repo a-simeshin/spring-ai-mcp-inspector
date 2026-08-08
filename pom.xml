@@ -50,6 +50,11 @@
         <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>3.5.0</maven-surefire-plugin.version>
         <maven-failsafe-plugin.version>3.5.0</maven-failsafe-plugin.version>
+        <!-- JUnit tags excluded from the failsafe run. `known-failing` quarantines ITs
+             that fail for a tracked, pre-existing reason so CI is not permanently red;
+             each tagged test carries the issue link. Run them anyway with
+             `-Dfailsafe.excludedGroups=`. -->
+        <failsafe.excludedGroups>known-failing</failsafe.excludedGroups>
         <spring-javaformat-maven-plugin.version>0.0.47</spring-javaformat-maven-plugin.version>
         <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
 
@@ -191,6 +196,7 @@
                             <include>**/*IT.java</include>
                             <include>**/*E2ETest.java</include>
                         </includes>
+                        <excludedGroups>${failsafe.excludedGroups}</excludedGroups>
                         <systemPropertyVariables>
                             <allure.results.directory>${project.build.directory}/allure-results</allure.results.directory>
                         </systemPropertyVariables>

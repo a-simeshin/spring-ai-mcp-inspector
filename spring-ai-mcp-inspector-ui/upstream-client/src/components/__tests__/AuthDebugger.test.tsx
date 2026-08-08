@@ -60,6 +60,10 @@ import { EMPTY_DEBUGGER_STATE } from "../../lib/auth-types";
 
 // Mock local auth module
 jest.mock("../../lib/auth", () => ({
+  // [spring-ai-mcp-inspector PATCH] Keep the real helpers (oauth-state-machine
+  // imports toAbsoluteServerUrl from here; an undefined stub throws before
+  // discovery ever runs) and override only what the suite drives.
+  ...jest.requireActual("../../lib/auth"),
   DebugInspectorOAuthClientProvider: jest.fn().mockImplementation(() => ({
     tokens: jest.fn().mockImplementation(() => Promise.resolve(undefined)),
     clear: jest.fn().mockImplementation(() => {
