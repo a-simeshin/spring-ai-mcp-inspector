@@ -199,6 +199,16 @@
                         <excludedGroups>${failsafe.excludedGroups}</excludedGroups>
                         <systemPropertyVariables>
                             <allure.results.directory>${project.build.directory}/allure-results</allure.results.directory>
+                            <!-- ITs boot the demo app in-JVM and leave the proxy SseEmitter
+                                 and the MCP `/sse` stream open; the server only learns the
+                                 peer is gone on its next write, so Boot 3.5's default
+                                 graceful shutdown blocks every context close until
+                                 `spring.lifecycle.timeout-per-shutdown-phase` (30s) expires.
+                                 These contexts are disposable — drop the connections. This
+                                 is a workaround for issue #28 (the library never completes
+                                 those streams on context close); remove it once #28 is
+                                 fixed, so the suite exercises the real shutdown path. -->
+                            <server.shutdown>immediate</server.shutdown>
                         </systemPropertyVariables>
                     </configuration>
                 </plugin>
