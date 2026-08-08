@@ -168,19 +168,31 @@ with it.** An app on `context-path=/app` behind a gateway that routes `/tools/*`
 receive `X-Forwarded-Prefix: /tools/app` — the combined prefix. Sending `/tools` alone
 produces links that drop `/app`.
 
-### Two known limitations under a prefix
+### Known limitations under a prefix
 
 - **OAuth does not work under a context path.** The SPA hardcodes
   `window.location.origin + "/oauth/callback"` as its `redirect_uri` and compares
   `window.location.pathname` against that same literal, so both halves of the flow break
   once the app is not mounted at the root. Fixing it requires patching the upstream
   bundle; the inspector serves those two callback routes at the top level on purpose.
-- **The SSE transport is not fully prefix-aware.** Spring AI hands
-  `spring.ai.mcp.server.base-url` to the SSE transport provider, which uses it to advertise
-  the message endpoint; left empty (the default) the endpoint is advertised without the
-  context path, so set it to the prefix. Even then the inspector's own loopback SSE dial
-  still targets `/sse` at the container root, so prefer `STREAMABLE` under a prefix — it is
-  prefix-aware end to end.
+  Its code-split callback chunks are likewise still fetched from `/mcp-inspector/assets/`.
+- **The SSE transport needs one extra Spring AI property.** Spring AI advertises the
+  message endpoint as `spring.ai.mcp.server.base-url` + `sse-message-endpoint`; left empty
+  (the default) it is advertised without the prefix and the first client-to-server frame
+  404s. Set it to the prefix:
+
+  ```yaml
+  server:
+    servlet:
+      context-path: /app
+  spring:
+    ai:
+      mcp:
+        server:
+          base-url: /app
+  ```
+
+  `STREAMABLE` needs nothing extra.
 
 ## Ported 95% of original MCP Inspector
 

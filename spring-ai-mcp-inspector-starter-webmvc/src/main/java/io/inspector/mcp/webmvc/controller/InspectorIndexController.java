@@ -189,11 +189,10 @@ public class InspectorIndexController {
 	}
 
 	private static String contextPath(final HttpServletRequest request) {
-		if (request == null) {
-			return "";
-		}
+		// A root-mounted application reports "" per the servlet spec; a container
+		// reporting "/" instead would yield protocol-relative "//..." URLs.
 		final String contextPath = request.getContextPath();
-		return (contextPath != null && !"/".equals(contextPath)) ? contextPath : "";
+		return "/".equals(contextPath) ? "" : contextPath;
 	}
 
 }

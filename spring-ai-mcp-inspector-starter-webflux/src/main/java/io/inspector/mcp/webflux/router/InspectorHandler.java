@@ -482,7 +482,7 @@ public class InspectorHandler {
 		}
 		final String host = "127.0.0.1";
 		return switch (transport.type()) {
-			case SSE -> this.loopbackFactory.forSse(host, port, null, transport.messageEndpoint(), handlers);
+			case SSE -> this.loopbackFactory.forSse(host, port, transport.endpoint(), handlers);
 			case STREAMABLE -> this.loopbackFactory.forStreamable(host, port, transport.endpoint(), handlers);
 			case STATELESS -> this.loopbackFactory.forStateless(host, port, transport.endpoint(), handlers);
 			case STDIO_NO_HTTP -> throw new IllegalStateException(

@@ -69,8 +69,10 @@ public class InspectorConfigController {
 	@GetMapping(path = "${spring.ai.mcp.inspector.path:/mcp-inspector}/config",
 			produces = MediaType.APPLICATION_JSON_VALUE)
 	public ResponseEntity<InspectorBootstrap> config(final HttpServletRequest request) {
-		final String contextPath = (request != null) ? request.getContextPath() : null;
-		final InspectorBootstrap bootstrap = this.assembler.assemble(!"/".equals(contextPath) ? contextPath : "");
+		// A root-mounted application reports "" per the servlet spec; a container
+		// reporting "/" instead would yield a protocol-relative "//..." proxy address.
+		final String contextPath = request.getContextPath();
+		final InspectorBootstrap bootstrap = this.assembler.assemble("/".equals(contextPath) ? "" : contextPath);
 		final HttpHeaders headers = new HttpHeaders();
 		headers.setContentType(MediaType.APPLICATION_JSON);
 		headers.setCacheControl("no-cache, no-store, must-revalidate");

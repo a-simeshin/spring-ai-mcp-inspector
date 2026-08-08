@@ -103,6 +103,24 @@ class InspectorConfigControllerTests {
 			verify(InspectorConfigControllerTests.this.assembler).assemble("/app");
 		}
 
+		@Test
+		@Story("Context path")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("config() treats a \"/\" context path as no prefix, so the proxy address never becomes protocol-relative")
+		void config_withRootContextPath_passesEmptyPrefix() {
+			// given
+			given(InspectorConfigControllerTests.this.assembler.assemble(anyString()))
+				.willReturn(new InspectorBootstrap());
+			final MockHttpServletRequest request = new MockHttpServletRequest();
+			request.setContextPath("/");
+
+			// when
+			InspectorConfigControllerTests.this.controller.config(request);
+
+			// then
+			verify(InspectorConfigControllerTests.this.assembler).assemble("");
+		}
+
 	}
 
 }

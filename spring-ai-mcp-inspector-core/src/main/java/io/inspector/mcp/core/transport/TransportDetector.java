@@ -40,8 +40,8 @@ import org.springframework.core.env.Environment;
  *
  * <p>
  * Detected endpoints are returned <em>already prefixed</em> with the application's
- * deployment prefix ({@value #PROP_SERVLET_CONTEXT_PATH} on servlet stacks,
- * {@value #PROP_WEBFLUX_BASE_PATH} on reactive ones). This class is the only producer of
+ * deployment prefix — whichever of {@value #PROP_WEBFLUX_BASE_PATH} /
+ * {@value #PROP_SERVLET_CONTEXT_PATH} is set. This class is the only producer of
  * {@link DetectedTransport#endpoint()} / {@link DetectedTransport#messageEndpoint()}, so
  * consumers must never prefix them a second time.
  *
@@ -128,7 +128,7 @@ public class TransportDetector {
 		// messageEndpoint(), so prefixing here covers every consumer (loopback
 		// clients, proxy target advertisement, bootstrap payload) at once. No
 		// consumer may prefix again.
-		final String prefix = contextPrefix(stack);
+		final String prefix = contextPrefix();
 
 		return switch (protocol) {
 			case "SSE" -> new DetectedTransport(TransportType.SSE,
@@ -147,13 +147,16 @@ public class TransportDetector {
 	}
 
 	/**
-	 * Reads the stack-appropriate deployment prefix — {@value #PROP_SERVLET_CONTEXT_PATH}
-	 * for servlet applications, {@value #PROP_WEBFLUX_BASE_PATH} for reactive ones.
-	 * @param stack the detected stack label
+	 * Reads the deployment prefix from whichever of {@value #PROP_WEBFLUX_BASE_PATH} /
+	 * {@value #PROP_SERVLET_CONTEXT_PATH} is set — they are mutually exclusive, only one
+	 * web stack is ever active. Branching on the detected stack instead would drop the
+	 * base path of every ordinary WebFlux application, which leaves
+	 * {@value #PROP_WEB_APP_TYPE} unset because Boot deduces the type from the classpath.
 	 * @return the normalised prefix without a trailing slash, or {@code ""} when none
 	 */
-	private String contextPrefix(final String stack) {
-		final String raw = STACK_WEBFLUX.equals(stack) ? this.environment.getProperty(PROP_WEBFLUX_BASE_PATH)
+	private String contextPrefix() {
+		final String basePath = this.environment.getProperty(PROP_WEBFLUX_BASE_PATH);
+		final String raw = (basePath != null && !basePath.isBlank()) ? basePath
 				: this.environment.getProperty(PROP_SERVLET_CONTEXT_PATH);
 		if (raw == null || raw.isBlank()) {
 			return "";

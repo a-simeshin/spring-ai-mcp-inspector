@@ -277,7 +277,8 @@ class SseProxyControllerTests {
 					null, null, request);
 
 			// then
-			assertThat(bufferedFrames(emitter)).contains("/app/mcp-inspector-api/message?sessionId=");
+			// the "data:" anchor pins the start of the value, so a doubled prefix fails
+			assertThat(bufferedFrames(emitter)).contains("data:/app/mcp-inspector-api/message?sessionId=");
 		}
 
 		@Test
@@ -294,7 +295,26 @@ class SseProxyControllerTests {
 					null, null, REQUEST);
 
 			// then
-			assertThat(bufferedFrames(emitter)).contains("/mcp-inspector-api/message?sessionId=");
+			assertThat(bufferedFrames(emitter)).contains("data:/mcp-inspector-api/message?sessionId=");
+		}
+
+		@Test
+		@Story("Context path")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() treats a \"/\" context path as no prefix, so the prologue never becomes protocol-relative")
+		void openSse_withRootContextPath_prologueHasNoDoubleSlash() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			final MockHttpServletRequest request = new MockHttpServletRequest();
+			request.setContextPath("/");
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, request);
+
+			// then
+			assertThat(bufferedFrames(emitter)).contains("data:/mcp-inspector-api/message?sessionId=");
 		}
 
 		@Test
