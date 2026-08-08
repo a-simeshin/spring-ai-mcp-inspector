@@ -19,6 +19,9 @@ package io.inspector.mcp.core.proxy;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+import org.springframework.context.ApplicationListener;
+import org.springframework.context.event.ContextClosedEvent;
+
 /**
  * In-memory map of active proxy sessions, keyed by web-app session id.
  *
@@ -26,9 +29,17 @@ import java.util.concurrent.ConcurrentMap;
  * Thread-safe — the underlying {@link ConcurrentHashMap} permits concurrent lookups
  * (browser POSTs) and writes (new {@code GET /sse} requests, session closures).
  *
+ * <p>
+ * Every session pins a browser-facing SSE request open, so the registry drains itself on
+ * {@link ContextClosedEvent} — the first step of context close, before Boot's
+ * {@code WebServerGracefulShutdownLifecycle} starts waiting for in-flight requests.
+ * Destruction callbacks ({@code @PreDestroy}, {@code DisposableBean},
+ * {@code destroyMethod}) run after every lifecycle phase and would fire only once that
+ * wait had already timed out.
+ *
  * @author Artem Simeshin
  */
-public class ProxySessionRegistry {
+public class ProxySessionRegistry implements ApplicationListener<ContextClosedEvent> {
 
 	private final ConcurrentMap<String, ProxySession> sessions = new ConcurrentHashMap<>();
 
@@ -66,10 +77,19 @@ public class ProxySessionRegistry {
 		return true;
 	}
 
-	/** Closes and removes every session. Called on app shutdown. */
+	/**
+	 * Closes and removes every session. Idempotent — {@link ProxySession#close()} is a
+	 * no-op after the first call, which matters because a child context (an actuator
+	 * management server, say) republishes {@link ContextClosedEvent} to the parent.
+	 */
 	public void closeAll() {
 		this.sessions.values().forEach(ProxySession::close);
 		this.sessions.clear();
+	}
+
+	@Override
+	public void onApplicationEvent(final ContextClosedEvent event) {
+		closeAll();
 	}
 
 	/**

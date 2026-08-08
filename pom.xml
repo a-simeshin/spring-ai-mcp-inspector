@@ -199,16 +199,21 @@
                         <excludedGroups>${failsafe.excludedGroups}</excludedGroups>
                         <systemPropertyVariables>
                             <allure.results.directory>${project.build.directory}/allure-results</allure.results.directory>
-                            <!-- ITs boot the demo app in-JVM and leave the proxy SseEmitter
-                                 and the MCP `/sse` stream open; the server only learns the
-                                 peer is gone on its next write, so Boot 3.5's default
-                                 graceful shutdown blocks every context close until
-                                 `spring.lifecycle.timeout-per-shutdown-phase` (30s) expires.
-                                 These contexts are disposable — drop the connections. This
-                                 is a workaround for issue #28 (the library never completes
-                                 those streams on context close); remove it once #28 is
-                                 fixed, so the suite exercises the real shutdown path. -->
-                            <server.shutdown>immediate</server.shutdown>
+                            <!-- Graceful shutdown stays ON so the ITs exercise the real
+                                 shutdown path (issue #28: the inspector now completes its
+                                 own streams on ContextClosedEvent, before Boot starts
+                                 waiting for in-flight requests). What is left is not ours:
+                                 with `spring.ai.mcp.server.protocol=SSE` spring-ai's
+                                 `*SseServerTransportProvider` only releases its server-side
+                                 SSE session during bean destruction — after the graceful
+                                 phase has already timed out. That session never completes,
+                                 so every SSE-protocol context pays the whole timeout: cap
+                                 it at 1s instead of the 30s default (measured: 2s costs the
+                                 demo module ~70s, 1s ~35s). Drop this line once spring-ai
+                                 closes its transport before the graceful phase.
+                                 GracefulShutdownIT overrides it with command-line args, so
+                                 its assertions stay meaningful regardless. -->
+                            <spring.lifecycle.timeout-per-shutdown-phase>1s</spring.lifecycle.timeout-per-shutdown-phase>
                         </systemPropertyVariables>
                     </configuration>
                 </plugin>

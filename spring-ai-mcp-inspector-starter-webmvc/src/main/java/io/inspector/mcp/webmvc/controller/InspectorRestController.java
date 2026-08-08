@@ -36,6 +36,8 @@ import io.modelcontextprotocol.spec.McpSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationListener;
+import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -74,11 +76,18 @@ import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
  * REST endpoints that back the inspector SPA. All routes are mounted under
  * {@code /mcp-inspector/api} and protected by {@code InspectorAuthFilter}.
  *
+ * <p>
+ * A live UI session owns a loopback {@link McpSyncClient} pointed at this very JVM plus
+ * an {@link SseEmitter} for server-initiated events — two in-flight requests that would
+ * otherwise keep Boot's graceful shutdown waiting for the full
+ * {@code spring.lifecycle.timeout-per-shutdown-phase}. Both are released on
+ * {@link ContextClosedEvent}, which fires before any lifecycle phase stops.
+ *
  * @author Artem Simeshin
  */
 @RestController
 @RequestMapping("${spring.ai.mcp.inspector.path:/mcp-inspector}/api")
-public class InspectorRestController {
+public class InspectorRestController implements ApplicationListener<ContextClosedEvent> {
 
 	private static final Logger LOG = LoggerFactory.getLogger(InspectorRestController.class);
 
@@ -225,6 +234,27 @@ public class InspectorRestController {
 		}
 		this.emitterRegistry.close(id);
 		return ResponseEntity.noContent().build();
+	}
+
+	/**
+	 * Releases every live UI session and event stream. Idempotent, so the duplicate event
+	 * a child context republishes to its parent is harmless.
+	 * @param event the context-closed event (unused)
+	 */
+	@Override
+	public void onApplicationEvent(final ContextClosedEvent event) {
+		this.sessions.keySet().forEach((id) -> {
+			final SessionState state = this.sessions.remove(id);
+			if (state != null) {
+				try {
+					state.closeQuietly();
+				}
+				catch (final Exception ex) {
+					LOG.warn("Failed to close inspector session {} on shutdown", id, ex);
+				}
+			}
+		});
+		this.emitterRegistry.closeAll();
 	}
 
 	/**

@@ -1043,6 +1043,28 @@ class InspectorRestControllerTests {
 			assertThat(map).containsKey(sessionId);
 		}
 
+		@Test
+		@Story("Session registry")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("ContextClosedEvent releases every live session and every SSE emitter, so Boot's "
+				+ "graceful shutdown does not wait on them")
+		void onApplicationEvent_closesEverySessionAndEmitter() {
+			// given
+			final McpSyncClient client = mock(McpSyncClient.class);
+			registerSession(client);
+			registerSession(mock(McpSyncClient.class));
+
+			// when
+			InspectorRestControllerTests.this.controller
+				.onApplicationEvent(new org.springframework.context.event.ContextClosedEvent(
+						new org.springframework.context.support.StaticApplicationContext()));
+
+			// then
+			assertThat(InspectorRestControllerTests.this.controller.sessions()).isEmpty();
+			verify(client).closeGracefully();
+			verify(InspectorRestControllerTests.this.emitterRegistry).closeAll();
+		}
+
 	}
 
 	@Nested

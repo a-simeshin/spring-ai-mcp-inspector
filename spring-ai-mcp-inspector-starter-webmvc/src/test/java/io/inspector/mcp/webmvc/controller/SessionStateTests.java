@@ -146,7 +146,7 @@ class SessionStateTests {
 		@Test
 		@Story("Teardown")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("closeQuietly() clears pending requests and closes the client")
+		@Description("closeQuietly() clears pending requests and awaits the client teardown")
 		void closeQuietly_clearsPendingAndClosesClient() {
 			// given
 			SessionStateTests.this.state.pendingServerRequests().create("req-1");
@@ -154,9 +154,10 @@ class SessionStateTests {
 			// when
 			SessionStateTests.this.state.closeQuietly();
 
-			// then
+			// then — closeGracefully(), not close(): close() only dispatches the
+			// teardown, which then races Boot's graceful-shutdown phase
 			assertThat(SessionStateTests.this.state.pendingServerRequests().size()).isZero();
-			verify(SessionStateTests.this.client).close();
+			verify(SessionStateTests.this.client).closeGracefully();
 		}
 
 		@Test
@@ -165,10 +166,12 @@ class SessionStateTests {
 		@Description("closeQuietly() swallows exceptions thrown while closing the client")
 		void closeQuietly_whenClientCloseThrows_swallowsException() {
 			// given
+			willThrow(new RuntimeException("boom")).given(SessionStateTests.this.client).closeGracefully();
 			willThrow(new RuntimeException("boom")).given(SessionStateTests.this.client).close();
 
 			// when / then — no exception escapes
 			SessionStateTests.this.state.closeQuietly();
+			verify(SessionStateTests.this.client).closeGracefully();
 			verify(SessionStateTests.this.client).close();
 		}
 

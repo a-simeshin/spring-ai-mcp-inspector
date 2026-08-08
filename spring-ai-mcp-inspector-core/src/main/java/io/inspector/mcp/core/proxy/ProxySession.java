@@ -16,6 +16,7 @@
 
 package io.inspector.mcp.core.proxy;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -81,6 +82,11 @@ import reactor.core.publisher.Sinks;
  * @author Artem Simeshin
  */
 public final class ProxySession {
+
+	/**
+	 * Upper bound on the upstream {@code closeGracefully()} wait — see {@link #close()}.
+	 */
+	private static final Duration UPSTREAM_CLOSE_TIMEOUT = Duration.ofSeconds(5);
 
 	/** Web-app session identifier. Random UUID by default. */
 	private final String sessionId;
@@ -175,7 +181,10 @@ public final class ProxySession {
 			// tryEmitComplete never throws; defensive only
 		}
 		try {
-			this.targetTransport.closeGracefully().block();
+			// Bounded: close() also runs on the context-shutdown thread, serially for
+			// every open session. An unbounded block there lets one wedged upstream
+			// (dead remote server, hung stdio child) hang shutdown forever.
+			this.targetTransport.closeGracefully().block(UPSTREAM_CLOSE_TIMEOUT);
 		}
 		catch (final Exception ignored) {
 			// best-effort shutdown

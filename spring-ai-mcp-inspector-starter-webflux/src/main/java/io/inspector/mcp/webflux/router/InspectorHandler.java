@@ -41,6 +41,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.web.context.WebServerApplicationContext;
 import org.springframework.boot.web.context.WebServerInitializedEvent;
+import org.springframework.context.ApplicationListener;
+import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.CacheControl;
@@ -80,7 +82,7 @@ import io.inspector.mcp.core.transport.TransportType;
  *
  * @author Artem Simeshin
  */
-public class InspectorHandler {
+public class InspectorHandler implements ApplicationListener<ContextClosedEvent> {
 
 	private static final Logger LOG = LoggerFactory.getLogger(InspectorHandler.class);
 
@@ -300,6 +302,30 @@ public class InspectorHandler {
 			ctx.closeQuietly();
 		}
 		return ServerResponse.noContent().build();
+	}
+
+	/**
+	 * Releases every live UI session on context close. Each one owns a loopback MCP
+	 * client holding an inbound request against this very JVM plus an SSE sink; left open
+	 * they keep Boot's graceful shutdown waiting for the whole
+	 * {@code spring.lifecycle.timeout-per-shutdown-phase}. {@link ContextClosedEvent}
+	 * fires before any lifecycle phase stops, so this is early enough — bean destruction
+	 * would not be. Idempotent, so a child context republishing the event is harmless.
+	 * @param event the context-closed event (unused)
+	 */
+	@Override
+	public void onApplicationEvent(final ContextClosedEvent event) {
+		this.sessions.keySet().forEach((id) -> {
+			final SessionContext ctx = this.sessions.remove(id);
+			if (ctx != null) {
+				try {
+					ctx.closeQuietly();
+				}
+				catch (final Exception ex) {
+					LOG.warn("Failed to close inspector session {} on shutdown", id, ex);
+				}
+			}
+		});
 	}
 
 	/**

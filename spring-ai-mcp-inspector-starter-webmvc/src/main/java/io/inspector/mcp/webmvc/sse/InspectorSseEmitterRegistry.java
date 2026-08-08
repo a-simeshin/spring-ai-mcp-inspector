@@ -112,6 +112,14 @@ public class InspectorSseEmitterRegistry {
 	}
 
 	/**
+	 * Completes and removes every emitter. Called on context close — each emitter pins an
+	 * in-flight request that would otherwise stall Boot's graceful shutdown.
+	 */
+	public void closeAll() {
+		this.emitters.keySet().forEach(this::close);
+	}
+
+	/**
 	 * Returns the current number of active emitters. Exposed mainly for tests.
 	 * @return count of registered active emitters
 	 */

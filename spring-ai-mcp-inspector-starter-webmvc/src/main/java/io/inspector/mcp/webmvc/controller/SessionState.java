@@ -114,14 +114,29 @@ final class SessionState {
 		this.oauthToken = value;
 	}
 
+	/**
+	 * Tears the loopback client down and waits for it. {@code close()} would not do:
+	 * {@code McpTransport.close()} is {@code closeGracefully().subscribe()}, so the
+	 * session-termination request is merely dispatched. On context close that races
+	 * Boot's graceful-shutdown phase — the server-side session is still holding its
+	 * {@code GET /mcp} stream open when the wait starts, and the whole
+	 * {@code spring.lifecycle.timeout-per-shutdown-phase} gets paid. {@code
+	 * closeGracefully()} blocks until the teardown lands (bounded by the SDK at 10s) and
+	 * never throws, which is what the reactive {@code SessionContext} already does.
+	 */
 	void closeQuietly() {
 		this.pendingServerRequests.clear();
 		if (this.client != null) {
 			try {
-				this.client.close();
+				this.client.closeGracefully();
 			}
 			catch (final Exception ignored) {
-				/* best-effort */
+				try {
+					this.client.close();
+				}
+				catch (final Exception ignored2) {
+					/* best-effort */
+				}
 			}
 		}
 	}

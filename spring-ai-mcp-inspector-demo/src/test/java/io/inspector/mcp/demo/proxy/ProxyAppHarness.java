@@ -58,10 +58,13 @@ final class ProxyAppHarness {
 	 * @param authEnabled whether to leave the proxy auth filter active
 	 * @param authToken fixed token to use (only honored when {@code authEnabled}) —
 	 * {@code null} lets the framework generate a random one
+	 * @param extraArgs additional command-line args, appended last so they beat both
+	 * {@code application.yml} and the build's system properties
 	 * @return live context; caller is responsible for
 	 * {@link ConfigurableApplicationContext#close()}
 	 */
-	static ConfigurableApplicationContext start(Stack stack, String protocol, boolean authEnabled, String authToken) {
+	static ConfigurableApplicationContext start(Stack stack, String protocol, boolean authEnabled, String authToken,
+			String... extraArgs) {
 		boolean reactive = stack == Stack.WEBFLUX;
 		WebApplicationType type = reactive ? WebApplicationType.REACTIVE : WebApplicationType.SERVLET;
 
@@ -90,6 +93,7 @@ final class ProxyAppHarness {
 			args.add("--spring.ai.mcp.inspector.auth-token=" + authToken);
 		}
 		args.add("--spring.autoconfigure.exclude=" + exclude);
+		java.util.Collections.addAll(args, extraArgs);
 
 		return new SpringApplicationBuilder(DemoApplication.class).web(type).run(args.toArray(new String[0]));
 	}
