@@ -17,10 +17,12 @@
 package io.inspector.mcp.webflux.router;
 
 import java.net.URI;
+import java.util.concurrent.TimeUnit;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.http.CacheControl;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.RouterFunctions;
 import org.springframework.web.reactive.function.server.ServerRequest;
@@ -60,6 +62,13 @@ public class InspectorRouterConfig {
 
 	private static final ClassPathResource UI_ROOT = new ClassPathResource("mcp-inspector-bundle/");
 
+	/**
+	 * Cache policy for everything the resource route serves. Only content-hashed bundle
+	 * assets (plus {@code mcp.svg}) get here — {@code index.html} is claimed by the route
+	 * above and served no-store, so a long max-age cannot pin a stale entry point.
+	 */
+	private static final CacheControl ASSET_CACHE_CONTROL = CacheControl.maxAge(7, TimeUnit.DAYS);
+
 	@Bean
 	public RouterFunction<ServerResponse> inspectorRouter(final InspectorHandler handler,
 			final McpInspectorProperties properties) {
@@ -90,7 +99,8 @@ public class InspectorRouterConfig {
 			.andRoute(POST(apiPath + "/oauth/initiate"), handler::oauthInitiate)
 			.andRoute(GET(apiPath + "/oauth/callback"), handler::oauthCallback)
 			.andRoute(DELETE(apiPath + "/session/{id}"), handler::deleteSession)
-			.and(RouterFunctions.resources(basePath + "/**", UI_ROOT));
+			.and(RouterFunctions.resources(basePath + "/**", UI_ROOT,
+					(resource, headers) -> headers.setCacheControl(ASSET_CACHE_CONTROL)));
 	}
 
 	/**
