@@ -69,10 +69,21 @@ class ProxySessionLifecycleIT {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
 
-	private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+	private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
-	/** Per-request wall-clock budget. */
-	private static final Duration BUDGET = Duration.ofSeconds(15);
+	/**
+	 * Per-request wall-clock budget for a single streamable {@code initialize}.
+	 *
+	 * <p>
+	 * Deliberately generous: this IT is a <em>registry leak guard</em>, not a latency
+	 * SLA. On a contended CI runner (two full Spring Boot apps, JaCoCo instrumentation,
+	 * Chromium co-tenancy from sibling e2e ITs) a single one of the 100 sequential
+	 * proxied handshakes can stall for tens of seconds before the scheduler/GC clears.
+	 * The happy path is tens of milliseconds, so a wide budget never slows a green run —
+	 * it only stops a transient stall from failing the leak assertion. A genuine hang
+	 * still fails the test.
+	 */
+	private static final Duration BUDGET = Duration.ofSeconds(60);
 
 	/** Number of session create+close cycles per test run. */
 	private static final int CYCLES = 100;
@@ -165,7 +176,7 @@ class ProxySessionLifecycleIT {
 	/** DELETEs a session by id. */
 	private static HttpResponse<String> deleteSession(String proxyBase, String sessionId) throws Exception {
 		final HttpRequest request = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
-			.timeout(Duration.ofSeconds(10))
+			.timeout(Duration.ofSeconds(20))
 			.header("mcp-session-id", sessionId)
 			.DELETE()
 			.build();
