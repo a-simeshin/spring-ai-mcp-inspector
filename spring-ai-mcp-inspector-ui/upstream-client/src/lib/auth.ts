@@ -26,7 +26,7 @@ export const discoverScopes = async (
 ): Promise<string | undefined> => {
   try {
     const metadata = await discoverAuthorizationServerMetadata(
-      new URL("/", serverUrl),
+      new URL("/", toAbsoluteServerUrl(serverUrl)),
       { fetchFn },
     );
 
@@ -129,11 +129,34 @@ export const clearScopeFromSessionStorage = (serverUrl: string) => {
   sessionStorage.removeItem(key);
 };
 
-export class InspectorOAuthClientProvider implements OAuthClientProvider {
-  constructor(protected serverUrl: string) {
-    // Save the server URL to session storage
-    sessionStorage.setItem(SESSION_KEYS.SERVER_URL, serverUrl);
+/**
+ * [spring-ai-mcp-inspector PATCH] Resolves a same-origin relative server URL
+ * (e.g. "/mcp") against the current origin.
+ *
+ * The inspector advertises its MCP endpoint as a relative path so the proxy's
+ * `?url=` query stays clear of reverse-proxy WAF SSRF rules. OAuth, unlike the
+ * proxy, feeds this value to `new URL(...)` as a base, which throws on a
+ * relative input — so absolutise it here, at the OAuth boundary only.
+ */
+export const toAbsoluteServerUrl = (serverUrl: string): string => {
+  if (!serverUrl || !serverUrl.startsWith("/") || serverUrl.startsWith("//")) {
+    return serverUrl;
   }
+  try {
+    return new URL(serverUrl, window.location.origin).toString();
+  } catch {
+    return serverUrl;
+  }
+};
+
+export class InspectorOAuthClientProvider implements OAuthClientProvider {
+  constructor(serverUrl: string) {
+    this.serverUrl = toAbsoluteServerUrl(serverUrl);
+    // Save the server URL to session storage
+    sessionStorage.setItem(SESSION_KEYS.SERVER_URL, this.serverUrl);
+  }
+
+  protected serverUrl: string;
 
   get scope(): string | undefined {
     return getScopeFromSessionStorage(this.serverUrl);

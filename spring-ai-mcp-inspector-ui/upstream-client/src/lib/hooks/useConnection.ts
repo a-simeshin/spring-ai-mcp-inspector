@@ -62,6 +62,7 @@ import {
   saveScopeToSessionStorage,
   clearScopeFromSessionStorage,
   discoverScopes,
+  toAbsoluteServerUrl,
 } from "../auth";
 import { createProxyFetch } from "../proxyFetch";
 import {
@@ -397,7 +398,7 @@ export function useConnection({
         let resourceMetadata;
         try {
           resourceMetadata = await discoverOAuthProtectedResourceMetadata(
-            new URL("/", sseUrl),
+            new URL("/", toAbsoluteServerUrl(sseUrl)),
             {},
             fetchFn,
           );

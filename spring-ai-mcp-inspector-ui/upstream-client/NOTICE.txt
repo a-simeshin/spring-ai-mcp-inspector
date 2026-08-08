@@ -64,3 +64,12 @@ Local patches against upstream v0.21.2
    (`io.inspector.mcp.core.proxy.ProxyTargetResolver`), mirroring how
    springdoc-openapi serves the spec same-origin instead of pointing
    Swagger UI at an absolute `?url=`.
+
+6. src/lib/auth.ts + src/lib/oauth-state-machine.ts +
+   src/lib/hooks/useConnection.ts — resolve a relative same-origin
+   server URL against the current origin before handing it to
+   `new URL(...)` as a base (`toAbsoluteServerUrl`). Patch 5 makes the
+   default target the relative `/mcp`, and `new URL("/", "/mcp")` throws
+   `Invalid URL`, which aborted OAuth discovery on the default
+   configuration. The proxy path keeps the relative value, so the
+   WAF-safety of patch 5 is unaffected.
