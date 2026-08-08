@@ -109,21 +109,14 @@ class ProxyConfigEndpointIT {
 			.as("STREAMABLE → streamable-http per ProxyConfigController#mapTransport")
 			.isEqualTo("streamable-http");
 
-		if (stack == ProxyAppHarness.Stack.WEBMVC) {
-			// WebMvc path uses InspectorServerPortHolder, which is wired by the
-			// mvc autoconfig only — we can therefore assert a concrete URL shape.
-			assertThat(body.path("defaultServerUrl").asText())
-				.as("defaultServerUrl on webmvc must point at the live MCP endpoint")
-				.matches("http://localhost:\\d+/mcp");
-		}
-		else {
-			// Webflux uses ProxyHandler.listeningPort which is populated by a
-			// WebServerInitializedEvent. The event fires on the reactive stack
-			// too, so we expect the same shape; if the timing race causes a
-			// blank URL we surface that explicitly rather than silently passing.
-			assertThat(body.path("defaultServerUrl").asText()).as("defaultServerUrl on webflux")
-				.matches("http://localhost:\\d+/mcp|");
-		}
+		// defaultServerUrl is advertised as a relative same-origin path on both
+		// stacks. An absolute http://localhost:<port>/mcp would be echoed into the
+		// proxy's ?url= query, where a reverse-proxy WAF flags it as SSRF (OWASP
+		// CRS 934110) and drops the request; the proxy resolves the relative path
+		// back to the loopback endpoint server-side.
+		assertThat(body.path("defaultServerUrl").asText())
+			.as("defaultServerUrl must stay a relative same-origin path on " + stack)
+			.isEqualTo("/mcp");
 	}
 
 }

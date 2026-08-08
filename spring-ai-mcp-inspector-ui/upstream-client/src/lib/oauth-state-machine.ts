@@ -1,5 +1,9 @@
 import { OAuthStep, AuthDebuggerState } from "./auth-types";
-import { DebugInspectorOAuthClientProvider, discoverScopes } from "./auth";
+import {
+  DebugInspectorOAuthClientProvider,
+  discoverScopes,
+  toAbsoluteServerUrl,
+} from "./auth";
 import {
   discoverAuthorizationServerMetadata,
   registerClient,
@@ -33,7 +37,7 @@ export const oauthTransitions: Record<OAuthStep, StateTransition> = {
     canTransition: async () => true,
     execute: async (context) => {
       // Default to discovering from the server's URL
-      let authServerUrl = new URL("/", context.serverUrl);
+      let authServerUrl = new URL("/", toAbsoluteServerUrl(context.serverUrl));
       let resourceMetadata: OAuthProtectedResourceMetadata | null = null;
       let resourceMetadataError: Error | null = null;
       try {
