@@ -36,6 +36,8 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -70,6 +72,9 @@ import static org.mockito.Mockito.verify;
 @Feature("SseProxyController")
 class SseProxyControllerTests {
 
+	/** Root-mounted request: no context path, so no prefix in the SSE prologue. */
+	private static final MockHttpServletRequest REQUEST = new MockHttpServletRequest();
+
 	private ProxySessionRegistry registry;
 
 	private ProxyTransportFactory transportFactory;
@@ -98,6 +103,25 @@ class SseProxyControllerTests {
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(8);
 		return new ProxySession(id, target, browserToTarget, targetToBrowser);
+	}
+
+	/**
+	 * Reads back the frames the controller wrote into the emitter before the servlet
+	 * container attached its handler — {@code ResponseBodyEmitter} buffers them in a
+	 * private field, and this project has no MockMvc infrastructure to replay them
+	 * through.
+	 * @param emitter the emitter returned by the controller
+	 * @return every buffered chunk concatenated
+	 * @throws Exception if the buffered frames cannot be read
+	 */
+	private static String bufferedFrames(final SseEmitter emitter) throws Exception {
+		final java.lang.reflect.Field field = ResponseBodyEmitter.class.getDeclaredField("earlySendAttempts");
+		field.setAccessible(true);
+		final StringBuilder out = new StringBuilder();
+		for (final Object chunk : (java.util.Collection<?>) field.get(emitter)) {
+			out.append(chunk.getClass().getMethod("getData").invoke(chunk));
+		}
+		return out.toString();
 	}
 
 	@Nested
@@ -174,7 +198,7 @@ class SseProxyControllerTests {
 
 			// when
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
-					null, null);
+					null, null, REQUEST);
 
 			// then
 			assertThat(emitter).isNotNull();
@@ -193,7 +217,8 @@ class SseProxyControllerTests {
 				.willReturn(mock(McpClientTransport.class));
 
 			// when
-			SseProxyControllerTests.this.controller.openSse("streamable-http", "http://target/mcp", null, null, null);
+			SseProxyControllerTests.this.controller.openSse("streamable-http", "http://target/mcp", null, null, null,
+					REQUEST);
 
 			// then
 			verify(SseProxyControllerTests.this.transportFactory).openStreamable(URI.create("http://target/mcp"));
@@ -212,7 +237,8 @@ class SseProxyControllerTests {
 			// when — null url is now resolved to http://127.0.0.1:8080/sse by
 			// ProxyTargetResolver (loopbackPort() falls back to 8080 when portHolder is
 			// null)
-			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", null, null, null, null);
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", null, null, null, null,
+					REQUEST);
 
 			// then — the resolver succeeds, a session IS opened and registered
 			assertThat(emitter).isNotNull();
@@ -228,11 +254,47 @@ class SseProxyControllerTests {
 		void openSse_withUnsupportedType_doesNotRegisterSession() {
 			// when
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("carrier-pigeon", "x", null,
-					null, null);
+					null, null, REQUEST);
 
 			// then
 			assertThat(emitter).isNotNull();
 			verify(SseProxyControllerTests.this.registry, never()).put(any());
+		}
+
+		@Test
+		@Story("Context path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() under a context path emits a prologue carrying the prefix so the first browser frame is routable")
+		void openSse_underContextPath_prologueCarriesPrefix() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			final MockHttpServletRequest request = new MockHttpServletRequest();
+			request.setContextPath("/app");
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, request);
+
+			// then
+			assertThat(bufferedFrames(emitter)).contains("/app/mcp-inspector-api/message?sessionId=");
+		}
+
+		@Test
+		@Story("Context path")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() on a root-mounted application emits the unprefixed prologue")
+		void openSse_withoutContextPath_prologueHasNoPrefix() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, REQUEST);
+
+			// then
+			assertThat(bufferedFrames(emitter)).contains("/mcp-inspector-api/message?sessionId=");
 		}
 
 		@Test
@@ -246,7 +308,7 @@ class SseProxyControllerTests {
 
 			// when
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openStdio("python", "-m server",
-					"{\"KEY\":\"v\"}");
+					"{\"KEY\":\"v\"}", REQUEST);
 
 			// then
 			assertThat(emitter).isNotNull();
@@ -264,7 +326,7 @@ class SseProxyControllerTests {
 				.willReturn(mock(McpClientTransport.class));
 
 			// when
-			final SseEmitter emitter = SseProxyControllerTests.this.controller.openStdio("python", null, null);
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openStdio("python", null, null, REQUEST);
 
 			// then
 			assertThat(emitter).isNotNull();
@@ -277,7 +339,7 @@ class SseProxyControllerTests {
 		@Description("openStdio() with a blank command fails to build a transport and skips registration")
 		void openStdio_withBlankCommand_doesNotRegisterSession() {
 			// when
-			final SseEmitter emitter = SseProxyControllerTests.this.controller.openStdio("   ", null, null);
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openStdio("   ", null, null, REQUEST);
 
 			// then
 			assertThat(emitter).isNotNull();
@@ -294,7 +356,7 @@ class SseProxyControllerTests {
 				.willReturn(mock(McpClientTransport.class));
 
 			// when
-			SseProxyControllerTests.this.controller.openSse(null, "http://target/sse", null, null, null);
+			SseProxyControllerTests.this.controller.openSse(null, "http://target/sse", null, null, null, REQUEST);
 
 			// then
 			verify(SseProxyControllerTests.this.transportFactory).openSse(URI.create("http://target/sse"));
@@ -312,7 +374,7 @@ class SseProxyControllerTests {
 
 			// when
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("streamable-http", "", null,
-					null, null);
+					null, null, REQUEST);
 
 			// then — resolver produces a valid loopback URI, session IS registered
 			assertThat(emitter).isNotNull();

@@ -39,6 +39,16 @@ public class BootstrapHtmlRenderer {
 	/** Placeholder literal substituted in {@code index.html}. */
 	public static final String PLACEHOLDER = "<!--MCP_INSPECTOR_BOOTSTRAP-->";
 
+	/**
+	 * Asset base every URL in the bundle is built with. Duplicated from the UI build —
+	 * keep in lockstep with {@code base} in
+	 * {@code spring-ai-mcp-inspector-ui/upstream-client/vite.config.ts}. The trailing
+	 * slash is part of the literal: it is what makes the rewrite match only asset URLs
+	 * ({@code /mcp-inspector/assets/...}) and not the sibling proxy prefix
+	 * ({@code /mcp-inspector-api}).
+	 */
+	public static final String BUNDLE_ASSET_BASE = "/mcp-inspector/";
+
 	private final ObjectMapper objectMapper;
 
 	public BootstrapHtmlRenderer(final ObjectMapper objectMapper) {
@@ -54,6 +64,33 @@ public class BootstrapHtmlRenderer {
 	 * @throws IOException if Jackson serialisation fails
 	 */
 	public String renderIndexHtml(final String htmlTemplate, final InspectorBootstrap bootstrap) throws IOException {
+		return renderIndexHtml(htmlTemplate, bootstrap, BUNDLE_ASSET_BASE);
+	}
+
+	/**
+	 * Renders the inspector index HTML with the bootstrap script injected and every
+	 * bundle asset URL repointed at {@code assetBasePath}.
+	 *
+	 * <p>
+	 * Needed whenever the bundle is not served from {@value #BUNDLE_ASSET_BASE} — under a
+	 * servlet context path, a WebFlux base path, a reverse-proxy prefix, or a customised
+	 * {@code spring.ai.mcp.inspector.path}. Every emitted link in the bundle is
+	 * path-absolute, so a {@code <base href>} would be inert; the URLs themselves have to
+	 * be rewritten.
+	 * @param htmlTemplate the raw {@code index.html} contents
+	 * @param bootstrap the bootstrap payload to embed
+	 * @param assetBasePath the path the bundle is actually served from, e.g.
+	 * {@code /app/mcp-inspector}; a trailing slash is optional
+	 * @return the rendered HTML
+	 * @throws IOException if Jackson serialisation fails
+	 */
+	public String renderIndexHtml(final String htmlTemplate, final InspectorBootstrap bootstrap,
+			final String assetBasePath) throws IOException {
+		// Rewrite the RAW template, before the bootstrap script is injected. Doing it
+		// afterwards would also hit the injected proxyAddress ("/mcp-inspector-api"
+		// becomes "/mcp-inspector/..." once the slash-terminated literal is replaced),
+		// producing a doubly prefixed proxy address even on default configuration.
+		final String template = rewriteAssetUrls(htmlTemplate, assetBasePath);
 		final String json = this.objectMapper.writeValueAsString(bootstrap);
 		// Escape any "</" sequence (notably "</script>") so injected JSON cannot
 		// terminate the surrounding <script> element. The JS parser treats
@@ -65,7 +102,18 @@ public class BootstrapHtmlRenderer {
 		// Replace only the FIRST placeholder occurrence: the served index.html may
 		// contain the literal placeholder a second time inside a documentation
 		// comment, and String.replace would inject the script (and auth token) twice.
-		return htmlTemplate.replaceFirst(Pattern.quote(PLACEHOLDER), Matcher.quoteReplacement(scriptBlock));
+		return template.replaceFirst(Pattern.quote(PLACEHOLDER), Matcher.quoteReplacement(scriptBlock));
+	}
+
+	private static String rewriteAssetUrls(final String htmlTemplate, final String assetBasePath) {
+		if (assetBasePath == null || assetBasePath.isBlank()) {
+			return htmlTemplate;
+		}
+		final String withSlash = assetBasePath.endsWith("/") ? assetBasePath : assetBasePath + "/";
+		if (BUNDLE_ASSET_BASE.equals(withSlash)) {
+			return htmlTemplate;
+		}
+		return htmlTemplate.replace(BUNDLE_ASSET_BASE, withSlash);
 	}
 
 }

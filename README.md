@@ -144,6 +144,44 @@ Setting `spring.ai.mcp.inspector.auth-enabled=false` drops the built-in token ch
 entirely and logs a `WARN` at startup. Only do that when something else — Spring Security,
 a network boundary — already guards the path.
 
+## Under a context path or behind a reverse proxy
+
+A `server.servlet.context-path` (or `spring.webflux.base-path`) needs no extra
+configuration: asset URLs, the root redirect, the advertised proxy address and the
+detected MCP endpoint are all prefixed with it.
+
+### Behind a reverse proxy
+
+When a gateway serves the app under a prefix that the app itself does not know about, let
+Spring read the forwarded headers:
+
+```yaml
+server:
+  forward-headers-strategy: framework
+```
+
+The gateway then sends `X-Forwarded-Prefix` and the inspector emits links under that
+prefix.
+
+One sharp edge: **`X-Forwarded-Prefix` replaces the context path, it does not concatenate
+with it.** An app on `context-path=/app` behind a gateway that routes `/tools/*` to it must
+receive `X-Forwarded-Prefix: /tools/app` — the combined prefix. Sending `/tools` alone
+produces links that drop `/app`.
+
+### Two known limitations under a prefix
+
+- **OAuth does not work under a context path.** The SPA hardcodes
+  `window.location.origin + "/oauth/callback"` as its `redirect_uri` and compares
+  `window.location.pathname` against that same literal, so both halves of the flow break
+  once the app is not mounted at the root. Fixing it requires patching the upstream
+  bundle; the inspector serves those two callback routes at the top level on purpose.
+- **The SSE transport is not fully prefix-aware.** Spring AI hands
+  `spring.ai.mcp.server.base-url` to the SSE transport provider, which uses it to advertise
+  the message endpoint; left empty (the default) the endpoint is advertised without the
+  context path, so set it to the prefix. Even then the inspector's own loopback SSE dial
+  still targets `/sse` at the container root, so prefer `STREAMABLE` under a prefix — it is
+  prefix-aware end to end.
+
 ## Ported 95% of original MCP Inspector
 
 #### Transport

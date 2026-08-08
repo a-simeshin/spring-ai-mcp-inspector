@@ -204,4 +204,42 @@ class InspectorBootstrapAssemblerTests {
 
 	}
 
+	@Nested
+	@DisplayName("assemble(requestPrefix)")
+	class AssembleWithPrefix {
+
+		@Test
+		@Story("Request prefix")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("assemble(prefix) prefixes the proxy address but leaves the already-prefixed detected URL alone")
+		void assemble_withPrefix_prefixesProxyAddressOnly() {
+			// given
+			final InspectorBootstrapAssembler assembler = newAssemblerForTransport(TransportType.STREAMABLE,
+					"/app/mcp");
+
+			// when
+			final InspectorBootstrap bootstrap = assembler.assemble("/app");
+
+			// then
+			assertThat(bootstrap.getProxyAddress()).isEqualTo("/app/mcp-inspector-api");
+			assertThat(bootstrap.getDetectedUrl()).isEqualTo("/app/mcp");
+		}
+
+		@Test
+		@Story("Request prefix")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("A blank, null or root request prefix leaves the proxy address unprefixed")
+		void assemble_withoutPrefix_keepsProxyAddress() {
+			// given
+			final InspectorBootstrapAssembler assembler = newAssemblerForTransport(TransportType.STREAMABLE, "/mcp");
+
+			// when & then
+			assertThat(assembler.assemble("").getProxyAddress()).isEqualTo("/mcp-inspector-api");
+			assertThat(assembler.assemble((String) null).getProxyAddress()).isEqualTo("/mcp-inspector-api");
+			assertThat(assembler.assemble("/").getProxyAddress()).isEqualTo("/mcp-inspector-api");
+			assertThat(assembler.assemble("app/").getProxyAddress()).isEqualTo("/app/mcp-inspector-api");
+		}
+
+	}
+
 }

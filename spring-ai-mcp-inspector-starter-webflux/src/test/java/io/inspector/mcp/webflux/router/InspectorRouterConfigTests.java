@@ -84,6 +84,13 @@ class InspectorRouterConfigTests {
 		return ServerRequest.create(exchange, STRATEGIES.messageReaders());
 	}
 
+	private static ServerRequest requestWithContextPath(final HttpMethod method, final String uri,
+			final String contextPath) {
+		final MockServerHttpRequest mock = MockServerHttpRequest.method(method, uri).contextPath(contextPath).build();
+		final MockServerWebExchange exchange = MockServerWebExchange.from(mock);
+		return ServerRequest.create(exchange, STRATEGIES.messageReaders());
+	}
+
 	private static boolean matches(final RouterFunction<ServerResponse> router, final ServerRequest request) {
 		return router.route(request).blockOptional().isPresent();
 	}
@@ -152,6 +159,42 @@ class InspectorRouterConfigTests {
 			// when & then
 			assertThat(matches(router, request(HttpMethod.GET, "/oauth/callback"))).isTrue();
 			assertThat(matches(router, request(HttpMethod.GET, "/oauth/callback/debug"))).isTrue();
+		}
+
+		@Test
+		@Story("Base path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("The root redirect prefixes Location with the request's base path — the framework does not do it for a manual header")
+		void rootRedirect_underBasePath_prefixesLocation() {
+			// given
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config
+				.inspectorRouter(InspectorRouterConfigTests.this.handler, properties("/mcp-inspector"));
+			final ServerRequest request = requestWithContextPath(HttpMethod.GET, "/app/mcp-inspector", "/app");
+
+			// when
+			final ServerResponse response = router.route(request).flatMap((handler) -> handler.handle(request)).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.headers().getLocation()).hasToString("/app/mcp-inspector/index.html");
+		}
+
+		@Test
+		@Story("Base path")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("The root redirect stays unprefixed for a root-mounted application")
+		void rootRedirect_withoutBasePath_keepsPlainLocation() {
+			// given
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config
+				.inspectorRouter(InspectorRouterConfigTests.this.handler, properties("/mcp-inspector"));
+			final ServerRequest request = request(HttpMethod.GET, "/mcp-inspector/");
+
+			// when
+			final ServerResponse response = router.route(request).flatMap((handler) -> handler.handle(request)).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.headers().getLocation()).hasToString("/mcp-inspector/index.html");
 		}
 
 		@Test

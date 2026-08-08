@@ -177,4 +177,79 @@ class TransportDetectorTests {
 
 	}
 
+	@Nested
+	@DisplayName("deployment prefix")
+	class DeploymentPrefix {
+
+		@Test
+		@Story("Servlet context path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("detect() prefixes both SSE endpoints with the servlet context path")
+		void detect_withServletContextPath_prefixesSseEndpoints() {
+			// given
+			final MockEnvironment env = new MockEnvironment().withProperty(TransportDetector.PROP_PROTOCOL, "SSE")
+				.withProperty(TransportDetector.PROP_SERVLET_CONTEXT_PATH, "/app");
+
+			// when
+			final DetectedTransport detected = new TransportDetector(env).detect();
+
+			// then
+			assertThat(detected.endpoint()).isEqualTo("/app/sse");
+			assertThat(detected.messageEndpoint()).isEqualTo("/app/mcp/message");
+		}
+
+		@Test
+		@Story("Servlet context path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("detect() prefixes the streamable MCP endpoint with the servlet context path")
+		void detect_withServletContextPath_prefixesMcpEndpoint() {
+			// given
+			final MockEnvironment env = new MockEnvironment()
+				.withProperty(TransportDetector.PROP_PROTOCOL, "STREAMABLE")
+				.withProperty(TransportDetector.PROP_SERVLET_CONTEXT_PATH, "/app/");
+
+			// when
+			final DetectedTransport detected = new TransportDetector(env).detect();
+
+			// then — the trailing slash of the property must not survive
+			assertThat(detected.endpoint()).isEqualTo("/app/mcp");
+		}
+
+		@Test
+		@Story("WebFlux base path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("detect() prefixes reactive endpoints with spring.webflux.base-path, ignoring the servlet property")
+		void detect_withReactiveStack_usesWebfluxBasePath() {
+			// given
+			final MockEnvironment env = new MockEnvironment().withProperty(TransportDetector.PROP_PROTOCOL, "STATELESS")
+				.withProperty(TransportDetector.PROP_WEB_APP_TYPE, "REACTIVE")
+				.withProperty(TransportDetector.PROP_WEBFLUX_BASE_PATH, "app")
+				.withProperty(TransportDetector.PROP_SERVLET_CONTEXT_PATH, "/ignored");
+
+			// when
+			final DetectedTransport detected = new TransportDetector(env).detect();
+
+			// then — a missing leading slash is normalised
+			assertThat(detected.endpoint()).isEqualTo("/app/mcp");
+		}
+
+		@Test
+		@Story("No prefix")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("detect() leaves endpoints untouched for a root-mounted application")
+		void detect_withRootContextPath_leavesEndpointsUnprefixed() {
+			// given
+			final MockEnvironment env = new MockEnvironment().withProperty(TransportDetector.PROP_PROTOCOL, "SSE")
+				.withProperty(TransportDetector.PROP_SERVLET_CONTEXT_PATH, "/");
+
+			// when
+			final DetectedTransport detected = new TransportDetector(env).detect();
+
+			// then
+			assertThat(detected.endpoint()).isEqualTo("/sse");
+			assertThat(detected.messageEndpoint()).isEqualTo("/mcp/message");
+		}
+
+	}
+
 }
