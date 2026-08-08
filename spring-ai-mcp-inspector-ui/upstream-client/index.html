@@ -12,11 +12,11 @@
     <!--
       Spring AI MCP Inspector bootstrap.
 
-      The <!--MCP_INSPECTOR_BOOTSTRAP--> placeholder in <head> is replaced
+      The MCP_INSPECTOR_BOOTSTRAP placeholder in the head is replaced
       server-side by InspectorIndexController (webmvc) / InspectorHandler.index()
       (webflux) via BootstrapHtmlRenderer with an inline:
 
-        <script>window.__MCP_INSPECTOR_BOOTSTRAP = { ... };</script>
+        window.__MCP_INSPECTOR_BOOTSTRAP = { ... };
 
       carrying the typed InspectorBootstrap payload (authToken, proxyAddress,
       detectedTransport, detectedUrl, defaultUrl, defaultTransport, ...).
