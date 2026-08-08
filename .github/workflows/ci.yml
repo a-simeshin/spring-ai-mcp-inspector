@@ -3,13 +3,13 @@ name: CI
 # Build + test gate for main and the development branches. release.yml deploys
 # with `-DskipTests`, so this workflow is the only place tests run at all.
 #
-# Two jobs, because the demo module's Selenide/Selenium browser suite takes
-# 20-56 min while the rest of the reactor finishes in ~4 (parent 1s, core 23s,
-# ui 20s, starter-webmvc 2min, starter-webflux 30s):
-#   * `build` — fast, runs on every PR, meant to be the required check.
-#   * `e2e`   — slow, full reactor incl. demo. Post-merge on the long-lived
-#               branches, on demand, or on a PR labelled `e2e`. Never the thing
-#               a routine PR waits on.
+# Two jobs, because the demo module needs a browser and the rest of the reactor
+# does not:
+#   * `build` — reactor minus demo, ~3.5 min. The required check.
+#   * `e2e`   — full reactor incl. the demo Selenide suite, ~7 min. Runs on
+#               every PR too: this module is where the real breakages hide, and
+#               since 5af9c56 (no 30s graceful-shutdown wait per context) it is
+#               cheap enough not to need a gate.
 #
 # `push` is deliberately scoped to main + develop/**: a topic-branch PR then
 # triggers each job exactly once (no push/pull_request double billing), and the
@@ -24,10 +24,6 @@ on:
     branches:
       - main
       - 'develop/**'
-    # `labeled` is required for the e2e job's label gate to be usable: without it
-    # the default activity types never re-evaluate the condition, so adding the
-    # label to an open PR does nothing.
-    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
 
 permissions:
@@ -63,10 +59,9 @@ jobs:
   e2e:
     name: demo E2E (JDK 17)
     runs-on: ubuntu-latest
-    # Measured 20-56 min for the demo module; the cap stops a wedged browser or
-    # a hung proxy session from burning the 6h GitHub default.
-    timeout-minutes: 90
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    # ~7 min measured; the cap stops a wedged browser or a hung proxy session
+    # from burning the 6h GitHub default.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
