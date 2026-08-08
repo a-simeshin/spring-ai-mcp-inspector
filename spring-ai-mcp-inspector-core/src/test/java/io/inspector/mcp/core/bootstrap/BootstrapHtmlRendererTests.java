@@ -157,4 +157,86 @@ class BootstrapHtmlRendererTests {
 
 	}
 
+	@Nested
+	@DisplayName("renderIndexHtml() asset rewrite")
+	class AssetRewrite {
+
+		@Test
+		@Story("Asset URL rewrite")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("renderIndexHtml() repoints bundle asset URLs at the prefixed asset base")
+		void render_withPrefixedAssetBase_rewritesAssetUrls() throws IOException {
+			// given
+			final String template = "<script src=\"/mcp-inspector/assets/index-abc.js\"></script>"
+					+ BootstrapHtmlRenderer.PLACEHOLDER;
+
+			// when
+			final String html = BootstrapHtmlRendererTests.this.renderer.renderIndexHtml(template,
+					new InspectorBootstrap(), "/app/mcp-inspector");
+
+			// then
+			assertThat(html).contains("/app/mcp-inspector/assets/index-abc.js")
+				.doesNotContain("\"/mcp-inspector/assets");
+		}
+
+		@Test
+		@Story("Asset URL rewrite")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("The rewrite runs on the raw template so the injected proxy address is never prefixed twice")
+		void render_withDefaultAssetBase_leavesInjectedProxyAddressIntact() throws IOException {
+			// given — a proxy path that itself starts with the asset base
+			// (spring.ai.mcp.inspector.proxy-path=/mcp-inspector/api under /app), so the
+			// injected value collides with the slash-terminated rewrite literal
+			final String template = "<script src=\"/mcp-inspector/assets/index-abc.js\"></script>"
+					+ BootstrapHtmlRenderer.PLACEHOLDER;
+			final InspectorBootstrap bootstrap = new InspectorBootstrap();
+			bootstrap.setProxyAddress("/app/mcp-inspector/api");
+
+			// when
+			final String html = BootstrapHtmlRendererTests.this.renderer.renderIndexHtml(template, bootstrap,
+					"/app/mcp-inspector");
+
+			// then — rewriting after the injection would yield
+			// "/app/app/mcp-inspector/api"
+			assertThat(html).contains("\"proxyAddress\":\"/app/mcp-inspector/api\"");
+		}
+
+		@Test
+		@Story("Asset URL rewrite")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("The two-arg form and the default asset base leave the template's asset URLs untouched")
+		void render_withoutPrefix_keepsAssetUrls() throws IOException {
+			// given
+			final String template = "<script src=\"/mcp-inspector/assets/index-abc.js\"></script>"
+					+ BootstrapHtmlRenderer.PLACEHOLDER;
+
+			// when
+			final String legacy = BootstrapHtmlRendererTests.this.renderer.renderIndexHtml(template,
+					new InspectorBootstrap());
+			final String explicit = BootstrapHtmlRendererTests.this.renderer.renderIndexHtml(template,
+					new InspectorBootstrap(), BootstrapHtmlRenderer.BUNDLE_ASSET_BASE);
+
+			// then
+			assertThat(legacy).contains("/mcp-inspector/assets/index-abc.js").isEqualTo(explicit);
+		}
+
+		@Test
+		@Story("Asset URL rewrite")
+		@Severity(SeverityLevel.MINOR)
+		@Description("A blank asset base is treated as 'serve from the bundle default' and rewrites nothing")
+		void render_withBlankAssetBase_rewritesNothing() throws IOException {
+			// given
+			final String template = "<script src=\"/mcp-inspector/assets/index-abc.js\"></script>"
+					+ BootstrapHtmlRenderer.PLACEHOLDER;
+
+			// when
+			final String html = BootstrapHtmlRendererTests.this.renderer.renderIndexHtml(template,
+					new InspectorBootstrap(), "  ");
+
+			// then
+			assertThat(html).contains("/mcp-inspector/assets/index-abc.js");
+		}
+
+	}
+
 }

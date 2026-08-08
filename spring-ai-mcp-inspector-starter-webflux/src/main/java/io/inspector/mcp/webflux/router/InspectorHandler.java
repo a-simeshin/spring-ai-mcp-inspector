@@ -39,6 +39,7 @@ import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.web.context.WebServerApplicationContext;
 import org.springframework.boot.web.context.WebServerInitializedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.io.ClassPathResource;
@@ -90,6 +91,12 @@ public class InspectorHandler {
 	private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
 	private static final String INDEX_RESOURCE = "mcp-inspector-bundle/index.html";
+
+	/** Server namespace of the separate actuator web server, when one is started. */
+	private static final String MANAGEMENT_NAMESPACE = "management";
+
+	/** Inspector mount point assumed when no properties bean is wired. */
+	private static final String DEFAULT_INSPECTOR_PATH = "/mcp-inspector";
 
 	private final TransportDetector transportDetector;
 
@@ -157,6 +164,12 @@ public class InspectorHandler {
 
 	@EventListener
 	public void onWebServerStarted(final WebServerInitializedEvent event) {
+		// Skip the actuator's own server (management.server.port): last-writer-wins
+		// would otherwise leave the loopback port pointing at the management port.
+		final WebServerApplicationContext context = event.getApplicationContext();
+		if (context != null && MANAGEMENT_NAMESPACE.equals(context.getServerNamespace())) {
+			return;
+		}
 		this.listeningPort.set(event.getWebServer().getPort());
 	}
 
@@ -168,7 +181,8 @@ public class InspectorHandler {
 	 * @return a {@link Mono} emitting the HTML response
 	 */
 	public Mono<ServerResponse> index(final ServerRequest request) {
-		return Mono.fromCallable(this::renderIndexHtml)
+		final String prefix = contextPath(request);
+		return Mono.fromCallable(() -> renderIndexHtml(prefix))
 			.subscribeOn(Schedulers.boundedElastic())
 			.flatMap((html) -> ServerResponse.ok()
 				.contentType(MediaType.TEXT_HTML)
@@ -191,11 +205,12 @@ public class InspectorHandler {
 	 * @return a {@link Mono} emitting the JSON bootstrap config response
 	 */
 	public Mono<ServerResponse> serveConfig(final ServerRequest request) {
+		final String prefix = contextPath(request);
 		return Mono.fromSupplier(() -> {
 			if (this.bootstrapAssembler == null) {
 				throw new IllegalStateException("InspectorBootstrapAssembler not wired into InspectorHandler");
 			}
-			return this.bootstrapAssembler.assemble();
+			return this.bootstrapAssembler.assemble(prefix);
 		})
 			.subscribeOn(Schedulers.boundedElastic())
 			.flatMap((bootstrap) -> ServerResponse.ok()
@@ -467,7 +482,7 @@ public class InspectorHandler {
 		}
 		final String host = "127.0.0.1";
 		return switch (transport.type()) {
-			case SSE -> this.loopbackFactory.forSse(host, port, null, transport.messageEndpoint(), handlers);
+			case SSE -> this.loopbackFactory.forSse(host, port, transport.endpoint(), handlers);
 			case STREAMABLE -> this.loopbackFactory.forStreamable(host, port, transport.endpoint(), handlers);
 			case STATELESS -> this.loopbackFactory.forStateless(host, port, transport.endpoint(), handlers);
 			case STDIO_NO_HTTP -> throw new IllegalStateException(
@@ -607,7 +622,12 @@ public class InspectorHandler {
 		return ServerResponse.status(500).contentType(MediaType.APPLICATION_JSON).bodyValue(body);
 	}
 
-	private String renderIndexHtml() throws IOException {
+	private static String contextPath(final ServerRequest request) {
+		final String contextPath = request.requestPath().contextPath().value();
+		return "/".equals(contextPath) ? "" : contextPath;
+	}
+
+	private String renderIndexHtml(final String prefix) throws IOException {
 		// Pin the resource to *this class's* classloader rather than the thread-context
 		// classloader. In test environments that boot multiple Spring Boot apps in the
 		// same JVM (servlet + reactive runs back-to-back), the TCCL can be a stopped
@@ -627,8 +647,9 @@ public class InspectorHandler {
 				// still load, just without the inlined bootstrap script.
 				return template;
 			}
-			final InspectorBootstrap bootstrap = this.bootstrapAssembler.assemble();
-			return this.bootstrapHtmlRenderer.renderIndexHtml(template, bootstrap);
+			final InspectorBootstrap bootstrap = this.bootstrapAssembler.assemble(prefix);
+			final String inspectorPath = (this.properties != null) ? this.properties.getPath() : DEFAULT_INSPECTOR_PATH;
+			return this.bootstrapHtmlRenderer.renderIndexHtml(template, bootstrap, prefix + inspectorPath);
 		}
 	}
 

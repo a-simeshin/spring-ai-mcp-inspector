@@ -25,6 +25,9 @@ import io.qameta.allure.Story;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
 
@@ -102,6 +105,43 @@ class InspectorAuthTokenProviderTests {
 
 			// then
 			assertThat(token).hasSize(64);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("auth-disabled warning")
+	@ExtendWith(OutputCaptureExtension.class)
+	class AuthDisabledWarning {
+
+		@Test
+		@Story("Auth-disabled warning")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Constructing the provider with auth-enabled=false warns once about network reachability")
+		void construction_whenAuthDisabled_warnsAboutNetworkReachability(final CapturedOutput output) {
+			// given
+			final McpInspectorProperties props = new McpInspectorProperties();
+			props.setAuthEnabled(false);
+			props.setPath("/admin/inspector");
+
+			// when
+			new InspectorAuthTokenProvider(props);
+
+			// then
+			assertThat(output).containsOnlyOnce("MCP Inspector auth is disabled");
+			assertThat(output).contains("/admin/inspector").contains("Network reachability");
+		}
+
+		@Test
+		@Story("Auth-disabled warning")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Constructing the provider with auth left enabled logs nothing")
+		void construction_whenAuthEnabled_staysSilent(final CapturedOutput output) {
+			// when
+			new InspectorAuthTokenProvider(new McpInspectorProperties());
+
+			// then
+			assertThat(output).doesNotContain("MCP Inspector auth is disabled");
 		}
 
 	}

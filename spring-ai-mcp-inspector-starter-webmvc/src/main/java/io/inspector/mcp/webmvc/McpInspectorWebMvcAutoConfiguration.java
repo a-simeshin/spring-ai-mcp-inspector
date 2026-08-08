@@ -17,6 +17,7 @@
 package io.inspector.mcp.webmvc;
 
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -29,6 +30,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.Ordered;
 import org.springframework.core.env.Environment;
+import org.springframework.http.CacheControl;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
@@ -189,9 +191,12 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Override
 	public void addResourceHandlers(final ResourceHandlerRegistry registry) {
+		// Only content-hashed bundle assets (plus mcp.svg) reach this handler —
+		// index.html is claimed by InspectorIndexController and served no-store,
+		// so a long max-age cannot pin a stale entry point.
 		registry.addResourceHandler(this.properties.getPath() + "/**")
 			.addResourceLocations("classpath:/mcp-inspector-bundle/")
-			.setCachePeriod(0);
+			.setCacheControl(CacheControl.maxAge(7, TimeUnit.DAYS));
 	}
 
 	@Override

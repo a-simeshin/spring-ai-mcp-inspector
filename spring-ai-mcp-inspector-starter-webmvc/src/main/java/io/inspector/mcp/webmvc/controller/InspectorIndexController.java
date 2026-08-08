@@ -21,6 +21,7 @@ import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpHeaders;
@@ -77,23 +78,36 @@ public class InspectorIndexController {
 
 	private final BootstrapHtmlRenderer renderer;
 
+	private final String inspectorPath;
+
 	private final String indexPath;
 
 	public InspectorIndexController(final InspectorBootstrapAssembler assembler, final BootstrapHtmlRenderer renderer,
 			@Value("${spring.ai.mcp.inspector.path:/mcp-inspector}") final String inspectorPath) {
 		this.assembler = assembler;
 		this.renderer = renderer;
+		this.inspectorPath = inspectorPath;
 		this.indexPath = inspectorPath + "/index.html";
 	}
 
+	/**
+	 * Redirects the inspector root to {@code index.html}.
+	 * @param request the current request, read for its context path
+	 * @return a 302 to the context-path-aware {@code index.html}
+	 */
 	@GetMapping("${spring.ai.mcp.inspector.path:/mcp-inspector}")
-	public ResponseEntity<Void> redirectRoot() {
-		return redirectToIndex();
+	public ResponseEntity<Void> redirectRoot(final HttpServletRequest request) {
+		return redirectToIndex(request);
 	}
 
+	/**
+	 * Trailing-slash variant of {@link #redirectRoot(HttpServletRequest)}.
+	 * @param request the current request, read for its context path
+	 * @return a 302 to the context-path-aware {@code index.html}
+	 */
 	@GetMapping("${spring.ai.mcp.inspector.path:/mcp-inspector}/")
-	public ResponseEntity<Void> redirectTrailingSlash() {
-		return redirectToIndex();
+	public ResponseEntity<Void> redirectTrailingSlash(final HttpServletRequest request) {
+		return redirectToIndex(request);
 	}
 
 	/**
@@ -104,12 +118,13 @@ public class InspectorIndexController {
 	 *
 	 * <p>
 	 * This path stays hardcoded by design — see the class javadoc.
+	 * @param request the current request, read for its context path
 	 * @return the rendered index HTML response
 	 * @throws IOException if the bundle resource cannot be read
 	 */
 	@GetMapping(path = "/oauth/callback", produces = MediaType.TEXT_HTML_VALUE)
-	public ResponseEntity<String> oauthCallback() throws IOException {
-		return index();
+	public ResponseEntity<String> oauthCallback(final HttpServletRequest request) throws IOException {
+		return index(request);
 	}
 
 	/**
@@ -119,17 +134,25 @@ public class InspectorIndexController {
 	 *
 	 * <p>
 	 * This path stays hardcoded by design — see the class javadoc.
+	 * @param request the current request, read for its context path
 	 * @return the rendered index HTML response
 	 * @throws IOException if the bundle resource cannot be read
 	 */
 	@GetMapping(path = "/oauth/callback/debug", produces = MediaType.TEXT_HTML_VALUE)
-	public ResponseEntity<String> oauthCallbackDebug() throws IOException {
-		return index();
+	public ResponseEntity<String> oauthCallbackDebug(final HttpServletRequest request) throws IOException {
+		return index(request);
 	}
 
+	/**
+	 * Serves the templated SPA. Asset URLs and the bootstrap proxy address are rewritten
+	 * to carry the request's context path (or reverse-proxy prefix).
+	 * @param request the current request, read for its context path
+	 * @return the rendered index HTML response
+	 * @throws IOException if the bundle resource cannot be read
+	 */
 	@GetMapping(path = "${spring.ai.mcp.inspector.path:/mcp-inspector}/index.html",
 			produces = MediaType.TEXT_HTML_VALUE)
-	public ResponseEntity<String> index() throws IOException {
+	public ResponseEntity<String> index(final HttpServletRequest request) throws IOException {
 		// Pin to this class's classloader rather than the thread-context loader,
 		// which in multi-context test scenarios (servlet + reactive back-to-back)
 		// may be a stopped Tomcat WebappClassLoader and would throw "Illegal access:
@@ -146,8 +169,9 @@ public class InspectorIndexController {
 		try (InputStream in = resource.getInputStream()) {
 			body = StreamUtils.copyToString(in, StandardCharsets.UTF_8);
 		}
-		final InspectorBootstrap bootstrap = this.assembler.assemble();
-		final String rendered = this.renderer.renderIndexHtml(body, bootstrap);
+		final String prefix = contextPath(request);
+		final InspectorBootstrap bootstrap = this.assembler.assemble(prefix);
+		final String rendered = this.renderer.renderIndexHtml(body, bootstrap, prefix + this.inspectorPath);
 
 		final HttpHeaders headers = new HttpHeaders();
 		headers.setContentType(MediaType.TEXT_HTML);
@@ -156,10 +180,19 @@ public class InspectorIndexController {
 		return new ResponseEntity<>(rendered, headers, HttpStatus.OK);
 	}
 
-	private ResponseEntity<Void> redirectToIndex() {
+	private ResponseEntity<Void> redirectToIndex(final HttpServletRequest request) {
 		final HttpHeaders headers = new HttpHeaders();
-		headers.setLocation(URI.create(this.indexPath));
+		// A manually set Location is NOT context-path-prepended by the container —
+		// unlike a "redirect:" view or sendRedirect() — so the prefix goes in here.
+		headers.setLocation(URI.create(contextPath(request) + this.indexPath));
 		return new ResponseEntity<>(headers, HttpStatus.FOUND);
+	}
+
+	private static String contextPath(final HttpServletRequest request) {
+		// A root-mounted application reports "" per the servlet spec; a container
+		// reporting "/" instead would yield protocol-relative "//..." URLs.
+		final String contextPath = request.getContextPath();
+		return "/".equals(contextPath) ? "" : contextPath;
 	}
 
 }

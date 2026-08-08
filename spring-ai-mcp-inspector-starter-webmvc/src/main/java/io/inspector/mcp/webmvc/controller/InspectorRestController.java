@@ -359,7 +359,7 @@ public class InspectorRestController {
 	private McpSyncClient buildLoopbackClient(final DetectedTransport t, final InspectorClientHandlers handlers) {
 		final int port = this.portHolder.port();
 		return switch (t.type()) {
-			case SSE -> this.loopbackFactory.forSse("127.0.0.1", port, "", t.messageEndpoint(), handlers);
+			case SSE -> this.loopbackFactory.forSse("127.0.0.1", port, t.endpoint(), handlers);
 			case STREAMABLE -> this.loopbackFactory.forStreamable("127.0.0.1", port, t.endpoint(), handlers);
 			case STATELESS -> this.loopbackFactory.forStateless("127.0.0.1", port, t.endpoint(), handlers);
 			case STDIO_NO_HTTP, UNKNOWN -> null;

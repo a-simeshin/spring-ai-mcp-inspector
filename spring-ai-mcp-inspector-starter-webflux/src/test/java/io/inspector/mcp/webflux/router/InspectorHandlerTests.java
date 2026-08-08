@@ -33,6 +33,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.web.context.WebServerApplicationContext;
 import org.springframework.boot.web.context.WebServerInitializedEvent;
 import org.springframework.boot.web.server.WebServer;
 import org.springframework.http.HttpStatus;
@@ -62,6 +63,7 @@ import io.inspector.mcp.core.transport.TransportType;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -247,7 +249,8 @@ class InspectorHandlerTests {
 		@Description("serveConfig() serializes the assembled bootstrap as no-store JSON")
 		void serveConfig_whenAssemblerWired_returnsOkJsonBootstrap() {
 			// given
-			given(InspectorHandlerTests.this.bootstrapAssembler.assemble()).willReturn(new InspectorBootstrap());
+			given(InspectorHandlerTests.this.bootstrapAssembler.assemble(anyString()))
+				.willReturn(new InspectorBootstrap());
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.get("/mcp-inspector/config").build());
 
 			// when
@@ -290,8 +293,9 @@ class InspectorHandlerTests {
 		@Description("index() renders the templated SPA HTML via the bootstrap renderer and returns it no-store")
 		void index_always_returnsHtmlNoStoreResponse() throws Exception {
 			// given
-			given(InspectorHandlerTests.this.bootstrapAssembler.assemble()).willReturn(new InspectorBootstrap());
-			given(InspectorHandlerTests.this.bootstrapHtmlRenderer.renderIndexHtml(any(), any()))
+			given(InspectorHandlerTests.this.bootstrapAssembler.assemble(anyString()))
+				.willReturn(new InspectorBootstrap());
+			given(InspectorHandlerTests.this.bootstrapHtmlRenderer.renderIndexHtml(any(), any(), anyString()))
 				.willReturn("<!doctype html><title>MCP Inspector</title>");
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector/index.html").build());
@@ -304,6 +308,46 @@ class InspectorHandlerTests {
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			assertThat(response.headers().getContentType()).isEqualTo(MediaType.TEXT_HTML);
 			assertThat(response.headers().getCacheControl()).contains("no-store");
+		}
+
+		@Test
+		@Story("Base path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("index() under a WebFlux base path passes the prefixed asset base and prefix onwards")
+		void index_underBasePath_passesPrefixedAssetBase() throws Exception {
+			// given
+			given(InspectorHandlerTests.this.bootstrapAssembler.assemble(anyString()))
+				.willReturn(new InspectorBootstrap());
+			given(InspectorHandlerTests.this.bootstrapHtmlRenderer.renderIndexHtml(any(), any(), anyString()))
+				.willReturn("<!doctype html><title>MCP Inspector</title>");
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/app/mcp-inspector/index.html").contextPath("/app").build());
+
+			// when
+			InspectorHandlerTests.this.handler.index(request).block();
+
+			// then
+			verify(InspectorHandlerTests.this.bootstrapAssembler).assemble("/app");
+			verify(InspectorHandlerTests.this.bootstrapHtmlRenderer).renderIndexHtml(any(), any(),
+					org.mockito.ArgumentMatchers.eq("/app/mcp-inspector"));
+		}
+
+		@Test
+		@Story("Management server guard")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A WebServerInitializedEvent from the management context does not overwrite the loopback port")
+		void onWebServerStarted_withManagementNamespace_isIgnored() {
+			// given — the actuator's own server reports port 9999
+			final WebServerInitializedEvent event = webServerStartedEvent(9999);
+			final WebServerApplicationContext context = mock(WebServerApplicationContext.class);
+			given(context.getServerNamespace()).willReturn("management");
+			given(event.getApplicationContext()).willReturn(context);
+
+			// when
+			InspectorHandlerTests.this.handler.onWebServerStarted(event);
+
+			// then — the port stays unset
+			assertThat(InspectorHandlerTests.this.handler.listeningPort()).isEqualTo(-1);
 		}
 
 	}
@@ -384,15 +428,15 @@ class InspectorHandlerTests {
 		@Test
 		@Story("Open session")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("connect() with an SSE detected transport builds the loopback client via the SSE factory branch")
+		@Description("connect() dials the detected SSE endpoint, base path included, via the SSE factory branch")
 		void connect_withSseTransport_usesSseLoopbackBranch() {
-			// given
+			// given — the detected endpoints already carry the base path
 			InspectorHandlerTests.this.handler.onWebServerStarted(webServerStartedEvent(8081));
 			given(InspectorHandlerTests.this.transportDetector.detect())
-				.willReturn(new DetectedTransport(TransportType.SSE, "/sse", "/mcp/message", "WEBFLUX"));
+				.willReturn(new DetectedTransport(TransportType.SSE, "/app/sse", "/app/mcp/message", "WEBFLUX"));
 			final McpSyncClient client = connectedClient();
-			given(InspectorHandlerTests.this.loopbackFactory.forSse(any(), org.mockito.ArgumentMatchers.eq(8081), any(),
-					any(), any()))
+			given(InspectorHandlerTests.this.loopbackFactory.forSse(any(), org.mockito.ArgumentMatchers.eq(8081),
+					org.mockito.ArgumentMatchers.eq("/app/sse"), any()))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -405,7 +449,7 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			verify(InspectorHandlerTests.this.loopbackFactory).forSse(any(), org.mockito.ArgumentMatchers.eq(8081),
-					any(), any(), any());
+					org.mockito.ArgumentMatchers.eq("/app/sse"), any());
 		}
 
 		@Test

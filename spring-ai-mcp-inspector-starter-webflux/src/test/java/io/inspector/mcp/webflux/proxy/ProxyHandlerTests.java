@@ -32,6 +32,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.web.context.WebServerApplicationContext;
 import org.springframework.boot.web.context.WebServerInitializedEvent;
 import org.springframework.boot.web.server.WebServer;
 import org.springframework.http.HttpMethod;
@@ -138,6 +139,14 @@ class ProxyHandlerTests {
 		given(webServer.getPort()).willReturn(port);
 		final WebServerInitializedEvent event = mock(WebServerInitializedEvent.class);
 		given(event.getWebServer()).willReturn(webServer);
+		return event;
+	}
+
+	private static WebServerInitializedEvent managementServerStartedEvent(final int port) {
+		final WebServerInitializedEvent event = webServerStartedEvent(port);
+		final WebServerApplicationContext context = mock(WebServerApplicationContext.class);
+		given(context.getServerNamespace()).willReturn("management");
+		given(event.getApplicationContext()).willReturn(context);
 		return event;
 	}
 
@@ -456,6 +465,56 @@ class ProxyHandlerTests {
 					assertThat(sse.data()).contains("world");
 				})
 				.verifyComplete();
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() under a base path emits a prologue carrying the prefix so the first browser frame is routable")
+		void openSse_underBasePath_prologueCarriesPrefix() {
+			// given
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/app/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
+						.contextPath("/app")
+						.build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+			captured[0].targetToBrowser().tryEmitComplete();
+
+			// then
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			reactor.test.StepVerifier.create(body)
+				.assertNext((sse) -> assertThat(sse.data()).startsWith("/app/mcp-inspector-api/message?sessionId="))
+				.verifyComplete();
+		}
+
+		@Test
+		@Story("Management server guard")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A WebServerInitializedEvent from the management context does not overwrite the loopback port")
+		void onWebServerStarted_withManagementNamespace_isIgnored() {
+			// given — the actuator's own server reports port 9999
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			ProxyHandlerTests.this.handler.onWebServerStarted(managementServerStartedEvent(9999));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse").build());
+
+			// when
+			ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then — the port is still unset, so the resolver falls back to 8080
+			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
 		}
 
 		@Test
