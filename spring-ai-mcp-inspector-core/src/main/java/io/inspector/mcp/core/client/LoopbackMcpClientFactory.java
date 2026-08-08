@@ -83,6 +83,27 @@ public class LoopbackMcpClientFactory {
 	}
 
 	/**
+	 * Builds a {@link McpSyncClient} for the legacy SSE transport from a base path and a
+	 * message path.
+	 * @param host loopback host (e.g. {@code 127.0.0.1})
+	 * @param port loopback port
+	 * @param basePath the deployment prefix the server is mounted under; may be
+	 * {@code null} or blank
+	 * @param messagePath ignored — the server advertises its message endpoint on the
+	 * stream itself, and the client follows what it advertises
+	 * @return a connected-ready {@link McpSyncClient} for SSE
+	 * @deprecated since 1.0.1, use {@link #forSse(String, int, String)} with the full SSE
+	 * endpoint path. The message path is resolved from the stream, so passing it here
+	 * never had an effect.
+	 */
+	@Deprecated(since = "1.0.1", forRemoval = false)
+	public McpSyncClient forSse(final String host, final int port, final String basePath, final String messagePath) {
+		final String prefix = (basePath != null) ? basePath.trim() : "";
+		final String trimmed = prefix.endsWith("/") ? prefix.substring(0, prefix.length() - 1) : prefix;
+		return forSse(host, port, trimmed + DEFAULT_SSE_PATH);
+	}
+
+	/**
 	 * Builds a {@link McpSyncClient} for the streamable-HTTP transport.
 	 * @param host loopback host
 	 * @param port loopback port
