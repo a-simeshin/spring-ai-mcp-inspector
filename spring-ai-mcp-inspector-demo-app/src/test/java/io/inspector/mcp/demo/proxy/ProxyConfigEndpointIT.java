@@ -26,8 +26,7 @@ import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -70,18 +69,17 @@ class ProxyConfigEndpointIT {
 		}
 	}
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
+	@Test
 	@DisplayName("GET /config returns the upstream-compatible defaults envelope")
 	@Story("Config defaults")
 	@Severity(SeverityLevel.NORMAL)
 	@Description("Verifies GET /mcp-inspector-api/config returns the upstream-compatible shape "
 			+ "(defaultEnvironment/defaultCommand/defaultArgs/defaultTransport/defaultServerUrl) on both stacks")
-	void config_whenRequested_returnsUpstreamCompatibleShape(ProxyAppHarness.Stack stack) throws Exception {
+	void config_whenRequested_returnsUpstreamCompatibleShape() throws Exception {
 		// given
 		// Auth off so we don't need to thread a token through every assertion —
 		// the auth filter is exhaustively covered by ProxyAuthFilterIT.
-		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
+		app = ProxyAppHarness.start("STREAMABLE", false, null);
 		int port = ProxyAppHarness.port(app);
 
 		// when
@@ -115,7 +113,7 @@ class ProxyConfigEndpointIT {
 		// CRS 934110) and drops the request; the proxy resolves the relative path
 		// back to the loopback endpoint server-side.
 		assertThat(body.path("defaultServerUrl").asText())
-			.as("defaultServerUrl must stay a relative same-origin path on " + stack)
+			.as("defaultServerUrl must stay a relative same-origin path on " + ProxyAppHarness.stack())
 			.isEqualTo("/mcp");
 	}
 

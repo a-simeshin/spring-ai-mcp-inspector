@@ -26,9 +26,8 @@ import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -80,16 +79,15 @@ class ProxyFetchEndpointIT {
 	@DisplayName("POST /fetch")
 	class FetchEndpoint {
 
-		@ParameterizedTest(name = "{0}")
-		@EnumSource(ProxyAppHarness.Stack.class)
+		@Test
 		@DisplayName("proxies a loopback GET and surfaces the body in the envelope")
 		@Story("Successful proxy")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("POST /fetch proxies a GET to the demo's own /health endpoint and surfaces the proxied "
 				+ "JSON in the envelope body with ok=true and status=200")
-		void fetch_withLoopbackHealthTarget_proxiesBody(ProxyAppHarness.Stack stack) throws Exception {
+		void fetch_withLoopbackHealthTarget_proxiesBody() throws Exception {
 			// given
-			app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
+			app = ProxyAppHarness.start("STREAMABLE", false, null);
 			int port = ProxyAppHarness.port(app);
 
 			String selfTarget = "http://127.0.0.1:" + port + "/mcp-inspector-api/health";
@@ -108,27 +106,28 @@ class ProxyFetchEndpointIT {
 			// WebMvc returns the upstream status; WebFlux normalizes to 200 (its
 			// ServerResponse.ok() wraps every successful envelope). Both must hand
 			// back the JSON envelope; accept either status as long as it's 2xx.
-			assertThat(response.statusCode()).as("fetch proxied ok on %s, body=%s", stack, response.body())
+			assertThat(response.statusCode())
+				.as("fetch proxied ok on %s, body=%s", ProxyAppHarness.stack(), response.body())
 				.isBetween(200, 299);
 
 			JsonNode envelope = MAPPER.readTree(response.body());
 			assertThat(envelope.path("ok").asBoolean()).isTrue();
 			assertThat(envelope.path("status").asInt()).isEqualTo(200);
 			// The proxied body is the health JSON; assert by substring rather than
-			// re-parsing (the upstream stack returns it as a JSON string).
+			// re-parsing (the upstream ProxyAppHarness.stack() returns it as a JSON
+			// string).
 			assertThat(envelope.path("body").asText()).contains("\"status\"").contains("ok");
 		}
 
-		@ParameterizedTest(name = "{0}")
-		@EnumSource(ProxyAppHarness.Stack.class)
+		@Test
 		@DisplayName("rejects a file:// scheme target")
 		@Story("SSRF tightening")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("POST /fetch with a file:// URL must be rejected with a non-2xx status to prevent SSRF "
 				+ "/ local file disclosure")
-		void fetch_withFileScheme_isRejected(ProxyAppHarness.Stack stack) throws Exception {
+		void fetch_withFileScheme_isRejected() throws Exception {
 			// given
-			app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
+			app = ProxyAppHarness.start("STREAMABLE", false, null);
 			int port = ProxyAppHarness.port(app);
 
 			// when
@@ -145,20 +144,19 @@ class ProxyFetchEndpointIT {
 			// WebMvc returns 400; WebFlux wraps the IllegalArgumentException via
 			// onErrorResume() → 502. Both are valid "no-SSRF" responses; we only
 			// require non-2xx so the test isn't coupled to either error mode.
-			assertThat(response.statusCode()).as("file:// scheme must not be proxied (%s)", stack)
+			assertThat(response.statusCode()).as("file:// scheme must not be proxied (%s)", ProxyAppHarness.stack())
 				.isGreaterThanOrEqualTo(400);
 		}
 
-		@ParameterizedTest(name = "{0}")
-		@EnumSource(ProxyAppHarness.Stack.class)
+		@Test
 		@DisplayName("rejects a request body missing the url field")
 		@Story("Validation")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("POST /fetch with a body that omits the required url field must be rejected with a "
 				+ "non-2xx status")
-		void fetch_withMissingUrl_isRejected(ProxyAppHarness.Stack stack) throws Exception {
+		void fetch_withMissingUrl_isRejected() throws Exception {
 			// given
-			app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
+			app = ProxyAppHarness.start("STREAMABLE", false, null);
 			int port = ProxyAppHarness.port(app);
 
 			// when
@@ -172,7 +170,7 @@ class ProxyFetchEndpointIT {
 
 			// then
 			// Same as above — WebMvc → 400, WebFlux → 502 via onErrorResume.
-			assertThat(response.statusCode()).as("missing url must be rejected (%s)", stack)
+			assertThat(response.statusCode()).as("missing url must be rejected (%s)", ProxyAppHarness.stack())
 				.isGreaterThanOrEqualTo(400);
 		}
 

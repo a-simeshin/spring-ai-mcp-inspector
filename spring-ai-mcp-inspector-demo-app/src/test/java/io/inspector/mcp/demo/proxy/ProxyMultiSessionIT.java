@@ -33,8 +33,7 @@ import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -98,18 +97,16 @@ class ProxyMultiSessionIT {
 		}
 	}
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
+	@Test
 	@DisplayName("Two concurrent sessions route their responses independently")
 	@Story("Concurrent sessions")
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Opens two streamable sessions against the same target, fires parallel tools/list "
 			+ "requests with distinct ids, and verifies each response is routed back to its own session "
 			+ "and both tear down cleanly")
-	void twoSessions_whenRequestsRunInParallel_routeResponsesIndependently(ProxyAppHarness.Stack stack)
-			throws Exception {
+	void twoSessions_whenRequestsRunInParallel_routeResponsesIndependently() throws Exception {
 		// given
-		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
+		app = ProxyAppHarness.start("STREAMABLE", false, null);
 		final int port = ProxyAppHarness.port(app);
 		final String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		final String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
@@ -120,9 +117,10 @@ class ProxyMultiSessionIT {
 		final String sessionB = openSession(proxyBase, targetUrl, 1);
 
 		// then
-		assertThat(sessionA).as("session A id on %s", stack).isNotBlank();
-		assertThat(sessionB).as("session B id on %s", stack).isNotBlank();
-		assertThat(sessionA).as("two sessions on %s MUST have distinct ids", stack).isNotEqualTo(sessionB);
+		assertThat(sessionA).as("session A id on %s", ProxyAppHarness.stack()).isNotBlank();
+		assertThat(sessionB).as("session B id on %s", ProxyAppHarness.stack()).isNotBlank();
+		assertThat(sessionA).as("two sessions on %s MUST have distinct ids", ProxyAppHarness.stack())
+			.isNotEqualTo(sessionB);
 
 		// 2. Send notifications/initialized for both sessions — required per MCP spec.
 		sendInitialized(proxyBase, sessionA);
@@ -143,24 +141,28 @@ class ProxyMultiSessionIT {
 			final HttpResponse<String> aResponse = aFuture.join();
 			final HttpResponse<String> bResponse = bFuture.join();
 
-			assertThat(aResponse.statusCode()).as("session A tools/list status on %s, body=%s", stack, aResponse.body())
+			assertThat(aResponse.statusCode())
+				.as("session A tools/list status on %s, body=%s", ProxyAppHarness.stack(), aResponse.body())
 				.isEqualTo(200);
-			assertThat(bResponse.statusCode()).as("session B tools/list status on %s, body=%s", stack, bResponse.body())
+			assertThat(bResponse.statusCode())
+				.as("session B tools/list status on %s, body=%s", ProxyAppHarness.stack(), bResponse.body())
 				.isEqualTo(200);
 
 			final JsonNode aBody = MAPPER.readTree(aResponse.body());
 			final JsonNode bBody = MAPPER.readTree(bResponse.body());
 
-			assertThat(aBody.path("id").asInt()).as("session A response id must echo its request id on %s", stack)
+			assertThat(aBody.path("id").asInt())
+				.as("session A response id must echo its request id on %s", ProxyAppHarness.stack())
 				.isEqualTo(SESSION_A_REQUEST_ID);
-			assertThat(bBody.path("id").asInt()).as("session B response id must echo its request id on %s", stack)
+			assertThat(bBody.path("id").asInt())
+				.as("session B response id must echo its request id on %s", ProxyAppHarness.stack())
 				.isEqualTo(SESSION_B_REQUEST_ID);
 
 			assertThat(aBody.path("result").path("tools").isArray())
-				.as("session A response.result.tools is an array on %s", stack)
+				.as("session A response.result.tools is an array on %s", ProxyAppHarness.stack())
 				.isTrue();
 			assertThat(bBody.path("result").path("tools").isArray())
-				.as("session B response.result.tools is an array on %s", stack)
+				.as("session B response.result.tools is an array on %s", ProxyAppHarness.stack())
 				.isTrue();
 		}
 		finally {
@@ -172,12 +174,13 @@ class ProxyMultiSessionIT {
 		final HttpResponse<String> deleteA = deleteSession(proxyBase, sessionA);
 		final HttpResponse<String> deleteB = deleteSession(proxyBase, sessionB);
 
-		assertThat(deleteA.statusCode()).as("DELETE session A on %s", stack).isIn(200, 204);
-		assertThat(deleteB.statusCode()).as("DELETE session B on %s", stack).isIn(200, 204);
+		assertThat(deleteA.statusCode()).as("DELETE session A on %s", ProxyAppHarness.stack()).isIn(200, 204);
+		assertThat(deleteB.statusCode()).as("DELETE session B on %s", ProxyAppHarness.stack()).isIn(200, 204);
 
 		// 5. After both deletes, the same ids must be unknown.
 		final HttpResponse<String> deleteAAgain = deleteSession(proxyBase, sessionA);
-		assertThat(deleteAAgain.statusCode()).as("DELETE already-removed session A on %s", stack).isEqualTo(404);
+		assertThat(deleteAAgain.statusCode()).as("DELETE already-removed session A on %s", ProxyAppHarness.stack())
+			.isEqualTo(404);
 	}
 
 	/**

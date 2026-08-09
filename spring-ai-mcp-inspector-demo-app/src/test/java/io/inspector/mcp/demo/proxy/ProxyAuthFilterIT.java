@@ -23,9 +23,8 @@ import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Verifies the proxy bearer-token guard on both webmvc and webflux.
  *
  * <p>
- * Scenarios per stack (3 each = 6 total):
+ * Scenarios per ProxyAppHarness.stack() (3 each = 6 total):
  *
  * <ol>
  * <li>No token on a protected endpoint ({@code /config}) → 401</li>
@@ -73,41 +72,40 @@ class ProxyAuthFilterIT {
 	@DisplayName("Rejects invalid credentials")
 	class RejectsInvalidToken {
 
-		@ParameterizedTest(name = "{0}")
-		@EnumSource(ProxyAppHarness.Stack.class)
+		@Test
 		@DisplayName("missing token → 401")
 		@Story("Missing token")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("A request to the protected /config endpoint without the X-MCP-Proxy-Auth header is "
 				+ "rejected with 401 on both stacks")
-		void protectedEndpoint_withMissingToken_returns401(ProxyAppHarness.Stack stack) throws Exception {
+		void protectedEndpoint_withMissingToken_returns401() throws Exception {
 			// given
-			app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
+			app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
 			int port = ProxyAppHarness.port(app);
 
 			// when
 			HttpResponse<String> response = get(port, "/config", null);
 
 			// then
-			assertThat(response.statusCode()).as("missing X-MCP-Proxy-Auth on %s", stack).isEqualTo(401);
+			assertThat(response.statusCode()).as("missing X-MCP-Proxy-Auth on %s", ProxyAppHarness.stack())
+				.isEqualTo(401);
 		}
 
-		@ParameterizedTest(name = "{0}")
-		@EnumSource(ProxyAppHarness.Stack.class)
+		@Test
 		@DisplayName("wrong token → 401")
 		@Story("Wrong token")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("A request carrying an incorrect bearer token is rejected with 401 on both stacks")
-		void protectedEndpoint_withWrongToken_returns401(ProxyAppHarness.Stack stack) throws Exception {
+		void protectedEndpoint_withWrongToken_returns401() throws Exception {
 			// given
-			app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
+			app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
 			int port = ProxyAppHarness.port(app);
 
 			// when
 			HttpResponse<String> response = get(port, "/config", "Bearer wrong-token");
 
 			// then
-			assertThat(response.statusCode()).as("wrong token on %s", stack).isEqualTo(401);
+			assertThat(response.statusCode()).as("wrong token on %s", ProxyAppHarness.stack()).isEqualTo(401);
 		}
 
 	}
@@ -116,60 +114,58 @@ class ProxyAuthFilterIT {
 	@DisplayName("Accepts valid credentials")
 	class AcceptsValidToken {
 
-		@ParameterizedTest(name = "{0}")
-		@EnumSource(ProxyAppHarness.Stack.class)
+		@Test
 		@DisplayName("correct bearer token → 200")
 		@Story("Bearer token")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("A request carrying the correct token via X-MCP-Proxy-Auth: Bearer <token> is accepted "
 				+ "with 200 on both stacks")
-		void protectedEndpoint_withCorrectBearerToken_returns200(ProxyAppHarness.Stack stack) throws Exception {
+		void protectedEndpoint_withCorrectBearerToken_returns200() throws Exception {
 			// given
-			app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
+			app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
 			int port = ProxyAppHarness.port(app);
 
 			// when
 			HttpResponse<String> response = get(port, "/config", "Bearer " + AUTH_TOKEN);
 
 			// then
-			assertThat(response.statusCode()).as("correct bearer token on %s, body=%s", stack, response.body())
+			assertThat(response.statusCode())
+				.as("correct bearer token on %s, body=%s", ProxyAppHarness.stack(), response.body())
 				.isEqualTo(200);
 		}
 
-		@ParameterizedTest(name = "{0}")
-		@EnumSource(ProxyAppHarness.Stack.class)
+		@Test
 		@DisplayName("raw token (no Bearer prefix) → 200")
 		@Story("Raw token")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("The filter tolerates a raw token without the Bearer prefix (matches upstream); exercise "
 				+ "it so future refactors cannot silently drop the fallback")
-		void protectedEndpoint_withRawToken_returns200(ProxyAppHarness.Stack stack) throws Exception {
+		void protectedEndpoint_withRawToken_returns200() throws Exception {
 			// given
 			// The filter accepts both "Bearer <token>" and a raw token (matches
 			// upstream's tolerance). Exercise the raw form so future refactors
 			// can't silently drop it.
-			app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
+			app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
 			int port = ProxyAppHarness.port(app);
 
 			// when
 			HttpResponse<String> response = get(port, "/config", AUTH_TOKEN);
 
 			// then
-			assertThat(response.statusCode()).as("raw token on %s", stack).isEqualTo(200);
+			assertThat(response.statusCode()).as("raw token on %s", ProxyAppHarness.stack()).isEqualTo(200);
 		}
 
-		@ParameterizedTest(name = "{0}")
-		@EnumSource(ProxyAppHarness.Stack.class)
+		@Test
 		@DisplayName("query-param fallback → 200")
 		@Story("Query-param fallback")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("EventSource clients cannot set headers, so the filter accepts the token via the "
 				+ "?MCP_PROXY_AUTH_TOKEN query parameter; verify both stacks honor it")
-		void queryParamFallback_forEventSourceClients_returns200(ProxyAppHarness.Stack stack) throws Exception {
+		void queryParamFallback_forEventSourceClients_returns200() throws Exception {
 			// given
 			// EventSource cannot set custom headers. Upstream UI falls back to the
 			// ?MCP_PROXY_AUTH_TOKEN query parameter — verify both stacks honor it.
-			app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
+			app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
 			int port = ProxyAppHarness.port(app);
 
 			// when
@@ -182,7 +178,8 @@ class ProxyAuthFilterIT {
 			HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
 
 			// then
-			assertThat(response.statusCode()).as("query-param token on %s, body=%s", stack, response.body())
+			assertThat(response.statusCode())
+				.as("query-param token on %s, body=%s", ProxyAppHarness.stack(), response.body())
 				.isEqualTo(200);
 		}
 

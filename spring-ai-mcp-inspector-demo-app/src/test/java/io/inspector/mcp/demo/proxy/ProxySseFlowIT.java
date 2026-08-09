@@ -34,8 +34,7 @@ import io.qameta.allure.Story;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -87,18 +86,16 @@ class ProxySseFlowIT {
 		}
 	}
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
+	@Test
 	@DisplayName("SSE endpoint emits the prologue and round-trips a JSON-RPC exchange")
 	@Story("SSE round-trip")
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Opens the SSE proxy stream, captures the endpoint prologue with the session id, "
 			+ "posts initialize + tools/list to the message relay, and waits for a valid JSON-RPC "
 			+ "message frame proving the bidirectional path is live")
-	void sseProxyEndpoint_whenJsonRpcPosted_emitsPrologueAndRoundtripsResponse(ProxyAppHarness.Stack stack)
-			throws Exception {
+	void sseProxyEndpoint_whenJsonRpcPosted_emitsPrologueAndRoundtripsResponse() throws Exception {
 		// given
-		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
+		app = ProxyAppHarness.start("STREAMABLE", false, null);
 		int port = ProxyAppHarness.port(app);
 		String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
@@ -155,7 +152,7 @@ class ProxySseFlowIT {
 			catch (Throwable t) {
 				streamError.set(t);
 			}
-		}, "sse-reader-" + stack);
+		}, "sse-reader-" + ProxyAppHarness.stack());
 		sseReader.setDaemon(true);
 		sseReader.start();
 
@@ -166,7 +163,7 @@ class ProxySseFlowIT {
 			.until(() -> frames.stream().anyMatch(f -> "endpoint".equals(f.event)));
 		SseFrame endpointFrame = frames.stream().filter(f -> "endpoint".equals(f.event)).findFirst().orElseThrow();
 		// Data shape: "/mcp-inspector-api/message?sessionId=<UUID>".
-		assertThat(endpointFrame.data).as("endpoint prologue data on %s", stack)
+		assertThat(endpointFrame.data).as("endpoint prologue data on %s", ProxyAppHarness.stack())
 			.startsWith("/mcp-inspector-api/message?sessionId=");
 
 		String sessionId = endpointFrame.data
@@ -187,14 +184,14 @@ class ProxySseFlowIT {
 		// pump is live. We don't insist on a specific RPC id because some MCP
 		// server stacks reply to initialize via the underlying HTTP body rather
 		// than the relay; the tools/list reply is what reliably comes back here.
-		Awaitility.await("at least one message frame on " + stack)
+		Awaitility.await("at least one message frame on " + ProxyAppHarness.stack())
 			.atMost(Duration.ofSeconds(20))
 			.pollInterval(Duration.ofMillis(100))
 			.until(() -> frames.stream().anyMatch(f -> "message".equals(f.event)));
 
 		// then
 		List<SseFrame> messages = frames.stream().filter(f -> "message".equals(f.event)).toList();
-		assertThat(messages).as("message frames on %s", stack).isNotEmpty();
+		assertThat(messages).as("message frames on %s", ProxyAppHarness.stack()).isNotEmpty();
 
 		// At least one message frame must be a valid JSON-RPC envelope.
 		boolean anyValidRpc = false;

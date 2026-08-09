@@ -21,50 +21,57 @@ import org.springframework.context.ConfigurableApplicationContext;
 
 /**
  * Boots a fresh {@link DemoApplication} on a random port for the proxy-level integration
- * tests under {@code io.inspector.mcp.demo.proxy}.
+ * tests.
  *
  * <p>
- * Two responsibilities:
- *
- * <ul>
- * <li>Force exactly one web stack ({@code webmvc} or {@code webflux}) by excluding the
- * autoconfig classes of the opposite stack. With both starters on the test classpath (see
- * the demo {@code pom.xml}), without these exclusions the boot would otherwise see both
- * {@code spring-ai-starter-mcp-server-webmvc} and {@code -webflux} and fail to start a
- * coherent transport.</li>
- * <li>Pass the MCP protocol selection ({@code SSE} / {@code STREAMABLE} /
- * {@code STATELESS}) as a {@code --spring.ai.mcp.server.protocol} argument so it beats
- * {@code application.yml}.</li>
- * </ul>
+ * These tests live in {@code demo-app} and are published in its test-jar, but they never
+ * run here — this module has no web stack at all. {@code demo-webmvc} and
+ * {@code demo-webflux} each pick them up through Failsafe's {@code dependenciesToScan},
+ * so one copy of every test runs twice, once per stack, against a classpath that contains
+ * exactly one server.
  *
  * <p>
- * Pattern mirrors {@code InspectorE2ETest#startApp} verbatim — the e2e suite has been
- * hardened against random-port collisions and dual-stack classpath over six combos, so we
- * reuse the proven approach instead of inventing a new one.
+ * That is why there is no {@code Stack} parameter and no
+ * {@code spring.autoconfigure.exclude} list any more. Both existed to keep two stacks
+ * apart inside a single module, and neither ever fully worked: with
+ * {@code spring-boot-starter-web} on the classpath Boot's
+ * {@code ReactiveWebServerFactoryAutoConfiguration} imports {@code EmbeddedTomcat} first,
+ * so the reactive rows silently ran on Tomcat-reactive; pinning reactor-netty instead
+ * disposed loop resources that later contexts in the same JVM still needed, and hung the
+ * suite on CI (issue 35). Splitting the modules removes the choice rather than fighting
+ * it.
  */
 final class ProxyAppHarness {
 
-	/** Web stack to bind. */
-	enum Stack {
+	/**
+	 * Marker for the reactive inspector starter — present only in {@code demo-webflux}.
+	 */
+	private static final String WEBFLUX_MARKER = "io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration";
 
-		WEBMVC, WEBFLUX
-
-	}
+	private static final boolean REACTIVE = isPresent(WEBFLUX_MARKER);
 
 	private ProxyAppHarness() {
 	}
 
 	/**
-	 * A client pinned to HTTP/1.1, which every IT in this package should use.
+	 * Which stack this JVM is running, for assertion messages. Derived from the
+	 * classpath, because that is now the only thing that decides it.
+	 * @return {@code "webflux"} or {@code "webmvc"}
+	 */
+	static String stack() {
+		return REACTIVE ? "webflux" : "webmvc";
+	}
+
+	/**
+	 * A client pinned to HTTP/1.1, which every IT here should use.
 	 *
 	 * <p>
 	 * {@link HttpClient} negotiates HTTP/2 by default and remembers the outcome per
 	 * {@code host:port}. The harness boots on random ports and the OS recycles them, so a
 	 * port that once answered as Tomcat (which speaks h2c) can come back as Netty (which
 	 * does not) and the cached decision produces a bare {@code 400} — observed once in
-	 * seven local runs, on {@code POST /api/connect}, before the request reached any
-	 * handler. These tests exercise SSE over HTTP/1.1 and have no reason to negotiate
-	 * anything.
+	 * seven runs, on {@code POST /api/connect}, before the request reached any handler.
+	 * These tests exercise SSE over HTTP/1.1 and have no reason to negotiate anything.
 	 * @param connectTimeout how long to wait for the TCP connect
 	 * @return a fresh client; callers hold it in a {@code static final} field
 	 */
@@ -73,8 +80,7 @@ final class ProxyAppHarness {
 	}
 
 	/**
-	 * Boots the demo app on a random port.
-	 * @param stack which servlet/reactive stack to bind
+	 * Boots the demo app on a random port, on whichever stack this module supplies.
 	 * @param protocol one of {@code SSE}, {@code STREAMABLE}, {@code STATELESS}
 	 * @param authEnabled whether to leave the proxy auth filter active
 	 * @param authToken fixed token to use (only honored when {@code authEnabled}) —
@@ -84,36 +90,18 @@ final class ProxyAppHarness {
 	 * @return live context; caller is responsible for
 	 * {@link ConfigurableApplicationContext#close()}
 	 */
-	static ConfigurableApplicationContext start(Stack stack, String protocol, boolean authEnabled, String authToken,
+	static ConfigurableApplicationContext start(String protocol, boolean authEnabled, String authToken,
 			String... extraArgs) {
-		boolean reactive = stack == Stack.WEBFLUX;
-		WebApplicationType type = reactive ? WebApplicationType.REACTIVE : WebApplicationType.SERVLET;
-
-		String exclude;
-		if (reactive) {
-			exclude = String.join(",",
-					"org.springframework.ai.mcp.server.autoconfigure.McpServerSseWebMvcAutoConfiguration",
-					"org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebMvcAutoConfiguration",
-					"org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebMvcAutoConfiguration",
-					"io.inspector.mcp.webmvc.McpInspectorWebMvcAutoConfiguration");
-		}
-		else {
-			exclude = String.join(",",
-					"org.springframework.ai.mcp.server.autoconfigure.McpServerSseWebFluxAutoConfiguration",
-					"org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration",
-					"org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebFluxAutoConfiguration",
-					"io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration");
-		}
+		WebApplicationType type = REACTIVE ? WebApplicationType.REACTIVE : WebApplicationType.SERVLET;
 
 		java.util.List<String> args = new java.util.ArrayList<>();
 		args.add("--server.port=0");
-		args.add("--spring.main.web-application-type=" + (reactive ? "reactive" : "servlet"));
+		args.add("--spring.main.web-application-type=" + (REACTIVE ? "reactive" : "servlet"));
 		args.add("--spring.ai.mcp.server.protocol=" + protocol.toUpperCase());
 		args.add("--spring.ai.mcp.inspector.auth-enabled=" + authEnabled);
 		if (authToken != null) {
 			args.add("--spring.ai.mcp.inspector.auth-token=" + authToken);
 		}
-		args.add("--spring.autoconfigure.exclude=" + exclude);
 		java.util.Collections.addAll(args, extraArgs);
 
 		return new SpringApplicationBuilder(DemoApplication.class).web(type).run(args.toArray(new String[0]));
@@ -132,6 +120,16 @@ final class ProxyAppHarness {
 			case "STREAMABLE", "STATELESS" -> "/mcp";
 			default -> "/mcp";
 		};
+	}
+
+	private static boolean isPresent(String className) {
+		try {
+			Class.forName(className, false, ProxyAppHarness.class.getClassLoader());
+			return true;
+		}
+		catch (ClassNotFoundException ex) {
+			return false;
+		}
 	}
 
 }

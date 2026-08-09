@@ -26,8 +26,7 @@ import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.web.context.WebServerApplicationContext;
@@ -72,17 +71,15 @@ class ProxyCorsIT {
 		}
 	}
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
+	@Test
 	@DisplayName("OPTIONS preflight advertises the allowed origin and headers")
 	@Story("CORS preflight")
 	@Severity(SeverityLevel.NORMAL)
 	@Description("Boots the demo with an allowed origin and verifies an OPTIONS preflight surfaces "
 			+ "Access-Control-Allow-Origin and the proxy auth header in Access-Control-Allow-Headers")
-	void corsPreflight_withAllowedOrigin_advertisesAllowedHeadersAndOrigin(ProxyAppHarness.Stack stack)
-			throws Exception {
+	void corsPreflight_withAllowedOrigin_advertisesAllowedHeadersAndOrigin() throws Exception {
 		// given
-		app = startWithAllowedOrigin(stack);
+		app = startWithAllowedOrigin();
 		int port = ((WebServerApplicationContext) app).getWebServer().getPort();
 
 		// when
@@ -97,25 +94,27 @@ class ProxyCorsIT {
 		HttpResponse<String> response = HTTP.send(preflight, HttpResponse.BodyHandlers.ofString());
 
 		// then
-		assertThat(response.statusCode()).as("preflight status on %s, body=%s", stack, response.body())
+		assertThat(response.statusCode())
+			.as("preflight status on %s, body=%s", ProxyAppHarness.stack(), response.body())
 			.isBetween(200, 299);
 
 		Optional<String> allowOrigin = response.headers().firstValue("Access-Control-Allow-Origin");
-		assertThat(allowOrigin).as("Access-Control-Allow-Origin must be present on %s", stack).isPresent();
+		assertThat(allowOrigin).as("Access-Control-Allow-Origin must be present on %s", ProxyAppHarness.stack())
+			.isPresent();
 		assertThat(allowOrigin.get()).isEqualTo(ALLOWED_ORIGIN);
 
 		Optional<String> allowHeaders = response.headers().firstValue("Access-Control-Allow-Headers");
 		// Both stacks use allowedHeaders("*") which echoes the requested headers
 		// verbatim.
-		assertThat(allowHeaders).as("Access-Control-Allow-Headers on %s", stack).isPresent();
+		assertThat(allowHeaders).as("Access-Control-Allow-Headers on %s", ProxyAppHarness.stack()).isPresent();
 		assertThat(allowHeaders.get().toLowerCase())
 			.as("Allowed headers must include the proxy auth header (case-insensitive)")
 			.contains("x-mcp-proxy-auth");
 	}
 
 	/** Boots the demo with a single CORS-allowed origin so the cors filters wire up. */
-	private static ConfigurableApplicationContext startWithAllowedOrigin(ProxyAppHarness.Stack stack) {
-		boolean reactive = stack == ProxyAppHarness.Stack.WEBFLUX;
+	private static ConfigurableApplicationContext startWithAllowedOrigin() {
+		boolean reactive = "webflux".equals(ProxyAppHarness.stack());
 		WebApplicationType type = reactive ? WebApplicationType.REACTIVE : WebApplicationType.SERVLET;
 
 		String exclude;

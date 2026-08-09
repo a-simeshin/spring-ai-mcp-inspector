@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.a-simeshin</groupId>
+        <artifactId>spring-ai-mcp-inspector-parent</artifactId>
+        <version>1.0.1-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>spring-ai-mcp-inspector-demo-app</artifactId>
+    <packaging>jar</packaging>
+    <name>spring-ai-mcp-inspector-demo-app</name>
+    <description>The demo MCP server itself — tools, resources, prompts and the Boot entry point —
+        with no web stack of its own. spring-ai-mcp-inspector-demo-webmvc and -demo-webflux each add
+        exactly one stack, so neither ever sees the other's autoconfiguration. Also publishes a
+        test-jar carrying the stack-agnostic IT base classes both of them run.</description>
+
+    <properties>
+        <!-- Demo modules are example code, not published artifacts. -->
+        <jacoco.skip>true</jacoco.skip>
+        <checkstyle.skip>true</checkstyle.skip>
+        <spotbugs.skip>true</spotbugs.skip>
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.source.skip>true</maven.source.skip>
+        <maven.javadoc.skip>true</maven.javadoc.skip>
+        <gpg.skip>true</gpg.skip>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+
+        <!-- MCP SDK: transport and client API, used by the app and by the shared IT bases. -->
+        <dependency>
+            <groupId>io.modelcontextprotocol.sdk</groupId>
+            <artifactId>mcp</artifactId>
+        </dependency>
+
+        <!--
+            The stack-free MCP server starter. It brings mcp-annotations (@McpTool and
+            friends) so the providers compile here, without dragging in a servlet or a
+            reactive container — which is the whole point of this module.
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-server</artifactId>
+        </dependency>
+
+        <!--
+            Test scope. These are compile-scope FOR THE TEST SOURCES of this module,
+            which are published as a test-jar and consumed by both stack modules — so
+            every dependency the shared IT bases touch has to be declared here too.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.qameta.allure</groupId>
+            <artifactId>allure-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+            <version>${aspectj.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.github.a-simeshin</groupId>
+            <artifactId>spring-ai-mcp-inspector-core</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+                The IT base classes live in src/test and are shared by both stack
+                modules, so they ship as a test-jar. Logic stays in one place; each
+                stack module contributes a thin subclass that supplies nothing but its
+                own classpath.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>test-jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

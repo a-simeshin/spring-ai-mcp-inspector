@@ -27,8 +27,7 @@ import io.qameta.allure.Story;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
@@ -107,18 +106,16 @@ class GracefulShutdownIT {
 		}
 	}
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
+	@Test
 	@DisplayName("an open proxy SSE stream does not stall context close")
 	@Story("Proxy session teardown")
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Opens a proxy SSE session against the host's own /mcp endpoint, then closes the context "
 			+ "and asserts the close finished well inside the graceful-shutdown budget and the session "
 			+ "registry was drained")
-	void openProxySession_whenContextCloses_doesNotWaitForGracefulTimeout(ProxyAppHarness.Stack stack)
-			throws Exception {
+	void openProxySession_whenContextCloses_doesNotWaitForGracefulTimeout() throws Exception {
 		// given
-		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null, GRACEFUL);
+		app = ProxyAppHarness.start("STREAMABLE", false, null, GRACEFUL);
 		int port = ProxyAppHarness.port(app);
 		String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		String sseUrl = "http://127.0.0.1:" + port + "/mcp-inspector-api/sse?transportType=streamable-http&url="
@@ -147,7 +144,7 @@ class GracefulShutdownIT {
 			catch (Throwable ignored) {
 				/* an abrupt drop is a failure mode we assert against below */
 			}
-		}, "graceful-shutdown-sse-reader-" + stack);
+		}, "graceful-shutdown-sse-reader-" + ProxyAppHarness.stack());
 		reader.setDaemon(true);
 		reader.start();
 
@@ -167,64 +164,59 @@ class GracefulShutdownIT {
 		long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L;
 
 		// then
-		assertThat(elapsedMs).as("context close on %s took %d ms", stack, elapsedMs).isLessThan(CLOSE_BUDGET_MS);
+		assertThat(elapsedMs).as("context close on %s took %d ms", ProxyAppHarness.stack(), elapsedMs)
+			.isLessThan(CLOSE_BUDGET_MS);
 		assertThat(registry.size()).as("proxy sessions after close").isZero();
 		reader.join(Duration.ofSeconds(5).toMillis());
 		assertThat(streamEnded).as("browser-facing SSE stream ended cleanly rather than being cut").isTrue();
 	}
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
+	@Test
 	@DisplayName("an open inspector UI session does not stall context close")
 	@Story("Inspector session teardown")
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Connects an inspector UI session — whose loopback MCP client holds an inbound request "
 			+ "against this very JVM — then closes the context and asserts the close finished well inside "
 			+ "the graceful-shutdown budget")
-	void openInspectorSession_whenContextCloses_doesNotWaitForGracefulTimeout(ProxyAppHarness.Stack stack)
-			throws Exception {
+	void openInspectorSession_whenContextCloses_doesNotWaitForGracefulTimeout() throws Exception {
 		// given
-		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null, GRACEFUL);
+		app = ProxyAppHarness.start("STREAMABLE", false, null, GRACEFUL);
 		connectInspectorSession(ProxyAppHarness.port(app));
 
 		// when / then
-		assertCloseIsPrompt(stack);
+		assertCloseIsPrompt();
 	}
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
+	@Test
 	@DisplayName("an inspector session survives context close promptly even when DELETE is disallowed")
 	@Story("Inspector session teardown")
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Same as the previous case but with spring.ai.mcp.server.streamable-http.disallow-delete=true, "
 			+ "which removes the loopback DELETE /mcp that used to make the server release its own session. "
 			+ "Without McpServerTransportDrain this stalls for the whole graceful phase on both stacks")
-	void openInspectorSession_whenDeleteDisallowed_doesNotWaitForGracefulTimeout(ProxyAppHarness.Stack stack)
-			throws Exception {
+	void openInspectorSession_whenDeleteDisallowed_doesNotWaitForGracefulTimeout() throws Exception {
 		// given
-		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null,
+		app = ProxyAppHarness.start("STREAMABLE", false, null,
 				withGraceful("--spring.ai.mcp.server.streamable-http.disallow-delete=true"));
 		connectInspectorSession(ProxyAppHarness.port(app));
 
 		// when / then
-		assertCloseIsPrompt(stack);
+		assertCloseIsPrompt();
 	}
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
+	@Test
 	@DisplayName("an inspector session on the SSE protocol does not stall context close")
 	@Story("Inspector session teardown")
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Same as the previous case on spring.ai.mcp.server.protocol=SSE, where the MCP protocol has "
 			+ "no DELETE at all, so nothing but McpServerTransportDrain can release the server-side session")
-	void openInspectorSession_onSseProtocol_doesNotWaitForGracefulTimeout(ProxyAppHarness.Stack stack)
-			throws Exception {
+	void openInspectorSession_onSseProtocol_doesNotWaitForGracefulTimeout() throws Exception {
 		// given
-		app = ProxyAppHarness.start(stack, "SSE", false, null, GRACEFUL);
+		app = ProxyAppHarness.start("SSE", false, null, GRACEFUL);
 		connectInspectorSession(ProxyAppHarness.port(app));
 
 		// when / then
-		assertCloseIsPrompt(stack);
+		assertCloseIsPrompt();
 	}
 
 	/** Opens one inspector UI session and asserts the server accepted it. */
@@ -242,14 +234,15 @@ class GracefulShutdownIT {
 	/**
 	 * Closes {@link #app} and asserts the close landed inside {@link #CLOSE_BUDGET_MS}.
 	 */
-	private void assertCloseIsPrompt(ProxyAppHarness.Stack stack) {
+	private void assertCloseIsPrompt() {
 		ConfigurableApplicationContext closing = app;
 		app = null;
 		long startedAt = System.nanoTime();
 		closing.close();
 		long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L;
 
-		assertThat(elapsedMs).as("context close on %s took %d ms", stack, elapsedMs).isLessThan(CLOSE_BUDGET_MS);
+		assertThat(elapsedMs).as("context close on %s took %d ms", ProxyAppHarness.stack(), elapsedMs)
+			.isLessThan(CLOSE_BUDGET_MS);
 	}
 
 	/** {@link #GRACEFUL} plus extra args, both beating the build's system properties. */

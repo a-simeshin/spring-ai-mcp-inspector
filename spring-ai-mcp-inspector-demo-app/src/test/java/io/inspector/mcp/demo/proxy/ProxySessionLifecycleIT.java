@@ -32,9 +32,8 @@ import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -86,7 +85,8 @@ class ProxySessionLifecycleIT {
 	 *
 	 * <p>
 	 * The cost of that width is bounded by the method-level {@code @Timeout}: 100 cycles
-	 * x (60 s + 20 s) would otherwise let a wedged proxy burn over two hours per stack.
+	 * x (60 s + 20 s) would otherwise let a wedged proxy burn over two hours per
+	 * ProxyAppHarness.stack().
 	 */
 	private static final Duration BUDGET = Duration.ofSeconds(60);
 
@@ -112,10 +112,10 @@ class ProxySessionLifecycleIT {
 		}
 	}
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
+	@Test
 	// Whole-test cap. The per-request BUDGET is intentionally wide, so without this a
-	// wedged proxy would fail only after 100 x 80 s per stack. Green runs finish in
+	// wedged proxy would fail only after 100 x 80 s per ProxyAppHarness.stack(). Green
+	// runs finish in
 	// well under a minute; 10 min is pure headroom.
 	@Timeout(value = 10, unit = TimeUnit.MINUTES)
 	@DisplayName("100 open/close cycles drain the registry back to its initial size")
@@ -123,9 +123,9 @@ class ProxySessionLifecycleIT {
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Opens and closes 100 streamable sessions sequentially and asserts the "
 			+ "ProxySessionRegistry drains back to its pre-loop size with 100 distinct session ids")
-	void hundredSessionOpenCloseCycles_whenAllDeleted_doNotLeak(ProxyAppHarness.Stack stack) throws Exception {
+	void hundredSessionOpenCloseCycles_whenAllDeleted_doNotLeak() throws Exception {
 		// given
-		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
+		app = ProxyAppHarness.start("STREAMABLE", false, null);
 		final int port = ProxyAppHarness.port(app);
 		final String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		final String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
@@ -138,29 +138,32 @@ class ProxySessionLifecycleIT {
 		// when
 		for (int i = 0; i < CYCLES; i++) {
 			final String sessionId = openSession(proxyBase, targetUrl);
-			assertThat(sessionId).as("cycle %d on %s: session id must be present", i, stack).isNotBlank();
+			assertThat(sessionId).as("cycle %d on %s: session id must be present", i, ProxyAppHarness.stack())
+				.isNotBlank();
 			assertThat(seenSessionIds.add(sessionId))
-				.as("cycle %d on %s: session id %s must be unique", i, stack, sessionId)
+				.as("cycle %d on %s: session id %s must be unique", i, ProxyAppHarness.stack(), sessionId)
 				.isTrue();
 
 			final HttpResponse<String> deleteResponse = deleteSession(proxyBase, sessionId);
 			assertThat(deleteResponse.statusCode())
-				.as("cycle %d on %s: DELETE status, body=%s", i, stack, deleteResponse.body())
+				.as("cycle %d on %s: DELETE status, body=%s", i, ProxyAppHarness.stack(), deleteResponse.body())
 				.isIn(200, 204);
 		}
 
 		// then
-		assertThat(seenSessionIds).as("100 cycles must produce 100 distinct session ids on %s", stack).hasSize(CYCLES);
+		assertThat(seenSessionIds).as("100 cycles must produce 100 distinct session ids on %s", ProxyAppHarness.stack())
+			.hasSize(CYCLES);
 
 		assertThat(registry.size())
 			.as("registry must drain back to its pre-loop size on %s " + "(initial=%d, after %d open+close cycles)",
-					stack, initialSize, CYCLES)
+					ProxyAppHarness.stack(), initialSize, CYCLES)
 			.isEqualTo(initialSize);
 
 		// Sanity: a DELETE on a never-issued id must be 404 — proves the
 		// registry actually consults its map and does not silently 200.
 		final HttpResponse<String> unknownDelete = deleteSession(proxyBase, "definitely-not-a-real-session");
-		assertThat(unknownDelete.statusCode()).as("DELETE on unknown session id must be 404 on %s", stack)
+		assertThat(unknownDelete.statusCode())
+			.as("DELETE on unknown session id must be 404 on %s", ProxyAppHarness.stack())
 			.isEqualTo(404);
 	}
 

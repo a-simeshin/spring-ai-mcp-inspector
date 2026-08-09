@@ -30,8 +30,7 @@ import io.qameta.allure.Story;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -124,18 +123,16 @@ class ProxyTargetLossIT {
 		}
 	}
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
+	@Test
 	@DisplayName("Target loss mid-session surfaces as 5xx and the session is cleaned up")
 	@Story("Upstream loss")
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Kills the upstream target mid-session and verifies the next POST returns 5xx without "
 			+ "hanging, then the session is reaped so a subsequent DELETE returns 404")
-	void targetLossMidSession_whenUpstreamKilled_surfacesAsErrorAndCleansUp(ProxyAppHarness.Stack stack)
-			throws Exception {
+	void targetLossMidSession_whenUpstreamKilled_surfacesAsErrorAndCleansUp() throws Exception {
 		// given
-		inspectorApp = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
-		targetApp = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
+		inspectorApp = ProxyAppHarness.start("STREAMABLE", false, null);
+		targetApp = ProxyAppHarness.start("STREAMABLE", false, null);
 
 		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
 		final int targetPort = ProxyAppHarness.port(targetApp);
@@ -144,15 +141,18 @@ class ProxyTargetLossIT {
 
 		// 1. Open the session against the target app.
 		final String sessionId = openSession(proxyBase, targetUrl);
-		assertThat(sessionId).as("session id on %s", stack).isNotBlank();
+		assertThat(sessionId).as("session id on %s", ProxyAppHarness.stack()).isNotBlank();
 		sendInitialized(proxyBase, sessionId);
 
 		// 2. Confirm baseline tools/list works while the target is alive.
 		final HttpResponse<String> baseline = sendToolsList(proxyBase, sessionId, 2, BUDGET);
-		assertThat(baseline.statusCode()).as("baseline tools/list status on %s, body=%s", stack, baseline.body())
+		assertThat(baseline.statusCode())
+			.as("baseline tools/list status on %s, body=%s", ProxyAppHarness.stack(), baseline.body())
 			.isEqualTo(200);
 		final JsonNode baselineBody = MAPPER.readTree(baseline.body());
-		assertThat(baselineBody.path("result").path("tools").isArray()).as("baseline tools list on %s", stack).isTrue();
+		assertThat(baselineBody.path("result").path("tools").isArray())
+			.as("baseline tools list on %s", ProxyAppHarness.stack())
+			.isTrue();
 
 		// when
 		// 3. Kill the target.
@@ -165,14 +165,15 @@ class ProxyTargetLossIT {
 		// - 5xx (transport-level failure surfaced sooner).
 		final HttpResponse<String> afterLoss = sendToolsList(proxyBase, sessionId, 3, POST_LOSS_BUDGET);
 		assertThat(afterLoss.statusCode())
-			.as("after target loss, proxy must respond with 5xx (not hang) on %s, body=%s", stack, afterLoss.body())
+			.as("after target loss, proxy must respond with 5xx (not hang) on %s, body=%s", ProxyAppHarness.stack(),
+					afterLoss.body())
 			.isBetween(500, 599);
 
 		// 5. Eventually the session is reaped — DELETE on the now-stale id
 		// returns 200 (if the proxy still has the record and removes it) or
 		// 404 (if the upstream-loss path already removed it). Either is a
 		// valid clean-shutdown signal — the contract is "not 5xx, not a hang".
-		Awaitility.await("session reaped after target loss on " + stack)
+		Awaitility.await("session reaped after target loss on " + ProxyAppHarness.stack())
 			.atMost(Duration.ofSeconds(10))
 			.pollInterval(Duration.ofMillis(200))
 			.until(() -> {
@@ -183,7 +184,9 @@ class ProxyTargetLossIT {
 
 		// 6. A fresh DELETE on the same id must be 404 — proves the session is gone.
 		final HttpResponse<String> finalDelete = deleteSession(proxyBase, sessionId);
-		assertThat(finalDelete.statusCode()).as("DELETE on torn-down session must be 404 on %s", stack).isEqualTo(404);
+		assertThat(finalDelete.statusCode())
+			.as("DELETE on torn-down session must be 404 on %s", ProxyAppHarness.stack())
+			.isEqualTo(404);
 	}
 
 	/** Opens a streamable session via initialize POST. */

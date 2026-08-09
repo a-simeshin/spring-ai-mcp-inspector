@@ -29,8 +29,7 @@ import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -100,17 +99,16 @@ class ProxyStreamableHttpInitFlowIT {
 	 * Drives the full request/notification dance through {@code /mcp-inspector-api/mcp}
 	 * and asserts spec-compliant responses on each step.
 	 */
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
+	@Test
 	@DisplayName("Streamable-HTTP init flow returns real upstream responses, not the legacy placeholder")
 	@Story("Spec-compliant init")
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Regression: drives initialize, notifications/initialized and tools/list through the "
 			+ "streamable-HTTP proxy and asserts real upstream responses (200 with result, 202 for "
 			+ "notifications), guarding against the old {\"accepted\":true} placeholder")
-	void streamableHttpInitFlow_whenDriven_returnsRealUpstreamResponses(ProxyAppHarness.Stack stack) throws Exception {
+	void streamableHttpInitFlow_whenDriven_returnsRealUpstreamResponses() throws Exception {
 		// given
-		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
+		app = ProxyAppHarness.start("STREAMABLE", false, null);
 		int port = ProxyAppHarness.port(app);
 		String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
@@ -121,22 +119,24 @@ class ProxyStreamableHttpInitFlowIT {
 		HttpResponse<String> initResponse = postProxy(
 				proxyBase + "/mcp?url=" + URLEncoder.encode(targetUrl, StandardCharsets.UTF_8), null, init);
 
-		assertThat(initResponse.statusCode()).as("initialize must be 200 on %s, body=%s", stack, initResponse.body())
+		assertThat(initResponse.statusCode())
+			.as("initialize must be 200 on %s, body=%s", ProxyAppHarness.stack(), initResponse.body())
 			.isEqualTo(200);
 		String sessionId = initResponse.headers().firstValue("mcp-session-id").orElse(null);
-		assertThat(sessionId).as("mcp-session-id on %s", stack).isNotBlank();
+		assertThat(sessionId).as("mcp-session-id on %s", ProxyAppHarness.stack()).isNotBlank();
 
 		// The body MUST be the real initialize response, not the old placeholder.
-		assertThat(initResponse.body()).as("initialize body on %s must NOT be the legacy placeholder", stack)
+		assertThat(initResponse.body())
+			.as("initialize body on %s must NOT be the legacy placeholder", ProxyAppHarness.stack())
 			.doesNotContain("\"accepted\":true");
 		JsonNode initBody = MAPPER.readTree(initResponse.body());
 		assertThat(initBody.path("jsonrpc").asText()).isEqualTo("2.0");
 		assertThat(initBody.path("id").asInt()).isEqualTo(1);
 		assertThat(initBody.path("result").path("serverInfo").isMissingNode())
-			.as("initialize result.serverInfo on %s must be present", stack)
+			.as("initialize result.serverInfo on %s must be present", ProxyAppHarness.stack())
 			.isFalse();
 		assertThat(initBody.path("result").path("protocolVersion").asText())
-			.as("initialize result.protocolVersion on %s", stack)
+			.as("initialize result.protocolVersion on %s", ProxyAppHarness.stack())
 			.isNotBlank();
 
 		// ---- 2. notifications/initialized — no id → expect 202 -----------
@@ -145,7 +145,7 @@ class ProxyStreamableHttpInitFlowIT {
 		initializedNotification.put("method", "notifications/initialized");
 		HttpResponse<String> notifResponse = postProxy(proxyBase + "/mcp", sessionId, initializedNotification);
 		assertThat(notifResponse.statusCode())
-			.as("notification POST must be 202 Accepted on %s, body=%s", stack, notifResponse.body())
+			.as("notification POST must be 202 Accepted on %s, body=%s", ProxyAppHarness.stack(), notifResponse.body())
 			.isEqualTo(202);
 
 		// ---- 3. tools/list (id=2) — request → expect 200 + matching response
@@ -155,12 +155,14 @@ class ProxyStreamableHttpInitFlowIT {
 		toolsList.put("id", 2);
 		HttpResponse<String> toolsListResponse = postProxy(proxyBase + "/mcp", sessionId, toolsList);
 		assertThat(toolsListResponse.statusCode())
-			.as("tools/list HTTP status on %s, body=%s", stack, toolsListResponse.body())
+			.as("tools/list HTTP status on %s, body=%s", ProxyAppHarness.stack(), toolsListResponse.body())
 			.isEqualTo(200);
 		JsonNode toolsBody = MAPPER.readTree(toolsListResponse.body());
-		assertThat(toolsBody.path("id").asInt()).as("tools/list response id on %s", stack).isEqualTo(2);
+		assertThat(toolsBody.path("id").asInt()).as("tools/list response id on %s", ProxyAppHarness.stack())
+			.isEqualTo(2);
 		assertThat(toolsBody.path("result").path("tools").isArray())
-			.as("tools/list response result.tools is an array on %s, body=%s", stack, toolsListResponse.body())
+			.as("tools/list response result.tools is an array on %s, body=%s", ProxyAppHarness.stack(),
+					toolsListResponse.body())
 			.isTrue();
 
 		// ---- 4. DELETE — session is known, then unknown ----------------
@@ -170,7 +172,8 @@ class ProxyStreamableHttpInitFlowIT {
 			.DELETE()
 			.build();
 		HttpResponse<String> deleteResponse = HTTP.send(deleteRequest, HttpResponse.BodyHandlers.ofString());
-		assertThat(deleteResponse.statusCode()).as("DELETE on known session must be 200 on %s", stack).isIn(200, 204);
+		assertThat(deleteResponse.statusCode()).as("DELETE on known session must be 200 on %s", ProxyAppHarness.stack())
+			.isIn(200, 204);
 	}
 
 	/**

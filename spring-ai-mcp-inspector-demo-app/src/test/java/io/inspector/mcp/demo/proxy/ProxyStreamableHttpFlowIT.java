@@ -31,8 +31,7 @@ import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -43,14 +42,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * frame to the demo MCP server's {@code /mcp} endpoint.
  *
  * <p>
- * Flow (one test method = one stack):
+ * Flow (one test method = one ProxyAppHarness.stack()):
  *
  * <ol>
  * <li>{@code POST /mcp-inspector-api/mcp?url=<target>} with an {@code initialize} body →
  * 200, {@code mcp-session-id} echoed in the response header.</li>
  * <li>{@code POST /mcp-inspector-api/mcp} with the session id header and a
  * {@code tools/list} body → 202 Accepted (the proxy relays the frame to the demo; the
- * inline POST body for non-initialize calls on this stack is empty by design).</li>
+ * inline POST body for non-initialize calls on this ProxyAppHarness.stack() is empty by
+ * design).</li>
  * <li>{@code GET /mcp-inspector-api/mcp} with the session id header opens an SSE stream
  * of {@code event: message} frames coming from the target. We pre-open this stream before
  * issuing requests so reply frames are captured deterministically.</li>
@@ -97,17 +97,15 @@ class ProxyStreamableHttpFlowIT {
 	 * regardless of {@code STREAMABLE} vs {@code STATELESS}. We pick {@code STREAMABLE}
 	 * as the most representative.
 	 */
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
+	@Test
 	@DisplayName("initialize + tools/list round-trip through the streamable-HTTP proxy")
 	@Story("Init + tools/list round-trip")
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Drives initialize (200 + session id), notifications/initialized (202), tools/list (200) "
 			+ "and DELETE (200 then 404) through /mcp-inspector-api/mcp on both stacks")
-	void initializeAndToolsList_throughStreamableHttpProxy_completesFullDance(ProxyAppHarness.Stack stack)
-			throws Exception {
+	void initializeAndToolsList_throughStreamableHttpProxy_completesFullDance() throws Exception {
 		// given
-		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
+		app = ProxyAppHarness.start("STREAMABLE", false, null);
 		int port = ProxyAppHarness.port(app);
 		String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
@@ -125,10 +123,11 @@ class ProxyStreamableHttpFlowIT {
 		HttpResponse<String> initResponse = HTTP.send(initRequest, HttpResponse.BodyHandlers.ofString());
 
 		// then
-		assertThat(initResponse.statusCode()).as("initialize HTTP status on %s, body=%s", stack, initResponse.body())
+		assertThat(initResponse.statusCode())
+			.as("initialize HTTP status on %s, body=%s", ProxyAppHarness.stack(), initResponse.body())
 			.isEqualTo(200);
 		String sessionId = initResponse.headers().firstValue("mcp-session-id").orElse(null);
-		assertThat(sessionId).as("mcp-session-id round-trip on %s", stack).isNotBlank();
+		assertThat(sessionId).as("mcp-session-id round-trip on %s", ProxyAppHarness.stack()).isNotBlank();
 
 		// ---- 2a. notifications/initialized — required by the MCP handshake.
 		// The proxy answers 202 for notification frames (no id) per spec.
@@ -144,7 +143,8 @@ class ProxyStreamableHttpFlowIT {
 		HttpResponse<String> initializedNotificationResponse = HTTP.send(initializedNotificationRequest,
 				HttpResponse.BodyHandlers.ofString());
 		assertThat(initializedNotificationResponse.statusCode())
-			.as("notifications/initialized must be 202 on %s, body=%s", stack, initializedNotificationResponse.body())
+			.as("notifications/initialized must be 202 on %s, body=%s", ProxyAppHarness.stack(),
+					initializedNotificationResponse.body())
 			.isEqualTo(202);
 
 		// ---- 2b. tools/list ------------------------------------------------
@@ -165,7 +165,7 @@ class ProxyStreamableHttpFlowIT {
 		// response for request frames; tools/list is a request → 200 with the
 		// upstream's reply body.
 		assertThat(toolsListResponse.statusCode())
-			.as("tools/list POST relay on %s, body=%s", stack, toolsListResponse.body())
+			.as("tools/list POST relay on %s, body=%s", ProxyAppHarness.stack(), toolsListResponse.body())
 			.isEqualTo(200);
 
 		// ---- 3. DELETE the session — proxy reports it as known ------------
@@ -175,11 +175,13 @@ class ProxyStreamableHttpFlowIT {
 			.DELETE()
 			.build();
 		HttpResponse<String> deleteResponse = HTTP.send(deleteRequest, HttpResponse.BodyHandlers.ofString());
-		assertThat(deleteResponse.statusCode()).as("DELETE known session on %s", stack).isEqualTo(200);
+		assertThat(deleteResponse.statusCode()).as("DELETE known session on %s", ProxyAppHarness.stack())
+			.isEqualTo(200);
 
 		// ---- 4. DELETE again — now unknown -> 404 -------------------------
 		HttpResponse<String> secondDelete = HTTP.send(deleteRequest, HttpResponse.BodyHandlers.ofString());
-		assertThat(secondDelete.statusCode()).as("DELETE unknown session on %s", stack).isEqualTo(404);
+		assertThat(secondDelete.statusCode()).as("DELETE unknown session on %s", ProxyAppHarness.stack())
+			.isEqualTo(404);
 	}
 
 	/**
@@ -188,16 +190,15 @@ class ProxyStreamableHttpFlowIT {
 	 * on webflux the handler returns 404 JSON. Both must respond in bounded time without
 	 * hanging.
 	 */
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
+	@Test
 	@DisplayName("GET /mcp with an unknown session responds quickly without hanging")
 	@Story("Unknown session GET")
 	@Severity(SeverityLevel.NORMAL)
 	@Description("A GET on /mcp with a never-issued session id must answer within the budget (200 with an "
 			+ "error event on webmvc, 404 on webflux) and never hang")
-	void getMcp_withUnknownSession_respondsQuickly(ProxyAppHarness.Stack stack) throws Exception {
+	void getMcp_withUnknownSession_respondsQuickly() throws Exception {
 		// given
-		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null);
+		app = ProxyAppHarness.start("STREAMABLE", false, null);
 		int port = ProxyAppHarness.port(app);
 
 		// when
@@ -211,7 +212,8 @@ class ProxyStreamableHttpFlowIT {
 		// then
 		// WebMvc → 200 with an event:error inside; WebFlux → 404. Accept both
 		// shapes; the contract is "answers within 10s without hanging".
-		assertThat(response.statusCode()).as("status on %s for unknown session GET", stack).isIn(200, 404);
+		assertThat(response.statusCode()).as("status on %s for unknown session GET", ProxyAppHarness.stack())
+			.isIn(200, 404);
 	}
 
 	/**

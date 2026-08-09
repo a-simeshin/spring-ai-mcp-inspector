@@ -95,6 +95,7 @@
         <module>spring-ai-mcp-inspector-ui</module>
         <module>spring-ai-mcp-inspector-starter-webmvc</module>
         <module>spring-ai-mcp-inspector-starter-webflux</module>
+        <module>spring-ai-mcp-inspector-demo-app</module>
         <module>spring-ai-mcp-inspector-demo</module>
     </modules>
 

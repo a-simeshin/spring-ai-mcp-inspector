@@ -26,8 +26,7 @@ import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -69,17 +68,16 @@ class ProxyHealthEndpointIT {
 		}
 	}
 
-	@ParameterizedTest(name = "{0}")
-	@EnumSource(ProxyAppHarness.Stack.class)
+	@Test
 	@DisplayName("GET /health returns 200 even with auth enabled (allow-listed)")
 	@Story("Health allow-list")
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("With the proxy auth filter active, the allow-listed /health route must still respond "
 			+ "200 with {\"status\":\"ok\"} and no auth header")
-	void health_whenAuthEnabled_returnsOkOnBothStacks(ProxyAppHarness.Stack stack) throws Exception {
+	void health_whenAuthEnabled_returnsOkOnBothStacks() throws Exception {
 		// given
 		// Auth ON to prove the health route is in fact unprotected (matches upstream).
-		app = ProxyAppHarness.start(stack, "STREAMABLE", true, "test-token-health");
+		app = ProxyAppHarness.start("STREAMABLE", true, "test-token-health");
 		int port = ProxyAppHarness.port(app);
 
 		// when

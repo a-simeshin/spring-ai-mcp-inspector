@@ -29,9 +29,8 @@ import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -41,7 +40,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * custom headers on a streamable-HTTP session.
  *
  * <p>
- * Scenarios per stack:
+ * Scenarios per ProxyAppHarness.stack():
  *
  * <ol>
  * <li><b>Correct auth + custom headers → 200.</b> Client sends the proxy auth token via
@@ -117,16 +116,15 @@ class ProxyAuthAndHeadersIT {
 	@DisplayName("Auth with custom headers")
 	class AuthWithCustomHeaders {
 
-		@ParameterizedTest(name = "{0}")
-		@EnumSource(ProxyAppHarness.Stack.class)
+		@Test
 		@DisplayName("correct auth + custom headers opens a session")
 		@Story("Authenticated session")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("With auth enabled, an authenticated POST carrying arbitrary custom headers opens a "
 				+ "streamable session (200 with a session id and a real initialize response)")
-		void authOkWithCustomHeaders_opensSession(ProxyAppHarness.Stack stack) throws Exception {
+		void authOkWithCustomHeaders_opensSession() throws Exception {
 			// given
-			app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
+			app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
 			final int port = ProxyAppHarness.port(app);
 			final String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 			final String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
@@ -137,17 +135,17 @@ class ProxyAuthAndHeadersIT {
 
 			// then
 			assertThat(response.statusCode())
-				.as("auth OK + custom headers must succeed on %s, body=%s", stack, response.body())
+				.as("auth OK + custom headers must succeed on %s, body=%s", ProxyAppHarness.stack(), response.body())
 				.isEqualTo(200);
 
 			final String sessionId = response.headers().firstValue("mcp-session-id").orElse(null);
-			assertThat(sessionId).as("session id must be issued on %s", stack).isNotBlank();
+			assertThat(sessionId).as("session id must be issued on %s", ProxyAppHarness.stack()).isNotBlank();
 
 			// Body must be a real initialize response (not the legacy placeholder).
 			final JsonNode body = MAPPER.readTree(response.body());
 			assertThat(body.path("jsonrpc").asText()).isEqualTo("2.0");
 			assertThat(body.path("result").path("protocolVersion").asText())
-				.as("initialize result.protocolVersion on %s", stack)
+				.as("initialize result.protocolVersion on %s", ProxyAppHarness.stack())
 				.isNotBlank();
 		}
 
@@ -155,16 +153,15 @@ class ProxyAuthAndHeadersIT {
 		 * With auth enabled, omitting the auth token yields 401 even if the client
 		 * supplies custom headers — proving auth is not bypassed by header tricks.
 		 */
-		@ParameterizedTest(name = "{0}")
-		@EnumSource(ProxyAppHarness.Stack.class)
+		@Test
 		@DisplayName("missing auth is rejected regardless of custom headers")
 		@Story("Auth not bypassable")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("With auth enabled, omitting the auth token yields 401 even when custom headers are "
 				+ "present, proving auth cannot be bypassed via header tricks")
-		void missingAuth_withCustomHeaders_isRejected(ProxyAppHarness.Stack stack) throws Exception {
+		void missingAuth_withCustomHeaders_isRejected() throws Exception {
 			// given
-			app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
+			app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
 			final int port = ProxyAppHarness.port(app);
 			final String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 			final String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
@@ -175,7 +172,8 @@ class ProxyAuthAndHeadersIT {
 
 			// then
 			assertThat(response.statusCode())
-				.as("missing auth must be 401 on %s even with custom headers, body=%s", stack, response.body())
+				.as("missing auth must be 401 on %s even with custom headers, body=%s", ProxyAppHarness.stack(),
+						response.body())
 				.isEqualTo(401);
 		}
 
@@ -200,21 +198,20 @@ class ProxyAuthAndHeadersIT {
 		 * by a positive forwarding assertion (e.g. add a tiny test-only servlet on the
 		 * demo that echoes inbound headers, and assert {@code X-Custom-A: foo} arrives).
 		 */
-		@ParameterizedTest(name = "{0}")
-		@EnumSource(ProxyAppHarness.Stack.class)
+		@Test
 		@DisplayName("custom headers are NOT forwarded to the target (documented bug, pinned)")
 		@Story("Header forwarding regression")
 		@Severity(SeverityLevel.MINOR)
 		@Description("Regression pin for T31: custom request headers are not forwarded to the upstream MCP "
 				+ "server; the session still opens (200 + session id). A future fix flips this into a "
 				+ "positive forwarding assertion")
-		void customHeaders_areNotForwardedToTarget_documentedBug(ProxyAppHarness.Stack stack) throws Exception {
+		void customHeaders_areNotForwardedToTarget_documentedBug() throws Exception {
 			// given
 			// BUG: see Javadoc above. ProxyTransportFactory.openStreamable(URI) has no
 			// header parameter — custom headers from the inspector client never reach
 			// the target MCP server. T31 should add a (Map<String,String> headers)
 			// overload and thread it through HttpClientStreamableHttpTransport.builder().
-			app = ProxyAppHarness.start(stack, "STREAMABLE", true, AUTH_TOKEN);
+			app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
 			final int port = ProxyAppHarness.port(app);
 			final String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 			final String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
@@ -228,10 +225,10 @@ class ProxyAuthAndHeadersIT {
 			// ignored on the inspector → target hop). A future fix flips this into
 			// a positive forwarding assertion.
 			assertThat(response.statusCode())
-				.as("session opens despite custom headers on %s, body=%s", stack, response.body())
+				.as("session opens despite custom headers on %s, body=%s", ProxyAppHarness.stack(), response.body())
 				.isEqualTo(200);
 			assertThat(response.headers().firstValue("mcp-session-id").orElse(null))
-				.as("session id present on %s", stack)
+				.as("session id present on %s", ProxyAppHarness.stack())
 				.isNotBlank();
 		}
 
