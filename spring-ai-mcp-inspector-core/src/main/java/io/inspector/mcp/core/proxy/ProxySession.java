@@ -24,8 +24,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * A single inspector-proxy session: pairs a browser-facing SSE/HTTP channel with an
@@ -85,6 +88,8 @@ import reactor.core.publisher.Sinks;
  * @author Artem Simeshin
  */
 public final class ProxySession {
+
+	private static final Logger LOG = LoggerFactory.getLogger(ProxySession.class);
 
 	/**
 	 * Upper bound on the upstream {@code closeGracefully()} wait — see {@link #close()}.
@@ -216,14 +221,33 @@ public final class ProxySession {
 		// covered the streams that matter.
 		this.browserToTarget.tryEmitComplete();
 		this.targetToBrowser.tryEmitComplete();
+		final Mono<Void> upstreamClose = this.targetTransport.closeGracefully();
+		if (Schedulers.isInNonBlockingThread()) {
+			// On the reactive stack close() arrives straight from a Netty event loop —
+			// ProxyHandler.deleteMcp calls it inline, as do the SSE doOnTerminate hooks.
+			// Reactor refuses to block such a thread: block() throws
+			// IllegalStateException before it ever subscribes, so the upstream transport
+			// was never closed at all and every proxied session stayed open on the target
+			// server. This went unseen because those tests used to boot Tomcat-reactive,
+			// whose servlet threads are blocking-friendly. Hand the close to a worker and
+			// let the DELETE answer immediately; the timeout keeps a wedged upstream from
+			// pinning that worker forever.
+			upstreamClose.timeout(UPSTREAM_CLOSE_TIMEOUT)
+				.subscribeOn(Schedulers.boundedElastic())
+				.subscribe((ignored) -> {
+				}, (ex) -> LOG.debug("proxy[{}] upstream close failed: {}", this.sessionId, ex.toString()));
+			return;
+		}
 		try {
 			// Bounded: close() also runs on the context-shutdown thread, serially for
 			// every open session. An unbounded block there lets one wedged upstream
 			// (dead remote server, hung stdio child) hang shutdown forever.
-			this.targetTransport.closeGracefully().block(UPSTREAM_CLOSE_TIMEOUT);
+			upstreamClose.block(UPSTREAM_CLOSE_TIMEOUT);
 		}
-		catch (final Exception ignored) {
-			// best-effort shutdown
+		catch (final Exception ex) {
+			// Best-effort shutdown, but never silent: a swallowed exception here is
+			// exactly what hid the event-loop bug above for as long as it lasted.
+			LOG.debug("proxy[{}] upstream close failed: {}", this.sessionId, ex.toString());
 		}
 	}
 

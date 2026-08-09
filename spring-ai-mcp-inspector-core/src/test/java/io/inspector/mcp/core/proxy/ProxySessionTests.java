@@ -16,7 +16,11 @@
 
 package io.inspector.mcp.core.proxy;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.modelcontextprotocol.spec.McpClientTransport;
@@ -31,6 +35,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -146,6 +151,47 @@ class ProxySessionTests {
 			verify(ProxySessionTests.this.transport).closeGracefully();
 			StepVerifier.create(ProxySessionTests.this.browserToTarget.asFlux()).verifyComplete();
 			StepVerifier.create(ProxySessionTests.this.targetToBrowser.asFlux()).verifyComplete();
+		}
+
+		@Test
+		@Story("Teardown")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("close() from a Reactor non-blocking thread hands the upstream close to a worker "
+				+ "instead of running it on the caller")
+		void close_onNonBlockingThread_movesTheUpstreamCloseOffTheCallingThread() throws Exception {
+			// given
+			// The reactive proxy handler calls close() straight from a Netty event loop,
+			// which Reactor marks non-blocking; Schedulers.single() gives us an
+			// equivalent
+			// thread here. block() on such a thread throws IllegalStateException the
+			// moment
+			// it would wait, and close() used to swallow that — every reactive teardown
+			// took the exception path, silently, and the upstream close was left to
+			// finish
+			// on whatever thread happened to carry it. Pinning the worker here is what
+			// keeps
+			// that from coming back.
+			final CountDownLatch subscribed = new CountDownLatch(1);
+			final AtomicReference<String> subscriberThread = new AtomicReference<>();
+			final McpClientTransport transport = mock(McpClientTransport.class);
+			given(transport.closeGracefully()).willReturn(Mono.<Void>empty().doOnSubscribe((s) -> {
+				subscriberThread.set(Thread.currentThread().getName());
+				subscribed.countDown();
+			}));
+			final ProxySession session = new ProxySession("s-nb", transport,
+					Sinks.many().unicast().onBackpressureBuffer(), Sinks.many().replay().limit(8));
+
+			// when
+			Mono.fromRunnable(session::close).subscribeOn(Schedulers.single()).block(Duration.ofSeconds(5));
+
+			// then
+			assertThat(subscribed.await(5, TimeUnit.SECONDS))
+				.as("upstream closeGracefully() must be subscribed, not dropped")
+				.isTrue();
+			assertThat(subscriberThread.get())
+				.as("the upstream close must run on a blocking-capable worker, not on the non-blocking caller")
+				.startsWith("boundedElastic-");
+			assertThat(session.isClosed()).isTrue();
 		}
 
 		@Test
