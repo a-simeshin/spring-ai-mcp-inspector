@@ -94,6 +94,36 @@ final class ProxyAppHarness {
 	 */
 	static ConfigurableApplicationContext start(Stack stack, String protocol, boolean authEnabled, String authToken,
 			String... extraArgs) {
+		return start(stack, protocol, authEnabled, authToken, false, extraArgs);
+	}
+
+	/**
+	 * As {@link #start(Stack, String, boolean, String, String...)}, but binds a
+	 * {@code WEBFLUX} stack to reactor-netty instead of letting Boot pick
+	 * Tomcat-reactive.
+	 *
+	 * <p>
+	 * Opt-in rather than the default, because it is not free. Under real reactor-netty
+	 * {@code ProxySessionLifecycleIT}'s 100-cycle open/close loop hangs on a two-core
+	 * GitHub runner — one {@code POST /mcp} never answers and the test dies on its 60s
+	 * budget — while finishing in 5s on an eight-core developer machine. See
+	 * <a href= "https://github.com/a-simeshin/spring-ai-mcp-inspector/issues/35">issue
+	 * 35</a>. Until that is understood, only the tests that actually assert reactive
+	 * behaviour pay for it.
+	 * @param stack which servlet/reactive stack to bind
+	 * @param protocol one of {@code SSE}, {@code STREAMABLE}, {@code STATELESS}
+	 * @param authEnabled whether to leave the proxy auth filter active
+	 * @param authToken fixed token, or {@code null} for a generated one
+	 * @param extraArgs additional command-line args, appended last
+	 * @return live context; caller closes it
+	 */
+	static ConfigurableApplicationContext startOnReactorNetty(Stack stack, String protocol, boolean authEnabled,
+			String authToken, String... extraArgs) {
+		return start(stack, protocol, authEnabled, authToken, true, extraArgs);
+	}
+
+	private static ConfigurableApplicationContext start(Stack stack, String protocol, boolean authEnabled,
+			String authToken, boolean forceNetty, String... extraArgs) {
 		boolean reactive = stack == Stack.WEBFLUX;
 		WebApplicationType type = reactive ? WebApplicationType.REACTIVE : WebApplicationType.SERVLET;
 
@@ -125,7 +155,7 @@ final class ProxyAppHarness {
 		java.util.Collections.addAll(args, extraArgs);
 
 		SpringApplicationBuilder builder = new SpringApplicationBuilder(DemoApplication.class).web(type);
-		if (reactive) {
+		if (reactive && forceNetty) {
 			builder.sources(ForceNetty.class);
 		}
 		return builder.run(args.toArray(new String[0]));
