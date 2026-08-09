@@ -1,0 +1,5 @@
+# Test-only. Every context booted in this module gets its own Reactor Netty loops, so
+# closing one app cannot tear down the loops another app is still serving on — see
+# PerContextReactorResourcesInitializer for the failure it prevents.
+org.springframework.context.ApplicationContextInitializer=\
+io.inspector.mcp.demo.netty.PerContextReactorResourcesInitializer

@@ -3,13 +3,25 @@ name: CI
 # Build + test gate for main and the development branches. release.yml deploys
 # with `-DskipTests`, so this workflow is the only place tests run at all.
 #
-# Two jobs, because the demo module needs a browser and the rest of the reactor
-# does not:
-#   * `build` — reactor minus demo, ~3.5 min. The required check.
-#   * `e2e`   — full reactor incl. the demo Selenide suite, ~7 min. Runs on
-#               every PR too: this module is where the real breakages hide, and
-#               since 5af9c56 (no 30s graceful-shutdown wait per context) it is
-#               cheap enough not to need a gate.
+# Three jobs, because the demo needs a browser and the rest of the reactor does
+# not, and because each web stack needs a classpath of its own:
+#   * `build`       — reactor minus both stack demo modules, ~3.5 min. The
+#                     required check. It keeps `-demo-app` (no web stack, cheap),
+#                     so the shared proxy ITs still compile there.
+#   * `e2e-webmvc`  — reactor minus `-demo-webflux`: servlet stack only.
+#   * `e2e-webflux` — reactor minus `-demo-webmvc`: reactive stack only.
+#
+# The two stacks must never meet on one classpath. With spring-boot-starter-web
+# present, Boot's ReactiveWebServerFactoryAutoConfiguration imports the embedded
+# Tomcat factory before the Netty one, so a module that can see both silently
+# runs every "reactive" row on Tomcat-reactive — the old single demo module did
+# exactly that, and no `spring.autoconfigure.exclude` list ever fixed it.
+# Separate modules make the classpath, not a property, decide the stack.
+#
+# Both e2e jobs run on every PR too: the demo is where the real breakages hide,
+# and since 5af9c56 (no 30s graceful-shutdown wait per context) it is cheap
+# enough not to need a gate. They also re-run the shared proxy ITs from the
+# `-demo-app` test-jar, once per stack, via Failsafe's `dependenciesToScan`.
 #
 # `push` is deliberately scoped to main + develop/**: a topic-branch PR then
 # triggers each job exactly once (no push/pull_request double billing), and the
@@ -51,13 +63,15 @@ jobs:
           cache: maven
 
       # Unit + integration tests and the quality gates (spring-javaformat,
-      # checkstyle, SpotBugs, JaCoCo coverage). The demo module is excluded —
-      # its browser E2E runs in the `e2e` job below.
+      # checkstyle, SpotBugs, JaCoCo coverage). Both stack demo modules are
+      # excluded — their browser E2E runs in the two `e2e-*` jobs below.
       - name: Build, test and gates
-        run: ./mvnw -B -ntp verify -pl '!:spring-ai-mcp-inspector-demo'
+        run: >-
+          ./mvnw -B -ntp verify
+          -pl '!:spring-ai-mcp-inspector-demo-webmvc,!:spring-ai-mcp-inspector-demo-webflux'
 
-  e2e:
-    name: demo E2E (JDK 17)
+  e2e-webmvc:
+    name: demo E2E webmvc (JDK 17)
     runs-on: ubuntu-latest
     # ~7 min measured; the cap stops a wedged browser or a hung proxy session
     # from burning the 6h GitHub default.
@@ -78,5 +92,30 @@ jobs:
           java-version: '17'
           cache: maven
 
-      - name: Build and test the full reactor
-        run: ./mvnw -B -ntp verify
+      - name: Build and test the servlet reactor
+        run: ./mvnw -B -ntp verify -pl '!:spring-ai-mcp-inspector-demo-webflux'
+
+  e2e-webflux:
+    name: demo E2E webflux (JDK 17)
+    runs-on: ubuntu-latest
+    # Same cap as the servlet job; a hung reactive loopback session is the
+    # failure mode this guards against.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The reactive demo carries a Selenide smoke IT of its own, so this job
+      # needs a browser too.
+      - name: Set up Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Build and test the reactive reactor
+        run: ./mvnw -B -ntp verify -pl '!:spring-ai-mcp-inspector-demo-webmvc'

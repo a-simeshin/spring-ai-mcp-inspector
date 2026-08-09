@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.a-simeshin</groupId>
+        <artifactId>spring-ai-mcp-inspector-parent</artifactId>
+        <version>1.0.1-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>spring-ai-mcp-inspector-demo-webmvc</artifactId>
+    <packaging>jar</packaging>
+    <name>spring-ai-mcp-inspector-demo-webmvc</name>
+    <description>The demo MCP server on the servlet stack: spring-ai-mcp-inspector-demo-app plus
+        exactly one web stack (spring-boot-starter-web) and the webmvc inspector starter. Carries
+        the servlet-side integration tests, the OAuth stub they authenticate against, and the
+        Selenide browser E2E suite. The reactive stack is never on this classpath.</description>
+
+    <properties>
+        <!-- Demo modules are example code, not published artifacts. -->
+        <jacoco.skip>true</jacoco.skip>
+        <checkstyle.skip>true</checkstyle.skip>
+        <spotbugs.skip>true</spotbugs.skip>
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.source.skip>true</maven.source.skip>
+        <maven.javadoc.skip>true</maven.javadoc.skip>
+        <gpg.skip>true</gpg.skip>
+    </properties>
+
+    <dependencies>
+        <!-- The demo application itself: entry point, tools, resources, prompts. -->
+        <dependency>
+            <groupId>io.github.a-simeshin</groupId>
+            <artifactId>spring-ai-mcp-inspector-demo-app</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- The one web stack this module is allowed to see. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.a-simeshin</groupId>
+            <artifactId>spring-ai-mcp-inspector-starter-webmvc</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!--
+            The demo-app test-jar carries the stack-agnostic proxy ITs and their
+            harness. It is on the test classpath so Failsafe can scan it (see
+            <dependenciesToScan> below) and run that shared suite against the
+            servlet stack.
+        -->
+        <dependency>
+            <groupId>io.github.a-simeshin</groupId>
+            <artifactId>spring-ai-mcp-inspector-demo-app</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Selenide + WebDriverManager drive the browser E2E suite; versions from the root pom. -->
+        <dependency>
+            <groupId>com.codeborne</groupId>
+            <artifactId>selenide</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.github.bonigarcia</groupId>
+            <artifactId>webdrivermanager</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Allure (project test standard); version aligned via allure-bom imported in the root pom -->
+        <dependency>
+            <groupId>io.qameta.allure</groupId>
+            <artifactId>allure-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+            <version>${aspectj.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <version>${spring-boot.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                        <configuration>
+                            <!-- Keep a classifier so the original thin jar (with classes
+                                 directly under the root) is preserved for downstream
+                                 modules and ITs that need them on the test classpath.
+                                 The exec jar is not optional: InspectorUiIT's STDIO case
+                                 globs target/ for spring-ai-mcp-inspector-demo-*-exec.jar
+                                 and launches it as an external process. -->
+                            <classifier>exec</classifier>
+                            <!-- The entry point lives in the demo-app dependency, and the
+                                 plugin looks for a start class only among this module's
+                                 own classes (never inside BOOT-INF/lib), which here are
+                                 just the OAuth stub. Without this the repackage goal fails
+                                 with "Unable to find a single main class". -->
+                            <mainClass>io.inspector.mcp.demo.DemoApplication</mainClass>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!--
+                The shared proxy ITs live in the demo-app test-jar rather than here, so
+                Failsafe would not find them by scanning this module's own test classes.
+                dependenciesToScan makes it look inside that jar, which is how one copy
+                of every proxy IT ends up running twice — once per stack module — with
+                no duplicated sources. Everything else (includes, argLine, system
+                properties) must keep inheriting from the root pom.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <dependenciesToScan>
+                        <dependency>io.github.a-simeshin:spring-ai-mcp-inspector-demo-app</dependency>
+                    </dependenciesToScan>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
