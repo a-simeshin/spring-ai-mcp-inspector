@@ -86,6 +86,13 @@
         <aspectj.version>1.9.25.1</aspectj.version>
         <allure-maven-plugin.version>2.15.2</allure-maven-plugin.version>
 
+        <!-- Browser automation for the Selenide UI tests. Declared here because the
+             demo split put them on three classpaths at once (demo-app, demo-webmvc,
+             demo-webflux); a single pair of properties keeps the browser stack from
+             drifting apart between the stack modules. -->
+        <selenide.version>7.6.1</selenide.version>
+        <webdrivermanager.version>6.1.0</webdrivermanager.version>
+
         <!-- JaCoCo coverage gate (Surefire only — IT/E2E run under Failsafe
              and do not contribute). Override per-module to relax or skip. -->
         <jacoco.line.minimum>0.80</jacoco.line.minimum>
@@ -99,7 +106,9 @@
         <module>spring-ai-mcp-inspector-ui</module>
         <module>spring-ai-mcp-inspector-starter-webmvc</module>
         <module>spring-ai-mcp-inspector-starter-webflux</module>
-        <module>spring-ai-mcp-inspector-demo</module>
+        <module>spring-ai-mcp-inspector-demo-app</module>
+        <module>spring-ai-mcp-inspector-demo-webmvc</module>
+        <module>spring-ai-mcp-inspector-demo-webflux</module>
     </modules>
 
     <dependencyManagement>
@@ -137,6 +146,18 @@
                 <version>${allure.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <!-- Selenide + WebDriverManager: managed centrally so the three demo
+                 modules that run browser tests declare them without a <version>. -->
+            <dependency>
+                <groupId>com.codeborne</groupId>
+                <artifactId>selenide</artifactId>
+                <version>${selenide.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.github.bonigarcia</groupId>
+                <artifactId>webdrivermanager</artifactId>
+                <version>${webdrivermanager.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
