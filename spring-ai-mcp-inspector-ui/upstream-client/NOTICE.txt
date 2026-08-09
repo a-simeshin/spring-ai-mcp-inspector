@@ -66,10 +66,13 @@ Local patches against upstream v0.21.2
    Swagger UI at an absolute `?url=`.
 
 6. src/lib/auth.ts + src/lib/oauth-state-machine.ts +
-   src/lib/hooks/useConnection.ts — resolve a relative same-origin
-   server URL against the current origin before handing it to
-   `new URL(...)` as a base (`toAbsoluteServerUrl`). Patch 5 makes the
-   default target the relative `/mcp`, and `new URL("/", "/mcp")` throws
-   `Invalid URL`, which aborted OAuth discovery on the default
-   configuration. The proxy path keeps the relative value, so the
-   WAF-safety of patch 5 is unaffected.
+   src/lib/hooks/useConnection.ts + src/components/OAuthFlowProgress.tsx
+   — resolve a relative same-origin server URL against the current origin
+   before handing it to `new URL(...)` as a base (`toAbsoluteServerUrl`).
+   Patch 5 makes the default target the relative `/mcp`, and
+   `new URL("/", "/mcp")` throws `Invalid URL`, which aborted OAuth
+   discovery on the default configuration. The same applies wherever the
+   value reaches the SDK: `auth()` and the state machine both funnel it
+   into `resourceUrlFromServerUrl` -> `new URL(serverUrl)`.
+   The proxy path keeps the relative value, so the WAF-safety of patch 5
+   is unaffected.
