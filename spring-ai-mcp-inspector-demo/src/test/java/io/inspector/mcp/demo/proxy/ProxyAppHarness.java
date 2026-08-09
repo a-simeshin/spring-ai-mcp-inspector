@@ -17,11 +17,7 @@ import io.inspector.mcp.demo.DemoApplication;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.web.context.WebServerApplicationContext;
-import org.springframework.boot.web.embedded.netty.NettyReactiveWebServerFactory;
 import org.springframework.context.ConfigurableApplicationContext;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.http.client.ReactorResourceFactory;
 
 /**
  * Boots a fresh {@link DemoApplication} on a random port for the proxy-level integration
@@ -65,14 +61,10 @@ final class ProxyAppHarness {
 	 * {@link HttpClient} negotiates HTTP/2 by default and remembers the outcome per
 	 * {@code host:port}. The harness boots on random ports and the OS recycles them, so a
 	 * port that once answered as Tomcat (which speaks h2c) can come back as Netty (which
-	 * does not) and the cached decision produces a bare {@code 400} — or, with the
-	 * connection wedged mid-upgrade, a request that simply never returns. Both were
-	 * observed only after {@link ForceNetty} started binding the {@code WEBFLUX} rows to
-	 * reactor-netty for real: a {@code 400} on {@code POST /api/connect} locally, and a
-	 * 62-second {@code HttpTimeoutException} in {@code ProxySessionLifecycleIT} on CI.
-	 *
-	 * <p>
-	 * These tests exercise SSE over HTTP/1.1 and have no reason to negotiate anything.
+	 * does not) and the cached decision produces a bare {@code 400} — observed once in
+	 * seven local runs, on {@code POST /api/connect}, before the request reached any
+	 * handler. These tests exercise SSE over HTTP/1.1 and have no reason to negotiate
+	 * anything.
 	 * @param connectTimeout how long to wait for the TCP connect
 	 * @return a fresh client; callers hold it in a {@code static final} field
 	 */
@@ -94,36 +86,6 @@ final class ProxyAppHarness {
 	 */
 	static ConfigurableApplicationContext start(Stack stack, String protocol, boolean authEnabled, String authToken,
 			String... extraArgs) {
-		return start(stack, protocol, authEnabled, authToken, false, extraArgs);
-	}
-
-	/**
-	 * As {@link #start(Stack, String, boolean, String, String...)}, but binds a
-	 * {@code WEBFLUX} stack to reactor-netty instead of letting Boot pick
-	 * Tomcat-reactive.
-	 *
-	 * <p>
-	 * Opt-in rather than the default, because it is not free. Under real reactor-netty
-	 * {@code ProxySessionLifecycleIT}'s 100-cycle open/close loop hangs on a two-core
-	 * GitHub runner — one {@code POST /mcp} never answers and the test dies on its 60s
-	 * budget — while finishing in 5s on an eight-core developer machine. See
-	 * <a href= "https://github.com/a-simeshin/spring-ai-mcp-inspector/issues/35">issue
-	 * 35</a>. Until that is understood, only the tests that actually assert reactive
-	 * behaviour pay for it.
-	 * @param stack which servlet/reactive stack to bind
-	 * @param protocol one of {@code SSE}, {@code STREAMABLE}, {@code STATELESS}
-	 * @param authEnabled whether to leave the proxy auth filter active
-	 * @param authToken fixed token, or {@code null} for a generated one
-	 * @param extraArgs additional command-line args, appended last
-	 * @return live context; caller closes it
-	 */
-	static ConfigurableApplicationContext startOnReactorNetty(Stack stack, String protocol, boolean authEnabled,
-			String authToken, String... extraArgs) {
-		return start(stack, protocol, authEnabled, authToken, true, extraArgs);
-	}
-
-	private static ConfigurableApplicationContext start(Stack stack, String protocol, boolean authEnabled,
-			String authToken, boolean forceNetty, String... extraArgs) {
 		boolean reactive = stack == Stack.WEBFLUX;
 		WebApplicationType type = reactive ? WebApplicationType.REACTIVE : WebApplicationType.SERVLET;
 
@@ -154,56 +116,7 @@ final class ProxyAppHarness {
 		args.add("--spring.autoconfigure.exclude=" + exclude);
 		java.util.Collections.addAll(args, extraArgs);
 
-		SpringApplicationBuilder builder = new SpringApplicationBuilder(DemoApplication.class).web(type);
-		if (reactive && forceNetty) {
-			builder.sources(ForceNetty.class);
-		}
-		return builder.run(args.toArray(new String[0]));
-	}
-
-	/**
-	 * Pins the reactive stack to reactor-netty.
-	 *
-	 * <p>
-	 * Boot's {@code ReactiveWebServerFactoryAutoConfiguration} imports
-	 * {@code EmbeddedTomcat} before {@code EmbeddedNetty}, and the default Maven profile
-	 * puts {@code spring-boot-starter-web} (hence {@code tomcat-embed-core}) on the test
-	 * classpath at compile scope. Without this bean every {@code WEBFLUX} row of these
-	 * ITs silently boots {@code TomcatReactiveWebServerFactory} — verified: the log said
-	 * "TomcatWebServer - Tomcat started" for all four {@link Stack} rows — so the
-	 * reactive assertions proved nothing about the stack users actually run. A
-	 * user-defined
-	 * {@link org.springframework.boot.web.reactive.server.ReactiveWebServerFactory} wins
-	 * because the autoconfigured ones are {@code @ConditionalOnMissingBean}.
-	 *
-	 * <p>
-	 * The {@link ReactorResourceFactory} is not optional here. Boot's own
-	 * {@code reactorServerResourceFactory} / {@code reactorClientResourceFactory} both
-	 * default to reactor-netty's <em>global</em> {@code HttpResources}, and several ITs
-	 * in this package boot two reactive contexts in one JVM ({@code ProxyTargetLossIT}
-	 * runs an inspector app plus a target app). Closing either one then disposes the
-	 * shared loops and the survivor's server stops accepting — observed as a bare
-	 * {@code java.net.ConnectException} against a port that had just answered.
-	 * Per-context resources keep the two apps independent. This is a harness concern
-	 * only: a real deployment runs one context per JVM.
-	 */
-	@Configuration(proxyBeanMethods = false)
-	static class ForceNetty {
-
-		@Bean
-		ReactorResourceFactory reactorResourceFactory() {
-			ReactorResourceFactory factory = new ReactorResourceFactory();
-			factory.setUseGlobalResources(false);
-			return factory;
-		}
-
-		@Bean
-		NettyReactiveWebServerFactory nettyReactiveWebServerFactory(ReactorResourceFactory resourceFactory) {
-			NettyReactiveWebServerFactory factory = new NettyReactiveWebServerFactory();
-			factory.setResourceFactory(resourceFactory);
-			return factory;
-		}
-
+		return new SpringApplicationBuilder(DemoApplication.class).web(type).run(args.toArray(new String[0]));
 	}
 
 	/** Extracts the dynamically allocated server port. */

@@ -118,7 +118,7 @@ class GracefulShutdownIT {
 	void openProxySession_whenContextCloses_doesNotWaitForGracefulTimeout(ProxyAppHarness.Stack stack)
 			throws Exception {
 		// given
-		app = ProxyAppHarness.startOnReactorNetty(stack, "STREAMABLE", false, null, GRACEFUL);
+		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null, GRACEFUL);
 		int port = ProxyAppHarness.port(app);
 		String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		String sseUrl = "http://127.0.0.1:" + port + "/mcp-inspector-api/sse?transportType=streamable-http&url="
@@ -184,7 +184,7 @@ class GracefulShutdownIT {
 	void openInspectorSession_whenContextCloses_doesNotWaitForGracefulTimeout(ProxyAppHarness.Stack stack)
 			throws Exception {
 		// given
-		app = ProxyAppHarness.startOnReactorNetty(stack, "STREAMABLE", false, null, GRACEFUL);
+		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null, GRACEFUL);
 		connectInspectorSession(ProxyAppHarness.port(app));
 
 		// when / then
@@ -202,7 +202,7 @@ class GracefulShutdownIT {
 	void openInspectorSession_whenDeleteDisallowed_doesNotWaitForGracefulTimeout(ProxyAppHarness.Stack stack)
 			throws Exception {
 		// given
-		app = ProxyAppHarness.startOnReactorNetty(stack, "STREAMABLE", false, null,
+		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null,
 				withGraceful("--spring.ai.mcp.server.streamable-http.disallow-delete=true"));
 		connectInspectorSession(ProxyAppHarness.port(app));
 
@@ -220,7 +220,7 @@ class GracefulShutdownIT {
 	void openInspectorSession_onSseProtocol_doesNotWaitForGracefulTimeout(ProxyAppHarness.Stack stack)
 			throws Exception {
 		// given
-		app = ProxyAppHarness.startOnReactorNetty(stack, "SSE", false, null, GRACEFUL);
+		app = ProxyAppHarness.start(stack, "SSE", false, null, GRACEFUL);
 		connectInspectorSession(ProxyAppHarness.port(app));
 
 		// when / then
