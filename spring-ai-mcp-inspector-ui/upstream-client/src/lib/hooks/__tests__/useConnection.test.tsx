@@ -151,6 +151,11 @@ jest.mock("../../auth", () => ({
   saveScopeToSessionStorage: jest.fn(),
   clearScopeFromSessionStorage: jest.fn(),
   discoverScopes: jest.fn(),
+  // Deliberately the real implementation: stubbing it to undefined made every
+  // `toAbsoluteServerUrl(sseUrl)` call throw, which the surrounding try/catch
+  // swallowed, so the resource-metadata discovery branch was never actually
+  // exercised by these tests.
+  toAbsoluteServerUrl: jest.requireActual("../../auth").toAbsoluteServerUrl,
 }));
 
 const mockAuth = auth as jest.MockedFunction<typeof auth>;
@@ -1598,6 +1603,25 @@ describe("useConnection", () => {
       expect(mockAuth).toHaveBeenCalledWith(
         expect.any(Object),
         expect.not.objectContaining({ fetchFn: expect.anything() }),
+      );
+    });
+
+    // The inspector advertises its endpoint as a relative same-origin path, so
+    // sseUrl is routinely "/sse". The SDK's auth() feeds serverUrl to
+    // resourceUrlFromServerUrl -> new URL(serverUrl), which throws
+    // "Invalid URL" on a relative string and leaves the user with a toast
+    // instead of a redirect to the IdP.
+    it("absolutizes a relative sseUrl before handing it to the SDK's auth()", async () => {
+      mockDiscoverScopes.mockResolvedValue("read");
+      setup401Error();
+
+      await attemptConnection({ ...defaultProps, sseUrl: "/sse" });
+
+      expect(mockAuth).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          serverUrl: `${window.location.origin}/sse`,
+        }),
       );
     });
   });
