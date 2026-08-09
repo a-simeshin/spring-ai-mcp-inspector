@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.boot.web.server.context.WebServerInitializedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.http.HttpStatus;
@@ -77,6 +78,9 @@ public class ProxyHandler {
 
 	private static final Logger LOG = LoggerFactory.getLogger(ProxyHandler.class);
 
+	/** Server namespace of the separate actuator web server, when one is started. */
+	private static final String MANAGEMENT_NAMESPACE = "management";
+
 	private final ProxySessionRegistry registry;
 
 	private final ProxyTransportFactory transportFactory;
@@ -115,6 +119,12 @@ public class ProxyHandler {
 
 	@EventListener
 	public void onWebServerStarted(final WebServerInitializedEvent event) {
+		// Skip the actuator's own server (management.server.port): last-writer-wins
+		// would otherwise leave the loopback port pointing at the management port.
+		final WebServerApplicationContext context = event.getApplicationContext();
+		if (context != null && MANAGEMENT_NAMESPACE.equals(context.getServerNamespace())) {
+			return;
+		}
 		this.listeningPort.set(event.getWebServer().getPort());
 	}
 
@@ -223,7 +233,7 @@ public class ProxyHandler {
 		final String args = request.queryParam("args").orElse(null);
 		final String env = request.queryParam("env").orElse(null);
 		return openProxiedSession(transportType, url, command, args, env, inboundAuthorization(request),
-				inboundCustomHeaders(request));
+				inboundCustomHeaders(request), contextPath(request));
 	}
 
 	public Mono<ServerResponse> openStdio(final ServerRequest request) {
@@ -231,7 +241,18 @@ public class ProxyHandler {
 		final String args = request.queryParam("args").orElse(null);
 		final String env = request.queryParam("env").orElse(null);
 		return openProxiedSession("stdio", null, command, args, env, inboundAuthorization(request),
-				inboundCustomHeaders(request));
+				inboundCustomHeaders(request), contextPath(request));
+	}
+
+	/**
+	 * Returns the request's deployment prefix — the WebFlux base path or a forwarded
+	 * proxy prefix — normalised so a root-mounted application contributes nothing.
+	 * @param request the incoming request
+	 * @return the prefix, or an empty string when the application is root-mounted
+	 */
+	private static String contextPath(final ServerRequest request) {
+		final String contextPath = request.requestPath().contextPath().value();
+		return "/".equals(contextPath) ? "" : contextPath;
 	}
 
 	/**
@@ -290,7 +311,8 @@ public class ProxyHandler {
 	}
 
 	private Mono<ServerResponse> openProxiedSession(final String transportType, final String url, final String command,
-			final String args, final String env, final String authorization, final Map<String, String> customHeaders) {
+			final String args, final String env, final String authorization, final Map<String, String> customHeaders,
+			final String contextPath) {
 		final String sessionId = UUID.randomUUID().toString();
 		final McpClientTransport target;
 		try {
@@ -310,9 +332,12 @@ public class ProxyHandler {
 		this.registry.put(session);
 
 		final String proxyBase = (this.properties != null) ? this.properties.getProxyPath() : "/mcp-inspector-api";
+		// The prologue must carry the deployment prefix: the browser resolves it with
+		// new URL(data, sseUrl), and a path-absolute value replaces the whole path, so
+		// without the prefix every first client->server frame would 404.
 		final ServerSentEvent<String> prologue = ServerSentEvent.<String>builder()
 			.event("endpoint")
-			.data(proxyBase + "/message?sessionId=" + sessionId)
+			.data(contextPath + proxyBase + "/message?sessionId=" + sessionId)
 			.build();
 
 		final var flux = targetToBrowser.asFlux().map((frame) -> {

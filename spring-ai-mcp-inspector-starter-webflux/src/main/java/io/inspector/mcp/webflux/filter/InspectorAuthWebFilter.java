@@ -85,8 +85,11 @@ public class InspectorAuthWebFilter implements WebFilter, Ordered {
 		if (this.properties == null || !this.properties.isAuthEnabled()) {
 			return chain.filter(exchange);
 		}
-		final String path = exchange.getRequest().getURI().getPath();
-		if (path == null || !path.startsWith(this.apiPrefix)) {
+		// Application-relative path, never the raw URI: under spring.webflux.base-path
+		// or an X-Forwarded-Prefix the prefix lives in contextPath, and matching the
+		// raw path against the unprefixed API prefix would leave the API open.
+		final String path = exchange.getRequest().getPath().pathWithinApplication().value();
+		if (!path.startsWith(this.apiPrefix)) {
 			return chain.filter(exchange);
 		}
 		// CORS preflight requests carry no credentials; let them pass so the CORS
