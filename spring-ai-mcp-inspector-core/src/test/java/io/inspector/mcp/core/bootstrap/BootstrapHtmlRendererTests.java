@@ -84,6 +84,44 @@ class BootstrapHtmlRendererTests {
 		}
 
 		@Test
+		@Story("Placeholder replacement")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("renderIndexHtml() injects the bootstrap script once even when the template repeats the placeholder")
+		void render_whenPlaceholderRepeated_injectsScriptOnlyOnce() throws IOException {
+			// given — the shipped index.html carries the placeholder in <head> and again
+			// inside a documentation comment
+			final String template = "<head>" + BootstrapHtmlRenderer.PLACEHOLDER + "</head><body><!-- The "
+					+ BootstrapHtmlRenderer.PLACEHOLDER + " placeholder is replaced server-side. --></body>";
+			final InspectorBootstrap bootstrap = new InspectorBootstrap();
+			bootstrap.setAuthToken("token-abc");
+
+			// when
+			final String html = BootstrapHtmlRendererTests.this.renderer.renderIndexHtml(template, bootstrap);
+
+			// then — the auth token must not be embedded a second time
+			assertThat(html).containsOnlyOnce("window.__MCP_INSPECTOR_BOOTSTRAP = ").containsOnlyOnce("token-abc");
+			assertThat(html).contains(BootstrapHtmlRenderer.PLACEHOLDER);
+		}
+
+		@Test
+		@Story("Comment-delimiter escaping")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("renderIndexHtml() escapes HTML comment delimiters so a bootstrap value cannot break out of a comment")
+		void render_escapesHtmlCommentDelimiters() throws IOException {
+			// given
+			final String template = BootstrapHtmlRenderer.PLACEHOLDER;
+			final InspectorBootstrap bootstrap = new InspectorBootstrap();
+			bootstrap.setDefaultUrl("--><script>alert(1)</script><!--");
+
+			// when
+			final String html = BootstrapHtmlRendererTests.this.renderer.renderIndexHtml(template, bootstrap);
+
+			// then — neither delimiter may survive verbatim
+			assertThat(html).doesNotContain("-->").doesNotContain("<!--");
+			assertThat(html).contains("--\\><script>alert(1)<\\/script><\\!--");
+		}
+
+		@Test
 		@Story("Missing placeholder")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("renderIndexHtml() returns the template untouched when the placeholder is absent")
