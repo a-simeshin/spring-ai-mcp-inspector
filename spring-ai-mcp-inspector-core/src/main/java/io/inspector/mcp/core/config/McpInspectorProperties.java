@@ -142,6 +142,25 @@ public class McpInspectorProperties {
 		this.allowedOrigins = (allowedOrigins != null) ? allowedOrigins : new ArrayList<>();
 	}
 
+	/**
+	 * Returns the Ant-style URL patterns covering every mount point the inspector claims
+	 * — the UI/API base path, the proxy backend, and the two fixed OAuth callback routes.
+	 *
+	 * <p>
+	 * Intended to be handed to a host application's Spring Security configuration so the
+	 * inspector can be authorized (or exempted from CSRF) as a single unit, without the
+	 * host having to restate paths that move with {@link #getPath()}.
+	 *
+	 * <p>
+	 * This is <strong>not</strong> a configuration property: the name deliberately omits
+	 * the {@code get} prefix so Boot's JavaBean binder does not expose it under
+	 * {@code spring.ai.mcp.inspector.security-path-patterns}.
+	 * @return an immutable list of Ant patterns (never {@code null} or empty)
+	 */
+	public List<String> securityPathPatterns() {
+		return List.of(this.path + "/**", getProxyPath() + "/**", "/oauth/callback", "/oauth/callback/debug");
+	}
+
 	public Timeouts getTimeouts() {
 		return this.timeouts;
 	}

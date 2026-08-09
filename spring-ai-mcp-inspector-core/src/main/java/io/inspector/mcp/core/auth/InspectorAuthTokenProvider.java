@@ -19,6 +19,9 @@ package io.inspector.mcp.core.auth;
 import java.security.SecureRandom;
 import java.util.HexFormat;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import io.inspector.mcp.core.config.McpInspectorProperties;
 
 /**
@@ -38,6 +41,8 @@ import io.inspector.mcp.core.config.McpInspectorProperties;
  * @author Artem Simeshin
  */
 public class InspectorAuthTokenProvider {
+
+	private static final Logger LOG = LoggerFactory.getLogger(InspectorAuthTokenProvider.class);
 
 	private static final int RANDOM_TOKEN_BYTES = 32;
 
@@ -60,6 +65,16 @@ public class InspectorAuthTokenProvider {
 	InspectorAuthTokenProvider(final McpInspectorProperties properties, final SecureRandom random) {
 		this.properties = properties;
 		this.random = random;
+		if (properties != null && !properties.isAuthEnabled()) {
+			// Eager singleton in both web stacks, so this fires once per application
+			// start.
+			LOG.warn(
+					"MCP Inspector auth is disabled (spring.ai.mcp.inspector.auth-enabled=false). "
+							+ "Network reachability is now the only control: anyone who can reach {} gets full "
+							+ "use of the inspector proxy, which opens connections to arbitrary URLs from inside "
+							+ "your network. Keep it on a trusted network or put it behind your own authentication.",
+					properties.getPath());
+		}
 	}
 
 	/**

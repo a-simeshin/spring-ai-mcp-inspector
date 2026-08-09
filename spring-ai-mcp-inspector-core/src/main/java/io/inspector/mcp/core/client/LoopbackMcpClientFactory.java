@@ -45,33 +45,36 @@ import io.modelcontextprotocol.spec.McpSchema;
  */
 public class LoopbackMcpClientFactory {
 
+	private static final String DEFAULT_SSE_PATH = "/sse";
+
 	/**
 	 * Builds a {@link McpSyncClient} for the legacy SSE transport.
 	 * @param host loopback host (e.g. {@code 127.0.0.1})
 	 * @param port loopback port
-	 * @param basePath optional servlet/router base path; may be {@code null} or empty
-	 * @param messagePath server-advertised message-endpoint path (e.g.
-	 * {@code /mcp/message}); must be non-null
+	 * @param sseEndpoint the SSE endpoint path, deployment prefix included (e.g.
+	 * {@code /app/sse}); defaults to {@code /sse} when blank. The message endpoint is not
+	 * passed in — the server advertises it on the stream.
 	 * @return a connected-ready {@link McpSyncClient} for SSE
 	 */
-	public McpSyncClient forSse(final String host, final int port, final String basePath, final String messagePath) {
-		return forSse(host, port, basePath, messagePath, InspectorClientHandlers.none());
+	public McpSyncClient forSse(final String host, final int port, final String sseEndpoint) {
+		return forSse(host, port, sseEndpoint, InspectorClientHandlers.none());
 	}
 
 	/**
-	 * Variant of {@link #forSse(String, int, String, String)} that wires inspector client
+	 * Variant of {@link #forSse(String, int, String)} that wires inspector client
 	 * handlers (sampling / elicitation) on the resulting client.
 	 * @param host loopback host (e.g. {@code 127.0.0.1})
 	 * @param port loopback port
-	 * @param basePath optional servlet/router base path; may be {@code null} or empty
-	 * @param messagePath server-advertised message-endpoint path; must be non-null
+	 * @param sseEndpoint the SSE endpoint path, deployment prefix included; defaults to
+	 * {@code /sse} when blank
 	 * @param handlers inspector client handlers to register; may be {@code null}
 	 * @return a connected-ready {@link McpSyncClient} for SSE with handlers applied
 	 */
-	public McpSyncClient forSse(final String host, final int port, final String basePath, final String messagePath,
+	public McpSyncClient forSse(final String host, final int port, final String sseEndpoint,
 			final InspectorClientHandlers handlers) {
 		final String baseUri = buildBaseUri(host, port);
-		final String ssePath = joinPath(basePath, "/sse");
+		final String ssePath = (sseEndpoint == null || sseEndpoint.isBlank() || "/".equals(sseEndpoint))
+				? DEFAULT_SSE_PATH : sseEndpoint;
 
 		final HttpClientSseClientTransport transport = HttpClientSseClientTransport.builder(baseUri)
 			.sseEndpoint(ssePath)
@@ -183,14 +186,6 @@ public class LoopbackMcpClientFactory {
 	private static String buildBaseUri(final String host, final int port) {
 		final String h = (host == null || host.isBlank()) ? "127.0.0.1" : host;
 		return "http://" + h + ":" + port;
-	}
-
-	private static String joinPath(final String basePath, final String suffix) {
-		if (basePath == null || basePath.isBlank() || "/".equals(basePath)) {
-			return suffix;
-		}
-		final String trimmed = basePath.endsWith("/") ? basePath.substring(0, basePath.length() - 1) : basePath;
-		return trimmed + suffix;
 	}
 
 	/**

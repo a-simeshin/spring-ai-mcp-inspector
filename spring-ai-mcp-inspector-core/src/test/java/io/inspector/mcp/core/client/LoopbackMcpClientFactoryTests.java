@@ -93,11 +93,10 @@ class LoopbackMcpClientFactoryTests {
 		@Test
 		@Story("Build SSE client")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("forSse() builds a client for a host/port with sse and message endpoints")
+		@Description("forSse() builds a client for a host/port and explicit SSE endpoint")
 		void forSse_withMessageEndpoint_buildsClient() {
 			// given / when
-			final McpSyncClient client = LoopbackMcpClientFactoryTests.this.factory.forSse("localhost", 8080, "",
-					"/mcp/message");
+			final McpSyncClient client = LoopbackMcpClientFactoryTests.this.factory.forSse("localhost", 8080, "/sse");
 
 			// then
 			assertThat(client).isNotNull();
@@ -153,8 +152,8 @@ class LoopbackMcpClientFactoryTests {
 		@Description("forSse() wires sampling and elicitation handlers on the client when supplied")
 		void forSse_withHandlers_buildsClient() {
 			// given / when
-			final McpSyncClient client = LoopbackMcpClientFactoryTests.this.factory.forSse("localhost", 8080, "/base",
-					"/mcp/message", BOTH);
+			final McpSyncClient client = LoopbackMcpClientFactoryTests.this.factory.forSse("localhost", 8080,
+					"/app/sse", BOTH);
 
 			// then
 			assertThat(client).isNotNull();
@@ -209,11 +208,11 @@ class LoopbackMcpClientFactoryTests {
 		@Test
 		@Story("Default host fallback")
 		@Severity(SeverityLevel.MINOR)
-		@Description("forSse() falls back to 127.0.0.1 when the host is blank and uses the root base path")
+		@Description("forSse() falls back to 127.0.0.1 for a blank host and to /sse for a root SSE endpoint")
 		void forSse_withBlankHostAndRootBase_buildsClient() {
 			// given / when
 			final McpSyncClient client = LoopbackMcpClientFactoryTests.this.factory.forSse(" ", 8080, "/",
-					"/mcp/message", InspectorClientHandlers.none());
+					InspectorClientHandlers.none());
 
 			// then
 			assertThat(client).isNotNull();
