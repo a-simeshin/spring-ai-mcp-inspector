@@ -1,4 +1,4 @@
-import { discoverScopes } from "../auth";
+import { discoverScopes, toAbsoluteServerUrl } from "../auth";
 import { discoverAuthorizationServerMetadata } from "@modelcontextprotocol/sdk/client/auth.js";
 
 jest.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
@@ -65,6 +65,17 @@ describe("discoverScopes", () => {
       serverUrl: "https://example.com/",
       expected: "read write",
       expectedCallUrl: "https://example.com/",
+    },
+    {
+      // [spring-ai-mcp-inspector PATCH] The inspector advertises its MCP endpoint
+      // as a same-origin relative path to stay clear of reverse-proxy WAF rules.
+      // Without toAbsoluteServerUrl, `new URL("/", "/mcp")` throws "Invalid URL"
+      // and discovery silently returns undefined.
+      name: "absolutizes a relative server URL instead of throwing Invalid URL",
+      mockResolves: baseMetadata,
+      serverUrl: "/mcp",
+      expected: "read write",
+      expectedCallUrl: `${window.location.origin}/`,
     },
     {
       name: "handles single scope",
@@ -155,4 +166,20 @@ describe("discoverScopes", () => {
       expect(result).toBeUndefined();
     },
   );
+});
+
+describe("toAbsoluteServerUrl", () => {
+  it("resolves a same-origin relative server URL against the current origin", () => {
+    expect(toAbsoluteServerUrl("/mcp")).toBe(`${window.location.origin}/mcp`);
+    // The OAuth call site uses the result as a `new URL(...)` base; a relative
+    // value there throws "Invalid URL".
+    expect(() => new URL("/", toAbsoluteServerUrl("/mcp"))).not.toThrow();
+  });
+
+  it("leaves absolute and protocol-relative URLs untouched", () => {
+    expect(toAbsoluteServerUrl("https://example.com/mcp")).toBe(
+      "https://example.com/mcp",
+    );
+    expect(toAbsoluteServerUrl("//example.com/mcp")).toBe("//example.com/mcp");
+  });
 });

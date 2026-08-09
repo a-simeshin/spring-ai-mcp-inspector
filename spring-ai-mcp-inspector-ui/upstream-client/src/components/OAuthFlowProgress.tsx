@@ -1,7 +1,10 @@
 import { AuthDebuggerState, OAuthStep } from "@/lib/auth-types";
 import { CheckCircle2, Circle, ExternalLink } from "lucide-react";
 import { Button } from "./ui/button";
-import { DebugInspectorOAuthClientProvider } from "@/lib/auth";
+import {
+  DebugInspectorOAuthClientProvider,
+  toAbsoluteServerUrl,
+} from "@/lib/auth";
 import { useEffect, useMemo, useState } from "react";
 import { OAuthClientInformation } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { validateRedirectUrl } from "@/utils/urlValidation";
@@ -69,11 +72,15 @@ const steps: Array<OAuthStep> = [
 ];
 
 export const OAuthFlowProgress = ({
-  serverUrl,
+  serverUrl: rawServerUrl,
   authState,
   updateAuthState,
   proceedToNextStep,
 }: OAuthFlowProgressProps) => {
+  // [spring-ai-mcp-inspector PATCH] The server URL arrives as a same-origin relative
+  // path ("/sse"); the `new URL("/.well-known/...", serverUrl)` calls below would throw
+  // "Invalid base URL" during render and unmount the whole tree (no error boundary).
+  const serverUrl = toAbsoluteServerUrl(rawServerUrl);
   const { toast } = useToast();
   const provider = useMemo(
     () => new DebugInspectorOAuthClientProvider(serverUrl),

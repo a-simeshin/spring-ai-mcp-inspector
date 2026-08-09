@@ -63,6 +63,7 @@ import {
   saveScopeToSessionStorage,
   clearScopeFromSessionStorage,
   discoverScopes,
+  toAbsoluteServerUrl,
 } from "../auth";
 import { createProxyFetch } from "../proxyFetch";
 import {
@@ -398,7 +399,7 @@ export function useConnection({
         let resourceMetadata;
         try {
           resourceMetadata = await discoverOAuthProtectedResourceMetadata(
-            new URL("/", sseUrl),
+            new URL("/", toAbsoluteServerUrl(sseUrl)),
             {},
             fetchFn,
           );
@@ -413,7 +414,10 @@ export function useConnection({
 
       try {
         const result = await auth(serverAuthProvider, {
-          serverUrl: sseUrl,
+          // The SDK's auth() reaches selectResourceURL -> new URL(serverUrl),
+          // which throws on the relative same-origin path the inspector
+          // advertises by default.
+          serverUrl: toAbsoluteServerUrl(sseUrl),
           scope,
           ...(fetchFn && { fetchFn }),
         });
@@ -572,7 +576,7 @@ export function useConnection({
       // Determine connection URL based on the connection type
       if (connectionType === "direct" && transportType !== "stdio") {
         // Direct connection - use the provided URL directly (not available for STDIO)
-        serverUrl = new URL(sseUrl);
+        serverUrl = new URL(toAbsoluteServerUrl(sseUrl));
 
         const requestHeaders = { ...headers };
         if (mcpSessionId) {
