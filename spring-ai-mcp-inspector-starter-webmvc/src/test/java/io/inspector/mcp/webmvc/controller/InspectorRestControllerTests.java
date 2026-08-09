@@ -153,15 +153,15 @@ class InspectorRestControllerTests {
 		@Test
 		@Story("Open session")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("connect() builds and initializes a loopback client and returns the new session id")
+		@Description("connect() dials the detected SSE endpoint, deployment prefix included, and returns the new session id")
 		void connect_withSseTransport_initializesClientAndReturnsSessionId() {
-			// given
+			// given — the detected endpoints already carry the context path
 			given(InspectorRestControllerTests.this.transportDetector.detect())
-				.willReturn(new DetectedTransport(TransportType.SSE, "/sse", "/mcp/message", "WEBMVC"));
+				.willReturn(new DetectedTransport(TransportType.SSE, "/app/sse", "/app/mcp/message", "WEBMVC"));
 			given(InspectorRestControllerTests.this.portHolder.port()).willReturn(1234);
 			final McpSyncClient client = mock(McpSyncClient.class);
-			given(InspectorRestControllerTests.this.loopbackFactory.forSse(eq("127.0.0.1"), eq(1234), eq(""),
-					eq("/mcp/message"), any()))
+			given(InspectorRestControllerTests.this.loopbackFactory.forSse(eq("127.0.0.1"), eq(1234), eq("/app/sse"),
+					any()))
 				.willReturn(client);
 
 			// when
@@ -985,7 +985,7 @@ class InspectorRestControllerTests {
 			final ArgumentCaptor<InspectorClientHandlers> handlersCaptor = ArgumentCaptor
 				.forClass(InspectorClientHandlers.class);
 			given(InspectorRestControllerTests.this.loopbackFactory.forSse(anyString(), anyInt(), anyString(),
-					anyString(), handlersCaptor.capture()))
+					handlersCaptor.capture()))
 				.willReturn(client);
 
 			final ResponseEntity<Map<String, Object>> connectResponse = InspectorRestControllerTests.this.controller

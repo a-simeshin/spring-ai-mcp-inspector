@@ -139,6 +139,7 @@ public class SseProxyController {
 	 * @param command the executable for stdio transport
 	 * @param args the arguments for stdio transport
 	 * @param env the environment variables for stdio transport as JSON
+	 * @param request the current request, read for its context path
 	 * @return the {@link SseEmitter} for the opened session
 	 */
 	@GetMapping(path = "/sse", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -147,8 +148,8 @@ public class SseProxyController {
 			@RequestParam(value = "url", required = false) final String url,
 			@RequestParam(value = "command", required = false) final String command,
 			@RequestParam(value = "args", required = false) final String args,
-			@RequestParam(value = "env", required = false) final String env) {
-		return openProxiedSession(transportType, url, command, args, env);
+			@RequestParam(value = "env", required = false) final String env, final HttpServletRequest request) {
+		return openProxiedSession(transportType, url, command, args, env, contextPath(request));
 	}
 
 	/**
@@ -156,13 +157,14 @@ public class SseProxyController {
 	 * @param command the executable for stdio transport
 	 * @param args the arguments for stdio transport
 	 * @param env the environment variables for stdio transport as JSON
+	 * @param request the current request, read for its context path
 	 * @return the {@link SseEmitter} for the opened session
 	 */
 	@GetMapping(path = "/stdio", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
 	public SseEmitter openStdio(@RequestParam("command") final String command,
 			@RequestParam(value = "args", required = false) final String args,
-			@RequestParam(value = "env", required = false) final String env) {
-		return openProxiedSession("stdio", null, command, args, env);
+			@RequestParam(value = "env", required = false) final String env, final HttpServletRequest request) {
+		return openProxiedSession("stdio", null, command, args, env, contextPath(request));
 	}
 
 	/**
@@ -192,8 +194,15 @@ public class SseProxyController {
 	// session bring-up
 	// ---------------------------------------------------------------------
 
+	private static String contextPath(final HttpServletRequest request) {
+		// A root-mounted application reports "" per the servlet spec; a container
+		// reporting "/" instead would yield a protocol-relative "//..." prologue.
+		final String contextPath = request.getContextPath();
+		return "/".equals(contextPath) ? "" : contextPath;
+	}
+
 	private SseEmitter openProxiedSession(final String transportType, final String url, final String command,
-			final String args, final String env) {
+			final String args, final String env, final String contextPath) {
 		final String sessionId = UUID.randomUUID().toString();
 		final SseEmitter emitter = new SseEmitter(resolveTimeouts().getSseSession().toMillis());
 
@@ -218,8 +227,12 @@ public class SseProxyController {
 		this.registry.put(session);
 
 		// SSE prologue — tells SSEClientTransport on the browser where to POST.
+		// The value must carry the deployment prefix: the browser resolves it with
+		// new URL(data, sseUrl), and a path-absolute value replaces the whole path,
+		// so without the prefix every first client->server frame would 404.
 		try {
-			final String messageEndpoint = this.properties.getProxyPath() + "/message?sessionId=" + sessionId;
+			final String messageEndpoint = contextPath + this.properties.getProxyPath() + "/message?sessionId="
+					+ sessionId;
 			emitter.send(SseEmitter.event().name("endpoint").data(messageEndpoint));
 		}
 		catch (final IOException ex) {

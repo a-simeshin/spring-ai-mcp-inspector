@@ -16,6 +16,7 @@
 
 package io.inspector.mcp.webmvc.controller;
 
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -59,10 +60,19 @@ public class InspectorConfigController {
 		this.assembler = assembler;
 	}
 
+	/**
+	 * Serves the bootstrap payload, with the proxy address carrying the request's context
+	 * path so the SPA dials the inspector where it is actually mounted.
+	 * @param request the current request, read for its context path
+	 * @return the bootstrap payload with no-cache headers
+	 */
 	@GetMapping(path = "${spring.ai.mcp.inspector.path:/mcp-inspector}/config",
 			produces = MediaType.APPLICATION_JSON_VALUE)
-	public ResponseEntity<InspectorBootstrap> config() {
-		final InspectorBootstrap bootstrap = this.assembler.assemble();
+	public ResponseEntity<InspectorBootstrap> config(final HttpServletRequest request) {
+		// A root-mounted application reports "" per the servlet spec; a container
+		// reporting "/" instead would yield a protocol-relative "//..." proxy address.
+		final String contextPath = request.getContextPath();
+		final InspectorBootstrap bootstrap = this.assembler.assemble("/".equals(contextPath) ? "" : contextPath);
 		final HttpHeaders headers = new HttpHeaders();
 		headers.setContentType(MediaType.APPLICATION_JSON);
 		headers.setCacheControl("no-cache, no-store, must-revalidate");
