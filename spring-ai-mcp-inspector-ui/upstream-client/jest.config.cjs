@@ -30,6 +30,11 @@ module.exports = {
     "/bin/",
     "/e2e/",
     "\\.config\\.(js|ts|cjs|mjs)$",
+    // [spring-ai-mcp-inspector PATCH] Only the upstream *client* is vendored here;
+    // upstream's Node proxy (`server/`) is replaced by the Java backend. These two
+    // suites read/spawn `../../../../server/src/...` and can never pass in this tree.
+    "/src/__tests__/proxyFetchEndpoint\\.test\\.ts$",
+    "/src/lib/__tests__/mcpProxyTransportErrorCode\\.test\\.ts$",
   ],
   // Exclude the same patterns from coverage reports
   coveragePathIgnorePatterns: [
