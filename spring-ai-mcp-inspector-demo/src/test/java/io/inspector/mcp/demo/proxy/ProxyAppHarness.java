@@ -14,7 +14,11 @@ import io.inspector.mcp.demo.DemoApplication;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.web.context.WebServerApplicationContext;
+import org.springframework.boot.web.embedded.netty.NettyReactiveWebServerFactory;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.client.ReactorResourceFactory;
 
 /**
  * Boots a fresh {@link DemoApplication} on a random port for the proxy-level integration
@@ -95,7 +99,56 @@ final class ProxyAppHarness {
 		args.add("--spring.autoconfigure.exclude=" + exclude);
 		java.util.Collections.addAll(args, extraArgs);
 
-		return new SpringApplicationBuilder(DemoApplication.class).web(type).run(args.toArray(new String[0]));
+		SpringApplicationBuilder builder = new SpringApplicationBuilder(DemoApplication.class).web(type);
+		if (reactive) {
+			builder.sources(ForceNetty.class);
+		}
+		return builder.run(args.toArray(new String[0]));
+	}
+
+	/**
+	 * Pins the reactive stack to reactor-netty.
+	 *
+	 * <p>
+	 * Boot's {@code ReactiveWebServerFactoryAutoConfiguration} imports
+	 * {@code EmbeddedTomcat} before {@code EmbeddedNetty}, and the default Maven profile
+	 * puts {@code spring-boot-starter-web} (hence {@code tomcat-embed-core}) on the test
+	 * classpath at compile scope. Without this bean every {@code WEBFLUX} row of these
+	 * ITs silently boots {@code TomcatReactiveWebServerFactory} — verified: the log said
+	 * "TomcatWebServer - Tomcat started" for all four {@link Stack} rows — so the
+	 * reactive assertions proved nothing about the stack users actually run. A
+	 * user-defined
+	 * {@link org.springframework.boot.web.reactive.server.ReactiveWebServerFactory} wins
+	 * because the autoconfigured ones are {@code @ConditionalOnMissingBean}.
+	 *
+	 * <p>
+	 * The {@link ReactorResourceFactory} is not optional here. Boot's own
+	 * {@code reactorServerResourceFactory} / {@code reactorClientResourceFactory} both
+	 * default to reactor-netty's <em>global</em> {@code HttpResources}, and several ITs
+	 * in this package boot two reactive contexts in one JVM ({@code ProxyTargetLossIT}
+	 * runs an inspector app plus a target app). Closing either one then disposes the
+	 * shared loops and the survivor's server stops accepting — observed as a bare
+	 * {@code java.net.ConnectException} against a port that had just answered.
+	 * Per-context resources keep the two apps independent. This is a harness concern
+	 * only: a real deployment runs one context per JVM.
+	 */
+	@Configuration(proxyBeanMethods = false)
+	static class ForceNetty {
+
+		@Bean
+		ReactorResourceFactory reactorResourceFactory() {
+			ReactorResourceFactory factory = new ReactorResourceFactory();
+			factory.setUseGlobalResources(false);
+			return factory;
+		}
+
+		@Bean
+		NettyReactiveWebServerFactory nettyReactiveWebServerFactory(ReactorResourceFactory resourceFactory) {
+			NettyReactiveWebServerFactory factory = new NettyReactiveWebServerFactory();
+			factory.setResourceFactory(resourceFactory);
+			return factory;
+		}
+
 	}
 
 	/** Extracts the dynamically allocated server port. */
