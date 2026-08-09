@@ -79,19 +79,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Feature("Graceful shutdown")
 class GracefulShutdownIT {
 
-	/**
-	 * Pinned to HTTP/1.1. {@link HttpClient} negotiates HTTP/2 by default and remembers
-	 * the outcome per {@code host:port}; the OS recycles the harness's random ports, so a
-	 * port that answered as Tomcat (which speaks h2c) can come back as Netty (which does
-	 * not) and the cached decision produces a bare {@code 400} on the next request. Seen
-	 * once in seven runs after pinning the reactive stack to Netty, on
-	 * {@code POST /api/connect} before it reached any handler. These tests exercise SSE
-	 * over HTTP/1.1 and have no reason to negotiate anything.
-	 */
-	private static final HttpClient HTTP = HttpClient.newBuilder()
-		.version(HttpClient.Version.HTTP_1_1)
-		.connectTimeout(Duration.ofSeconds(5))
-		.build();
+	/** Pinned to HTTP/1.1 — see {@link ProxyAppHarness#httpClient(Duration)}. */
+	private static final HttpClient HTTP = ProxyAppHarness.httpClient(Duration.ofSeconds(5));
 
 	/**
 	 * Command-line args beat the failsafe system properties, so these hold regardless of

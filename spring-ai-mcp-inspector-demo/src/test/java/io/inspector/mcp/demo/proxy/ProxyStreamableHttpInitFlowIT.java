@@ -72,7 +72,7 @@ class ProxyStreamableHttpInitFlowIT {
 	 * Shared HTTP client; bound to a short connect-timeout to fail fast on bring-up
 	 * issues.
 	 */
-	private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+	private static final HttpClient HTTP = ProxyAppHarness.httpClient(Duration.ofSeconds(5));
 
 	/** Wall-clock budget per HTTP exchange. Tests must finish well under this. */
 	private static final Duration BUDGET = Duration.ofSeconds(30);

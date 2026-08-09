@@ -9,6 +9,9 @@
  */
 package io.inspector.mcp.demo.proxy;
 
+import java.net.http.HttpClient;
+import java.time.Duration;
+
 import io.inspector.mcp.demo.DemoApplication;
 
 import org.springframework.boot.WebApplicationType;
@@ -53,6 +56,28 @@ final class ProxyAppHarness {
 	}
 
 	private ProxyAppHarness() {
+	}
+
+	/**
+	 * A client pinned to HTTP/1.1, which every IT in this package should use.
+	 *
+	 * <p>
+	 * {@link HttpClient} negotiates HTTP/2 by default and remembers the outcome per
+	 * {@code host:port}. The harness boots on random ports and the OS recycles them, so a
+	 * port that once answered as Tomcat (which speaks h2c) can come back as Netty (which
+	 * does not) and the cached decision produces a bare {@code 400} — or, with the
+	 * connection wedged mid-upgrade, a request that simply never returns. Both were
+	 * observed only after {@link ForceNetty} started binding the {@code WEBFLUX} rows to
+	 * reactor-netty for real: a {@code 400} on {@code POST /api/connect} locally, and a
+	 * 62-second {@code HttpTimeoutException} in {@code ProxySessionLifecycleIT} on CI.
+	 *
+	 * <p>
+	 * These tests exercise SSE over HTTP/1.1 and have no reason to negotiate anything.
+	 * @param connectTimeout how long to wait for the TCP connect
+	 * @return a fresh client; callers hold it in a {@code static final} field
+	 */
+	static HttpClient httpClient(final Duration connectTimeout) {
+		return HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(connectTimeout).build();
 	}
 
 	/**
