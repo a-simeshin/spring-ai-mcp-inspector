@@ -224,6 +224,24 @@
                         </includes>
                         <systemPropertyVariables>
                             <allure.results.directory>${project.build.directory}/allure-results</allure.results.directory>
+                            <!-- Caps how long an IT context may spend in Boot's graceful
+                                 shutdown phase. ITs boot the demo app in-JVM and leave the
+                                 proxy SSE stream open; the library does not complete those
+                                 streams on context close, so every close otherwise waits
+                                 out the full 30s default — dozens of "1 bean still running
+                                 after timeout of 30000ms: [webServerGracefulShutdown]" per
+                                 CI run, and on a two-core runner that is enough to push
+                                 ProxySessionLifecycleIT past its request budget.
+
+                                 This is a workaround, not a bound on residual stalls: the
+                                 upstream fix (1.x #28 — the transport drain) is not ported
+                                 to this line yet. Remove it when it is, so the suite
+                                 exercises the real shutdown path again. Do NOT replace it
+                                 with server.shutdown=immediate globally; ProxyAppHarness
+                                 passes that per app on the command line, where it beats
+                                 this system property, and the @SpringBootTest contexts
+                                 should keep closing gracefully. -->
+                            <spring.lifecycle.timeout-per-shutdown-phase>1s</spring.lifecycle.timeout-per-shutdown-phase>
                         </systemPropertyVariables>
                     </configuration>
                 </plugin>
