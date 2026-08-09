@@ -16,8 +16,6 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Optional;
 
-import io.inspector.mcp.demo.DemoApplication;
-
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -27,9 +25,6 @@ import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.WebApplicationType;
-import org.springframework.boot.builder.SpringApplicationBuilder;
-import org.springframework.boot.web.context.WebServerApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,7 +41,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * CORS headers.
  *
  * <p>
- * Two stacks × one assertion = 2 tests.
+ * The stack comes from whichever module runs this test-jar, so the single assertion below
+ * is executed once per stack.
  */
 @Epic("Inspector Proxy")
 @Feature("CORS")
@@ -80,7 +76,7 @@ class ProxyCorsIT {
 	void corsPreflight_withAllowedOrigin_advertisesAllowedHeadersAndOrigin() throws Exception {
 		// given
 		app = startWithAllowedOrigin();
-		int port = ((WebServerApplicationContext) app).getWebServer().getPort();
+		int port = ProxyAppHarness.port(app);
 
 		// when
 		HttpRequest preflight = HttpRequest
@@ -114,28 +110,8 @@ class ProxyCorsIT {
 
 	/** Boots the demo with a single CORS-allowed origin so the cors filters wire up. */
 	private static ConfigurableApplicationContext startWithAllowedOrigin() {
-		boolean reactive = "webflux".equals(ProxyAppHarness.stack());
-		WebApplicationType type = reactive ? WebApplicationType.REACTIVE : WebApplicationType.SERVLET;
-
-		String exclude;
-		if (reactive) {
-			exclude = "org.springframework.ai.mcp.server.autoconfigure.McpServerSseWebMvcAutoConfiguration,"
-					+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebMvcAutoConfiguration,"
-					+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebMvcAutoConfiguration,"
-					+ "io.inspector.mcp.webmvc.McpInspectorWebMvcAutoConfiguration";
-		}
-		else {
-			exclude = "org.springframework.ai.mcp.server.autoconfigure.McpServerSseWebFluxAutoConfiguration,"
-					+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStreamableHttpWebFluxAutoConfiguration,"
-					+ "org.springframework.ai.mcp.server.autoconfigure.McpServerStatelessWebFluxAutoConfiguration,"
-					+ "io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration";
-		}
-
-		return new SpringApplicationBuilder(DemoApplication.class).web(type)
-			.run("--server.port=0", "--spring.main.web-application-type=" + (reactive ? "reactive" : "servlet"),
-					"--spring.ai.mcp.server.protocol=STREAMABLE", "--spring.ai.mcp.inspector.auth-enabled=false",
-					"--spring.ai.mcp.inspector.allowed-origins=" + ALLOWED_ORIGIN,
-					"--spring.autoconfigure.exclude=" + exclude);
+		return ProxyAppHarness.start("STREAMABLE", false, null,
+				"--spring.ai.mcp.inspector.allowed-origins=" + ALLOWED_ORIGIN);
 	}
 
 }

@@ -14,7 +14,6 @@ import java.time.Duration;
 
 import io.inspector.mcp.demo.DemoApplication;
 
-import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.web.context.WebServerApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -41,7 +40,7 @@ import org.springframework.context.ConfigurableApplicationContext;
  * suite on CI (issue 35). Splitting the modules removes the choice rather than fighting
  * it.
  */
-final class ProxyAppHarness {
+public final class ProxyAppHarness {
 
 	/**
 	 * Marker for the reactive inspector starter — present only in {@code demo-webflux}.
@@ -58,7 +57,7 @@ final class ProxyAppHarness {
 	 * classpath, because that is now the only thing that decides it.
 	 * @return {@code "webflux"} or {@code "webmvc"}
 	 */
-	static String stack() {
+	public static String stack() {
 		return REACTIVE ? "webflux" : "webmvc";
 	}
 
@@ -90,13 +89,14 @@ final class ProxyAppHarness {
 	 * @return live context; caller is responsible for
 	 * {@link ConfigurableApplicationContext#close()}
 	 */
-	static ConfigurableApplicationContext start(String protocol, boolean authEnabled, String authToken,
+	public static ConfigurableApplicationContext start(String protocol, boolean authEnabled, String authToken,
 			String... extraArgs) {
-		WebApplicationType type = REACTIVE ? WebApplicationType.REACTIVE : WebApplicationType.SERVLET;
-
+		// No web(...) call and no spring.main.web-application-type: Boot deduces the
+		// application type from the classpath, and after the split the classpath holds
+		// exactly one server. Forcing the type here would only restate what the module
+		// already decided — and would go quietly stale if it ever disagreed.
 		java.util.List<String> args = new java.util.ArrayList<>();
 		args.add("--server.port=0");
-		args.add("--spring.main.web-application-type=" + (REACTIVE ? "reactive" : "servlet"));
 		args.add("--spring.ai.mcp.server.protocol=" + protocol.toUpperCase());
 		args.add("--spring.ai.mcp.inspector.auth-enabled=" + authEnabled);
 		if (authToken != null) {
@@ -104,11 +104,11 @@ final class ProxyAppHarness {
 		}
 		java.util.Collections.addAll(args, extraArgs);
 
-		return new SpringApplicationBuilder(DemoApplication.class).web(type).run(args.toArray(new String[0]));
+		return new SpringApplicationBuilder(DemoApplication.class).run(args.toArray(new String[0]));
 	}
 
 	/** Extracts the dynamically allocated server port. */
-	static int port(ConfigurableApplicationContext ctx) {
+	public static int port(ConfigurableApplicationContext ctx) {
 		return ((WebServerApplicationContext) ctx).getWebServer().getPort();
 	}
 

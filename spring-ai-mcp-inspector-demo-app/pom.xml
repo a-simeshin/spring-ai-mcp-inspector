@@ -28,6 +28,16 @@
         <maven.source.skip>true</maven.source.skip>
         <maven.javadoc.skip>true</maven.javadoc.skip>
         <gpg.skip>true</gpg.skip>
+        <!--
+            Failsafe is bound in the parent's active <plugins>, so without this it would
+            run this module's own *IT.java here — on a classpath that deliberately has no
+            web server and no inspector starter, where every one of them fails on the
+            first boot. These ITs exist to be compiled and published in the test-jar;
+            demo-webmvc and demo-webflux execute them through <dependenciesToScan>, once
+            per stack. Not maven.test.skip: that would stop test compilation and leave the
+            test-jar empty.
+        -->
+        <skipITs>true</skipITs>
     </properties>
 
     <dependencies>
@@ -77,6 +87,25 @@
             <groupId>io.github.a-simeshin</groupId>
             <artifactId>spring-ai-mcp-inspector-core</artifactId>
             <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            Browser driving. This module boots no web server, so nothing here opens a
+            page during its own build — InspectorUiSmokeIT ships in the test-jar and runs
+            inside demo-webmvc and demo-webflux, which is exactly why the dependency has
+            to be declared here: the test sources have to compile against it. Versions
+            come from the parent's dependencyManagement so all three demo modules drive
+            the same browser stack.
+        -->
+        <dependency>
+            <groupId>com.codeborne</groupId>
+            <artifactId>selenide</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.github.bonigarcia</groupId>
+            <artifactId>webdrivermanager</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

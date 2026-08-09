@@ -434,14 +434,21 @@ spring-ai-mcp-inspector-core              # transport-agnostic core: properties,
 spring-ai-mcp-inspector-starter-webmvc    # Spring Boot starter for the servlet stack
 spring-ai-mcp-inspector-starter-webflux   # Spring Boot starter for the reactive stack
 spring-ai-mcp-inspector-ui                # Vendored upstream React/Vite bundle
-spring-ai-mcp-inspector-demo              # Runnable demo app (all four transports)
+spring-ai-mcp-inspector-demo-app          # Demo MCP server (tools/resources/prompts), no web stack
+spring-ai-mcp-inspector-demo-webmvc       # Demo on the servlet stack — the runnable jar
+spring-ai-mcp-inspector-demo-webflux      # Demo on the reactive stack
 ```
+
+The demo is split in three so that each web stack gets a classpath of its own:
+with both starters visible, Spring Boot silently runs the "reactive" setup on
+Tomcat-reactive. `-demo-app` holds the application and the stack-agnostic tests;
+the two stack modules add exactly one starter each.
 
 ## Running the demo
 
 ```
-./mvnw -pl spring-ai-mcp-inspector-demo package -DskipTests
-java -jar spring-ai-mcp-inspector-demo/target/spring-ai-mcp-inspector-demo-*-exec.jar \
+./mvnw -pl spring-ai-mcp-inspector-demo-webmvc -am package -DskipTests
+java -jar spring-ai-mcp-inspector-demo-webmvc/target/spring-ai-mcp-inspector-demo-webmvc-*-exec.jar \
     --spring.profiles.active=streamable
 ```
 

@@ -8,9 +8,11 @@ import org.springframework.scheduling.annotation.EnableScheduling;
  * Demo MCP server application.
  *
  * <p>
- * Showcases the Spring AI MCP Inspector across multiple Maven profiles ({@code webmvc},
- * {@code webflux}, {@code stdio-only}) and Spring profiles ({@code sse},
- * {@code streamable}, {@code stateless}, {@code stdio}).
+ * This module carries the demo itself and no web stack, so the transport comes from
+ * whichever module you build on top of it — {@code spring-ai-mcp-inspector-demo-webmvc}
+ * for the servlet stack, {@code spring-ai-mcp-inspector-demo-webflux} for the reactive
+ * one. Spring profiles ({@code sse}, {@code streamable}, {@code stateless},
+ * {@code stdio}) then pick the MCP endpoint style.
  *
  * <p>
  * Tools, resources and prompts are discovered automatically by the Spring AI MCP server
