@@ -74,7 +74,7 @@ starter modules.
 ### End-to-end (Selenide)
 
 ```
-./mvnw verify -pl spring-ai-mcp-inspector-demo-webmvc,spring-ai-mcp-inspector-demo-webflux
+./mvnw verify -pl spring-ai-mcp-inspector-demo-webmvc,spring-ai-mcp-inspector-demo-webflux -am
 ```
 
 Runs the demo on a random port and drives a real Chromium browser through the
@@ -131,7 +131,7 @@ Available Spring profiles: `stdio`, `sse`, `streamable`, `stateless`. Open
 `http://localhost:8080/mcp-inspector/` after startup. The web stack is chosen by
 which module you build, not by a Maven profile — `-demo-webmvc` is the only one
 packaged as an executable jar; exercise the reactive stack through
-`./mvnw verify -pl spring-ai-mcp-inspector-demo-webflux`.
+`./mvnw verify -pl spring-ai-mcp-inspector-demo-webflux -am`.
 
 ## Code style
 
