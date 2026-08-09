@@ -68,7 +68,7 @@ class WebFluxLoopbackSseIT {
 			+ "loopback inspector client can list the expected demo tools (echo, sum, currentTime).")
 	void listTools_viaReactiveLoopbackSse_returnsDemoTools() {
 		// given
-		McpSyncClient client = loopbackFactory.forSse("127.0.0.1", port, "", "/mcp/message");
+		McpSyncClient client = loopbackFactory.forSse("127.0.0.1", port, "/sse");
 		try {
 			// when
 			client.initialize();

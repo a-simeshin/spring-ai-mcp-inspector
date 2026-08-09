@@ -93,7 +93,7 @@ class LargeToolOutputIT {
 		@DisplayName("1 MiB payload stays intact over SSE")
 		void oneMibPayload_overSse_staysIntact() {
 			// given
-			McpSyncClient client = loopbackFactory.forSse("127.0.0.1", port, "", "/mcp/message");
+			McpSyncClient client = loopbackFactory.forSse("127.0.0.1", port, "/sse");
 			try {
 				client.initialize();
 
@@ -117,7 +117,7 @@ class LargeToolOutputIT {
 		@DisplayName("4 MiB payload stays intact over SSE")
 		void fourMibPayload_overSse_staysIntact() {
 			// given
-			McpSyncClient client = loopbackFactory.forSse("127.0.0.1", port, "", "/mcp/message");
+			McpSyncClient client = loopbackFactory.forSse("127.0.0.1", port, "/sse");
 			try {
 				client.initialize();
 

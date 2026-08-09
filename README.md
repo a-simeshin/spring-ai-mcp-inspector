@@ -70,6 +70,132 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 
 Start your application and open `http://localhost:8080/mcp-inspector/`. The inspector is pre-connected to your local MCP server, click **Connect** and you'll see tools/resources/prompts immediately.
 
+## Security
+
+**The inspector is a development tool. Its built-in token is not a security boundary.**
+
+Two facts make that plain:
+
+- `GET ${spring.ai.mcp.inspector.path}/config` serves the bootstrap payload — including
+  the auth token — **unauthenticated, by design**. The SPA is a static bundle; it has to
+  fetch the token before it can call anything. Whoever can reach that URL has the token.
+- The proxy backend dials **arbitrary absolute URLs** supplied by the client. Anyone who
+  can reach the port can therefore make outbound requests from inside your network, to
+  hosts your users cannot reach directly.
+
+So the only real control is who can reach the port. Outside a trusted network, either
+turn the inspector off:
+
+```yaml
+spring:
+  ai:
+    mcp:
+      inspector:
+        enabled: false
+```
+
+or put it behind your application's own authentication.
+
+### Behind Spring Security
+
+`McpInspectorProperties#securityPathPatterns()` returns every path the inspector claims —
+the UI base path, the proxy backend and the two fixed OAuth callback routes — so the rules
+below keep working when you move `spring.ai.mcp.inspector.path`. It is a plain method, not
+a configuration property.
+
+Two things matter in these snippets:
+
+- Use `.authenticated()`, **not** `permitAll()`. `permitAll()` on these patterns is a full
+  bypass of your own authentication, which is exactly what you were trying to avoid.
+- Exempt the same patterns from CSRF. The UI issues `POST`s (`connect`, `jsonrpc`, `fetch`,
+  `message`, `mcp`), a `PUT` to `/roots` and a `DELETE` to end a session, none of which
+  carry a CSRF token — without the exemption `CsrfFilter` answers `403` on the very first
+  **Connect**.
+
+**WebMVC**
+
+```java
+@Bean
+SecurityFilterChain inspectorSecurity(HttpSecurity http, McpInspectorProperties inspector) throws Exception {
+    String[] patterns = inspector.securityPathPatterns().toArray(String[]::new);
+    return http.securityMatcher(patterns)
+        .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
+        .csrf(csrf -> csrf.ignoringRequestMatchers(patterns))
+        .httpBasic(Customizer.withDefaults())
+        .build();
+}
+```
+
+**WebFlux**
+
+```java
+@Bean
+SecurityWebFilterChain inspectorSecurity(ServerHttpSecurity http, McpInspectorProperties inspector) {
+    String[] patterns = inspector.securityPathPatterns().toArray(String[]::new);
+    ServerWebExchangeMatcher matcher = ServerWebExchangeMatchers.pathMatchers(patterns);
+    return http.securityMatcher(matcher)
+        .authorizeExchange(auth -> auth.anyExchange().authenticated())
+        .csrf(csrf -> csrf.requireCsrfProtectionMatcher(
+                new NegatedServerWebExchangeMatcher(matcher)))
+        .httpBasic(Customizer.withDefaults())
+        .build();
+}
+```
+
+Setting `spring.ai.mcp.inspector.auth-enabled=false` drops the built-in token check
+entirely and logs a `WARN` at startup. Only do that when something else — Spring Security,
+a network boundary — already guards the path.
+
+## Under a context path or behind a reverse proxy
+
+A `server.servlet.context-path` (or `spring.webflux.base-path`) needs no extra
+configuration: asset URLs, the root redirect, the advertised proxy address and the
+detected MCP endpoint are all prefixed with it.
+
+### Behind a reverse proxy
+
+When a gateway serves the app under a prefix that the app itself does not know about, let
+Spring read the forwarded headers:
+
+```yaml
+server:
+  forward-headers-strategy: framework
+```
+
+The gateway then sends `X-Forwarded-Prefix` and the inspector emits links under that
+prefix.
+
+One sharp edge: **`X-Forwarded-Prefix` replaces the context path, it does not concatenate
+with it.** An app on `context-path=/app` behind a gateway that routes `/tools/*` to it must
+receive `X-Forwarded-Prefix: /tools/app` — the combined prefix. Sending `/tools` alone
+produces links that drop `/app`.
+
+### Known limitations under a prefix
+
+- **OAuth does not work under a context path.** The SPA hardcodes
+  `window.location.origin + "/oauth/callback"` as its `redirect_uri` and compares
+  `window.location.pathname` against that same literal, so both halves of the flow break
+  once the app is not mounted at the root. Fixing it requires patching the upstream
+  bundle; the inspector serves those two callback routes at the top level on purpose.
+  Its code-split callback chunks are likewise still fetched from `/mcp-inspector/assets/`.
+- **The SSE transport needs one extra Spring AI property.** Spring AI advertises the
+  message endpoint as `spring.ai.mcp.server.base-url` + `sse-message-endpoint`; left empty
+  (the default) it is advertised without the prefix and the first client-to-server frame
+  404s. Set it to the prefix:
+
+  ```yaml
+  server:
+    servlet:
+      context-path: /app
+  spring:
+    ai:
+      mcp:
+        server:
+          base-url: /app
+  ```
+
+  `STREAMABLE` needs nothing extra.
+
 ## Ported 95% of original MCP Inspector
 
 #### Transport
@@ -112,6 +238,7 @@ All settings live under the `spring.ai.mcp.inspector` namespace:
 | `spring.ai.mcp.inspector.path` | `/mcp-inspector` | Base path the UI is served at. Must start with `/`, no trailing `/`. |
 | `spring.ai.mcp.inspector.auth-enabled` | `true` | When `true`, requests to the proxy endpoint require the bearer token below. |
 | `spring.ai.mcp.inspector.auth-token` | _(generated)_ | Bearer token. If unset, a random token is generated at boot and injected into the SPA bootstrap automatically. |
+| `spring.ai.mcp.inspector.allowed-origins` | _(empty)_ | Origins allowed to call the inspector API and proxy cross-origin. Empty means no CORS mapping is registered at all, so only same-origin browser calls work — set it only when the UI is served from a different host than the app. Accepts a YAML list. |
 
 Custom path example:
 
