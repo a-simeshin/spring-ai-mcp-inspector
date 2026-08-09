@@ -42,6 +42,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.web.context.WebServerApplicationContext;
 import org.springframework.boot.web.context.WebServerInitializedEvent;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
@@ -84,12 +86,26 @@ import io.inspector.mcp.core.transport.TransportType;
  *
  * @author Artem Simeshin
  */
-public class InspectorHandler {
+public class InspectorHandler implements ApplicationContextAware {
 
 	private static final Logger LOG = LoggerFactory.getLogger(InspectorHandler.class);
 
-	/** Total wall-clock budget for draining UI sessions on context close. */
-	private static final Duration SESSION_CLOSE_BUDGET = Duration.ofSeconds(5);
+	/**
+	 * Total wall-clock budget for draining UI sessions on context close.
+	 *
+	 * <p>
+	 * Sized to the close it supervises rather than to a round number.
+	 * {@code SessionContext.closeQuietly()} calls
+	 * {@code McpSyncClient.closeGracefully()}, which blocks up to the SDK's hard-coded
+	 * 10s before returning {@code false} and letting the forced {@code close()} take
+	 * over. A budget below that cancels the task exactly when the forcing step is about
+	 * to run — i.e. in precisely the wedged-session case the forcing step exists for. The
+	 * extra second is for that forced close. Still well inside the 15s default
+	 * {@code spring.lifecycle.timeout-per-shutdown-phase} this whole drain exists to
+	 * avoid paying, and only a wedged transport ever spends it: a healthy session closes
+	 * in milliseconds.
+	 */
+	private static final Duration SESSION_CLOSE_BUDGET = Duration.ofSeconds(11);
 
 	/**
 	 * Shared CSPRNG for OAuth {@code state} generation. {@link SecureRandom} is
@@ -126,6 +142,12 @@ public class InspectorHandler {
 	private final ConcurrentMap<String, SessionContext> sessions = new ConcurrentHashMap<>();
 
 	private final AtomicInteger listeningPort = new AtomicInteger(-1);
+
+	/** The context this bean belongs to; {@code null} when built outside a container. */
+	private ApplicationContext applicationContext;
+
+	/** Set once {@link #onContextClosed(ContextClosedEvent)} has swept. Never reset. */
+	private volatile boolean closed;
 
 	public InspectorHandler(final TransportDetector transportDetector, final LoopbackMcpClientFactory loopbackFactory,
 			final ExternalStdioClientFactory externalStdioFactory, final InspectorAuthTokenProvider tokenProvider,
@@ -329,11 +351,20 @@ public class InspectorHandler {
 	 * {@code McpSyncClient.closeGracefully()} blocks up to the SDK's hard-coded 10s and
 	 * the SDK offers no way to shorten it, so a serial loop could not be bounded below
 	 * N&nbsp;&times;&nbsp;10s.
-	 * @param event the context-closed event (unused)
+	 *
+	 * <p>
+	 * Only this context's close counts: {@code publishEvent} forwards to the parent, so a
+	 * management child context closing would otherwise tear down the live sessions of a
+	 * parent that is still serving.
+	 * @param event the context-closed event
 	 */
 	@EventListener
 	@Order(100)
 	public void onContextClosed(final ContextClosedEvent event) {
+		if (this.applicationContext != null && event.getApplicationContext() != this.applicationContext) {
+			return;
+		}
+		this.closed = true;
 		final List<Runnable> closers = this.sessions.keySet().stream().<Runnable>map((id) -> () -> {
 			final SessionContext ctx = this.sessions.remove(id);
 			if (ctx != null) {
@@ -346,6 +377,16 @@ public class InspectorHandler {
 			}
 		}).toList();
 		ShutdownDrain.drain("inspector session", SESSION_CLOSE_BUDGET, closers);
+	}
+
+	/**
+	 * Records the owning context so {@link #onContextClosed(ContextClosedEvent)} can tell
+	 * this context's close from a child's.
+	 * @param applicationContext the context this bean was created in
+	 */
+	@Override
+	public void setApplicationContext(final ApplicationContext applicationContext) {
+		this.applicationContext = applicationContext;
 	}
 
 	/**
@@ -511,6 +552,17 @@ public class InspectorHandler {
 		final SessionContext ctx = new SessionContext(client, sink);
 		holder.ctx = ctx;
 		this.sessions.put(sessionId, ctx);
+		if (this.closed) {
+			// Lost the race: the shutdown sweep snapshotted the map while this handshake
+			// was still initializing, so nothing would ever close this session. The
+			// connector is not paused until phase 2147482623, so the request is live and
+			// its client would hold an inbound request open for the whole graceful phase.
+			final SessionContext late = this.sessions.remove(sessionId);
+			if (late != null) {
+				late.closeQuietly();
+			}
+			throw new IllegalStateException("inspector is shutting down");
+		}
 
 		final McpSchema.Implementation info = client.getServerInfo();
 		final Map<String, Object> result = new LinkedHashMap<>();

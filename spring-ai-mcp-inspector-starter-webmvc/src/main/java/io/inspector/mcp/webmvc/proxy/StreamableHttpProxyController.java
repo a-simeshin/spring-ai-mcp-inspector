@@ -147,8 +147,11 @@ public class StreamableHttpProxyController {
 		if (session == null) {
 			return emitErrorAndComplete(emitter, "unknown mcp-session-id: " + mcpSessionId);
 		}
+		// takeUntilOther: close() cannot complete the sink while another thread owns it,
+		// and an emitter left open is what makes graceful shutdown pay its full timeout.
 		session.targetToBrowser()
 			.asFlux()
+			.takeUntilOther(session.closeSignal())
 			.subscribe((frame) -> sendEvent(emitter, frame), emitter::completeWithError, emitter::complete);
 		return emitter;
 	}

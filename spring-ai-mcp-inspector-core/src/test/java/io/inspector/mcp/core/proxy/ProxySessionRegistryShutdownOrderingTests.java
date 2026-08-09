@@ -100,6 +100,46 @@ class ProxySessionRegistryShutdownOrderingTests {
 		StepVerifier.create(targetToBrowser.asFlux()).verifyComplete();
 	}
 
+	@Test
+	@DisplayName("a child context closing leaves the running parent's registry alone")
+	@Story("Shutdown ordering")
+	@Severity(SeverityLevel.BLOCKER)
+	@Description("AbstractApplicationContext.publishEvent forwards every event to the parent, so closing a "
+			+ "child — Spring Boot's actuator management context is the everyday case — used to drain the "
+			+ "still-running parent's sessions and latch its registry closed for good")
+	void childContextClose_leavesTheParentRegistryUsable() {
+		final GenericApplicationContext parent = new GenericApplicationContext();
+		AnnotationConfigUtils.registerAnnotationConfigProcessors(parent);
+		parent.registerBean(ProxySessionRegistry.class);
+		parent.refresh();
+		final GenericApplicationContext child = new GenericApplicationContext();
+		child.setParent(parent);
+		child.refresh();
+
+		final ProxySessionRegistry registry = parent.getBean(ProxySessionRegistry.class);
+		registry.put(session("before-child-close"));
+
+		child.close();
+
+		assertThat(parent.isActive()).as("parent still active after the child closed").isTrue();
+		assertThat(registry.size()).as("sessions surviving the child's close").isOne();
+		// The registry must still accept new sessions: a latched `closed` flag would
+		// silently close every session the running application opens from here on.
+		registry.put(session("after-child-close"));
+		assertThat(registry.size()).isEqualTo(2);
+
+		parent.close();
+
+		assertThat(registry.size()).as("sessions after the owning context closed").isZero();
+	}
+
+	private static ProxySession session(final String id) {
+		final McpClientTransport transport = mock(McpClientTransport.class);
+		given(transport.closeGracefully()).willReturn(Mono.empty());
+		return new ProxySession(id, transport, Sinks.many().unicast().onBackpressureBuffer(),
+				Sinks.many().replay().limit(8));
+	}
+
 	/**
 	 * Stops one phase above {@code WebServerGracefulShutdownLifecycle}. Because
 	 * {@code DefaultLifecycleProcessor} stops beans in descending phase order, this runs

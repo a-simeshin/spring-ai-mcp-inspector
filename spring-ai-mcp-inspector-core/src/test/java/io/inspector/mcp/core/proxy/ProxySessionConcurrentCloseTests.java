@@ -39,24 +39,27 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 
 /**
- * {@link ProxySession#close()} must complete its sinks even when another thread is
- * emitting at the same moment.
+ * A browser-facing proxy stream must end the moment {@link ProxySession#close()} runs,
+ * even when another thread is emitting into the same sink at that instant.
  *
  * <p>
  * This is the shutdown case, not an exotic one: {@code SIGTERM} arrives while a session
- * is relaying server notifications. Both sinks are wrapped in Reactor's
- * {@code SinkManySerialized}, whose {@code tryEmitComplete()} returns
- * {@code FAIL_NON_SERIALIZED} the instant another thread owns the sink and does not
- * retry. The old code discarded that result, so the completion was simply lost — the
- * browser's SSE emitter never finished and Boot's graceful shutdown waited out the whole
- * phase anyway.
+ * is relaying server notifications. Ending the stream by completing the sink cannot be
+ * made reliable — both sinks are wrapped in Reactor's {@code SinkManySerialized}, whose
+ * emit methods refuse the moment another thread owns the sink, and the real subscriber
+ * holds it for a long time (it serialises JSON and writes to the browser's socket inside
+ * {@code tryEmitNext}, on the emitting thread). Discarding {@code tryEmitComplete()}'s
+ * result dropped 176 of 200 completions; retrying with
+ * {@code emitComplete(busyLooping(100ms))} still dropped 5-40 per 200 while burning up to
+ * 200ms of uninterruptible spin per {@code close()} — which on webflux runs on the Netty
+ * event loop.
  *
  * <p>
- * The window is wide because the real subscriber does work inside {@code tryEmitNext} on
- * the emitting thread (serialise JSON, write to the SSE socket); the subscriber below
- * spins for a comparable moment to reproduce that. Measured against the old
- * {@code tryEmitComplete()} implementation: 176 of 200 completions dropped. The assertion
- * is zero.
+ * So the streams no longer depend on the sink's terminal event at all: they end on
+ * {@link ProxySession#closeSignal()}, a {@code CompletableFuture} that contends with
+ * nothing. This test subscribes exactly the way the controllers do —
+ * {@code asFlux().takeUntilOther(session.closeSignal())} — and the assertion is zero
+ * dropped terminations out of 200 rounds.
  */
 @Epic("MCP Inspector Core")
 @Feature("Proxy session")
@@ -65,13 +68,13 @@ class ProxySessionConcurrentCloseTests {
 	private static final int ROUNDS = 200;
 
 	@Test
-	@DisplayName("close() completes the browser-facing sink even under a concurrent emitter")
+	@DisplayName("close() ends the browser-facing stream even under a concurrent emitter")
 	@Story("Session teardown")
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Races close() against a thread emitting frames into targetToBrowser 200 times and "
-			+ "asserts the subscriber saw onComplete every single time — a dropped completion leaves the "
-			+ "browser's SSE stream open and makes graceful shutdown pay its full timeout")
-	void close_whileAnotherThreadEmits_alwaysCompletesTheSink() throws Exception {
+			+ "asserts the browser-facing subscriber saw onComplete every single time — a dropped "
+			+ "termination leaves the browser's SSE stream open and makes graceful shutdown pay its " + "full timeout")
+	void close_whileAnotherThreadEmits_alwaysEndsTheBrowserStream() throws Exception {
 		int droppedCompletions = 0;
 
 		for (int round = 0; round < ROUNDS; round++) {
@@ -81,7 +84,9 @@ class ProxySessionConcurrentCloseTests {
 					targetToBrowser);
 
 			final AtomicBoolean completed = new AtomicBoolean(false);
-			targetToBrowser.asFlux().subscribe((frame) -> burnCpu(), (error) -> {
+			// Exactly what SseProxyController, StreamableHttpProxyController and
+			// ProxyHandler subscribe: the sink, cut off by the session's close signal.
+			targetToBrowser.asFlux().takeUntilOther(session.closeSignal()).subscribe((frame) -> burnCpu(), (error) -> {
 			}, () -> completed.set(true));
 
 			final AtomicBoolean stop = new AtomicBoolean(false);
@@ -106,7 +111,7 @@ class ProxySessionConcurrentCloseTests {
 			}
 		}
 
-		assertThat(droppedCompletions).as("completions dropped out of %d rounds", ROUNDS).isZero();
+		assertThat(droppedCompletions).as("stream terminations dropped out of %d rounds", ROUNDS).isZero();
 	}
 
 	private static McpClientTransport closingTransport() {

@@ -21,6 +21,8 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
@@ -52,7 +54,7 @@ import io.inspector.mcp.core.shutdown.ShutdownDrain;
  *
  * @author Artem Simeshin
  */
-public class ProxySessionRegistry {
+public class ProxySessionRegistry implements ApplicationContextAware {
 
 	/**
 	 * Total wall-clock budget for {@link #closeAll()}, however many sessions there are.
@@ -60,6 +62,9 @@ public class ProxySessionRegistry {
 	private static final Duration CLOSE_ALL_BUDGET = Duration.ofSeconds(5);
 
 	private final ConcurrentMap<String, ProxySession> sessions = new ConcurrentHashMap<>();
+
+	/** The context this bean belongs to; {@code null} when built outside a container. */
+	private ApplicationContext applicationContext;
 
 	/**
 	 * Set once {@link #closeAll()} has started. Never reset — a registry whose context is
@@ -150,12 +155,34 @@ public class ProxySessionRegistry {
 	 * class is public and user-extensible, and Java allows only one parameterisation of a
 	 * generic interface per hierarchy, so implementing it here would stop any subclass
 	 * from being an {@code ApplicationListener} of a different event type.
-	 * @param event the context-closed event (unused)
+	 *
+	 * <p>
+	 * Only <em>this</em> context's close counts.
+	 * {@code AbstractApplicationContext.publishEvent} forwards every event to the parent,
+	 * so a child context closing — Spring Boot's actuator management context is the
+	 * everyday case, it comes and goes independently — delivers a
+	 * {@link ContextClosedEvent} here while this context is still serving traffic. Acting
+	 * on it would drain live sessions and latch {@link #closed}, permanently disabling
+	 * the inspector in a running application.
+	 * @param event the context-closed event
 	 */
 	@EventListener
 	@Order(100)
 	public void onContextClosed(final ContextClosedEvent event) {
+		if (this.applicationContext != null && event.getApplicationContext() != this.applicationContext) {
+			return;
+		}
 		closeAll();
+	}
+
+	/**
+	 * Records the owning context so {@link #onContextClosed(ContextClosedEvent)} can tell
+	 * this context's close from a child's.
+	 * @param applicationContext the context this bean was created in
+	 */
+	@Override
+	public void setApplicationContext(final ApplicationContext applicationContext) {
+		this.applicationContext = applicationContext;
 	}
 
 	/**

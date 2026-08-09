@@ -149,19 +149,22 @@ public class McpInspectorWebFluxAutoConfiguration {
 	/**
 	 * Closes the host's MCP server transport provider before Boot's graceful-shutdown
 	 * phase starts waiting — see {@link McpServerTransportDrain} for why spring-ai's own
-	 * teardown is too late. Absent entirely when
-	 * {@code spring.ai.mcp.inspector.shutdown.close-mcp-server-transports=false}, and a
-	 * no-op when the application runs no MCP server of its own.
+	 * teardown is too late. A no-op when the application runs no MCP server of its own,
+	 * or when {@code spring.ai.mcp.inspector.shutdown.close-mcp-server-transports=false}.
+	 *
+	 * <p>
+	 * The switch is read from the bound properties rather than gating the bean with
+	 * {@code @ConditionalOnProperty}, so the accessor is the single source of truth
+	 * instead of a field that quietly does nothing.
 	 * @param providers the MCP server transport providers in this context, if any
+	 * @param properties the inspector properties carrying the shutdown switch
 	 * @return the shutdown listener
 	 */
 	@Bean
 	@ConditionalOnMissingBean
-	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.shutdown", name = "close-mcp-server-transports",
-			havingValue = "true", matchIfMissing = true)
 	public McpServerTransportDrain mcpInspectorServerTransportDrain(
-			final ObjectProvider<McpServerTransportProviderBase> providers) {
-		return new McpServerTransportDrain(providers);
+			final ObjectProvider<McpServerTransportProviderBase> providers, final McpInspectorProperties properties) {
+		return new McpServerTransportDrain(providers, properties);
 	}
 
 	@Bean

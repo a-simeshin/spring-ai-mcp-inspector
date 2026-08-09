@@ -23,9 +23,13 @@ import io.modelcontextprotocol.spec.McpServerTransportProviderBase;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.ApplicationListener;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.core.Ordered;
+
+import io.inspector.mcp.core.config.McpInspectorProperties;
 
 /**
  * Closes the host application's own MCP server transport provider at the start of context
@@ -82,13 +86,15 @@ import org.springframework.core.Ordered;
  * </ul>
  *
  * <p>
- * TODO: file this upstream against spring-ai and record the issue URL here. A workaround
- * for another project's bug, with no issue tracking its removal, becomes permanent by
- * default.
+ * Tracked for removal by
+ * <a href="https://github.com/a-simeshin/spring-ai-mcp-inspector/issues/33">issue 33</a>.
+ * A workaround for another project's bug, with no issue tracking its removal, becomes
+ * permanent by default.
  *
  * @author Artem Simeshin
  */
-public class McpServerTransportDrain implements ApplicationListener<ContextClosedEvent>, Ordered {
+public class McpServerTransportDrain
+		implements ApplicationListener<ContextClosedEvent>, ApplicationContextAware, Ordered {
 
 	/**
 	 * Upper bound on the wait for the provider to release its sessions. Matches
@@ -102,10 +108,34 @@ public class McpServerTransportDrain implements ApplicationListener<ContextClose
 
 	private final ObjectProvider<McpServerTransportProviderBase> providers;
 
+	private final McpInspectorProperties properties;
+
 	private final AtomicBoolean drained = new AtomicBoolean(false);
 
-	public McpServerTransportDrain(final ObjectProvider<McpServerTransportProviderBase> providers) {
+	/** The context this bean belongs to; {@code null} when built outside a container. */
+	private ApplicationContext applicationContext;
+
+	/**
+	 * Creates a drain for the given providers.
+	 * @param providers the MCP server transport providers in this context, if any
+	 * @param properties the inspector properties, read at event time so that a
+	 * programmatic change to {@code shutdown.close-mcp-server-transports} takes effect;
+	 * {@code null} means "enabled", the binding default
+	 */
+	public McpServerTransportDrain(final ObjectProvider<McpServerTransportProviderBase> providers,
+			final McpInspectorProperties properties) {
 		this.providers = providers;
+		this.properties = properties;
+	}
+
+	/**
+	 * Records the owning context so {@link #onApplicationEvent(ContextClosedEvent)} can
+	 * tell this context's close from a child's.
+	 * @param applicationContext the context this bean was created in
+	 */
+	@Override
+	public void setApplicationContext(final ApplicationContext applicationContext) {
+		this.applicationContext = applicationContext;
 	}
 
 	/**
@@ -129,12 +159,20 @@ public class McpServerTransportDrain implements ApplicationListener<ContextClose
 
 	@Override
 	public void onApplicationEvent(final ContextClosedEvent event) {
-		// A management child context republishes ContextClosedEvent to its parent, so
-		// this
-		// can fire twice. The providers' own closeGracefully() clears state on success
-		// and
-		// would very likely tolerate it, but "very likely" is not a reason to find out
-		// during shutdown.
+		// publishEvent forwards to the parent, so a management child context closing
+		// delivers this event to a parent that is still serving. Draining then would
+		// kill the host's live MCP sessions and, because of the latch below, never let
+		// them come back.
+		if (this.applicationContext != null && event.getApplicationContext() != this.applicationContext) {
+			return;
+		}
+		if (this.properties != null && !this.properties.getShutdown().isCloseMcpServerTransports()) {
+			return;
+		}
+		// The same event can still reach us twice (a child that shares this listener).
+		// The providers' own closeGracefully() clears state on success and would very
+		// likely tolerate it, but "very likely" is not a reason to find out during
+		// shutdown.
 		if (!this.drained.compareAndSet(false, true)) {
 			return;
 		}
