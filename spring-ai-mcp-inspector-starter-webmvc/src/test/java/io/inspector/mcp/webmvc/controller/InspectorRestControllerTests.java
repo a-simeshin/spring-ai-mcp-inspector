@@ -1048,7 +1048,7 @@ class InspectorRestControllerTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("ContextClosedEvent releases every live session and every SSE emitter, so Boot's "
 				+ "graceful shutdown does not wait on them")
-		void onApplicationEvent_closesEverySessionAndEmitter() {
+		void onContextClosed_closesEverySessionAndEmitter() {
 			// given
 			final McpSyncClient client = mock(McpSyncClient.class);
 			registerSession(client);
@@ -1056,7 +1056,7 @@ class InspectorRestControllerTests {
 
 			// when
 			InspectorRestControllerTests.this.controller
-				.onApplicationEvent(new org.springframework.context.event.ContextClosedEvent(
+				.onContextClosed(new org.springframework.context.event.ContextClosedEvent(
 						new org.springframework.context.support.StaticApplicationContext()));
 
 			// then

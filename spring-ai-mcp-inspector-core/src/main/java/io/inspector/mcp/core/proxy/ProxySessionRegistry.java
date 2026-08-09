@@ -16,11 +16,16 @@
 
 package io.inspector.mcp.core.proxy;
 
+import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-import org.springframework.context.ApplicationListener;
 import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
+
+import io.inspector.mcp.core.shutdown.ShutdownDrain;
 
 /**
  * In-memory map of active proxy sessions, keyed by web-app session id.
@@ -37,18 +42,57 @@ import org.springframework.context.event.ContextClosedEvent;
  * {@code destroyMethod}) run after every lifecycle phase and would fire only once that
  * wait had already timed out.
  *
+ * <p>
+ * The hook is {@link EventListener}-annotated rather than an implemented
+ * {@code ApplicationListener<ContextClosedEvent>}, which keeps subclasses free to be an
+ * {@code ApplicationListener} of their own event type. The trade is that it needs
+ * {@code EventListenerMethodProcessor} in the context — present in every Spring Boot
+ * application, and therefore in every context this starter configures, but not in a bare
+ * {@code GenericApplicationContext} assembled by hand.
+ *
  * @author Artem Simeshin
  */
-public class ProxySessionRegistry implements ApplicationListener<ContextClosedEvent> {
+public class ProxySessionRegistry {
+
+	/**
+	 * Total wall-clock budget for {@link #closeAll()}, however many sessions there are.
+	 */
+	private static final Duration CLOSE_ALL_BUDGET = Duration.ofSeconds(5);
 
 	private final ConcurrentMap<String, ProxySession> sessions = new ConcurrentHashMap<>();
 
 	/**
-	 * Adds {@code session} under {@code session.sessionId()}.
+	 * Set once {@link #closeAll()} has started. Never reset — a registry whose context is
+	 * closing does not reopen.
+	 */
+	private volatile boolean closed;
+
+	/**
+	 * Adds {@code session} under {@code session.sessionId()}, unless the registry has
+	 * already been drained — in which case the session is closed immediately instead.
+	 *
+	 * <p>
+	 * The guard is not theoretical. A {@code GET /sse} that arrived just before shutdown
+	 * can still be connecting upstream when {@link ContextClosedEvent} fires; the sweep
+	 * runs, and only then does the request register its session. The container has not
+	 * paused its connector yet — that happens later, at phase 2147482623 — so the request
+	 * is live and its emitter would never be completed. Worse, a {@code put} landing
+	 * between the sweep and a bare {@code clear()} used to erase the session from the map
+	 * without closing it, which made {@link #size()} report zero over a still-open
+	 * stream.
 	 * @param session the session to register (never {@code null})
 	 */
 	public void put(final ProxySession session) {
+		if (this.closed) {
+			session.close();
+			return;
+		}
 		this.sessions.put(session.sessionId(), session);
+		if (this.closed) {
+			// Lost the race: closeAll() flipped the flag after our first check but swept
+			// before our put landed. Double-checking closes it without needing a lock.
+			removeAndClose(session.sessionId());
+		}
 	}
 
 	/**
@@ -81,14 +125,36 @@ public class ProxySessionRegistry implements ApplicationListener<ContextClosedEv
 	 * Closes and removes every session. Idempotent — {@link ProxySession#close()} is a
 	 * no-op after the first call, which matters because a child context (an actuator
 	 * management server, say) republishes {@link ContextClosedEvent} to the parent.
+	 *
+	 * <p>
+	 * Each {@link ProxySession#close()} blocks up to 5s on its upstream transport, so a
+	 * serial sweep would cost 5s <em>per</em> wedged session. They run in parallel
+	 * against one 5s deadline instead, which bounds the whole sweep regardless of session
+	 * count.
 	 */
 	public void closeAll() {
-		this.sessions.values().forEach(ProxySession::close);
-		this.sessions.clear();
+		this.closed = true;
+		final List<Runnable> closers = this.sessions.keySet()
+			.stream()
+			.<Runnable>map((id) -> () -> removeAndClose(id))
+			.toList();
+		ShutdownDrain.drain("proxy session", CLOSE_ALL_BUDGET, closers);
 	}
 
-	@Override
-	public void onApplicationEvent(final ContextClosedEvent event) {
+	/**
+	 * Drains every session on context close — the first step of
+	 * {@code AbstractApplicationContext.doClose()}, before any lifecycle phase stops.
+	 *
+	 * <p>
+	 * An annotated method rather than {@code implements ApplicationListener<...>}: this
+	 * class is public and user-extensible, and Java allows only one parameterisation of a
+	 * generic interface per hierarchy, so implementing it here would stop any subclass
+	 * from being an {@code ApplicationListener} of a different event type.
+	 * @param event the context-closed event (unused)
+	 */
+	@EventListener
+	@Order(100)
+	public void onContextClosed(final ContextClosedEvent event) {
 		closeAll();
 	}
 

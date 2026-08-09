@@ -88,6 +88,9 @@ public final class ProxySession {
 	 */
 	private static final Duration UPSTREAM_CLOSE_TIMEOUT = Duration.ofSeconds(5);
 
+	/** How long {@link #close()} may spin waiting to win a sink's serialization lock. */
+	private static final Duration COMPLETE_BUSY_LOOP = Duration.ofMillis(100);
+
 	/** Web-app session identifier. Random UUID by default. */
 	private final String sessionId;
 
@@ -168,18 +171,8 @@ public final class ProxySession {
 		if (!this.closed.compareAndSet(false, true)) {
 			return;
 		}
-		try {
-			this.browserToTarget.tryEmitComplete();
-		}
-		catch (final Exception ignored) {
-			// tryEmitComplete never throws; defensive only
-		}
-		try {
-			this.targetToBrowser.tryEmitComplete();
-		}
-		catch (final Exception ignored) {
-			// tryEmitComplete never throws; defensive only
-		}
+		completeQuietly(this.browserToTarget);
+		completeQuietly(this.targetToBrowser);
 		try {
 			// Bounded: close() also runs on the context-shutdown thread, serially for
 			// every open session. An unbounded block there lets one wedged upstream
@@ -188,6 +181,38 @@ public final class ProxySession {
 		}
 		catch (final Exception ignored) {
 			// best-effort shutdown
+		}
+	}
+
+	/**
+	 * Completes {@code sink}, retrying while another thread holds it.
+	 *
+	 * <p>
+	 * {@code tryEmitComplete()} was not good enough. Both sinks are wrapped in Reactor's
+	 * {@code SinkManySerialized}, whose emit methods return {@code FAIL_NON_SERIALIZED}
+	 * the moment another thread owns the sink — no retry, no deferral. The critical
+	 * section is not short: the {@code targetToBrowser} subscriber serialises JSON and
+	 * writes it to the browser's SSE socket inside {@code tryEmitNext} on the emitting
+	 * thread. A session relaying frames when {@code SIGTERM} arrives therefore lost its
+	 * completion outright (measured: 176 of 200 dropped under a concurrent emitter), the
+	 * emitter never completed, and the graceful timeout got paid anyway — the exact
+	 * failure {@link #close()} exists to prevent.
+	 *
+	 * <p>
+	 * The busy-loop is bounded at 100ms because this runs on the shutdown thread, where
+	 * an unbounded spin would be a hang of its own. {@code emitComplete} is silent on an
+	 * already-terminated sink and throws only if it never wins the lock.
+	 * @param sink the sink to complete
+	 */
+	private static void completeQuietly(final Sinks.Many<JsonNode> sink) {
+		try {
+			sink.emitComplete(Sinks.EmitFailureHandler.busyLooping(COMPLETE_BUSY_LOOP));
+		}
+		catch (final RuntimeException ignored) {
+			// EmissionException: lost the lock for the whole 100ms, so this one stream is
+			// left to the graceful phase — the old behaviour, now for a vanishingly rare
+			// session rather than for most of them. Swallowed because close() must not
+			// throw on the shutdown thread and abandon the sessions behind it.
 		}
 	}
 

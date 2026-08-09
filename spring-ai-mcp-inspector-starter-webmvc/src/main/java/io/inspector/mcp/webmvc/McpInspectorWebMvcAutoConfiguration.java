@@ -20,6 +20,8 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.modelcontextprotocol.spec.McpServerTransportProviderBase;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -46,6 +48,7 @@ import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.shutdown.McpServerTransportDrain;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.webmvc.controller.InspectorConfigController;
 import io.inspector.mcp.webmvc.controller.InspectorIndexController;
@@ -164,6 +167,24 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 	@ConditionalOnMissingBean
 	public ProxySessionRegistry mcpInspectorProxySessionRegistry() {
 		return new ProxySessionRegistry();
+	}
+
+	/**
+	 * Closes the host's MCP server transport provider before Boot's graceful-shutdown
+	 * phase starts waiting — see {@link McpServerTransportDrain} for why spring-ai's own
+	 * teardown is too late. Absent entirely when
+	 * {@code spring.ai.mcp.inspector.shutdown.close-mcp-server-transports=false}, and a
+	 * no-op when the application runs no MCP server of its own.
+	 * @param providers the MCP server transport providers in this context, if any
+	 * @return the shutdown listener
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.shutdown", name = "close-mcp-server-transports",
+			havingValue = "true", matchIfMissing = true)
+	public McpServerTransportDrain mcpInspectorServerTransportDrain(
+			final ObjectProvider<McpServerTransportProviderBase> providers) {
+		return new McpServerTransportDrain(providers);
 	}
 
 	@Bean

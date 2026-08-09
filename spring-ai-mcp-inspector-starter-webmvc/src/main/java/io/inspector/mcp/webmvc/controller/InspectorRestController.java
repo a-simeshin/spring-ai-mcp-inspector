@@ -17,6 +17,7 @@
 package io.inspector.mcp.webmvc.controller;
 
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -36,8 +37,9 @@ import io.modelcontextprotocol.spec.McpSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.ApplicationListener;
 import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -66,6 +68,7 @@ import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthInitiateResponse;
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
+import io.inspector.mcp.core.shutdown.ShutdownDrain;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.core.transport.TransportType;
@@ -87,9 +90,12 @@ import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
  */
 @RestController
 @RequestMapping("${spring.ai.mcp.inspector.path:/mcp-inspector}/api")
-public class InspectorRestController implements ApplicationListener<ContextClosedEvent> {
+public class InspectorRestController {
 
 	private static final Logger LOG = LoggerFactory.getLogger(InspectorRestController.class);
+
+	/** Total wall-clock budget for draining UI sessions on context close. */
+	private static final Duration SESSION_CLOSE_BUDGET = Duration.ofSeconds(5);
 
 	/**
 	 * Shared CSPRNG for OAuth {@code state} generation. {@link SecureRandom} is
@@ -239,11 +245,23 @@ public class InspectorRestController implements ApplicationListener<ContextClose
 	/**
 	 * Releases every live UI session and event stream. Idempotent, so the duplicate event
 	 * a child context republishes to its parent is harmless.
+	 *
+	 * <p>
+	 * An annotated method rather than {@code implements ApplicationListener<...>}: the
+	 * class is public and user-extensible, and Java permits only one parameterisation of
+	 * a generic interface per hierarchy, so implementing it would stop a subclass from
+	 * listening to any other event type.
+	 *
+	 * <p>
+	 * Sessions drain in parallel under one deadline —
+	 * {@code McpSyncClient.closeGracefully()} blocks up to the SDK's hard-coded 10s, so a
+	 * serial loop could not be bounded below N&nbsp;&times;&nbsp;10s.
 	 * @param event the context-closed event (unused)
 	 */
-	@Override
-	public void onApplicationEvent(final ContextClosedEvent event) {
-		this.sessions.keySet().forEach((id) -> {
+	@EventListener
+	@Order(100)
+	public void onContextClosed(final ContextClosedEvent event) {
+		final List<Runnable> closers = this.sessions.keySet().stream().<Runnable>map((id) -> () -> {
 			final SessionState state = this.sessions.remove(id);
 			if (state != null) {
 				try {
@@ -253,7 +271,8 @@ public class InspectorRestController implements ApplicationListener<ContextClose
 					LOG.warn("Failed to close inspector session {} on shutdown", id, ex);
 				}
 			}
-		});
+		}).toList();
+		ShutdownDrain.drain("inspector session", SESSION_CLOSE_BUDGET, closers);
 		this.emitterRegistry.closeAll();
 	}
 

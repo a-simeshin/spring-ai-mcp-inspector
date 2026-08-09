@@ -199,21 +199,21 @@
                         <excludedGroups>${failsafe.excludedGroups}</excludedGroups>
                         <systemPropertyVariables>
                             <allure.results.directory>${project.build.directory}/allure-results</allure.results.directory>
-                            <!-- Graceful shutdown stays ON so the ITs exercise the real
-                                 shutdown path (issue #28: the inspector now completes its
-                                 own streams on ContextClosedEvent, before Boot starts
-                                 waiting for in-flight requests). What is left is not ours:
-                                 with `spring.ai.mcp.server.protocol=SSE` spring-ai's
-                                 `*SseServerTransportProvider` only releases its server-side
-                                 SSE session during bean destruction — after the graceful
-                                 phase has already timed out. That session never completes,
-                                 so every SSE-protocol context pays the whole timeout: cap
-                                 it at 1s instead of the 30s default (measured: 2s costs the
-                                 demo module ~70s, 1s ~35s). Drop this line once spring-ai
-                                 closes its transport before the graceful phase.
-                                 GracefulShutdownIT overrides it with command-line args, so
-                                 its assertions stay meaningful regardless. -->
-                            <spring.lifecycle.timeout-per-shutdown-phase>1s</spring.lifecycle.timeout-per-shutdown-phase>
+                            <!-- No shutdown workaround here on purpose. Boot 3.5 defaults
+                                 `server.shutdown` to GRACEFUL and nothing overrides it, so
+                                 every IT context closes through the real graceful path —
+                                 which is the path issue #28 was about. The inspector
+                                 releases its own streams on ContextClosedEvent, and
+                                 McpServerTransportDrain releases spring-ai's server-side
+                                 MCP sessions there too; the `protocol=SSE` residual that
+                                 previously forced a 1s cap on
+                                 `spring.lifecycle.timeout-per-shutdown-phase` is gone.
+                                 Measured over the full reactor on JDK 17: 06:04 with the
+                                 cap, 05:54 without (demo module 04:00 -> 03:44), with
+                                 identical test counts — so the cap was buying nothing.
+                                 If you find yourself adding a cap back, find out which
+                                 context is stalling first — it means something stopped
+                                 being released. -->
                         </systemPropertyVariables>
                     </configuration>
                 </plugin>

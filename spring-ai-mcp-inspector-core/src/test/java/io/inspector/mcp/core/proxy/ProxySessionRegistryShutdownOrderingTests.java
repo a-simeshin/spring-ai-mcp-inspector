@@ -30,6 +30,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.web.context.WebServerGracefulShutdownLifecycle;
 import org.springframework.context.SmartLifecycle;
+import org.springframework.context.annotation.AnnotationConfigUtils;
 import org.springframework.context.support.GenericApplicationContext;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -72,6 +73,12 @@ class ProxySessionRegistryShutdownOrderingTests {
 	void contextClose_drainsRegistryBeforeGracefulShutdownPhase() {
 		final AtomicInteger sizeSeenByProbe = new AtomicInteger(-1);
 		final GenericApplicationContext context = new GenericApplicationContext();
+		// The registry listens via @EventListener rather than
+		// ApplicationListener<ContextClosedEvent> so that subclasses keep their one
+		// permitted parameterisation of that interface. Annotated listeners need
+		// EventListenerMethodProcessor, which every Spring Boot context registers and a
+		// bare GenericApplicationContext does not.
+		AnnotationConfigUtils.registerAnnotationConfigProcessors(context);
 		context.registerBean(ProxySessionRegistry.class);
 		context.registerBean(GracefulPhaseProbe.class,
 				() -> new GracefulPhaseProbe(context.getBean(ProxySessionRegistry.class), sizeSeenByProbe));

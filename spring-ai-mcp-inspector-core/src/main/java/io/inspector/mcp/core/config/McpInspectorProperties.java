@@ -83,6 +83,10 @@ public class McpInspectorProperties {
 	@NestedConfigurationProperty
 	private Timeouts timeouts = new Timeouts();
 
+	/** Context-shutdown behaviour. */
+	@NestedConfigurationProperty
+	private Shutdown shutdown = new Shutdown();
+
 	public boolean isEnabled() {
 		return this.enabled;
 	}
@@ -167,6 +171,47 @@ public class McpInspectorProperties {
 
 	public void setTimeouts(final Timeouts timeouts) {
 		this.timeouts = (timeouts != null) ? timeouts : new Timeouts();
+	}
+
+	public Shutdown getShutdown() {
+		return this.shutdown;
+	}
+
+	public void setShutdown(final Shutdown shutdown) {
+		this.shutdown = (shutdown != null) ? shutdown : new Shutdown();
+	}
+
+	/**
+	 * Context-shutdown behaviour. Bound under {@code spring.ai.mcp.inspector.shutdown}.
+	 */
+	public static class Shutdown {
+
+		/**
+		 * Whether to close the host application's MCP server transport provider on
+		 * {@code ContextClosedEvent} instead of leaving it to bean destruction.
+		 *
+		 * <p>
+		 * Defaults to {@code true}. A live MCP session pins an inbound request open, and
+		 * spring-ai releases it only during bean destruction — after Boot's graceful
+		 * shutdown phase has already waited out
+		 * {@code spring.lifecycle.timeout-per-shutdown-phase} in full. Closing it first
+		 * removes that wait.
+		 *
+		 * <p>
+		 * The cost of {@code true}: an MCP tool call still streaming its response when
+		 * shutdown starts is cut short, where today it would get the graceful window. Set
+		 * this to {@code false} to keep the old behaviour.
+		 */
+		private boolean closeMcpServerTransports = true;
+
+		public boolean isCloseMcpServerTransports() {
+			return this.closeMcpServerTransports;
+		}
+
+		public void setCloseMcpServerTransports(final boolean closeMcpServerTransports) {
+			this.closeMcpServerTransports = closeMcpServerTransports;
+		}
+
 	}
 
 	/**

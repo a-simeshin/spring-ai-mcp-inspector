@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -41,9 +42,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.web.context.WebServerApplicationContext;
 import org.springframework.boot.web.context.WebServerInitializedEvent;
-import org.springframework.context.ApplicationListener;
 import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
@@ -72,6 +73,7 @@ import io.inspector.mcp.core.dto.RootsDto;
 import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthInitiateResponse;
+import io.inspector.mcp.core.shutdown.ShutdownDrain;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.core.transport.TransportType;
@@ -82,9 +84,12 @@ import io.inspector.mcp.core.transport.TransportType;
  *
  * @author Artem Simeshin
  */
-public class InspectorHandler implements ApplicationListener<ContextClosedEvent> {
+public class InspectorHandler {
 
 	private static final Logger LOG = LoggerFactory.getLogger(InspectorHandler.class);
+
+	/** Total wall-clock budget for draining UI sessions on context close. */
+	private static final Duration SESSION_CLOSE_BUDGET = Duration.ofSeconds(5);
 
 	/**
 	 * Shared CSPRNG for OAuth {@code state} generation. {@link SecureRandom} is
@@ -311,11 +316,25 @@ public class InspectorHandler implements ApplicationListener<ContextClosedEvent>
 	 * {@code spring.lifecycle.timeout-per-shutdown-phase}. {@link ContextClosedEvent}
 	 * fires before any lifecycle phase stops, so this is early enough — bean destruction
 	 * would not be. Idempotent, so a child context republishing the event is harmless.
+	 *
+	 * <p>
+	 * An annotated method rather than {@code implements ApplicationListener<...>} — this
+	 * class is public and user-extensible, and a generic interface may be parameterised
+	 * only once per hierarchy, so implementing it here would stop a subclass from
+	 * listening to any other event type. Same pattern as
+	 * {@link #onWebServerStarted(WebServerInitializedEvent)} above.
+	 *
+	 * <p>
+	 * Sessions are drained in parallel under one deadline:
+	 * {@code McpSyncClient.closeGracefully()} blocks up to the SDK's hard-coded 10s and
+	 * the SDK offers no way to shorten it, so a serial loop could not be bounded below
+	 * N&nbsp;&times;&nbsp;10s.
 	 * @param event the context-closed event (unused)
 	 */
-	@Override
-	public void onApplicationEvent(final ContextClosedEvent event) {
-		this.sessions.keySet().forEach((id) -> {
+	@EventListener
+	@Order(100)
+	public void onContextClosed(final ContextClosedEvent event) {
+		final List<Runnable> closers = this.sessions.keySet().stream().<Runnable>map((id) -> () -> {
 			final SessionContext ctx = this.sessions.remove(id);
 			if (ctx != null) {
 				try {
@@ -325,7 +344,8 @@ public class InspectorHandler implements ApplicationListener<ContextClosedEvent>
 					LOG.warn("Failed to close inspector session {} on shutdown", id, ex);
 				}
 			}
-		});
+		}).toList();
+		ShutdownDrain.drain("inspector session", SESSION_CLOSE_BUDGET, closers);
 	}
 
 	/**

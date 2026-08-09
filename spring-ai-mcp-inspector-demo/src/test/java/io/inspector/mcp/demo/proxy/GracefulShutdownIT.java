@@ -56,18 +56,42 @@ import static org.assertj.core.api.Assertions.assertThat;
  * paid, i.e. the streams were never released.
  *
  * <p>
- * ponytail: the host MCP protocol is deliberately {@code STREAMABLE}, not {@code SSE}.
- * With {@code protocol=SSE} spring-ai's {@code *SseServerTransportProvider} only releases
- * its own server-side SSE session during bean destruction — after the graceful phase has
- * already timed out — so an SSE-protocol variant of this test would stay red no matter
- * what this library does. That residual is upstream's to fix; do not "helpfully" switch
- * the protocol here.
+ * Four scenarios, each on both stacks. Two of them exist because the first two were
+ * passing for a reason nobody had checked: spring-ai's transport provider releases the
+ * server-side session only during bean destruction, long after the graceful wait, and the
+ * only thing that saved us was that {@code McpSyncClient.closeGracefully()} happens to
+ * issue a loopback {@code DELETE /mcp} which makes the server tear its own session down.
+ * That is a client-side round trip to a server already in the middle of shutting down —
+ * far too load-bearing to leave untested. The last two scenarios take it away:
+ *
+ * <ul>
+ * <li>{@code disallow-delete=true} — a supported spring-ai setting; the server answers
+ * 405 and the session survives the client's close.</li>
+ * <li>{@code protocol=SSE} — no {@code DELETE} exists in that protocol at all.</li>
+ * </ul>
+ *
+ * <p>
+ * Both stall for the full graceful phase without {@code McpServerTransportDrain} and pass
+ * in milliseconds with it, on both stacks. Note this is not a webflux-only hole: webmvc
+ * fails these two just as hard.
  */
 @Epic("Inspector Proxy")
 @Feature("Graceful shutdown")
 class GracefulShutdownIT {
 
-	private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+	/**
+	 * Pinned to HTTP/1.1. {@link HttpClient} negotiates HTTP/2 by default and remembers
+	 * the outcome per {@code host:port}; the OS recycles the harness's random ports, so a
+	 * port that answered as Tomcat (which speaks h2c) can come back as Netty (which does
+	 * not) and the cached decision produces a bare {@code 400} on the next request. Seen
+	 * once in seven runs after pinning the reactive stack to Netty, on
+	 * {@code POST /api/connect} before it reached any handler. These tests exercise SSE
+	 * over HTTP/1.1 and have no reason to negotiate anything.
+	 */
+	private static final HttpClient HTTP = HttpClient.newBuilder()
+		.version(HttpClient.Version.HTTP_1_1)
+		.connectTimeout(Duration.ofSeconds(5))
+		.build();
 
 	/**
 	 * Command-line args beat the failsafe system properties, so these hold regardless of
@@ -172,8 +196,50 @@ class GracefulShutdownIT {
 			throws Exception {
 		// given
 		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null, GRACEFUL);
-		int port = ProxyAppHarness.port(app);
+		connectInspectorSession(ProxyAppHarness.port(app));
 
+		// when / then
+		assertCloseIsPrompt(stack);
+	}
+
+	@ParameterizedTest(name = "{0}")
+	@EnumSource(ProxyAppHarness.Stack.class)
+	@DisplayName("an inspector session survives context close promptly even when DELETE is disallowed")
+	@Story("Inspector session teardown")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Same as the previous case but with spring.ai.mcp.server.streamable-http.disallow-delete=true, "
+			+ "which removes the loopback DELETE /mcp that used to make the server release its own session. "
+			+ "Without McpServerTransportDrain this stalls for the whole graceful phase on both stacks")
+	void openInspectorSession_whenDeleteDisallowed_doesNotWaitForGracefulTimeout(ProxyAppHarness.Stack stack)
+			throws Exception {
+		// given
+		app = ProxyAppHarness.start(stack, "STREAMABLE", false, null,
+				withGraceful("--spring.ai.mcp.server.streamable-http.disallow-delete=true"));
+		connectInspectorSession(ProxyAppHarness.port(app));
+
+		// when / then
+		assertCloseIsPrompt(stack);
+	}
+
+	@ParameterizedTest(name = "{0}")
+	@EnumSource(ProxyAppHarness.Stack.class)
+	@DisplayName("an inspector session on the SSE protocol does not stall context close")
+	@Story("Inspector session teardown")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Same as the previous case on spring.ai.mcp.server.protocol=SSE, where the MCP protocol has "
+			+ "no DELETE at all, so nothing but McpServerTransportDrain can release the server-side session")
+	void openInspectorSession_onSseProtocol_doesNotWaitForGracefulTimeout(ProxyAppHarness.Stack stack)
+			throws Exception {
+		// given
+		app = ProxyAppHarness.start(stack, "SSE", false, null, GRACEFUL);
+		connectInspectorSession(ProxyAppHarness.port(app));
+
+		// when / then
+		assertCloseIsPrompt(stack);
+	}
+
+	/** Opens one inspector UI session and asserts the server accepted it. */
+	private static void connectInspectorSession(int port) throws Exception {
 		HttpResponse<String> connect = HTTP
 			.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/mcp-inspector/api/connect"))
 				.timeout(Duration.ofSeconds(20))
@@ -182,16 +248,27 @@ class GracefulShutdownIT {
 				.build(), HttpResponse.BodyHandlers.ofString());
 		assertThat(connect.statusCode()).as("connect response: %s", connect.body()).isEqualTo(200);
 		assertThat(connect.body()).contains("sessionId");
+	}
 
-		// when
+	/**
+	 * Closes {@link #app} and asserts the close landed inside {@link #CLOSE_BUDGET_MS}.
+	 */
+	private void assertCloseIsPrompt(ProxyAppHarness.Stack stack) {
 		ConfigurableApplicationContext closing = app;
 		app = null;
 		long startedAt = System.nanoTime();
 		closing.close();
 		long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L;
 
-		// then
 		assertThat(elapsedMs).as("context close on %s took %d ms", stack, elapsedMs).isLessThan(CLOSE_BUDGET_MS);
+	}
+
+	/** {@link #GRACEFUL} plus extra args, both beating the build's system properties. */
+	private static String[] withGraceful(String... extra) {
+		String[] args = new String[GRACEFUL.length + extra.length];
+		System.arraycopy(GRACEFUL, 0, args, 0, GRACEFUL.length);
+		System.arraycopy(extra, 0, args, GRACEFUL.length, extra.length);
+		return args;
 	}
 
 }
