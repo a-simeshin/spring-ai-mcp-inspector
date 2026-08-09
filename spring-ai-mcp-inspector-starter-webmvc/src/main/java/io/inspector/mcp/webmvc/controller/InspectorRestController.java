@@ -17,6 +17,7 @@
 package io.inspector.mcp.webmvc.controller;
 
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -36,6 +37,11 @@ import io.modelcontextprotocol.spec.McpSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationContextAware;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -64,6 +70,7 @@ import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthInitiateResponse;
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
+import io.inspector.mcp.core.shutdown.ShutdownDrain;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.core.transport.TransportType;
@@ -74,13 +81,37 @@ import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
  * REST endpoints that back the inspector SPA. All routes are mounted under
  * {@code /mcp-inspector/api} and protected by {@code InspectorAuthFilter}.
  *
+ * <p>
+ * A live UI session owns a loopback {@link McpSyncClient} pointed at this very JVM plus
+ * an {@link SseEmitter} for server-initiated events — two in-flight requests that would
+ * otherwise keep Boot's graceful shutdown waiting for the full
+ * {@code spring.lifecycle.timeout-per-shutdown-phase}. Both are released on
+ * {@link ContextClosedEvent}, which fires before any lifecycle phase stops.
+ *
  * @author Artem Simeshin
  */
 @RestController
 @RequestMapping("${spring.ai.mcp.inspector.path:/mcp-inspector}/api")
-public class InspectorRestController {
+public class InspectorRestController implements ApplicationContextAware {
 
 	private static final Logger LOG = LoggerFactory.getLogger(InspectorRestController.class);
+
+	/**
+	 * Total wall-clock budget for draining UI sessions on context close.
+	 *
+	 * <p>
+	 * Sized to the close it supervises rather than to a round number.
+	 * {@link SessionState#closeQuietly()} calls {@code McpSyncClient.closeGracefully()},
+	 * which blocks up to the SDK's hard-coded 10s before returning {@code false} and
+	 * letting the forced {@code close()} take over. A budget below that cancels the task
+	 * exactly when the forcing step is about to run — i.e. in precisely the
+	 * wedged-session case the forcing step exists for. The extra second is for that
+	 * forced close. Still well inside the 15s default
+	 * {@code spring.lifecycle.timeout-per-shutdown-phase} this whole drain exists to
+	 * avoid paying, and only a wedged transport ever spends it: a healthy session closes
+	 * in milliseconds.
+	 */
+	private static final Duration SESSION_CLOSE_BUDGET = Duration.ofSeconds(11);
 
 	/**
 	 * Shared CSPRNG for OAuth {@code state} generation. {@link SecureRandom} is
@@ -113,6 +144,12 @@ public class InspectorRestController {
 	private final String serverName;
 
 	private final ConcurrentMap<String, SessionState> sessions = new ConcurrentHashMap<>();
+
+	/** The context this bean belongs to; {@code null} when built outside a container. */
+	private ApplicationContext applicationContext;
+
+	/** Set once {@link #onContextClosed(ContextClosedEvent)} has swept. Never reset. */
+	private volatile boolean closed;
 
 	public InspectorRestController(final McpInspectorProperties properties, final TransportDetector transportDetector,
 			final LoopbackMcpClientFactory loopbackFactory, final InspectorAuthTokenProvider authTokenProvider,
@@ -182,6 +219,18 @@ public class InspectorRestController {
 		final SessionState state = new SessionState(client);
 		holder.state = state;
 		this.sessions.put(sessionId, state);
+		if (this.closed) {
+			// Lost the race: the shutdown sweep snapshotted the map while this handshake
+			// was still connecting upstream, so nothing will ever close this session. The
+			// connector is not paused until phase 2147482623, so the request is live and
+			// its client would hold an inbound request open for the whole graceful phase.
+			final SessionState late = this.sessions.remove(sessionId);
+			if (late != null) {
+				late.closeQuietly();
+			}
+			return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+				.body(Map.of("error", "inspector is shutting down"));
+		}
 		return ResponseEntity.ok(Map.of("sessionId", sessionId));
 	}
 
@@ -225,6 +274,59 @@ public class InspectorRestController {
 		}
 		this.emitterRegistry.close(id);
 		return ResponseEntity.noContent().build();
+	}
+
+	/**
+	 * Releases every live UI session and event stream. Idempotent, so the duplicate event
+	 * a child context republishes to its parent is harmless.
+	 *
+	 * <p>
+	 * An annotated method rather than {@code implements ApplicationListener<...>}: the
+	 * class is public and user-extensible, and Java permits only one parameterisation of
+	 * a generic interface per hierarchy, so implementing it would stop a subclass from
+	 * listening to any other event type.
+	 *
+	 * <p>
+	 * Sessions drain in parallel under one deadline —
+	 * {@code McpSyncClient.closeGracefully()} blocks up to the SDK's hard-coded 10s, so a
+	 * serial loop could not be bounded below N&nbsp;&times;&nbsp;10s.
+	 *
+	 * <p>
+	 * Only this context's close counts: {@code publishEvent} forwards to the parent, so a
+	 * management child context closing would otherwise tear down the live sessions of a
+	 * parent that is still serving.
+	 * @param event the context-closed event
+	 */
+	@EventListener
+	@Order(100)
+	public void onContextClosed(final ContextClosedEvent event) {
+		if (this.applicationContext != null && event.getApplicationContext() != this.applicationContext) {
+			return;
+		}
+		this.closed = true;
+		final List<Runnable> closers = this.sessions.keySet().stream().<Runnable>map((id) -> () -> {
+			final SessionState state = this.sessions.remove(id);
+			if (state != null) {
+				try {
+					state.closeQuietly();
+				}
+				catch (final Exception ex) {
+					LOG.warn("Failed to close inspector session {} on shutdown", id, ex);
+				}
+			}
+		}).toList();
+		ShutdownDrain.drain("inspector session", SESSION_CLOSE_BUDGET, closers);
+		this.emitterRegistry.closeAll();
+	}
+
+	/**
+	 * Records the owning context so {@link #onContextClosed(ContextClosedEvent)} can tell
+	 * this context's close from a child's.
+	 * @param applicationContext the context this bean was created in
+	 */
+	@Override
+	public void setApplicationContext(final ApplicationContext applicationContext) {
+		this.applicationContext = applicationContext;
 	}
 
 	/**

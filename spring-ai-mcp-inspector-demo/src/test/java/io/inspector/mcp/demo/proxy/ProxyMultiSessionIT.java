@@ -66,7 +66,7 @@ class ProxyMultiSessionIT {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
 
-	private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+	private static final HttpClient HTTP = ProxyAppHarness.httpClient(Duration.ofSeconds(5));
 
 	/** Per-request wall-clock budget. */
 	private static final Duration BUDGET = Duration.ofSeconds(20);

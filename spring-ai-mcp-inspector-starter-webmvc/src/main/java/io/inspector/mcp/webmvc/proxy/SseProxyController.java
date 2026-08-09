@@ -239,11 +239,16 @@ public class SseProxyController {
 			return emitter;
 		}
 
-		// target → browser pump
-		targetToBrowser.asFlux().subscribe((frame) -> sendMessageEvent(emitter, sessionId, frame), (err) -> {
-			LOG.warn("proxy[{}] target stream errored: {}", sessionId, err.toString());
-			emitter.completeWithError(err);
-		}, () -> emitter.complete());
+		// target → browser pump. takeUntilOther completes the emitter off the session's
+		// lock-free close signal: close() can fail to complete the sink itself whenever
+		// another thread owns it at that instant, and a never-completed emitter is
+		// exactly what makes Boot's graceful shutdown pay its full timeout.
+		targetToBrowser.asFlux()
+			.takeUntilOther(session.closeSignal())
+			.subscribe((frame) -> sendMessageEvent(emitter, sessionId, frame), (err) -> {
+				LOG.warn("proxy[{}] target stream errored: {}", sessionId, err.toString());
+				emitter.completeWithError(err);
+			}, () -> emitter.complete());
 
 		emitter.onCompletion(() -> this.registry.removeAndClose(sessionId));
 		emitter.onTimeout(() -> this.registry.removeAndClose(sessionId));

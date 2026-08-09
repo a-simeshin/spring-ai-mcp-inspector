@@ -16,6 +16,7 @@
 
 package io.inspector.mcp.webflux.router;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -38,6 +39,9 @@ import io.inspector.mcp.core.oauth.OAuthTokenResponse;
  * @author Artem Simeshin
  */
 final class SessionContext {
+
+	/** How long {@link #closeQuietly()} may spin waiting to win the sink's lock. */
+	private static final Duration COMPLETE_BUSY_LOOP = Duration.ofMillis(100);
 
 	private final McpSyncClient client;
 
@@ -125,25 +129,52 @@ final class SessionContext {
 		this.oauthToken = value;
 	}
 
+	/**
+	 * Releases the session: drops pending server requests, completes the
+	 * {@code /api/events} sink, then tears the loopback client down.
+	 *
+	 * <p>
+	 * Two details that used to be wrong here:
+	 *
+	 * <ul>
+	 * <li>{@code tryEmitComplete()} discarded its {@code EmitResult}. The sink is wrapped
+	 * in {@code SinkManySerialized}, which fails fast with {@code FAIL_NON_SERIALIZED}
+	 * whenever another thread is mid-emit — so a session broadcasting notifications when
+	 * shutdown began silently kept its SSE stream open. {@code emitComplete} with a
+	 * bounded busy-loop retries instead of giving up.</li>
+	 * <li>The {@code catch} around {@code closeGracefully()} was unreachable:
+	 * {@code McpSyncClient.closeGracefully()} blocks 10s, swallows
+	 * {@code RuntimeException}, logs "Client didn't close within timeout" and returns
+	 * {@code false}. Nothing ever forced {@code transport.close()}, so a wedged loopback
+	 * stream stayed open for the whole graceful phase — precisely the case the fallback
+	 * was written for. Branching on the returned {@code boolean} makes it reachable, and
+	 * {@code close()} really does force the transport down.</li>
+	 * </ul>
+	 */
 	void closeQuietly() {
 		this.pendingServerRequests.clear();
 		try {
-			this.sink.tryEmitComplete();
+			this.sink.emitComplete(Sinks.EmitFailureHandler.busyLooping(COMPLETE_BUSY_LOOP));
 		}
 		catch (final RuntimeException ignored) {
-			/* sink already terminated */
+			/* sink already terminated, or never won the serialization lock */
 		}
-		if (this.client != null) {
+		if (this.client == null) {
+			return;
+		}
+		boolean closed = false;
+		try {
+			closed = this.client.closeGracefully();
+		}
+		catch (final RuntimeException ignored) {
+			/* documented not to happen; forced below either way */
+		}
+		if (!closed) {
 			try {
-				this.client.closeGracefully();
+				this.client.close();
 			}
 			catch (final RuntimeException ignored) {
-				try {
-					this.client.close();
-				}
-				catch (final RuntimeException ignored2) {
-					/* best-effort */
-				}
+				/* best-effort */
 			}
 		}
 	}

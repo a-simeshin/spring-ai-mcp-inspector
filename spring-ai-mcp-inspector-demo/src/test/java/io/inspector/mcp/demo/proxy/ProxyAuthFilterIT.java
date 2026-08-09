@@ -52,7 +52,7 @@ class ProxyAuthFilterIT {
 
 	private static final String AUTH_TOKEN = "deadbeef-cafef00d-deadbeef-cafef00d";
 
-	private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+	private static final HttpClient HTTP = ProxyAppHarness.httpClient(Duration.ofSeconds(5));
 
 	private ConfigurableApplicationContext app;
 

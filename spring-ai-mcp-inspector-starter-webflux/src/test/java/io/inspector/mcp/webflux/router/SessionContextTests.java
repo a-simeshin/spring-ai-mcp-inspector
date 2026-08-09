@@ -149,6 +149,25 @@ class SessionContextTests {
 
 		@Test
 		@Story("Teardown")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("closeQuietly() forces close() when closeGracefully() reports failure. The SDK never "
+				+ "throws from closeGracefully() — it blocks 10s, logs 'Client didn't close within timeout' "
+				+ "and returns false — so branching on the exception alone left the wedged transport open "
+				+ "for the whole graceful phase")
+		void closeQuietly_whenGracefulCloseReportsFailure_forcesClose() {
+			// given
+			given(SessionContextTests.this.client.closeGracefully()).willReturn(false);
+
+			// when
+			SessionContextTests.this.context.closeQuietly();
+
+			// then
+			verify(SessionContextTests.this.client).closeGracefully();
+			verify(SessionContextTests.this.client).close();
+		}
+
+		@Test
+		@Story("Teardown")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("closeQuietly() falls back to close() when graceful shutdown throws")
 		void closeQuietly_whenGracefulCloseThrows_fallsBackToClose() {

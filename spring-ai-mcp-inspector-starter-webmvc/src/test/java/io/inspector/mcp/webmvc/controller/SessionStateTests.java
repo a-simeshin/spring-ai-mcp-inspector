@@ -34,8 +34,10 @@ import io.inspector.mcp.core.dto.RootDto;
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -146,7 +148,7 @@ class SessionStateTests {
 		@Test
 		@Story("Teardown")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("closeQuietly() clears pending requests and closes the client")
+		@Description("closeQuietly() clears pending requests and awaits the client teardown")
 		void closeQuietly_clearsPendingAndClosesClient() {
 			// given
 			SessionStateTests.this.state.pendingServerRequests().create("req-1");
@@ -154,9 +156,45 @@ class SessionStateTests {
 			// when
 			SessionStateTests.this.state.closeQuietly();
 
-			// then
+			// then — closeGracefully(), not close(): close() only dispatches the
+			// teardown, which then races Boot's graceful-shutdown phase
 			assertThat(SessionStateTests.this.state.pendingServerRequests().size()).isZero();
+			verify(SessionStateTests.this.client).closeGracefully();
+		}
+
+		@Test
+		@Story("Teardown")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("When closeGracefully() reports failure, close() is called to force the transport down. "
+				+ "McpSyncClient.closeGracefully() never throws — it blocks 10s, logs 'Client didn't close "
+				+ "within timeout' and returns false — so a catch block around it is unreachable and the "
+				+ "wedged transport that matters during shutdown was never forced closed")
+		void closeQuietly_whenGracefulCloseReportsFailure_forcesClose() {
+			// given
+			given(SessionStateTests.this.client.closeGracefully()).willReturn(false);
+
+			// when
+			SessionStateTests.this.state.closeQuietly();
+
+			// then
+			verify(SessionStateTests.this.client).closeGracefully();
 			verify(SessionStateTests.this.client).close();
+		}
+
+		@Test
+		@Story("Teardown")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("A successful graceful close does not also force close()")
+		void closeQuietly_whenGracefulCloseSucceeds_doesNotForceClose() {
+			// given
+			given(SessionStateTests.this.client.closeGracefully()).willReturn(true);
+
+			// when
+			SessionStateTests.this.state.closeQuietly();
+
+			// then
+			verify(SessionStateTests.this.client).closeGracefully();
+			verify(SessionStateTests.this.client, never()).close();
 		}
 
 		@Test
@@ -165,10 +203,12 @@ class SessionStateTests {
 		@Description("closeQuietly() swallows exceptions thrown while closing the client")
 		void closeQuietly_whenClientCloseThrows_swallowsException() {
 			// given
+			willThrow(new RuntimeException("boom")).given(SessionStateTests.this.client).closeGracefully();
 			willThrow(new RuntimeException("boom")).given(SessionStateTests.this.client).close();
 
 			// when / then — no exception escapes
 			SessionStateTests.this.state.closeQuietly();
+			verify(SessionStateTests.this.client).closeGracefully();
 			verify(SessionStateTests.this.client).close();
 		}
 

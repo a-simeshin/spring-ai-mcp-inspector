@@ -70,7 +70,7 @@ class ProxySseFlowIT {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
 
-	private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+	private static final HttpClient HTTP = ProxyAppHarness.httpClient(Duration.ofSeconds(5));
 
 	private ConfigurableApplicationContext app;
 

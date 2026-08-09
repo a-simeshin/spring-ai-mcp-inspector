@@ -786,6 +786,25 @@ class InspectorHandlerTests {
 
 		@Test
 		@Story("Terminate session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("ContextClosedEvent releases every live session, so Boot's graceful shutdown "
+				+ "does not wait on their loopback MCP clients")
+		void onContextClosed_closesEverySession() {
+			// given
+			final McpSyncClient client = connectedClient();
+			final String sessionId = openLoopbackSession(client);
+
+			// when
+			InspectorHandlerTests.this.handler.onContextClosed(new org.springframework.context.event.ContextClosedEvent(
+					new org.springframework.context.support.StaticApplicationContext()));
+
+			// then
+			assertThat(InspectorHandlerTests.this.handler.hasSession(sessionId)).isFalse();
+			verify(client).closeGracefully();
+		}
+
+		@Test
+		@Story("Terminate session")
 		@Severity(SeverityLevel.MINOR)
 		@Description("deleteSession() for an unknown id still returns 204 no content (idempotent)")
 		void deleteSession_whenUnknown_returnsNoContent() {
