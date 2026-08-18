@@ -17,6 +17,7 @@ on:
     branches:
       - main
       - 'develop/**'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -29,6 +30,9 @@ jobs:
   build:
     name: build (JDK ${{ matrix.java }})
     runs-on: ubuntu-latest
+    # The cap stops a wedged browser or a hung proxy session from burning the
+    # 6h GitHub default.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

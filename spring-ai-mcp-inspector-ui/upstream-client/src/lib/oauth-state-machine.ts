@@ -1,5 +1,9 @@
 import { OAuthStep, AuthDebuggerState } from "./auth-types";
-import { DebugInspectorOAuthClientProvider, discoverScopes } from "./auth";
+import {
+  DebugInspectorOAuthClientProvider,
+  discoverScopes,
+  toAbsoluteServerUrl,
+} from "./auth";
 import {
   discoverAuthorizationServerMetadata,
   registerClient,
@@ -33,7 +37,7 @@ export const oauthTransitions: Record<OAuthStep, StateTransition> = {
     canTransition: async () => true,
     execute: async (context) => {
       // Default to discovering from the server's URL
-      let authServerUrl = new URL("/", context.serverUrl);
+      let authServerUrl = new URL("/", toAbsoluteServerUrl(context.serverUrl));
       let resourceMetadata: OAuthProtectedResourceMetadata | null = null;
       let resourceMetadataError: Error | null = null;
       try {
@@ -221,7 +225,13 @@ export class OAuthStateMachine {
     private serverUrl: string,
     private updateState: (updates: Partial<AuthDebuggerState>) => void,
     private fetchFn?: typeof fetch,
-  ) {}
+  ) {
+    // [spring-ai-mcp-inspector PATCH] The inspector advertises its MCP endpoint as a
+    // same-origin relative path ("/sse"), and the SDK's selectResourceURL feeds it
+    // straight into `new URL(...)`, which throws "Invalid URL" on a relative string.
+    // Absolutize once here so every transition and every caller gets an absolute URL.
+    this.serverUrl = toAbsoluteServerUrl(serverUrl);
+  }
 
   async executeStep(state: AuthDebuggerState): Promise<void> {
     const provider = new DebugInspectorOAuthClientProvider(this.serverUrl);
