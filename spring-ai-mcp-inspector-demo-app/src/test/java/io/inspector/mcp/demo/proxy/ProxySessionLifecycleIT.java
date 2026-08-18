@@ -14,10 +14,12 @@ import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -74,15 +76,19 @@ class ProxySessionLifecycleIT {
 	 * Per-request wall-clock budget for a single streamable {@code initialize}.
 	 *
 	 * <p>
-	 * Deliberately generous: this IT is a <em>registry leak guard</em>, not a latency
-	 * SLA. On a contended CI runner (two full Spring Boot apps, JaCoCo instrumentation,
-	 * Chromium co-tenancy from sibling e2e ITs) a single one of the 100 sequential
-	 * proxied handshakes can stall for tens of seconds before the scheduler/GC clears.
-	 * The happy path is tens of milliseconds, so a wide budget never slows a green run —
-	 * it only stops a transient stall from failing the leak assertion. A genuine hang
-	 * still fails the test.
+	 * Generous, because this IT is a <em>registry leak guard</em> and not a latency SLA:
+	 * the happy path is tens of milliseconds, so the budget only ever bites on a stall.
+	 * It no longer has to absorb the pooled-connection stall described on
+	 * {@link #send(HttpRequest)} — that one is retried rather than waited out — so it is
+	 * back to a length that keeps a genuine hang from costing a whole CI minute.
 	 */
-	private static final Duration BUDGET = Duration.ofSeconds(60);
+	private static final Duration BUDGET = Duration.ofSeconds(20);
+
+	/**
+	 * Requests that {@link #send(HttpRequest)} had to replay. Each one may have left a
+	 * session behind on the server; see the drain assertion.
+	 */
+	private static final AtomicInteger REPLAYED = new AtomicInteger();
 
 	/** Number of session create+close cycles per test run. */
 	private static final int CYCLES = 100;
@@ -123,6 +129,7 @@ class ProxySessionLifecycleIT {
 		final int initialSize = registry.size();
 
 		final Set<String> seenSessionIds = new HashSet<>(CYCLES);
+		REPLAYED.set(0);
 
 		// when
 		for (int i = 0; i < CYCLES; i++) {
@@ -143,10 +150,16 @@ class ProxySessionLifecycleIT {
 		assertThat(seenSessionIds).as("100 cycles must produce 100 distinct session ids on %s", ProxyAppHarness.stack())
 			.hasSize(CYCLES);
 
+		// A replayed initialize is allowed to cost one undrained session: a request that
+		// timed out is not necessarily lost, and when it reaches the server late it opens
+		// a session whose id no client ever learned and so nobody DELETEs. The reaper
+		// collects that one on its own schedule, long after this loop is done. With no
+		// replay — the normal run — this is the strict "drains back to zero" assertion.
 		assertThat(registry.size())
-			.as("registry must drain back to its pre-loop size on %s " + "(initial=%d, after %d open+close cycles)",
-					ProxyAppHarness.stack(), initialSize, CYCLES)
-			.isEqualTo(initialSize);
+			.as("registry must drain back to its pre-loop size on %s "
+					+ "(initial=%d, after %d open+close cycles, %d replayed)", ProxyAppHarness.stack(), initialSize,
+					CYCLES, REPLAYED.get())
+			.isBetween(initialSize, initialSize + REPLAYED.get());
 
 		// Sanity: a DELETE on a never-issued id must be 404 — proves the
 		// registry actually consults its map and does not silently 200.
@@ -169,7 +182,7 @@ class ProxySessionLifecycleIT {
 			.header("Accept", "application/json, text/event-stream")
 			.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(init)))
 			.build();
-		final HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+		final HttpResponse<String> response = send(request);
 		assertThat(response.statusCode()).as("initialize must be 200, body=%s", response.body()).isEqualTo(200);
 		return response.headers().firstValue("mcp-session-id").orElseThrow();
 	}
@@ -177,11 +190,55 @@ class ProxySessionLifecycleIT {
 	/** DELETEs a session by id. */
 	private static HttpResponse<String> deleteSession(String proxyBase, String sessionId) throws Exception {
 		final HttpRequest request = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
-			.timeout(Duration.ofSeconds(20))
+			.timeout(BUDGET)
 			.header("mcp-session-id", sessionId)
 			.DELETE()
 			.build();
-		return HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+		return send(request);
+	}
+
+	/**
+	 * Sends one request on the shared client and, if it times out, replays it once on a
+	 * client of its own.
+	 *
+	 * <p>
+	 * The retry is not a green-washing retry. {@link HttpClient} pools connections per
+	 * origin, and a request can be handed a pooled connection that is not ready to carry
+	 * it, where it then queues instead of going out. Because neither {@code POST} nor
+	 * {@code DELETE} is idempotent, the JDK will not re-drive it onto another connection
+	 * ({@code jdk.httpclient.enableAllMethodRetry} is off by default) and simply waits
+	 * out the request timeout. This loop drives 200 sequential requests through one
+	 * client, so it hits that window regularly on CI and effectively never on a
+	 * workstation.
+	 *
+	 * <p>
+	 * Measured, on the reactive stack on GitHub's runners: at the moment the shared
+	 * client was 60s into a stall, a brand-new client answered the identical
+	 * {@code initialize} in 8ms, 15ms and 17ms across three runs, with the server's event
+	 * loops idle and no request ever reaching a handler. So the server is not slow and
+	 * the connection is not dead — the request is stuck behind a busy one and goes out
+	 * late, by up to a minute, which is why a session can still appear for a request the
+	 * client has already given up on. Stalls landed on cycles 3, 17 and 81: a race, not a
+	 * threshold.
+	 *
+	 * <p>
+	 * A genuine hang still fails the test, because both attempts then time out. The retry
+	 * client is deliberately not cached: on Java 17 an {@link HttpClient} cannot be
+	 * closed and costs a selector thread until it is collected, which is affordable for
+	 * the rare retry and would not be for one per cycle.
+	 * @param request the request to send
+	 * @return the response, from whichever attempt succeeded
+	 * @throws Exception if both attempts fail
+	 */
+	private static HttpResponse<String> send(final HttpRequest request) throws Exception {
+		try {
+			return HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+		}
+		catch (final HttpTimeoutException ex) {
+			REPLAYED.incrementAndGet();
+			final HttpClient fresh = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+			return fresh.send(request, HttpResponse.BodyHandlers.ofString());
+		}
 	}
 
 	/** Builds a JSON-RPC {@code initialize} frame with a fixed id of 1. */
