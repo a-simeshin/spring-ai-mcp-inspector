@@ -236,7 +236,9 @@ class ProxySessionLifecycleIT {
 		}
 		catch (final HttpTimeoutException ex) {
 			REPLAYED.incrementAndGet();
-			final HttpClient fresh = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+			// Built the same way as HTTP, so the replay differs from the original in
+			// exactly one respect — a connection pool of its own.
+			final HttpClient fresh = ProxyAppHarness.httpClient(Duration.ofSeconds(10));
 			return fresh.send(request, HttpResponse.BodyHandlers.ofString());
 		}
 	}
