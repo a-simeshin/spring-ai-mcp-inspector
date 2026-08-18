@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -83,6 +84,12 @@ class ProxySessionLifecycleIT {
 	 */
 	private static final Duration BUDGET = Duration.ofSeconds(20);
 
+	/**
+	 * Requests that {@link #send(HttpRequest)} had to replay. Each one may have left a
+	 * session behind on the server; see the drain assertion.
+	 */
+	private static final AtomicInteger REPLAYED = new AtomicInteger();
+
 	/** Number of session create+close cycles per test run. */
 	private static final int CYCLES = 100;
 
@@ -122,6 +129,7 @@ class ProxySessionLifecycleIT {
 		final int initialSize = registry.size();
 
 		final Set<String> seenSessionIds = new HashSet<>(CYCLES);
+		REPLAYED.set(0);
 
 		// when
 		for (int i = 0; i < CYCLES; i++) {
@@ -142,10 +150,17 @@ class ProxySessionLifecycleIT {
 		assertThat(seenSessionIds).as("100 cycles must produce 100 distinct session ids on %s", ProxyAppHarness.stack())
 			.hasSize(CYCLES);
 
+		// A replayed initialize is allowed to cost one undrained session. The request
+		// that
+		// timed out is not necessarily lost: it can still reach the server late, which
+		// then opens a session whose id no client ever learned and so nobody DELETEs. The
+		// reaper collects it on its own schedule, long after this loop is done. With no
+		// replay — the normal run — this is the strict "drains back to zero" assertion.
 		assertThat(registry.size())
-			.as("registry must drain back to its pre-loop size on %s " + "(initial=%d, after %d open+close cycles)",
-					ProxyAppHarness.stack(), initialSize, CYCLES)
-			.isEqualTo(initialSize);
+			.as("registry must drain back to its pre-loop size on %s "
+					+ "(initial=%d, after %d open+close cycles, %d replayed)", ProxyAppHarness.stack(), initialSize,
+					CYCLES, REPLAYED.get())
+			.isBetween(initialSize, initialSize + REPLAYED.get());
 
 		// Sanity: a DELETE on a never-issued id must be 404 — proves the
 		// registry actually consults its map and does not silently 200.
@@ -219,6 +234,7 @@ class ProxySessionLifecycleIT {
 			return HTTP.send(request, HttpResponse.BodyHandlers.ofString());
 		}
 		catch (final HttpTimeoutException ex) {
+			REPLAYED.incrementAndGet();
 			final HttpClient fresh = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 			return fresh.send(request, HttpResponse.BodyHandlers.ofString());
 		}
