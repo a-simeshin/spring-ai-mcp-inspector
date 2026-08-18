@@ -1,12 +1,36 @@
 name: CI
 
-# Build + test gate for the development branches. Runs the full `mvn verify`
-# (unit + integration tests and the quality gates: spring-javaformat, checkstyle,
-# SpotBugs and the JaCoCo coverage check) so breakages surface per-commit rather
-# than only at release time.
+# Build + test gate for main and the development branches. release.yml deploys
+# with `-DskipTests`, so this workflow is the only place tests run at all.
 #
-# The 2.x line (Spring Boot 4 / Spring AI 2.0) is proven on both the Java 17
-# baseline and the recommended Java 21; the 1.x maintenance line only needs 17.
+# Three jobs, because the demo needs a browser and the rest of the reactor does
+# not, and because each web stack needs a classpath of its own:
+#   * `build`       — reactor minus both stack demo modules. The required check.
+#                     It keeps `-demo-app` (no web stack, `skipITs`), so the
+#                     shared proxy ITs still compile there. Runs on both the
+#                     Java 17 baseline and the recommended Java 21.
+#   * `e2e-webmvc`  — reactor minus `-demo-webflux`: servlet stack only.
+#   * `e2e-webflux` — reactor minus `-demo-webmvc`: reactive stack only.
+#
+# The two stacks must never meet on one classpath. With spring-boot-starter-web
+# present, Boot's ReactiveWebServerFactoryAutoConfiguration imports the embedded
+# Tomcat factory before the Netty one, so a module that can see both silently
+# runs every "reactive" row on Tomcat-reactive — the old single demo module did
+# exactly that, and no `spring.autoconfigure.exclude` list ever fixed it.
+# Separate modules make the classpath, not a property, decide the stack.
+#
+# Both e2e jobs run on every PR too: the demo is where the real breakages hide.
+# They also re-run the shared proxy ITs from the `-demo-app` test-jar, once per
+# stack, via Failsafe's `dependenciesToScan`.
+#
+# The JDK matrix rides on `build` only. `maven.compiler.release` is 17 across
+# every module, so the 21 leg is a compatibility signal for the library code —
+# the browser E2E suite exercises Selenide and Chrome, not the JDK, and running
+# it twice would double the slowest job for no extra signal.
+#
+# `push` is deliberately scoped to main + develop/**: a topic-branch PR then
+# triggers each job exactly once (no push/pull_request double billing), and the
+# post-merge push run is the full-suite pass.
 
 on:
   push:
@@ -30,9 +54,9 @@ jobs:
   build:
     name: build (JDK ${{ matrix.java }})
     runs-on: ubuntu-latest
-    # The cap stops a wedged browser or a hung proxy session from burning the
-    # 6h GitHub default.
-    timeout-minutes: 30
+    # The library reactor is the cheap half of the build; 45 min is far past any
+    # honest run and only catches a hang.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -41,11 +65,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Selenide UI integration tests (InspectorUiIT, UiBigDataIT) and the -Pe2e
-      # E2E tests drive a real browser via WebDriverManager; provide one.
-      - name: Set up Chrome
-        uses: browser-actions/setup-chrome@v1
-
       - name: Set up JDK ${{ matrix.java }}
         uses: actions/setup-java@v4
         with:
@@ -53,5 +72,63 @@ jobs:
           java-version: ${{ matrix.java }}
           cache: maven
 
+      # Unit + integration tests and the quality gates (spring-javaformat,
+      # checkstyle, SpotBugs, JaCoCo coverage). Both stack demo modules are
+      # excluded — their browser E2E runs in the two `e2e-*` jobs below. No
+      # Chrome step: nothing left in this reactor drives a browser.
       - name: Build, test and gates
-        run: ./mvnw -B -ntp verify
+        run: >-
+          ./mvnw -B -ntp verify
+          -pl '!:spring-ai-mcp-inspector-demo-webmvc,!:spring-ai-mcp-inspector-demo-webflux'
+
+  e2e-webmvc:
+    name: demo E2E webmvc (JDK 17)
+    runs-on: ubuntu-latest
+    # The full pre-split verify measured 22-24 min on a 2-vCPU runner and 22:22
+    # locally with a warm cache; this job is most of that plus a browser. 45 min
+    # leaves real headroom while still stopping a wedged browser or a hung proxy
+    # session from burning the 6h GitHub default.
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Selenide UI integration tests (InspectorUiIT, UiBigDataIT) and the
+      # `*E2ETest` suite drive a real browser via WebDriverManager; provide one.
+      - name: Set up Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Build and test the servlet reactor
+        run: ./mvnw -B -ntp verify -pl '!:spring-ai-mcp-inspector-demo-webflux'
+
+  e2e-webflux:
+    name: demo E2E webflux (JDK 17)
+    runs-on: ubuntu-latest
+    # Same cap as the servlet job; a hung reactive loopback session is the
+    # failure mode this guards against.
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The reactive demo carries a Selenide smoke IT of its own, so this job
+      # needs a browser too.
+      - name: Set up Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Build and test the reactive reactor
+        run: ./mvnw -B -ntp verify -pl '!:spring-ai-mcp-inspector-demo-webmvc'

@@ -20,8 +20,18 @@ spring-ai-mcp-inspector-core              # transport-agnostic core: properties,
 spring-ai-mcp-inspector-starter-webmvc    # Spring Boot starter (servlet stack)
 spring-ai-mcp-inspector-starter-webflux   # Spring Boot starter (reactive stack)
 spring-ai-mcp-inspector-ui                # Vendored upstream React/Vite bundle
-spring-ai-mcp-inspector-demo              # Runnable demo application
+spring-ai-mcp-inspector-demo-app          # Demo MCP server (tools/resources/prompts), no web stack
+spring-ai-mcp-inspector-demo-webmvc       # Demo on the servlet stack — the runnable jar
+spring-ai-mcp-inspector-demo-webflux      # Demo on the reactive stack
 ```
+
+The demo is three modules on purpose. The two web stacks must never share a
+classpath: with `spring-boot-starter-web` present, Boot's
+`ReactiveWebServerFactoryAutoConfiguration` picks the embedded Tomcat factory
+before the Netty one, so anything "reactive" quietly runs on Tomcat-reactive.
+`-demo-app` carries the application plus the stack-agnostic proxy integration
+tests (published as a test-jar); each stack module adds exactly one starter and
+re-runs those shared tests through Failsafe's `dependenciesToScan`.
 
 ## Building
 
@@ -64,11 +74,13 @@ starter modules.
 ### End-to-end (Selenide)
 
 ```
-./mvnw verify -pl spring-ai-mcp-inspector-demo
+./mvnw verify -pl spring-ai-mcp-inspector-demo-webmvc,spring-ai-mcp-inspector-demo-webflux -am
 ```
 
 Runs the demo on a random port and drives a real Chromium browser through the
-inspector UI. Live in `*E2ETest.java` files under the demo module.
+inspector UI. Live in `*E2ETest.java` files under the demo stack modules. Each
+of the two also re-runs the shared proxy integration tests from the
+`-demo-app` test-jar, so those get exercised once per web stack.
 
 ### Code coverage — mandatory ≥ 80%
 
@@ -79,7 +91,7 @@ threshold fails `./mvnw verify`.
 - **Threshold:** ≥ **80%** for **LINE**, **BRANCH**, and **INSTRUCTION**.
 - **Per module** (`<element>BUNDLE</element>`): `spring-ai-mcp-inspector-core`,
   `spring-ai-mcp-inspector-starter-webmvc`, `spring-ai-mcp-inspector-starter-webflux`.
-  (`-demo` and `-ui` opt out via `jacoco.skip`.)
+  (`-demo-*` and `-ui` opt out via `jacoco.skip`.)
 - **Unit tests only.** The gate reads `target/jacoco-unit.exec` (the Surefire
   run). Integration tests write a separate `jacoco-it.exec` that is **not**
   counted — coverage must be earned with real unit tests, not integration tests.
@@ -110,13 +122,16 @@ Mirror the existing test classes.
 ## Running the demo manually
 
 ```
-./mvnw -pl spring-ai-mcp-inspector-demo package -DskipTests
-java -jar spring-ai-mcp-inspector-demo/target/spring-ai-mcp-inspector-demo-*-exec.jar \
+./mvnw -pl spring-ai-mcp-inspector-demo-webmvc -am package -DskipTests
+java -jar spring-ai-mcp-inspector-demo-webmvc/target/spring-ai-mcp-inspector-demo-webmvc-*-exec.jar \
     --spring.profiles.active=streamable
 ```
 
-Available profiles: `stdio`, `sse`, `streamable`, `stateless`. Open
-`http://localhost:8080/mcp-inspector/` after startup.
+Available Spring profiles: `stdio`, `sse`, `streamable`, `stateless`. Open
+`http://localhost:8080/mcp-inspector/` after startup. The web stack is chosen by
+which module you build, not by a Maven profile — `-demo-webmvc` is the only one
+packaged as an executable jar; exercise the reactive stack through
+`./mvnw verify -pl spring-ai-mcp-inspector-demo-webflux -am`.
 
 ## Code style
 
@@ -166,7 +181,7 @@ Run it on its own:
 ./mvnw checkstyle:check -Dcheckstyle.failOnViolation=false   # list without failing
 ```
 
-`-demo` and `-ui` opt out via `<checkstyle.skip>true</checkstyle.skip>`. Test
+`-demo-*` and `-ui` opt out via `<checkstyle.skip>true</checkstyle.skip>`. Test
 classes are named `*Tests.java` (Spring convention); integration tests are
 `*IT.java`, end-to-end `*E2ETest.java`.
 
@@ -191,7 +206,7 @@ Run it on its own:
 ./mvnw -pl spring-ai-mcp-inspector-core spotbugs:gui             # browse findings
 ```
 
-Tests are not scanned (`includeTests=false`); `-demo` and `-ui` opt out via
+Tests are not scanned (`includeTests=false`); `-demo-*` and `-ui` opt out via
 `<spotbugs.skip>true</spotbugs.skip>`.
 
 ## Submitting changes

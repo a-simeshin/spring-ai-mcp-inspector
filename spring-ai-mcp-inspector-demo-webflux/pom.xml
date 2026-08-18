@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.a-simeshin</groupId>
+        <artifactId>spring-ai-mcp-inspector-parent</artifactId>
+        <version>2.0.0</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>spring-ai-mcp-inspector-demo-webflux</artifactId>
+    <packaging>jar</packaging>
+    <name>spring-ai-mcp-inspector-demo-webflux</name>
+    <description>The demo MCP server on the reactive stack: spring-ai-mcp-inspector-demo-app plus
+        exactly one web stack (spring-boot-starter-webflux) and the webflux inspector starter.
+        Carries the reactive loopback ITs and a browser smoke test. The servlet stack must never
+        appear on this classpath at any scope — that isolation is the reason this module exists.</description>
+
+    <properties>
+        <!-- Demo modules are example code, not published artifacts. -->
+        <jacoco.skip>true</jacoco.skip>
+        <checkstyle.skip>true</checkstyle.skip>
+        <spotbugs.skip>true</spotbugs.skip>
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.source.skip>true</maven.source.skip>
+        <maven.javadoc.skip>true</maven.javadoc.skip>
+        <gpg.skip>true</gpg.skip>
+    </properties>
+
+    <dependencies>
+        <!-- The demo application itself: entry point, tools, resources, prompts. -->
+        <dependency>
+            <groupId>io.github.a-simeshin</groupId>
+            <artifactId>spring-ai-mcp-inspector-demo-app</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!--
+            The one web stack this module is allowed to see. With
+            spring-boot-starter-web also present, Boot's
+            ReactiveWebServerFactoryAutoConfiguration imports EmbeddedTomcat before
+            EmbeddedNetty and every "reactive" test would silently run on
+            Tomcat-reactive instead — the bug this module split exists to kill.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-server-webflux</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.a-simeshin</groupId>
+            <artifactId>spring-ai-mcp-inspector-starter-webflux</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!--
+            The demo-app test-jar carries the stack-agnostic proxy ITs and their
+            harness. It is on the test classpath so Failsafe can scan it (see
+            <dependenciesToScan> below) and run that shared suite against the
+            reactive stack.
+        -->
+        <dependency>
+            <groupId>io.github.a-simeshin</groupId>
+            <artifactId>spring-ai-mcp-inspector-demo-app</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Selenide + WebDriverManager drive the browser smoke test; versions from the root pom. -->
+        <dependency>
+            <groupId>com.codeborne</groupId>
+            <artifactId>selenide</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.github.bonigarcia</groupId>
+            <artifactId>webdrivermanager</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Allure (project test standard); version aligned via allure-bom imported in the root pom -->
+        <dependency>
+            <groupId>io.qameta.allure</groupId>
+            <artifactId>allure-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+            <version>${aspectj.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+                No spring-boot-maven-plugin here on purpose: only the servlet module
+                produces the exec jar that the STDIO E2E case launches.
+
+                The shared proxy ITs live in the demo-app test-jar rather than here, so
+                Failsafe would not find them by scanning this module's own test classes.
+                dependenciesToScan makes it look inside that jar, which is how one copy
+                of every proxy IT ends up running twice — once per stack module — with
+                no duplicated sources. Everything else (includes, argLine, system
+                properties) must keep inheriting from the root pom.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <dependenciesToScan>
+                        <dependency>io.github.a-simeshin:spring-ai-mcp-inspector-demo-app</dependency>
+                    </dependenciesToScan>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

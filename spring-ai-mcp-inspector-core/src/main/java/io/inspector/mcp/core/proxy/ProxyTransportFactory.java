@@ -19,6 +19,9 @@ package io.inspector.mcp.core.proxy;
 import java.net.URI;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
@@ -48,6 +51,35 @@ import tools.jackson.databind.json.JsonMapper;
  * @author Artem Simeshin
  */
 public class ProxyTransportFactory {
+
+	/** Names the threads of {@link #SHARED_HTTP_EXECUTOR}. Must stay declared first. */
+	private static final AtomicLong THREAD_SEQ = new AtomicLong();
+
+	/**
+	 * One executor shared by every HTTP transport this factory builds.
+	 *
+	 * <p>
+	 * The MCP SDK's builders take an {@link java.net.http.HttpClient.Builder}, never a
+	 * finished client, so each proxy session gets an {@link java.net.http.HttpClient} of
+	 * its own — and on Java 17 an {@code HttpClient} has no {@code close()}: its selector
+	 * and its private worker pool live until the instance is garbage collected. Left
+	 * alone, each session therefore costs about five threads that outlive it. A hundred
+	 * open/close cycles on a two-core Linux runner reached 120 of the JVM's 154 threads
+	 * and wedged the proxy well before the loop finished (measured on
+	 * {@code ProxySessionLifecycleIT}); the same loop on a developer laptop never
+	 * noticed, because the sessions were reclaimed faster than they piled up.
+	 *
+	 * <p>
+	 * Handing every client the same executor collapses that to one selector thread per
+	 * session, which the JVM can carry until GC catches up. The threads are daemons so a
+	 * lingering client cannot hold up JVM exit, and the pool is cached so it shrinks back
+	 * on its own once the sessions are gone.
+	 */
+	private static final Executor SHARED_HTTP_EXECUTOR = Executors.newCachedThreadPool((runnable) -> {
+		final Thread thread = new Thread(runnable, "mcp-inspector-proxy-http-" + THREAD_SEQ.incrementAndGet());
+		thread.setDaemon(true);
+		return thread;
+	});
 
 	private final JsonMapper objectMapper;
 
@@ -98,7 +130,8 @@ public class ProxyTransportFactory {
 				: sseUri.getRawPath();
 		final HttpClientSseClientTransport.Builder builder = HttpClientSseClientTransport.builder(baseUri)
 			.sseEndpoint(ssePath)
-			.messageEndpointValidator(noopValidator());
+			.messageEndpointValidator(noopValidator())
+			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR));
 		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(authorization, customHeaders);
 		if (customizer != null) {
 			builder.httpRequestCustomizer(customizer);
@@ -141,7 +174,8 @@ public class ProxyTransportFactory {
 		final String path = (mcpUri.getRawPath() == null || mcpUri.getRawPath().isBlank()) ? "/mcp"
 				: mcpUri.getRawPath();
 		final HttpClientStreamableHttpTransport.Builder builder = HttpClientStreamableHttpTransport.builder(baseUri)
-			.endpoint(path);
+			.endpoint(path)
+			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR));
 		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(authorization, customHeaders);
 		if (customizer != null) {
 			builder.httpRequestCustomizer(customizer);

@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.a-simeshin</groupId>
+        <artifactId>spring-ai-mcp-inspector-parent</artifactId>
+        <version>2.0.0</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>spring-ai-mcp-inspector-demo-app</artifactId>
+    <packaging>jar</packaging>
+    <name>spring-ai-mcp-inspector-demo-app</name>
+    <description>The demo MCP server itself — tools, resources, prompts and the Boot entry point —
+        with no web stack of its own. spring-ai-mcp-inspector-demo-webmvc and -demo-webflux each add
+        exactly one stack, so neither ever sees the other's autoconfiguration. Also publishes a
+        test-jar carrying the stack-agnostic proxy ITs both of them run.</description>
+
+    <properties>
+        <!-- Demo modules are example code, not published artifacts. -->
+        <jacoco.skip>true</jacoco.skip>
+        <checkstyle.skip>true</checkstyle.skip>
+        <spotbugs.skip>true</spotbugs.skip>
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <maven.source.skip>true</maven.source.skip>
+        <maven.javadoc.skip>true</maven.javadoc.skip>
+        <gpg.skip>true</gpg.skip>
+        <!--
+            Failsafe is bound in the parent's active <plugins>, so without this it would
+            run this module's own *IT.java here — on a classpath that deliberately has no
+            web server and no inspector starter, where every one of them fails on the
+            first boot. These ITs exist to be compiled and published in the test-jar;
+            demo-webmvc and demo-webflux execute them through <dependenciesToScan>, once
+            per stack. Not maven.test.skip: that would stop test compilation and leave the
+            test-jar empty.
+        -->
+        <skipITs>true</skipITs>
+    </properties>
+
+    <dependencies>
+        <!-- Always-on Spring Boot core dependencies -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+
+        <!-- MCP SDK: transport and client API, used by the app and by the shared ITs. -->
+        <dependency>
+            <groupId>io.modelcontextprotocol.sdk</groupId>
+            <artifactId>mcp-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.modelcontextprotocol.sdk</groupId>
+            <artifactId>mcp-json-jackson3</artifactId>
+        </dependency>
+
+        <!--
+            The stack-free MCP server starter. It brings mcp-annotations (@McpTool and
+            friends) so the providers compile here, without dragging in a servlet or a
+            reactive container — which is the whole point of this module.
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-server</artifactId>
+        </dependency>
+
+        <!--
+            Test scope. These are compile-scope FOR THE TEST SOURCES of this module,
+            which are published as a test-jar and consumed by both stack modules — so
+            every dependency the shared ITs touch has to be declared here too.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.github.a-simeshin</groupId>
+            <artifactId>spring-ai-mcp-inspector-core</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!--
+            ProxyAppHarness reads the random port off WebServerApplicationContext. Boot 4
+            moved that interface out of the spring-boot jar into this one, which carries
+            the web-server abstraction only — no Tomcat, no Netty, nothing that could
+            decide a stack here. Compiling the shared ITs needs it; running them still
+            needs a real server, which only the stack modules supply.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-web-server</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Allure (project test standard); version aligned via allure-bom imported in the root pom -->
+        <dependency>
+            <groupId>io.qameta.allure</groupId>
+            <artifactId>allure-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.aspectj</groupId>
+            <artifactId>aspectjweaver</artifactId>
+            <version>${aspectj.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            Browser driving. This module boots no web server, so nothing here opens a
+            page during its own build — InspectorUiSmokeIT ships in the test-jar and runs
+            inside demo-webmvc and demo-webflux, which is exactly why the dependency has
+            to be declared here: the test sources have to compile against it. Versions
+            come from the parent's dependencyManagement so all three demo modules drive
+            the same browser stack.
+        -->
+        <dependency>
+            <groupId>com.codeborne</groupId>
+            <artifactId>selenide</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.github.bonigarcia</groupId>
+            <artifactId>webdrivermanager</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+                The proxy ITs live in src/test and are shared by both stack modules, so
+                they ship as a test-jar. One copy of the logic, executed once per stack.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>test-jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
