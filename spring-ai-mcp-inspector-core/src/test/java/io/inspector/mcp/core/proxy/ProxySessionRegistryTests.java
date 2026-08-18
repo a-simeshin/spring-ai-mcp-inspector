@@ -351,4 +351,30 @@ class ProxySessionRegistryTests {
 
 	}
 
+	@Nested
+	@DisplayName("post-shutdown registration")
+	class AfterCloseAll {
+
+		@Test
+		@Story("Shutdown ordering")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A session registered after the shutdown sweep is closed immediately instead of being "
+				+ "silently kept — a GET /sse still connecting upstream when ContextClosedEvent fires used to "
+				+ "land in the map afterwards and hold its stream open for the whole graceful phase")
+		void put_afterCloseAll_closesTheLateSessionAndDoesNotRegisterIt() {
+			// given
+			ProxySessionRegistryTests.this.registry.closeAll();
+			final ProxySession late = sessionWith("late", mockTransport());
+
+			// when
+			ProxySessionRegistryTests.this.registry.put(late);
+
+			// then
+			assertThat(late.isClosed()).as("late session closed on arrival").isTrue();
+			assertThat(ProxySessionRegistryTests.this.registry.size()).as("late session not registered").isZero();
+			assertThat(ProxySessionRegistryTests.this.registry.get("late")).isNull();
+		}
+
+	}
+
 }

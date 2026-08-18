@@ -137,6 +137,24 @@ class InspectorSseEmitterRegistryTests {
 			assertThat(registry.size()).isZero();
 		}
 
+		@Test
+		@Story("Teardown")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("closeAll() completes and removes every emitter — the shutdown path")
+		void closeAllRemovesEveryEmitter() {
+			// given
+			final InspectorSseEmitterRegistry registry = new InspectorSseEmitterRegistry();
+			registry.register("s1");
+			registry.register("s2");
+			assertThat(registry.size()).isEqualTo(2);
+
+			// when
+			registry.closeAll();
+
+			// then
+			assertThat(registry.size()).isZero();
+		}
+
 	}
 
 }

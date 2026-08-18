@@ -340,7 +340,9 @@ public class ProxyHandler {
 			.data(contextPath + proxyBase + "/message?sessionId=" + sessionId)
 			.build();
 
-		final var flux = targetToBrowser.asFlux().map((frame) -> {
+		// takeUntilOther: the stream ends when the session closes, whether or not
+		// close() managed to complete the sink (it cannot when another thread owns it).
+		final var flux = targetToBrowser.asFlux().takeUntilOther(session.closeSignal()).map((frame) -> {
 			try {
 				return ServerSentEvent.<String>builder()
 					.event("message")
@@ -598,7 +600,8 @@ public class ProxyHandler {
 			return ServerResponse.status(HttpStatus.NOT_FOUND)
 				.bodyValue(Map.of("error", "unknown mcp-session-id: " + mcpSessionId));
 		}
-		final var flux = session.targetToBrowser().asFlux().map((frame) -> {
+		// takeUntilOther: see openProxiedSession — the sink's own completion can be lost.
+		final var flux = session.targetToBrowser().asFlux().takeUntilOther(session.closeSignal()).map((frame) -> {
 			try {
 				return ServerSentEvent.<String>builder()
 					.event("message")

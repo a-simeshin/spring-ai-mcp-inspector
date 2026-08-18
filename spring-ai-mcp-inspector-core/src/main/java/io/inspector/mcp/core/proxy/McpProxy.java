@@ -78,7 +78,10 @@ public final class McpProxy {
 	public Mono<Void> start(final ProxySession session) {
 		// Browser → target: every frame the controllers push into browserToTarget
 		// is deserialized then forwarded to the upstream transport.
-		session.browserToTarget().asFlux().flatMap((frame) -> {
+		// takeUntilOther: close() may fail to complete the sink if another thread owns
+		// it at that instant, so the pump is unsubscribed off the session's lock-free
+		// close signal instead of trusting the sink's terminal event to arrive.
+		session.browserToTarget().asFlux().takeUntilOther(session.closeSignal()).flatMap((frame) -> {
 			final JSONRPCMessage typed = toTyped(frame);
 			if (typed == null) {
 				return Mono.empty();

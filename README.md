@@ -276,6 +276,42 @@ spring:
           server-request: 5m
 ```
 
+### Graceful shutdown
+
+Boot defaults `server.shutdown` to `graceful`, which blocks context close until every
+in-flight request finishes or `spring.lifecycle.timeout-per-shutdown-phase` expires. A live
+MCP session pins an inbound request open and never finishes on its own, so an application
+with the inspector attached used to pay that timeout in full on every shutdown.
+
+The inspector releases its own streams at the start of context close. It also closes the
+host application's MCP server transport provider there, because spring-ai leaves that to
+bean destruction — which happens after the graceful wait has already been paid, so the
+session that caused the wait is released too late to shorten it.
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `spring.ai.mcp.inspector.shutdown.close-mcp-server-transports` | `true` | Close the MCP server transport provider on `ContextClosedEvent` instead of at bean destruction. |
+
+**The default has a cost worth knowing about.** Closing the provider early terminates the
+server's MCP sessions, so an MCP tool call that is still streaming its response when
+shutdown begins is cut short, where today it would get the whole graceful window to
+finish. For the case that actually occurs — an idle listening stream, which can never
+drain by itself and only ever burns the timeout — the trade is clearly worth it, which is
+why it is on. If your tools legitimately run for tens of seconds and you would rather pay
+the timeout than cut them off:
+
+```yaml
+spring:
+  ai:
+    mcp:
+      inspector:
+        shutdown:
+          close-mcp-server-transports: false
+```
+
+The setting only exists where the inspector does: no application gets this behaviour
+merely by having spring-ai on the classpath.
+
 ## Customizing the inspector bootstrap
 
 When the inspector serves `index.html` it injects a single inline
