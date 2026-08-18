@@ -50,7 +50,7 @@ class ProxyHealthEndpointIT {
 
 	private static final JsonMapper MAPPER = new JsonMapper();
 
-	private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+	private static final HttpClient HTTP = ProxyAppHarness.httpClient(Duration.ofSeconds(5));
 
 	private ConfigurableApplicationContext app;
 

@@ -18,6 +18,8 @@ package io.inspector.mcp.webflux;
 
 import java.util.List;
 
+import io.modelcontextprotocol.spec.McpServerTransportProviderBase;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -42,6 +44,7 @@ import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.shutdown.McpServerTransportDrain;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.webflux.filter.InspectorAuthWebFilter;
 import io.inspector.mcp.webflux.proxy.ProxyAuthWebFilter;
@@ -161,6 +164,27 @@ public class McpInspectorWebFluxAutoConfiguration {
 		final ProxySessionRegistry registry = new ProxySessionRegistry();
 		registry.setInactivityBudget(properties.getTimeouts().getSessionReaper());
 		return registry;
+	}
+
+	/**
+	 * Closes the host's MCP server transport provider before Boot's graceful-shutdown
+	 * phase starts waiting — see {@link McpServerTransportDrain} for why spring-ai's own
+	 * teardown is too late. A no-op when the application runs no MCP server of its own,
+	 * or when {@code spring.ai.mcp.inspector.shutdown.close-mcp-server-transports=false}.
+	 *
+	 * <p>
+	 * The switch is read from the bound properties rather than gating the bean with
+	 * {@code @ConditionalOnProperty}, so the accessor is the single source of truth
+	 * instead of a field that quietly does nothing.
+	 * @param providers the MCP server transport providers in this context, if any
+	 * @param properties the inspector properties carrying the shutdown switch
+	 * @return the shutdown listener
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	public McpServerTransportDrain mcpInspectorServerTransportDrain(
+			final ObjectProvider<McpServerTransportProviderBase> providers, final McpInspectorProperties properties) {
+		return new McpServerTransportDrain(providers, properties);
 	}
 
 	@Bean

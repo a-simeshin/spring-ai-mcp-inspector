@@ -339,6 +339,24 @@ class InspectorHandlerTests {
 	class Connect {
 
 		@Test
+		@Story("Management server guard")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A WebServerInitializedEvent from the management context does not overwrite the loopback port")
+		void onWebServerStarted_withManagementNamespace_isIgnored() {
+			// given — the actuator's own server reports port 9999
+			final WebServerInitializedEvent event = webServerStartedEvent(9999);
+			final WebServerApplicationContext context = mock(WebServerApplicationContext.class);
+			given(context.getServerNamespace()).willReturn("management");
+			given(event.getApplicationContext()).willReturn(context);
+
+			// when
+			InspectorHandlerTests.this.handler.onWebServerStarted(event);
+
+			// then — the port stays unset
+			assertThat(InspectorHandlerTests.this.handler.listeningPort()).isEqualTo(-1);
+		}
+
+		@Test
 		@Story("Open session")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("connect() builds a loopback client, initializes it, registers a session and returns its id + server info")
@@ -764,6 +782,25 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.NO_CONTENT);
 			assertThat(InspectorHandlerTests.this.handler.hasSession(sessionId)).isFalse();
+		}
+
+		@Test
+		@Story("Terminate session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("ContextClosedEvent releases every live session, so Boot's graceful shutdown "
+				+ "does not wait on their loopback MCP clients")
+		void onContextClosed_closesEverySession() {
+			// given
+			final McpSyncClient client = connectedClient();
+			final String sessionId = openLoopbackSession(client);
+
+			// when
+			InspectorHandlerTests.this.handler.onContextClosed(new org.springframework.context.event.ContextClosedEvent(
+					new org.springframework.context.support.StaticApplicationContext()));
+
+			// then
+			assertThat(InspectorHandlerTests.this.handler.hasSession(sessionId)).isFalse();
+			verify(client).closeGracefully();
 		}
 
 		@Test

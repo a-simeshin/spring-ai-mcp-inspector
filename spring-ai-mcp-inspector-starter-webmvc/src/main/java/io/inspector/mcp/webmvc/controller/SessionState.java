@@ -114,9 +114,36 @@ final class SessionState {
 		this.oauthToken = value;
 	}
 
+	/**
+	 * Tears the loopback client down and waits for it. Plain {@code close()} would not
+	 * do: {@code McpTransport.close()} is {@code closeGracefully().subscribe()}, so the
+	 * session-termination request is merely dispatched. On context close that races
+	 * Boot's graceful-shutdown phase — the server-side session is still holding its
+	 * {@code GET /mcp} stream open when the wait starts, and the whole
+	 * {@code spring.lifecycle.timeout-per-shutdown-phase} gets paid.
+	 *
+	 * <p>
+	 * The result of {@code closeGracefully()} has to be checked, because it never throws:
+	 * it blocks 10s, catches {@code RuntimeException}, logs "Client didn't close within
+	 * timeout" and returns {@code false}. A {@code catch} around it is dead code, which
+	 * left the wedged-transport case — the one that matters during shutdown — with
+	 * nothing forcing it down. {@code close()} reaches {@code McpAsyncClient.close()},
+	 * which does {@code initializer.close(); transport.close();} synchronously, so it is
+	 * a real forcing step rather than a second no-op.
+	 */
 	void closeQuietly() {
 		this.pendingServerRequests.clear();
-		if (this.client != null) {
+		if (this.client == null) {
+			return;
+		}
+		boolean closed = false;
+		try {
+			closed = this.client.closeGracefully();
+		}
+		catch (final Exception ignored) {
+			/* documented not to happen; forced below either way */
+		}
+		if (!closed) {
 			try {
 				this.client.close();
 			}

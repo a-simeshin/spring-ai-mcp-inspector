@@ -225,22 +225,22 @@
                         <systemPropertyVariables>
                             <allure.results.directory>${project.build.directory}/allure-results</allure.results.directory>
                             <!-- Caps how long an IT context may spend in Boot's graceful
-                                 shutdown phase. ITs boot the demo app in-JVM and leave the
-                                 proxy SSE stream open; the library does not complete those
-                                 streams on context close, so every close otherwise waits
-                                 out the full 30s default — dozens of "1 bean still running
-                                 after timeout of 30000ms: [webServerGracefulShutdown]" per
-                                 CI run, and on a two-core runner that is enough to push
-                                 ProxySessionLifecycleIT past its request budget.
+                                 shutdown phase. NOT a workaround for issue #28 — that is
+                                 fixed in production code, and `server.shutdown` stays
+                                 GRACEFUL here precisely so the ITs exercise the real
+                                 path. This bounds what the suite pays when a context does
+                                 stall for a reason outside our control.
 
-                                 This is a workaround, not a bound on residual stalls: the
-                                 upstream fix (1.x #28 — the transport drain) is not ported
-                                 to this line yet. Remove it when it is, so the suite
-                                 exercises the real shutdown path again. Do NOT replace it
-                                 with server.shutdown=immediate globally; ProxyAppHarness
-                                 passes that per app on the command line, where it beats
-                                 this system property, and the @SpringBootTest contexts
-                                 should keep closing gracefully. -->
+                                 On a two-core CI runner the cap buys a great deal:
+                                 without it, ProxySessionLifecycleIT's WEBMVC row went
+                                 from ~3s to 33s — the default 30s timeout, paid in
+                                 @AfterEach — and its WEBFLUX row then died on a 60s
+                                 request budget. Green locally, red on CI, three runs out
+                                 of three. Measuring only on a laptop is what hid it.
+
+                                 GracefulShutdownIT overrides this with command-line args,
+                                 which beat system properties, so its assertions about the
+                                 real graceful budget stay meaningful. -->
                             <spring.lifecycle.timeout-per-shutdown-phase>1s</spring.lifecycle.timeout-per-shutdown-phase>
                         </systemPropertyVariables>
                     </configuration>

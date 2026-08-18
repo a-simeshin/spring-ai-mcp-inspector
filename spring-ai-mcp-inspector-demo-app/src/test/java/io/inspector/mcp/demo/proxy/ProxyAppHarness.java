@@ -9,6 +9,9 @@
  */
 package io.inspector.mcp.demo.proxy;
 
+import java.net.http.HttpClient;
+import java.time.Duration;
+
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -80,12 +83,6 @@ public final class ProxyAppHarness {
 		if (authToken != null) {
 			args.add("--spring.ai.mcp.inspector.auth-token=" + authToken);
 		}
-		// Tests tear apps down abruptly (notably ProxyTargetLossIT kills the upstream
-		// mid-session) and the proxy SSE streams are not completed on context close, so
-		// a graceful shutdown waits out its whole phase. The root pom caps that phase at
-		// 1s for every IT JVM; this drops in-flight connections outright, which is what
-		// a disposable test context wants.
-		args.add("--server.shutdown=immediate");
 		java.util.Collections.addAll(args, extraArgs);
 
 		return new SpringApplicationBuilder(DemoApplication.class).run(args.toArray(new String[0]));
@@ -97,6 +94,23 @@ public final class ProxyAppHarness {
 	}
 
 	/** Composes the upstream-compatible MCP endpoint path for the given protocol. */
+	/**
+	 * A client pinned to HTTP/1.1, which every IT here should use.
+	 *
+	 * <p>
+	 * {@link HttpClient} negotiates HTTP/2 by default and remembers the outcome per
+	 * {@code host:port}. The harness boots on random ports and the OS recycles them, so a
+	 * port that once answered as Tomcat (which speaks h2c) can come back as Netty (which
+	 * does not) and the cached decision produces a bare {@code 400} — observed once in
+	 * seven runs, on {@code POST /api/connect}, before the request reached any handler.
+	 * These tests exercise SSE over HTTP/1.1 and have no reason to negotiate anything.
+	 * @param connectTimeout how long to wait for the TCP connect
+	 * @return a fresh client; callers hold it in a {@code static final} field
+	 */
+	static HttpClient httpClient(final Duration connectTimeout) {
+		return HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(connectTimeout).build();
+	}
+
 	static String mcpTargetPath(String protocol) {
 		return switch (protocol.toUpperCase()) {
 			case "SSE" -> "/sse"; // not used as a streamable target — kept for

@@ -18,6 +18,7 @@ package io.inspector.mcp.core.proxy;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
@@ -79,6 +80,7 @@ import tools.jackson.databind.JsonNode;
  *
  * <ol>
  * <li>marks the session closed (idempotent via {@link AtomicBoolean}),</li>
+ * <li>fires {@link #closeSignal()} so every browser-facing stream terminates,</li>
  * <li>completes both sinks so subscribers tear down,</li>
  * <li>calls {@code closeGracefully()} on the upstream transport.</li>
  * </ol>
@@ -127,6 +129,14 @@ public final class ProxySession {
 	 */
 	private final AtomicBoolean upstreamTerminated = new AtomicBoolean(false);
 
+	/**
+	 * Fired by {@link #close()}. Lock-free, hence never lost — see
+	 * {@link #closeSignal()}.
+	 */
+	private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
+
+	private final Mono<Void> closeSignal;
+
 	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
 			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser) {
 		this.sessionId = sessionId;
@@ -134,6 +144,10 @@ public final class ProxySession {
 		this.browserToTarget = browserToTarget;
 		this.targetToBrowser = targetToBrowser;
 		this.lastActivity = Instant.now();
+		// suppressCancel: one subscriber going away (a browser tab closing its SSE
+		// stream) must not cancel — and so terminate — the future every other
+		// subscriber is waiting on.
+		this.closeSignal = Mono.fromFuture(() -> this.closeFuture, true);
 	}
 
 	public String sessionId() {
@@ -196,6 +210,31 @@ public final class ProxySession {
 	 * @param error the terminal error from the upstream transport (may be {@code null},
 	 * in which case the sink is completed rather than errored)
 	 */
+	/**
+	 * Completes as soon as {@link #close()} is called, and immediately on subscribe if
+	 * the session is already closed. Every long-lived browser-facing stream ends itself
+	 * with {@code takeUntilOther(session.closeSignal())}.
+	 *
+	 * <p>
+	 * It exists because completing the sinks is <em>not</em> a reliable way to end those
+	 * streams. Both sinks are wrapped in Reactor's {@code SinkManySerialized}, whose emit
+	 * methods return {@code FAIL_NON_SERIALIZED} the moment another thread owns the sink;
+	 * the {@code targetToBrowser} subscriber serialises JSON and writes it to the
+	 * browser's socket inside {@code tryEmitNext} on the emitting thread, so a session
+	 * relaying frames when {@code SIGTERM} arrives loses the race often (measured: 176 of
+	 * 200 completions dropped). Retrying with {@code emitComplete(busyLooping(...))} lost
+	 * far fewer but still lost some — and paid for it with an uninterruptible spin on
+	 * whatever thread called {@code close()}, which on webflux is the Netty event loop.
+	 *
+	 * <p>
+	 * A {@link CompletableFuture} contends with nothing, so termination no longer depends
+	 * on winning a lock the emitting thread happens to hold.
+	 * @return a {@link Mono} that completes when this session closes
+	 */
+	public Mono<Void> closeSignal() {
+		return this.closeSignal;
+	}
+
 	public void failUpstream(final Throwable error) {
 		if (!this.upstreamTerminated.compareAndSet(false, true)) {
 			return;
@@ -221,6 +260,8 @@ public final class ProxySession {
 		if (!this.closed.compareAndSet(false, true)) {
 			return;
 		}
+		// First, and lock-free: this is what actually ends the browser-facing streams.
+		this.closeFuture.complete(null);
 		try {
 			this.browserToTarget.tryEmitComplete();
 		}
