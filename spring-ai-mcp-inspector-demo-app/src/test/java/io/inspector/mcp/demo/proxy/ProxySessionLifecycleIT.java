@@ -150,11 +150,10 @@ class ProxySessionLifecycleIT {
 		assertThat(seenSessionIds).as("100 cycles must produce 100 distinct session ids on %s", ProxyAppHarness.stack())
 			.hasSize(CYCLES);
 
-		// A replayed initialize is allowed to cost one undrained session. The request
-		// that
-		// timed out is not necessarily lost: it can still reach the server late, which
-		// then opens a session whose id no client ever learned and so nobody DELETEs. The
-		// reaper collects it on its own schedule, long after this loop is done. With no
+		// A replayed initialize is allowed to cost one undrained session: a request that
+		// timed out is not necessarily lost, and when it reaches the server late it opens
+		// a session whose id no client ever learned and so nobody DELETEs. The reaper
+		// collects that one on its own schedule, long after this loop is done. With no
 		// replay — the normal run — this is the strict "drains back to zero" assertion.
 		assertThat(registry.size())
 			.as("registry must drain back to its pre-loop size on %s "
@@ -204,9 +203,9 @@ class ProxySessionLifecycleIT {
 	 *
 	 * <p>
 	 * The retry is not a green-washing retry. {@link HttpClient} pools connections per
-	 * origin, and a pooled connection the server has already finished with can be handed
-	 * a fresh request that then never gets an answer; because neither {@code POST} nor
-	 * {@code DELETE} is idempotent, the JDK will not re-drive it onto a live connection
+	 * origin, and a request can be handed a pooled connection that is not ready to carry
+	 * it, where it then queues instead of going out. Because neither {@code POST} nor
+	 * {@code DELETE} is idempotent, the JDK will not re-drive it onto another connection
 	 * ({@code jdk.httpclient.enableAllMethodRetry} is off by default) and simply waits
 	 * out the request timeout. This loop drives 200 sequential requests through one
 	 * client, so it hits that window regularly on CI and effectively never on a
@@ -216,9 +215,11 @@ class ProxySessionLifecycleIT {
 	 * Measured, on the reactive stack on GitHub's runners: at the moment the shared
 	 * client was 60s into a stall, a brand-new client answered the identical
 	 * {@code initialize} in 8ms, 15ms and 17ms across three runs, with the server's event
-	 * loops idle and no request ever reaching a handler. So the server is not slow — the
-	 * connection is dead and only the client does not know it. Stalls landed on cycles 3,
-	 * 17 and 81: a race, not a threshold.
+	 * loops idle and no request ever reaching a handler. So the server is not slow and
+	 * the connection is not dead — the request is stuck behind a busy one and goes out
+	 * late, by up to a minute, which is why a session can still appear for a request the
+	 * client has already given up on. Stalls landed on cycles 3, 17 and 81: a race, not a
+	 * threshold.
 	 *
 	 * <p>
 	 * A genuine hang still fails the test, because both attempts then time out. The retry
