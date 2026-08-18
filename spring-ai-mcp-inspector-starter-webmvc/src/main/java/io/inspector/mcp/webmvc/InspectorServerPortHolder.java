@@ -16,6 +16,7 @@
 
 package io.inspector.mcp.webmvc;
 
+import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.boot.web.server.context.WebServerInitializedEvent;
 import org.springframework.context.event.EventListener;
 
@@ -28,10 +29,19 @@ import org.springframework.context.event.EventListener;
  */
 public class InspectorServerPortHolder {
 
+	/** Server namespace of the separate actuator web server, when one is started. */
+	private static final String MANAGEMENT_NAMESPACE = "management";
+
 	private volatile int port = -1;
 
 	@EventListener
 	public void onWebServerInitialized(final WebServerInitializedEvent event) {
+		// With management.server.port set, a second event arrives for the actuator's
+		// server; last-writer-wins would otherwise poison the loopback port.
+		final WebServerApplicationContext context = event.getApplicationContext();
+		if (context != null && MANAGEMENT_NAMESPACE.equals(context.getServerNamespace())) {
+			return;
+		}
 		this.port = event.getWebServer().getPort();
 	}
 

@@ -18,6 +18,8 @@ package io.inspector.mcp.webmvc.it;
 
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -68,6 +70,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 		"spring.ai.mcp.server.version=0.1.0", "spring.ai.mcp.inspector.auth-enabled=false",
 		"spring.application.name=mcp-inspector-itest" })
 class WebMvcAutoConfigurationIT {
+
+	/**
+	 * Extracts the first hashed bundle asset URL from the served HTML. The hash changes
+	 * on every UI build, so it is read back from the response instead of hardcoded.
+	 */
+	private static final Pattern ASSET_PATTERN = Pattern.compile("(?:src|href)=\"(/[^\"]*/assets/[^\"]+)\"");
 
 	@Autowired
 	private TestRestTemplate restTemplate;
@@ -149,6 +157,29 @@ class WebMvcAutoConfigurationIT {
 		final List<String> names = new java.util.ArrayList<>();
 		tools.forEach((t) -> names.add(t.path("name").asText()));
 		assertThat(names).contains("echo", "sum", "currentTime");
+	}
+
+	@Test
+	@DisplayName("hashed bundle assets are served long-lived, not no-store")
+	@Story("Static asset caching")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("A hashed asset referenced by index.html returns 200 with a body and a long max-age, so the multi-megabyte bundle survives a reload")
+	void hashedAsset_isServedWithLongMaxAge() {
+		// given
+		final ResponseEntity<String> index = this.restTemplate.getForEntity(url("/mcp-inspector/index.html"),
+				String.class);
+		assertThat(index.getStatusCode()).isEqualTo(HttpStatus.OK);
+		final Matcher matcher = ASSET_PATTERN.matcher(index.getBody());
+		assertThat(matcher.find()).as("index.html must reference at least one hashed bundle asset").isTrue();
+
+		// when
+		final ResponseEntity<String> asset = this.restTemplate.getForEntity(url(matcher.group(1)), String.class);
+
+		// then
+		assertThat(asset.getStatusCode()).isEqualTo(HttpStatus.OK);
+		assertThat(asset.getBody()).as("the asset must not be served empty").isNotEmpty();
+		assertThat(asset.getHeaders().getCacheControl()).as("hashed assets must be cacheable")
+			.contains("max-age=604800");
 	}
 
 	private String url(final String path) {

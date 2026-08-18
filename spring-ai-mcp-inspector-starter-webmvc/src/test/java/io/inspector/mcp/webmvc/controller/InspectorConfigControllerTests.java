@@ -29,13 +29,16 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
 
 import io.inspector.mcp.core.bootstrap.InspectorBootstrap;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapAssembler;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 /**
  * Unit tests for {@link InspectorConfigController}. Asserts the assembled bootstrap is
@@ -68,10 +71,11 @@ class InspectorConfigControllerTests {
 			final InspectorBootstrap bootstrap = new InspectorBootstrap();
 			bootstrap.setAuthToken("tok");
 			bootstrap.setProxyAddress("/mcp-inspector-api");
-			given(InspectorConfigControllerTests.this.assembler.assemble()).willReturn(bootstrap);
+			given(InspectorConfigControllerTests.this.assembler.assemble(anyString())).willReturn(bootstrap);
 
 			// when
-			final ResponseEntity<InspectorBootstrap> response = InspectorConfigControllerTests.this.controller.config();
+			final ResponseEntity<InspectorBootstrap> response = InspectorConfigControllerTests.this.controller
+				.config(new MockHttpServletRequest());
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -79,6 +83,42 @@ class InspectorConfigControllerTests {
 			assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_JSON);
 			assertThat(response.getHeaders().getCacheControl()).contains("no-cache").contains("no-store");
 			assertThat(response.getHeaders().getPragma()).isEqualTo("no-cache");
+		}
+
+		@Test
+		@Story("Context path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("config() passes the request context path to the assembler so the proxy address is reachable")
+		void config_underContextPath_passesPrefixToAssembler() {
+			// given
+			given(InspectorConfigControllerTests.this.assembler.assemble(anyString()))
+				.willReturn(new InspectorBootstrap());
+			final MockHttpServletRequest request = new MockHttpServletRequest();
+			request.setContextPath("/app");
+
+			// when
+			InspectorConfigControllerTests.this.controller.config(request);
+
+			// then
+			verify(InspectorConfigControllerTests.this.assembler).assemble("/app");
+		}
+
+		@Test
+		@Story("Context path")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("config() treats a \"/\" context path as no prefix, so the proxy address never becomes protocol-relative")
+		void config_withRootContextPath_passesEmptyPrefix() {
+			// given
+			given(InspectorConfigControllerTests.this.assembler.assemble(anyString()))
+				.willReturn(new InspectorBootstrap());
+			final MockHttpServletRequest request = new MockHttpServletRequest();
+			request.setContextPath("/");
+
+			// when
+			InspectorConfigControllerTests.this.controller.config(request);
+
+			// then
+			verify(InspectorConfigControllerTests.this.assembler).assemble("");
 		}
 
 	}

@@ -84,6 +84,44 @@ class BootstrapHtmlRendererTests {
 		}
 
 		@Test
+		@Story("Placeholder replacement")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("renderIndexHtml() injects the bootstrap script once even when the template repeats the placeholder")
+		void render_whenPlaceholderRepeated_injectsScriptOnlyOnce() throws IOException {
+			// given — the shipped index.html carries the placeholder in <head> and again
+			// inside a documentation comment
+			final String template = "<head>" + BootstrapHtmlRenderer.PLACEHOLDER + "</head><body><!-- The "
+					+ BootstrapHtmlRenderer.PLACEHOLDER + " placeholder is replaced server-side. --></body>";
+			final InspectorBootstrap bootstrap = new InspectorBootstrap();
+			bootstrap.setAuthToken("token-abc");
+
+			// when
+			final String html = BootstrapHtmlRendererTests.this.renderer.renderIndexHtml(template, bootstrap);
+
+			// then — the auth token must not be embedded a second time
+			assertThat(html).containsOnlyOnce("window.__MCP_INSPECTOR_BOOTSTRAP = ").containsOnlyOnce("token-abc");
+			assertThat(html).contains(BootstrapHtmlRenderer.PLACEHOLDER);
+		}
+
+		@Test
+		@Story("Comment-delimiter escaping")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("renderIndexHtml() escapes HTML comment delimiters so a bootstrap value cannot break out of a comment")
+		void render_escapesHtmlCommentDelimiters() throws IOException {
+			// given
+			final String template = BootstrapHtmlRenderer.PLACEHOLDER;
+			final InspectorBootstrap bootstrap = new InspectorBootstrap();
+			bootstrap.setDefaultUrl("--><script>alert(1)</script><!--");
+
+			// when
+			final String html = BootstrapHtmlRendererTests.this.renderer.renderIndexHtml(template, bootstrap);
+
+			// then — neither delimiter may survive verbatim
+			assertThat(html).doesNotContain("-->").doesNotContain("<!--");
+			assertThat(html).contains("--\\><script>alert(1)<\\/script><\\!--");
+		}
+
+		@Test
 		@Story("Missing placeholder")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("renderIndexHtml() returns the template untouched when the placeholder is absent")
@@ -115,6 +153,88 @@ class BootstrapHtmlRendererTests {
 			assertThatThrownBy(
 					() -> failingRenderer.renderIndexHtml(BootstrapHtmlRenderer.PLACEHOLDER, new InspectorBootstrap()))
 				.isInstanceOf(IOException.class);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("renderIndexHtml() asset rewrite")
+	class AssetRewrite {
+
+		@Test
+		@Story("Asset URL rewrite")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("renderIndexHtml() repoints bundle asset URLs at the prefixed asset base")
+		void render_withPrefixedAssetBase_rewritesAssetUrls() throws IOException {
+			// given
+			final String template = "<script src=\"/mcp-inspector/assets/index-abc.js\"></script>"
+					+ BootstrapHtmlRenderer.PLACEHOLDER;
+
+			// when
+			final String html = BootstrapHtmlRendererTests.this.renderer.renderIndexHtml(template,
+					new InspectorBootstrap(), "/app/mcp-inspector");
+
+			// then
+			assertThat(html).contains("/app/mcp-inspector/assets/index-abc.js")
+				.doesNotContain("\"/mcp-inspector/assets");
+		}
+
+		@Test
+		@Story("Asset URL rewrite")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("The rewrite runs on the raw template so the injected proxy address is never prefixed twice")
+		void render_withDefaultAssetBase_leavesInjectedProxyAddressIntact() throws IOException {
+			// given — a proxy path that itself starts with the asset base
+			// (spring.ai.mcp.inspector.proxy-path=/mcp-inspector/api under /app), so the
+			// injected value collides with the slash-terminated rewrite literal
+			final String template = "<script src=\"/mcp-inspector/assets/index-abc.js\"></script>"
+					+ BootstrapHtmlRenderer.PLACEHOLDER;
+			final InspectorBootstrap bootstrap = new InspectorBootstrap();
+			bootstrap.setProxyAddress("/app/mcp-inspector/api");
+
+			// when
+			final String html = BootstrapHtmlRendererTests.this.renderer.renderIndexHtml(template, bootstrap,
+					"/app/mcp-inspector");
+
+			// then — rewriting after the injection would yield
+			// "/app/app/mcp-inspector/api"
+			assertThat(html).contains("\"proxyAddress\":\"/app/mcp-inspector/api\"");
+		}
+
+		@Test
+		@Story("Asset URL rewrite")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("The two-arg form and the default asset base leave the template's asset URLs untouched")
+		void render_withoutPrefix_keepsAssetUrls() throws IOException {
+			// given
+			final String template = "<script src=\"/mcp-inspector/assets/index-abc.js\"></script>"
+					+ BootstrapHtmlRenderer.PLACEHOLDER;
+
+			// when
+			final String legacy = BootstrapHtmlRendererTests.this.renderer.renderIndexHtml(template,
+					new InspectorBootstrap());
+			final String explicit = BootstrapHtmlRendererTests.this.renderer.renderIndexHtml(template,
+					new InspectorBootstrap(), BootstrapHtmlRenderer.BUNDLE_ASSET_BASE);
+
+			// then
+			assertThat(legacy).contains("/mcp-inspector/assets/index-abc.js").isEqualTo(explicit);
+		}
+
+		@Test
+		@Story("Asset URL rewrite")
+		@Severity(SeverityLevel.MINOR)
+		@Description("A blank asset base is treated as 'serve from the bundle default' and rewrites nothing")
+		void render_withBlankAssetBase_rewritesNothing() throws IOException {
+			// given
+			final String template = "<script src=\"/mcp-inspector/assets/index-abc.js\"></script>"
+					+ BootstrapHtmlRenderer.PLACEHOLDER;
+
+			// when
+			final String html = BootstrapHtmlRendererTests.this.renderer.renderIndexHtml(template,
+					new InspectorBootstrap(), "  ");
+
+			// then
+			assertThat(html).contains("/mcp-inspector/assets/index-abc.js");
 		}
 
 	}

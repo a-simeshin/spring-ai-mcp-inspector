@@ -66,18 +66,45 @@ public class InspectorBootstrapAssembler {
 	 * @return populated bootstrap, never {@code null}
 	 */
 	public InspectorBootstrap assemble() {
+		return assemble("");
+	}
+
+	/**
+	 * Assembles a fresh {@link InspectorBootstrap} whose browser-facing proxy address is
+	 * prefixed with {@code requestPrefix} — the servlet context path, the WebFlux base
+	 * path, or the reverse-proxy prefix the request arrived with.
+	 *
+	 * <p>
+	 * The prefix is applied <em>before</em> the customizers run, so a customizer that
+	 * overrides {@code proxyAddress} still has the last word.
+	 * @param requestPrefix the deployment prefix of the current request; {@code ""} or
+	 * {@code null} for a root-mounted application
+	 * @return populated bootstrap, never {@code null}
+	 */
+	public InspectorBootstrap assemble(final String requestPrefix) {
 		final InspectorBootstrap bootstrap = new InspectorBootstrap();
 		bootstrap.setAuthToken(this.authTokenProvider.token());
-		bootstrap.setProxyAddress(this.properties.getProxyPath());
+		bootstrap.setProxyAddress(prefix(requestPrefix) + this.properties.getProxyPath());
 
 		final DetectedTransport detected = this.transportDetector.detect();
 		bootstrap.setDetectedTransport(mapTransportName(detected.type()));
+		// Not prefixed here: TransportDetector already returns endpoints carrying the
+		// application's context path.
 		bootstrap.setDetectedUrl((detected.endpoint() != null) ? detected.endpoint() : "");
 
 		for (final InspectorBootstrapCustomizer customizer : this.customizers) {
 			customizer.customize(bootstrap);
 		}
 		return bootstrap;
+	}
+
+	private static String prefix(final String requestPrefix) {
+		if (requestPrefix == null || requestPrefix.isBlank() || "/".equals(requestPrefix)) {
+			return "";
+		}
+		final String trimmed = requestPrefix.endsWith("/") ? requestPrefix.substring(0, requestPrefix.length() - 1)
+				: requestPrefix;
+		return trimmed.startsWith("/") ? trimmed : "/" + trimmed;
 	}
 
 	/**

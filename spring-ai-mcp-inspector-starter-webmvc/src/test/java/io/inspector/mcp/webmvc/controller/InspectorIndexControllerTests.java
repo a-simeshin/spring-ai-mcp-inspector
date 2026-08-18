@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
 
 import io.inspector.mcp.core.bootstrap.BootstrapHtmlRenderer;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrap;
@@ -37,8 +38,10 @@ import io.inspector.mcp.core.bootstrap.InspectorBootstrapAssembler;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 /**
  * Unit tests for {@link InspectorIndexController}. Collaborators are mocked; assertions
@@ -55,11 +58,14 @@ class InspectorIndexControllerTests {
 
 	private InspectorIndexController controller;
 
+	private MockHttpServletRequest request;
+
 	@BeforeEach
 	void setUp() {
 		this.assembler = mock(InspectorBootstrapAssembler.class);
 		this.renderer = mock(BootstrapHtmlRenderer.class);
 		this.controller = new InspectorIndexController(this.assembler, this.renderer, "/mcp-inspector");
+		this.request = new MockHttpServletRequest();
 	}
 
 	@Nested
@@ -72,7 +78,8 @@ class InspectorIndexControllerTests {
 		@Description("redirectRoot() returns 302 to the index.html under the configured path")
 		void redirectRoot_returns302ToIndexHtml() {
 			// when
-			final ResponseEntity<Void> response = InspectorIndexControllerTests.this.controller.redirectRoot();
+			final ResponseEntity<Void> response = InspectorIndexControllerTests.this.controller
+				.redirectRoot(InspectorIndexControllerTests.this.request);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FOUND);
@@ -85,7 +92,8 @@ class InspectorIndexControllerTests {
 		@Description("redirectTrailingSlash() returns the same 302 redirect to index.html")
 		void redirectTrailingSlash_returns302ToIndexHtml() {
 			// when
-			final ResponseEntity<Void> response = InspectorIndexControllerTests.this.controller.redirectTrailingSlash();
+			final ResponseEntity<Void> response = InspectorIndexControllerTests.this.controller
+				.redirectTrailingSlash(InspectorIndexControllerTests.this.request);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FOUND);
@@ -105,13 +113,14 @@ class InspectorIndexControllerTests {
 		void index_withBundlePresent_returnsRenderedHtmlWithNoCacheHeaders() throws Exception {
 			// given
 			final InspectorBootstrap bootstrap = new InspectorBootstrap();
-			given(InspectorIndexControllerTests.this.assembler.assemble()).willReturn(bootstrap);
+			given(InspectorIndexControllerTests.this.assembler.assemble(anyString())).willReturn(bootstrap);
 			given(InspectorIndexControllerTests.this.renderer.renderIndexHtml(anyString(),
-					any(InspectorBootstrap.class)))
+					any(InspectorBootstrap.class), anyString()))
 				.willReturn("<html>rendered</html>");
 
 			// when
-			final ResponseEntity<String> response = InspectorIndexControllerTests.this.controller.index();
+			final ResponseEntity<String> response = InspectorIndexControllerTests.this.controller
+				.index(InspectorIndexControllerTests.this.request);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -127,12 +136,14 @@ class InspectorIndexControllerTests {
 		@Description("oauthCallback() serves the same templated index page")
 		void oauthCallback_returnsRenderedIndex() throws Exception {
 			// given
-			given(InspectorIndexControllerTests.this.assembler.assemble()).willReturn(new InspectorBootstrap());
-			given(InspectorIndexControllerTests.this.renderer.renderIndexHtml(anyString(), any()))
+			given(InspectorIndexControllerTests.this.assembler.assemble(anyString()))
+				.willReturn(new InspectorBootstrap());
+			given(InspectorIndexControllerTests.this.renderer.renderIndexHtml(anyString(), any(), anyString()))
 				.willReturn("<html>cb</html>");
 
 			// when
-			final ResponseEntity<String> response = InspectorIndexControllerTests.this.controller.oauthCallback();
+			final ResponseEntity<String> response = InspectorIndexControllerTests.this.controller
+				.oauthCallback(InspectorIndexControllerTests.this.request);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -145,16 +156,77 @@ class InspectorIndexControllerTests {
 		@Description("oauthCallbackDebug() serves the same templated index page")
 		void oauthCallbackDebug_returnsRenderedIndex() throws Exception {
 			// given
-			given(InspectorIndexControllerTests.this.assembler.assemble()).willReturn(new InspectorBootstrap());
-			given(InspectorIndexControllerTests.this.renderer.renderIndexHtml(anyString(), any()))
+			given(InspectorIndexControllerTests.this.assembler.assemble(anyString()))
+				.willReturn(new InspectorBootstrap());
+			given(InspectorIndexControllerTests.this.renderer.renderIndexHtml(anyString(), any(), anyString()))
 				.willReturn("<html>dbg</html>");
 
 			// when
-			final ResponseEntity<String> response = InspectorIndexControllerTests.this.controller.oauthCallbackDebug();
+			final ResponseEntity<String> response = InspectorIndexControllerTests.this.controller
+				.oauthCallbackDebug(InspectorIndexControllerTests.this.request);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 			assertThat(response.getBody()).isEqualTo("<html>dbg</html>");
+		}
+
+	}
+
+	@Nested
+	@DisplayName("context path")
+	class ContextPath {
+
+		@Test
+		@Story("Context path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("redirectRoot() prefixes the Location header with the servlet context path")
+		void redirectRoot_underContextPath_prefixesLocation() {
+			// given
+			InspectorIndexControllerTests.this.request.setContextPath("/app");
+
+			// when
+			final ResponseEntity<Void> response = InspectorIndexControllerTests.this.controller
+				.redirectRoot(InspectorIndexControllerTests.this.request);
+
+			// then
+			assertThat(response.getHeaders().getLocation()).hasToString("/app/mcp-inspector/index.html");
+		}
+
+		@Test
+		@Story("Context path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("index() hands the renderer the prefixed asset base and the assembler the context path")
+		void index_underContextPath_passesPrefixedAssetBase() throws Exception {
+			// given
+			InspectorIndexControllerTests.this.request.setContextPath("/app");
+			given(InspectorIndexControllerTests.this.assembler.assemble(anyString()))
+				.willReturn(new InspectorBootstrap());
+			given(InspectorIndexControllerTests.this.renderer.renderIndexHtml(anyString(), any(), anyString()))
+				.willReturn("<html>prefixed</html>");
+
+			// when
+			InspectorIndexControllerTests.this.controller.index(InspectorIndexControllerTests.this.request);
+
+			// then
+			verify(InspectorIndexControllerTests.this.assembler).assemble("/app");
+			verify(InspectorIndexControllerTests.this.renderer).renderIndexHtml(anyString(), any(),
+					eq("/app/mcp-inspector"));
+		}
+
+		@Test
+		@Story("Context path")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("redirectRoot() treats a \"/\" context path as no prefix, so the Location never becomes protocol-relative")
+		void redirectRoot_withRootContextPath_doesNotDoubleSlash() {
+			// given
+			InspectorIndexControllerTests.this.request.setContextPath("/");
+
+			// when
+			final ResponseEntity<Void> response = InspectorIndexControllerTests.this.controller
+				.redirectRoot(InspectorIndexControllerTests.this.request);
+
+			// then
+			assertThat(response.getHeaders().getLocation()).hasToString("/mcp-inspector/index.html");
 		}
 
 	}

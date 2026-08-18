@@ -81,8 +81,11 @@ public class ProxyAuthWebFilter implements WebFilter, Ordered {
 		if (this.properties == null || !this.properties.isAuthEnabled()) {
 			return chain.filter(exchange);
 		}
-		final String path = exchange.getRequest().getURI().getPath();
-		if (path == null || !path.startsWith(this.proxyPrefix)) {
+		// Application-relative path, never the raw URI: under spring.webflux.base-path
+		// or an X-Forwarded-Prefix the prefix lives in contextPath, and matching the
+		// raw path against the unprefixed proxy prefix would leave the proxy open.
+		final String path = exchange.getRequest().getPath().pathWithinApplication().value();
+		if (!path.startsWith(this.proxyPrefix)) {
 			return chain.filter(exchange);
 		}
 		// Health is intentionally open.
