@@ -11,7 +11,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="Apache 2.0 License" src="https://img.shields.io/badge/License-Apache%202.0-blue.svg"></a>
   <a href="https://adoptium.net"><img alt="Java 17+" src="https://img.shields.io/badge/Java-17%2B-orange.svg"></a>
-  <a href="https://spring.io/projects/spring-boot"><img alt="Spring Boot 3.5" src="https://img.shields.io/badge/Spring%20Boot-3.5-6DB33F.svg"></a>
+  <a href="https://spring.io/projects/spring-boot"><img alt="Spring Boot 4.1" src="https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F.svg"></a>
   <a href="https://modelcontextprotocol.io"><img alt="MCP transports" src="https://img.shields.io/badge/MCP-stdio%20%7C%20sse%20%7C%20streamable%20%7C%20stateless-8A2BE2.svg"></a>
   <a href="CONTRIBUTING.md#code-coverage--mandatory--80"><img alt="Coverage ≥80%" src="https://img.shields.io/badge/coverage-%E2%89%A580%25-success.svg"></a>
 </p>
@@ -31,8 +31,10 @@ Spring AI's MCP server starters give you a running MCP endpoint, but no UI to ta
 ## Requirements
 
 - Java 17+
-- Spring Boot 3.4+
-- Spring AI 1.1+ (`org.springframework.ai:spring-ai-bom`)
+- Spring Boot 4.1+
+- Spring AI 2.0+ (`org.springframework.ai:spring-ai-bom`)
+
+Boot 3.5 / Spring AI 1.1 are served by the `1.x` line, maintained on `develop/1.x`.
 
 ## Compatibility
 
@@ -43,6 +45,17 @@ The table below records the exact stack a given inspector release was verified w
 |---------------------------|-------------|-----------|--------------|--------------------------|
 | `1.0.0`                   | `3.5.15`    | `1.1.8`   | `0.18.3`     | `0.21.2`                 |
 | `2.0.0`                   | `4.1.0`     | `2.0.0`   | `2.0.0`      | `0.22.0`                 |
+| `2.1.0`                   | `4.1.0`     | `2.0.0`   | `2.0.0`      | `0.22.0`                 |
+
+### Upgrading from `2.0.0`
+
+Nothing to change in your code or configuration. One runtime behaviour is different:
+the inspector now closes the MCP server's transport provider when the context starts
+closing, instead of leaving it to bean destruction. That is what stops a graceful
+shutdown from waiting out its whole timeout — and it means an MCP tool call still
+streaming when shutdown begins is cut short rather than being given the full window.
+Set `spring.ai.mcp.inspector.shutdown.close-mcp-server-transports: false` to keep the
+old behaviour; see [Graceful shutdown](#graceful-shutdown) for the trade-off.
 
 ## Quickstart
 
@@ -54,7 +67,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webmvc</artifactId>
-    <version>1.0.0</version>
+    <version>2.1.0</version>
 </dependency>
 ```
 
@@ -64,7 +77,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webflux</artifactId>
-    <version>1.0.0</version>
+    <version>2.1.0</version>
 </dependency>
 ```
 
