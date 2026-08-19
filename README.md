@@ -42,8 +42,11 @@ The table below records the exact stack a given inspector release was verified w
 | `spring-ai-mcp-inspector` | Spring Boot | Spring AI | Java MCP SDK | Bundled MCP Inspector UI |
 |---------------------------|-------------|-----------|--------------|--------------------------|
 | `1.0.0`                   | `3.5.15`    | `1.1.8`   | `0.18.3`     | `0.21.2`                 |
+| `1.1.0`                   | `3.5.15`    | `1.1.8`   | `0.18.3`     | `0.21.2`                 |
 
-### Upgrading to `1.0.1`
+Spring Boot 4 / Spring AI 2 are served by the `2.x` line, maintained on `develop/2.x`.
+
+### Upgrading to `1.1.0`
 
 `LoopbackMcpClientFactory.forSse` takes the full SSE endpoint path instead of a base path
 plus a message path:
@@ -51,7 +54,7 @@ plus a message path:
 ```java
 // 1.0.0
 factory.forSse("127.0.0.1", port, "/app", "/mcp/message");
-// 1.0.1
+// 1.1.0
 factory.forSse("127.0.0.1", port, "/app/sse");
 ```
 
@@ -64,6 +67,13 @@ The old signature cannot be kept as an overload: it is ambiguous against
 This only affects code calling the factory directly. The starters wire it internally, so
 applications that just add the dependency are unaffected.
 
+One runtime behaviour also differs: the inspector now closes the MCP server's transport
+provider when the context starts closing, instead of leaving it to bean destruction. That
+is what stops a graceful shutdown from waiting out its whole timeout — and it means an MCP
+tool call still streaming when shutdown begins is cut short rather than being given the
+full window. Set `spring.ai.mcp.inspector.shutdown.close-mcp-server-transports: false` to
+keep the old behaviour; see [Graceful shutdown](#graceful-shutdown) for the trade-off.
+
 ## Quickstart
 
 ### WebMVC
@@ -74,7 +84,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webmvc</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
 </dependency>
 ```
 
@@ -84,7 +94,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webflux</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
 </dependency>
 ```
 
