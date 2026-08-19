@@ -326,10 +326,22 @@ const App = () => {
 
   const currentTabRef = useRef<string>(activeTab);
   const lastToolCallOriginTabRef = useRef<string>(activeTab);
+  // [spring-ai-mcp-inspector PATCH] Answering a sampling or elicitation request
+  // re-asserts the originating tab once more after 100 ms. Upstream never keeps the
+  // handle, so that timer outlives the component and rewrites window.location.hash
+  // after unmount — which makes jest's randomised test order flaky (a stray timer from
+  // one test stomps the next one's hash) and, in the app, yanks a user who navigated
+  // away within those 100 ms. Both schedulers share this handle: the second one
+  // supersedes the first rather than racing it.
+  const originatingTabTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
 
   useEffect(() => {
     currentTabRef.current = activeTab;
   }, [activeTab]);
+
+  useEffect(() => () => clearTimeout(originatingTabTimerRef.current), []);
 
   const navigateToOriginatingTab = (originatingTab?: string) => {
     if (!originatingTab) return;
@@ -353,7 +365,8 @@ const App = () => {
     setActiveTab(originatingTab);
     window.location.hash = originatingTab;
 
-    setTimeout(() => {
+    clearTimeout(originatingTabTimerRef.current);
+    originatingTabTimerRef.current = setTimeout(() => {
       setActiveTab(originatingTab);
       window.location.hash = originatingTab;
     }, 100);
@@ -820,7 +833,8 @@ const App = () => {
             setActiveTab(originatingTab);
             window.location.hash = originatingTab;
 
-            setTimeout(() => {
+            clearTimeout(originatingTabTimerRef.current);
+            originatingTabTimerRef.current = setTimeout(() => {
               setActiveTab(originatingTab);
               window.location.hash = originatingTab;
             }, 100);

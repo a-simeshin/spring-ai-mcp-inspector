@@ -190,6 +190,50 @@ describe("App - Sampling auto-navigation", () => {
     });
   });
 
+  test("unmounting cancels the pending tab bounce instead of rewriting the hash", async () => {
+    let capturedOnPendingRequest: OnPendingRequestHandler | undefined;
+
+    mockUseConnection.mockImplementation((options) => {
+      capturedOnPendingRequest = (
+        options as { onPendingRequest?: OnPendingRequestHandler }
+      ).onPendingRequest;
+      return baseConnectionState as unknown as UseConnectionReturn;
+    });
+
+    const { unmount } = render(<App />);
+
+    act(() => {
+      if (!capturedOnPendingRequest) {
+        throw new Error("Expected onPendingRequest to be provided");
+      }
+
+      capturedOnPendingRequest(
+        {
+          method: "sampling/createMessage",
+          params: { messages: [], maxTokens: 1 },
+        },
+        jest.fn(),
+        jest.fn(),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("sampling-request")).toBeTruthy();
+    });
+
+    // Rejecting schedules a second, delayed hop back to the originating tab.
+    fireEvent.click(screen.getByRole("button", { name: /Reject/i }));
+    unmount();
+
+    // The delayed hop must not fire after unmount: window.location is global, so a
+    // stray timer here rewrites the hash of whatever runs next — which is exactly
+    // how this suite used to fail under jest's randomised test order.
+    window.location.hash = "#sampling";
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    expect(window.location.hash).toBe("#sampling");
+  });
+
   test("switches back to #tools after reject", async () => {
     let capturedOnPendingRequest: OnPendingRequestHandler | undefined;
 
