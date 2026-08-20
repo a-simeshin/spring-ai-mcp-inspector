@@ -18,6 +18,8 @@ package io.inspector.mcp.webflux.proxy;
 
 import java.net.URI;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
@@ -43,6 +45,8 @@ import org.springframework.web.reactive.function.server.HandlerStrategies;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -322,6 +326,52 @@ class ProxyHandlerTests {
 					.containsEntry("body", "hello-proxy");
 			}
 			finally {
+				server.stop(0);
+			}
+		}
+
+		@Test
+		@Story("Outbound HTTP proxy")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("fetch() runs its blocking HttpClient.send() off the subscribing (event-loop) thread")
+		void fetch_whenSubscribedOnANonBlockingThread_leavesThatThreadFree() throws Exception {
+			// given — an upstream that holds the response open for 3s
+			final CountDownLatch inFlight = new CountDownLatch(1);
+			final com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+				.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+			server.createContext("/slow", (exchange) -> {
+				inFlight.countDown();
+				try {
+					Thread.sleep(3000);
+				}
+				catch (final InterruptedException ignored) {
+					Thread.currentThread().interrupt();
+				}
+				exchange.sendResponseHeaders(204, -1);
+				exchange.close();
+			});
+			server.start();
+			final Scheduler loop = Schedulers.newParallel("fake-event-loop", 1);
+			try {
+				final int port = server.getAddress().getPort();
+				final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/fetch")
+					.contentType(MediaType.APPLICATION_JSON)
+					.body("{\"url\":\"http://127.0.0.1:" + port + "/slow\"}"));
+
+				// when — the exchange is subscribed on a single-worker (event-loop-like)
+				// scheduler
+				ProxyHandlerTests.this.handler.fetch(request).subscribeOn(loop).subscribe();
+				assertThat(inFlight.await(5, TimeUnit.SECONDS)).isTrue();
+
+				// then — that worker is still able to run other work
+				final CountDownLatch free = new CountDownLatch(1);
+				loop.schedule(free::countDown);
+				assertThat(free.await(1, TimeUnit.SECONDS))
+					.as("the subscribing (event-loop) thread must not be parked inside HttpClient.send()")
+					.isTrue();
+			}
+			finally {
+				loop.dispose();
 				server.stop(0);
 			}
 		}
