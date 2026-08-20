@@ -53,6 +53,12 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   AppWindow,
   Bell,
   Files,
@@ -102,6 +108,11 @@ import {
 import MetadataTab from "./components/MetadataTab";
 
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
+
+// MCP Tasks are an experimental/extension capability (SEP-1686). The demo
+// server cannot advertise them, so the Tasks tab is disabled — the tooltip on
+// the disabled trigger links to the proposal that defines the capability.
+const MCP_TASKS_DOCS_URL = "https://modelcontextprotocol.io/seps/1686-tasks";
 
 type PrefilledAppsToolCall = {
   id: number;
@@ -1428,13 +1439,38 @@ const App = () => {
                   <Hammer className="w-4 h-4 mr-2" />
                   Tools
                 </TabsTrigger>
-                <TabsTrigger
-                  value="tasks"
-                  disabled={!serverCapabilities?.tasks}
-                >
-                  <ListTodo className="w-4 h-4 mr-2" />
-                  Tasks
-                </TabsTrigger>
+                {serverCapabilities?.tasks ? (
+                  <TabsTrigger value="tasks">
+                    <ListTodo className="w-4 h-4 mr-2" />
+                    Tasks
+                  </TabsTrigger>
+                ) : (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        {/* The disabled trigger has pointer-events:none (tabs.tsx), so
+                            the tooltip must attach to a live wrapper span. */}
+                        <span className="pointer-events-auto inline-flex items-center">
+                          <TabsTrigger value="tasks" disabled>
+                            <ListTodo className="w-4 h-4 mr-2" />
+                            Tasks
+                          </TabsTrigger>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" className="max-w-xs text-center">
+                        This server does not support MCP Tasks.{" "}
+                        <a
+                          href={MCP_TASKS_DOCS_URL}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline"
+                        >
+                          MCP Tasks documentation
+                        </a>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
                 <TabsTrigger value="apps">
                   <AppWindow className="w-4 h-4 mr-2" />
                   Apps
