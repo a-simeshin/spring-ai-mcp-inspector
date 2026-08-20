@@ -17,6 +17,7 @@
 package io.inspector.mcp.webmvc.proxy;
 
 import java.net.URI;
+import java.time.Duration;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -37,6 +38,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
+import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
@@ -458,6 +460,41 @@ class StreamableHttpProxyControllerTests {
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("new-session await failure")
+	class NewSessionAwaitFailure {
+
+		@Test
+		@Story("New session")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() new-session request that times out tears down the orphaned session and returns 504")
+		void postMcp_newSessionRequestTimesOut_closesSessionAndReturns504() throws Exception {
+			// given — a short request timeout so the await fails fast, and a transport
+			// that
+			// builds but whose proxy never emits a matching response
+			final McpInspectorProperties props = new McpInspectorProperties();
+			props.getTimeouts().setStreamableRequest(Duration.ofMillis(200));
+			final StreamableHttpProxyController shortTimeoutController = new StreamableHttpProxyController(
+					StreamableHttpProxyControllerTests.this.registry,
+					StreamableHttpProxyControllerTests.this.transportFactory,
+					StreamableHttpProxyControllerTests.this.mcpProxy,
+					StreamableHttpProxyControllerTests.this.objectMapper, props);
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> entity = shortTimeoutController.postMcp(null, "http://target/mcp", body);
+
+			// then
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+			verify(StreamableHttpProxyControllerTests.this.registry).removeAndClose(any(String.class));
 		}
 
 	}
