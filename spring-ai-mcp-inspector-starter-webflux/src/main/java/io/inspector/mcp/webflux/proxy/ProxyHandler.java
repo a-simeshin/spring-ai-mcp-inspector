@@ -42,6 +42,7 @@ import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -170,7 +171,9 @@ public class ProxyHandler {
 	}
 
 	public Mono<ServerResponse> fetch(final ServerRequest request) {
+		// doFetch() ends in a blocking HttpClient.send() — keep it off the event loop.
 		return readJsonBody(request).flatMap((body) -> Mono.fromCallable(() -> doFetch(body))
+			.subscribeOn(Schedulers.boundedElastic())
 			.flatMap((envelope) -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(envelope))
 			.onErrorResume((ex) -> ServerResponse.status(502)
 				.bodyValue(

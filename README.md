@@ -289,6 +289,36 @@ spring:
           server-request: 5m
 ```
 
+### Upstream connection stalls
+
+On rare occasions a request through a pooled `java.net.http.HttpClient` connection parks
+until its own timeout expires while a freshly built client answers the same request in
+milliseconds. The request is not lost — it reaches the upstream server at the moment the
+caller gives up, which can leave behind an upstream MCP session whose id the inspector
+never learns. Observed rate on a loaded CI runner is roughly one to three stalls per two
+hundred sequential requests.
+
+Every browser-visible wait is bounded, so a stall surfaces as an error rather than a hang:
+the streamable-HTTP proxy answers `504` after `timeouts.streamable-request` and tears down
+the orphaned session, and `/fetch` answers `502` after `timeouts.fetch-request`. Retrying
+the operation from the UI succeeds.
+
+The inspector does not retry on your behalf. The JDK exposes no per-client way to validate
+or evict a pooled connection, and it never replays a request that failed on a timeout — for
+any method. The only cure is to replay on a brand-new `HttpClient`, and none of the affected
+requests can be replayed safely: a repeated `POST /mcp` re-runs the tool upstream, a repeated
+`initialize` opens a second upstream session, and a repeated OAuth token exchange burns the
+single-use authorization code.
+
+Two levers do exist, and both belong to the application that runs the JVM — they are global
+system properties read once at class-initialization time, so a starter must not set them for you:
+
+- Run JDK 17.0.21 or newer. [JDK-8277969](https://bugs.openjdk.org/browse/JDK-8277969) (fixed
+  in 17.0.17) and [JDK-8304701](https://bugs.openjdk.org/browse/JDK-8304701) (fixed in 17.0.21)
+  are both live in older 17.0.x and both bite the shapes this proxy uses.
+- `-Djdk.httpclient.keepalive.timeout=30` evicts idle pooled connections before an intermediary
+  silently drops them. JDK 17 defaults to `1200` seconds; JDK 20 and newer already default to `30`.
+
 ### Graceful shutdown
 
 Boot defaults `server.shutdown` to `graceful`, which blocks context close until every
