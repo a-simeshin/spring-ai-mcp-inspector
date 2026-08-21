@@ -1,3 +1,8 @@
+// [spring-ai-mcp-inspector PATCH] Vendored upstream config, kept as-is and dormant.
+// `@playwright/test` is not installed (see package.json) and this targets the Vite
+// dev server on :6274, which is not shipped by this project's build. Browser
+// regression coverage lives in the Selenide integration tests instead
+// (see docs/critical-paths.md).
 import { defineConfig, devices } from "@playwright/test";
 
 /**
