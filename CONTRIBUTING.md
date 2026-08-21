@@ -82,6 +82,13 @@ inspector UI. Live in `*E2ETest.java` files under the demo stack modules. Each
 of the two also re-runs the shared proxy integration tests from the
 `-demo-app` test-jar, so those get exercised once per web stack.
 
+The vendored `spring-ai-mcp-inspector-ui` bundle also ships an upstream TS
+Playwright suite (`upstream-client/e2e`, `playwright.config.ts`). It is
+dormant on purpose: `@playwright/test` is not installed and the config
+targets a dev server this project doesn't ship. Do not wire it into CI;
+browser regression coverage for the inspector UI lives in the Selenide
+integration tests above.
+
 ### Code coverage — mandatory ≥ 80%
 
 Every production module must keep **unit-test coverage at 80% or higher**. The

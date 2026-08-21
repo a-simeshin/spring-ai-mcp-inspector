@@ -1,3 +1,8 @@
+// [spring-ai-mcp-inspector PATCH] Vendored upstream config, kept as-is and dormant:
+// `@playwright/test` is not installed (not a devDependency here), and this config
+// targets a `vite dev server` on :6274 that is not shipped by this project. Browser
+// regression coverage for the inspector UI lives in the Selenide integration tests
+// instead: see InspectorUiIT and neighbors under the demo modules.
 import { defineConfig, devices } from "@playwright/test";
 
 /**
