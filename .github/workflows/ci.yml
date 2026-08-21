@@ -95,7 +95,13 @@ jobs:
 
       # Selenide UI integration tests (InspectorUiIT, UiBigDataIT) and the
       # `*E2ETest` suite drive a real browser via WebDriverManager; provide one.
+      # The step's `chrome-path` output is handed to Maven as CHROME_BINARY,
+      # the second entry in every suite's detection chain, so the browser the
+      # workflow installed is the browser the tests drive. Without it the suites
+      # fall back to guessing, and E2ePreconditions fails the job in CI rather
+      # than skipping silently.
       - name: Set up Chrome
+        id: setup-chrome
         uses: browser-actions/setup-chrome@v1
 
       - name: Set up JDK 17
@@ -106,6 +112,8 @@ jobs:
           cache: maven
 
       - name: Build and test the servlet reactor
+        env:
+          CHROME_BINARY: ${{ steps.setup-chrome.outputs.chrome-path }}
         run: ./mvnw -B -ntp verify -pl '!:spring-ai-mcp-inspector-demo-webflux'
 
   e2e-webflux:
@@ -119,8 +127,10 @@ jobs:
         uses: actions/checkout@v4
 
       # The reactive demo carries a Selenide smoke IT of its own, so this job
-      # needs a browser too.
+      # needs a browser too. Same `chrome-path` -> CHROME_BINARY handoff as the
+      # servlet job.
       - name: Set up Chrome
+        id: setup-chrome
         uses: browser-actions/setup-chrome@v1
 
       - name: Set up JDK 17
@@ -131,4 +141,6 @@ jobs:
           cache: maven
 
       - name: Build and test the reactive reactor
+        env:
+          CHROME_BINARY: ${{ steps.setup-chrome.outputs.chrome-path }}
         run: ./mvnw -B -ntp verify -pl '!:spring-ai-mcp-inspector-demo-webmvc'
