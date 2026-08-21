@@ -249,6 +249,11 @@ public class StreamableHttpProxyController {
 		}
 		catch (final RuntimeException ex) {
 			LOG.warn("proxy[{}] await response failed: {}", session.sessionId(), ex.toString());
+			// A failed first POST (the initialize) never returned a session id to the
+			// client, so the session is orphaned — tear it down instead of leaking it.
+			if (includeSessionHeader) {
+				this.registry.removeAndClose(session.sessionId());
+			}
 			return ResponseEntity.status(HttpStatus.GATEWAY_TIMEOUT)
 				.body(Map.of("error", "upstream did not respond within " + requestTimeout.toSeconds() + "s"));
 		}

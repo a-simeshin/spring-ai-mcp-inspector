@@ -18,6 +18,8 @@ package io.inspector.mcp.webflux.proxy;
 
 import java.net.URI;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -45,6 +47,8 @@ import org.springframework.web.reactive.function.server.HandlerStrategies;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
@@ -322,6 +326,52 @@ class ProxyHandlerTests {
 					.containsEntry("body", "hello-proxy");
 			}
 			finally {
+				server.stop(0);
+			}
+		}
+
+		@Test
+		@Story("Outbound HTTP proxy")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("fetch() runs its blocking HttpClient.send() off the subscribing (event-loop) thread")
+		void fetch_whenSubscribedOnANonBlockingThread_leavesThatThreadFree() throws Exception {
+			// given — an upstream that holds the response open for 3s
+			final CountDownLatch inFlight = new CountDownLatch(1);
+			final com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
+				.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+			server.createContext("/slow", (exchange) -> {
+				inFlight.countDown();
+				try {
+					Thread.sleep(3000);
+				}
+				catch (final InterruptedException ignored) {
+					Thread.currentThread().interrupt();
+				}
+				exchange.sendResponseHeaders(204, -1);
+				exchange.close();
+			});
+			server.start();
+			final Scheduler loop = Schedulers.newParallel("fake-event-loop", 1);
+			try {
+				final int port = server.getAddress().getPort();
+				final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/fetch")
+					.contentType(MediaType.APPLICATION_JSON)
+					.body("{\"url\":\"http://127.0.0.1:" + port + "/slow\"}"));
+
+				// when — the exchange is subscribed on a single-worker (event-loop-like)
+				// scheduler
+				ProxyHandlerTests.this.handler.fetch(request).subscribeOn(loop).subscribe();
+				assertThat(inFlight.await(5, TimeUnit.SECONDS)).isTrue();
+
+				// then — that worker is still able to run other work
+				final CountDownLatch free = new CountDownLatch(1);
+				loop.schedule(free::countDown);
+				assertThat(free.await(1, TimeUnit.SECONDS))
+					.as("the subscribing (event-loop) thread must not be parked inside HttpClient.send()")
+					.isTrue();
+			}
+			finally {
+				loop.dispose();
 				server.stop(0);
 			}
 		}
@@ -1415,6 +1465,42 @@ class ProxyHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			assertThat(response.headers().getContentType()).isEqualTo(MediaType.APPLICATION_JSON);
+		}
+
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() opening a new session whose upstream never replies times out with a 504 and tears down the orphaned session")
+		void postMcp_newSessionTimeout_returnsGatewayTimeoutAndRemovesSession() {
+			// given — a fast streamable request timeout so the awaiter trips quickly, and
+			// a
+			// brand-new session (includeSessionHeader == true) whose upstream stays
+			// silent
+			final McpInspectorProperties fastProps = new McpInspectorProperties();
+			fastProps.getTimeouts().setStreamableRequest(java.time.Duration.ofMillis(100));
+			final ProxyHandler fastHandler = new ProxyHandler(ProxyHandlerTests.this.registry,
+					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
+					ProxyHandlerTests.this.transportDetector, ProxyHandlerTests.this.objectMapper, fastProps);
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://up/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"ping\"}"));
+
+			// when — never feed a reply, so the awaiter times out
+			final ServerResponse response = fastHandler.postMcp(request).block();
+
+			// then — 504 gateway timeout and the orphaned new session is removed
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+			assertThat(entityBody(response).get("error").toString()).contains("did not respond");
+			verify(ProxyHandlerTests.this.registry).removeAndClose(captured[0].sessionId());
 		}
 
 	}

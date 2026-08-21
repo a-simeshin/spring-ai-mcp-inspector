@@ -44,6 +44,7 @@ import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
@@ -153,8 +154,10 @@ public class ProxyHandler {
 	}
 
 	public Mono<ServerResponse> fetch(final ServerRequest request) {
+		// doFetch() ends in a blocking HttpClient.send() — keep it off the event loop.
 		return request.bodyToMono(JsonNode.class)
 			.flatMap((body) -> Mono.fromCallable(() -> doFetch(body))
+				.subscribeOn(Schedulers.boundedElastic())
 				.flatMap((envelope) -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(envelope))
 				.onErrorResume((ex) -> ServerResponse.status(502)
 					.bodyValue(Map.of("error",
@@ -458,6 +461,11 @@ public class ProxyHandler {
 			return ok.bodyValue(node);
 		}).onErrorResume((ex) -> {
 			LOG.warn("proxy[{}] await response failed: {}", session.sessionId(), ex.toString());
+			// A failed first POST (the initialize) never returned a session id to the
+			// client, so the session is orphaned — tear it down instead of leaking it.
+			if (includeSessionHeader) {
+				this.registry.removeAndClose(session.sessionId());
+			}
 			return ServerResponse.status(HttpStatus.GATEWAY_TIMEOUT)
 				.bodyValue(Map.of("error", "upstream did not respond within " + requestTimeout.toSeconds() + "s"));
 		});
