@@ -77,6 +77,11 @@ build/reports/tests/
 build/screenshots/
 selenide-reports/
 
+# Playwright
+test-results/
+playwright-report/
+*.last-run.json
+
 # TypeScript incremental build cache
 *.tsbuildinfo
 
