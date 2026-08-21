@@ -24,6 +24,7 @@ import com.codeborne.selenide.Selenide;
 import com.codeborne.selenide.SelenideElement;
 import io.github.bonigarcia.wdm.WebDriverManager;
 import io.inspector.mcp.demo.DemoApplication;
+import io.inspector.mcp.demo.support.E2ePreconditions;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -31,7 +32,6 @@ import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -83,8 +83,9 @@ import static com.codeborne.selenide.Selenide.open;
  * The Chrome-binary detection and {@code WebDriverManager} setup are copied from
  * {@link InspectorUiIT#detectChromeBinary()} / {@link InspectorUiIT#setupBrowser()} —
  * same priority list (system property → env → macOS prod Chrome → Puppeteer cache →
- * Linux). The test is {@code Assumptions.assumeTrue}-gated on Chrome being present, so CI
- * without a browser skips cleanly instead of failing.
+ * Linux). The Chrome gate goes through
+ * {@link E2ePreconditions#requireChromeOrSkip(String)}: a developer host without a
+ * browser skips, CI without one fails.
  *
  * <p>
  * Property overrides (passed via {@code @SpringBootTest(properties=...)}):
@@ -121,7 +122,7 @@ class BootstrapRegressionE2ETest {
 	@BeforeAll
 	void setupBrowser() {
 		String binary = detectChromeBinary();
-		Assumptions.assumeTrue(binary != null && !binary.isBlank(), "Chrome binary not found; e2e skipped");
+		E2ePreconditions.requireChromeOrSkip(binary);
 
 		var wdm = WebDriverManager.chromedriver();
 		String majorVersion = parseMajorVersionFromPath(binary);
