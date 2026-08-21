@@ -51,6 +51,12 @@ import {
 } from "./lib/hooks/useDraggablePane";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import {
   AppWindow,
@@ -102,6 +108,16 @@ import {
 import MetadataTab from "./components/MetadataTab";
 
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
+
+// [spring-ai-mcp-inspector PATCH] MCP Tasks are an experimental/extension
+// capability (SEP-1686). Spring AI / MCP Java SDK 2.0.0 servers structurally
+// cannot advertise them, so the Tasks tab is always disabled and the user
+// cannot infer why. The hint text below is attached to the Tooltip wrapper span
+// (title + aria-label), NOT to the disabled trigger: tabs.tsx applies
+// `disabled:pointer-events-none`, which blocks hover on the trigger itself.
+const MCP_TASKS_DOCS_URL = "https://modelcontextprotocol.io/seps/1686-tasks";
+const MCP_TASKS_DISABLED_HINT =
+  "This server does not support MCP Tasks. See the SEP-1686 proposal.";
 
 type PrefilledAppsToolCall = {
   id: number;
@@ -1416,13 +1432,45 @@ const App = () => {
                   <Hammer className="w-4 h-4 mr-2" />
                   Tools
                 </TabsTrigger>
-                <TabsTrigger
-                  value="tasks"
-                  disabled={!serverCapabilities?.tasks}
-                >
-                  <ListTodo className="w-4 h-4 mr-2" />
-                  Tasks
-                </TabsTrigger>
+                {/* [spring-ai-mcp-inspector PATCH] The disabled trigger has
+                    pointer-events:none (components/ui/tabs.tsx), so the tooltip
+                    and the native title must live on a live wrapper span, and
+                    aria-label on the same wrapper keeps the reason reachable
+                    for assistive tech. The enabled branch stays unchanged. */}
+                {serverCapabilities?.tasks ? (
+                  <TabsTrigger value="tasks">
+                    <ListTodo className="w-4 h-4 mr-2" />
+                    Tasks
+                  </TabsTrigger>
+                ) : (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span
+                          className="pointer-events-auto inline-flex items-center"
+                          title={MCP_TASKS_DISABLED_HINT}
+                          aria-label={MCP_TASKS_DISABLED_HINT}
+                        >
+                          <TabsTrigger value="tasks" disabled>
+                            <ListTodo className="w-4 h-4 mr-2" />
+                            Tasks
+                          </TabsTrigger>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" className="max-w-xs text-center">
+                        This server does not support MCP Tasks.{" "}
+                        <a
+                          href={MCP_TASKS_DOCS_URL}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline"
+                        >
+                          MCP Tasks documentation
+                        </a>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
                 <TabsTrigger value="apps">
                   <AppWindow className="w-4 h-4 mr-2" />
                   Apps
