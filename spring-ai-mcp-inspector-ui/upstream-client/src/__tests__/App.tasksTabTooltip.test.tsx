@@ -1,6 +1,6 @@
 // Must run before react-dom loads (jsdom lacks PointerEvent; React only
 // attaches pointermove listeners when the constructor exists).
-import "./_pointerEventsPolyfill";
+import "../testUtils/pointerEventsPolyfill";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import App from "../App";
