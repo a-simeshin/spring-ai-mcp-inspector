@@ -213,6 +213,50 @@ describe("App - Tasks tab disabled-state tooltip", () => {
     }
   });
 
+  it("exposes the reason to the keyboard: wrapper is focusable and focus opens the tooltip", async () => {
+    mockUseConnection.mockReturnValue(
+      connectionState({ tools: { listChanged: true } }),
+    );
+
+    render(<App />);
+
+    const tasksTab = screen.getByRole("tab", { name: /^Tasks$/i });
+    expect(tasksTab).toBeDisabled();
+
+    // The wrapper span is the keyboard entry point: the disabled trigger is
+    // not focusable (disabled TabsTrigger), so tabIndex keeps the wrapper in
+    // the tab order and Radix Tooltip opens on focus.
+    const wrapper = tasksTab.parentElement!;
+    expect(wrapper).toHaveAttribute("tabindex", "0");
+    expect(wrapper).toHaveAttribute("aria-label", MCP_TASKS_DISABLED_HINT);
+
+    // No tooltip content before focus
+    expect(
+      screen.queryByText(/does not support MCP Tasks/i),
+    ).not.toBeInTheDocument();
+
+    // Focus the wrapper (what happens when the user tabs to it) and verify
+    // the explanation becomes available: tooltip content + SEP-1686 link.
+    fireEvent.focus(wrapper);
+
+    await waitFor(
+      () => {
+        expect(
+          screen.queryAllByText(/does not support MCP Tasks/i),
+        ).not.toHaveLength(0);
+      },
+      { timeout: 3000 },
+    );
+
+    const docsLinks = screen.getAllByRole("link", {
+      name: /MCP Tasks documentation/i,
+    });
+    expect(docsLinks.length).toBeGreaterThan(0);
+    for (const link of docsLinks) {
+      expect(link).toHaveAttribute("href", MCP_TASKS_DOCS_URL);
+    }
+  });
+
   it("keeps the Tasks tab enabled with no tooltip when the tasks capability is advertised", async () => {
     mockUseConnection.mockReturnValue(
       connectionState({ tasks: { listChanged: true } }),

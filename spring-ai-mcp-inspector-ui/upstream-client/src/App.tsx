@@ -1436,7 +1436,10 @@ const App = () => {
                     pointer-events:none (components/ui/tabs.tsx), so the tooltip
                     and the native title must live on a live wrapper span, and
                     aria-label on the same wrapper keeps the reason reachable
-                    for assistive tech. The enabled branch stays unchanged. */}
+                    for assistive tech. tabIndex keeps the wrapper reachable by
+                    keyboard: Radix TooltipTrigger does not make a plain span
+                    focusable, and the disabled trigger itself never receives
+                    focus. The enabled branch stays unchanged. */}
                 {serverCapabilities?.tasks ? (
                   <TabsTrigger value="tasks">
                     <ListTodo className="w-4 h-4 mr-2" />
@@ -1448,6 +1451,7 @@ const App = () => {
                       <TooltipTrigger asChild>
                         <span
                           className="pointer-events-auto inline-flex items-center"
+                          tabIndex={0}
                           title={MCP_TASKS_DISABLED_HINT}
                           aria-label={MCP_TASKS_DISABLED_HINT}
                         >
