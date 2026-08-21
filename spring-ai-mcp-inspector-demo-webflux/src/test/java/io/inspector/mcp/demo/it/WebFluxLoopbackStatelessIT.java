@@ -9,16 +9,15 @@
  */
 package io.inspector.mcp.demo.it;
 
-import java.util.List;
-
 import io.modelcontextprotocol.client.McpSyncClient;
-import io.modelcontextprotocol.spec.McpSchema.ListToolsResult;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,8 +27,6 @@ import org.springframework.test.context.TestPropertySource;
 
 import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
 import io.inspector.mcp.demo.DemoApplication;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Reactive (WebFlux + Netty) variant of {@code LoopbackStatelessTransportIT}.
@@ -51,32 +48,56 @@ class WebFluxLoopbackStatelessIT {
 	@LocalServerPort
 	private int port;
 
+	private McpSyncClient client;
+
+	@BeforeEach
+	void connect() {
+		this.client = loopbackFactory.forStateless("127.0.0.1", this.port, "/mcp");
+		this.client.initialize();
+	}
+
+	@AfterEach
+	void disconnect() {
+		if (this.client == null) {
+			return;
+		}
+		try {
+			this.client.close();
+		}
+		catch (Exception ignored) {
+			/* best-effort */
+		}
+	}
+
 	@Test
 	@DisplayName("listTools via the reactive loopback stateless client returns the demo tools")
 	@Story("Reactive loopback stateless tools/list")
 	@Severity(SeverityLevel.CRITICAL)
-	@Description("Boots the demo server on the reactive (WebFlux + Netty) stack with the stateless protocol "
-			+ "and verifies a real loopback inspector client can list the expected demo tools (echo, sum, currentTime).")
+	@Description("Boots the demo server on the reactive (WebFlux + Netty) stack over stateless and verifies a real "
+			+ "loopback inspector client can list the expected demo tools (echo, sum, currentTime).")
 	void listTools_viaReactiveLoopbackStateless_returnsDemoTools() {
-		// given
-		McpSyncClient client = loopbackFactory.forStateless("127.0.0.1", port, "/mcp");
-		try {
-			// when
-			client.initialize();
-			ListToolsResult result = client.listTools();
-			List<String> names = result.tools().stream().map(t -> t.name()).toList();
+		DemoServerAssertions.assertListsDemoTools(this.client);
+	}
 
-			// then
-			assertThat(names).contains("echo", "sum", "currentTime");
-		}
-		finally {
-			try {
-				client.close();
-			}
-			catch (Exception ignored) {
-				/* best-effort */
-			}
-		}
+	@Test
+	@DisplayName("readResource via the reactive loopback stateless client returns the greeting body")
+	@Story("Reactive loopback stateless resources/read")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Reads demo://greeting over the reactive (WebFlux + Netty) stateless transport and verifies the "
+			+ "resource body arrives intact: the resources API travels the same transport as tools/list.")
+	void readResource_viaReactiveLoopbackStateless_returnsGreetingBody() {
+		DemoServerAssertions.assertReadsGreetingResource(this.client);
+	}
+
+	@Test
+	@DisplayName("callTool via the reactive loopback stateless client round-trips arguments and results")
+	@Story("Reactive loopback stateless tools/call")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Calls echo and sum over the reactive (WebFlux + Netty) stateless transport and verifies the "
+			+ "arguments reach the server and the computed results come back. Listing tools alone never "
+			+ "exercises argument marshalling.")
+	void callTool_viaReactiveLoopbackStateless_roundTripsArgumentsAndResults() {
+		DemoServerAssertions.assertCallsDemoTools(this.client);
 	}
 
 }
