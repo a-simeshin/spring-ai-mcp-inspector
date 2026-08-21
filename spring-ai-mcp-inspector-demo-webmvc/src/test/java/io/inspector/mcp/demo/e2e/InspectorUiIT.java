@@ -35,6 +35,7 @@ import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -97,8 +98,9 @@ import static com.codeborne.selenide.Selenide.open;
  * {@link #parseMajorVersionFromPath(String)}, {@link #startApp(Combo)},
  * {@link #stopApp()}) mirror the patterns from the original {@code InspectorE2ETest}
  * verbatim — version-pinned WebDriverManager, Puppeteer-cache scan,
- * {@code Assumptions.assumeTrue(...)} when Chrome isn't installed, and command-line
- * {@code --server.port=0} so we never collide with {@code 8080}.
+ * {@link E2ePreconditions#requireChromeOrSkip(String)} when Chrome isn't installed (skip
+ * locally, hard failure in CI), and command-line {@code --server.port=0} so we never
+ * collide with {@code 8080}.
  */
 @Epic("MCP Inspector UI")
 @Feature("Upstream React inspector E2E")
@@ -144,7 +146,7 @@ class InspectorUiIT {
 	@BeforeAll
 	void setupBrowser() {
 		String binary = detectChromeBinary();
-		Assumptions.assumeTrue(binary != null && !binary.isBlank(), "Chrome binary not found; e2e skipped");
+		E2ePreconditions.requireChromeOrSkip(binary);
 
 		var wdm = WebDriverManager.chromedriver();
 		String majorVersion = parseMajorVersionFromPath(binary);
@@ -1180,10 +1182,11 @@ class InspectorUiIT {
 
 		/**
 		 * Detects whether the {@code prompts/list} response from this server includes
-		 * argument schemas. The demo's {@code @McpArg}-annotated providers should yield
-		 * arguments, but if Spring AI's annotation scanner skipped them the upstream UI
-		 * will render the prompt detail pane without input affordances — in that case we
-		 * skip the per-arg render tests rather than fail spuriously.
+		 * argument schemas. The demo's {@code @McpArg}-annotated providers must yield
+		 * arguments; if Spring AI's annotation scanner skipped them the upstream UI
+		 * renders the prompt detail pane without input affordances. That is a regression,
+		 * not an environment quirk, so the per-arg render tests assert on it instead of
+		 * skipping themselves.
 		 *
 		 * <p>
 		 * Returns {@code true} when at least one Combobox trigger
@@ -1216,7 +1219,7 @@ class InspectorUiIT {
 		void renderPrompt_greetingWithName_showsHelloWorld() {
 			// given
 			selectRow("greeting");
-			Assumptions.assumeTrue(promptArgsRendered(),
+			Assertions.assertTrue(promptArgsRendered(),
 					"prompts/list returned no argument schemas for `greeting` — server-side "
 							+ "Spring AI MCP @McpArg propagation is incomplete; skipping render assertion");
 
@@ -1243,7 +1246,7 @@ class InspectorUiIT {
 		void renderPrompt_multiTurnWithTopic_showsThreeMessages() {
 			// given
 			selectRow("multiTurn");
-			Assumptions.assumeTrue(promptArgsRendered(),
+			Assertions.assertTrue(promptArgsRendered(),
 					"prompts/list returned no argument schemas for `multiTurn`; skipping");
 
 			// when
@@ -1265,7 +1268,7 @@ class InspectorUiIT {
 		void renderPrompt_optionalDescriptionRequiredOnly_succeeds() {
 			// given
 			selectRow("optionalDescription");
-			Assumptions.assumeTrue(promptArgsRendered(),
+			Assertions.assertTrue(promptArgsRendered(),
 					"prompts/list returned no argument schemas for `optionalDescription`; skipping");
 
 			// when
@@ -2780,7 +2783,7 @@ class InspectorUiIT {
 			// The topic Combobox trigger is a <button role=combobox aria-controls=topic>.
 			// Click it to open the Popover containing the CommandInput.
 			SelenideElement trigger = activePanel().$("button[role=combobox][aria-controls=topic]");
-			Assumptions.assumeTrue(trigger.exists(),
+			Assertions.assertTrue(trigger.exists(),
 					"prompts/list returned no argument schemas for multiTurn — completion popover unavailable");
 			trigger.shouldBe(visible).click();
 
