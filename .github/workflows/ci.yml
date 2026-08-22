@@ -88,6 +88,8 @@ jobs:
       - name: Set up Chrome
         id: setup-chrome
         uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
 
       - name: Export the Chrome binary path
         run: echo "CHROME_BINARY=${{ steps.setup-chrome.outputs.chrome-path }}" >> "$GITHUB_ENV"
@@ -117,6 +119,8 @@ jobs:
       - name: Set up Chrome
         id: setup-chrome
         uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
 
       - name: Export the Chrome binary path
         run: echo "CHROME_BINARY=${{ steps.setup-chrome.outputs.chrome-path }}" >> "$GITHUB_ENV"
