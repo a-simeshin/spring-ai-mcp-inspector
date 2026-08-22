@@ -1422,7 +1422,14 @@ const App = () => {
                 window.location.hash = value;
               }}
             >
-              <TabsList className="mb-4 py-0">
+              {/* [spring-ai-mcp-inspector PATCH] Below `sm` (640px) the tab
+                  bar wraps instead of overflowing: the upstream TabsList base
+                  is `inline-flex h-9` with no wrap, so on a 375px viewport
+                  the trailing tabs (Sampling/Elicitations/Roots/Auth/Metadata)
+                  render off-screen with no scroll and no affordance. flex-wrap
+                  + h-auto let the triggers flow into rows; sm:h-9 +
+                  sm:flex-nowrap restore the single upstream row at >=640px. */}
+              <TabsList className="mb-4 py-0 flex-wrap h-auto sm:h-9 sm:flex-nowrap">
                 <TabsTrigger
                   value="resources"
                   disabled={!serverCapabilities?.resources}
