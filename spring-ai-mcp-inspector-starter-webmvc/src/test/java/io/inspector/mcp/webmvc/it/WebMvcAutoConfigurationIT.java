@@ -16,6 +16,8 @@
 
 package io.inspector.mcp.webmvc.it;
 
+import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -178,6 +180,40 @@ class WebMvcAutoConfigurationIT {
 		assertThat(asset.getBody()).as("the asset must not be served empty").isNotEmpty();
 		assertThat(asset.getHeaders().getCacheControl()).as("hashed assets must be cacheable")
 			.contains("max-age=604800");
+	}
+
+	@Test
+	@DisplayName("POST /mcp with an unreachable upstream returns a structured 502")
+	@Story("JSON-RPC relay")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Pointing the proxy at a closed port returns MCP_CONNECT_FAILED with reason connection_refused instead of a flat or timeout error")
+	void postMcp_unreachableUpstream_returnsStructured502() throws Exception {
+		// given — a loopback port that nothing listens on, so the very first
+		// connect attempt is refused
+		final int deadPort;
+		try (ServerSocket socket = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+			deadPort = socket.getLocalPort();
+		}
+		final HttpHeaders jsonHeaders = new HttpHeaders();
+		jsonHeaders.setContentType(MediaType.APPLICATION_JSON);
+		final HttpEntity<String> entity = new HttpEntity<>("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}",
+				jsonHeaders);
+		final String uri = UriComponentsBuilder.fromUriString(url("/mcp-inspector-api/mcp"))
+			.queryParam("url", "http://127.0.0.1:" + deadPort + "/mcp")
+			.build()
+			.toUriString();
+
+		// when — the browser-facing POST reaches the proxy, the upstream refuses
+		final ResponseEntity<String> response = this.restTemplate.exchange(uri, HttpMethod.POST, entity, String.class);
+
+		// then — non-2xx, machine-readable reason, no stack traces in the body
+		assertThat(response.getStatusCode()).as("body=%s", response.getBody()).isEqualTo(HttpStatus.BAD_GATEWAY);
+		final JsonNode body = this.objectMapper.readTree(response.getBody());
+		final JsonNode error = body.path("error");
+		assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+		assertThat(error.path("reason").asText()).isEqualTo("connection_refused");
+		assertThat(error.path("message").asText()).isNotBlank();
+		assertThat(error.path("retryable").asBoolean()).isTrue();
 	}
 
 	private String url(final String path) {
