@@ -39,6 +39,7 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -94,6 +95,9 @@ import static com.codeborne.selenide.Selenide.open;
  * <li>{@link TabsAvailability} — verifies the rendered tab list against expected.</li>
  * <li>{@link ResponsiveTabBar} — CI regression for the <640px wrap patch (375px /
  * sm-boundary / 1024px control).</li>
+ * <li>{@link ResponsiveHistoryLayout} — CI regression for the <1024px compact layout
+ * patch (History pane never overlaps tab content; elementFromPoint at 780x437, disjoint
+ * panes at 768/1023, desktop control at 1024px).</li>
  * </ul>
  *
  * <p>
@@ -2961,6 +2965,166 @@ class InspectorUiIT {
 				Assertions.assertTrue(height >= 32 && height <= 40,
 						"TabsList must be a single ~36px row at " + width + "px, was " + height + "px");
 			}
+		}
+
+	}
+
+	// =====================================================================
+	// Y. Responsive history layout — CI regression for the <lg compact
+	// layout patch (upstream-client/src/App.tsx root container + bottom
+	// History pane, NOTICE.txt entries 8/9). The shared suite browser is
+	// fixed at 1366x900 (setupBrowser), so each scenario resizes the live
+	// headless window to its target viewport and restores it afterwards.
+	//
+	// Tailwind's `lg` breakpoint is `min-width: 1024px` (inclusive): the
+	// desktop side-by-side layout (draggable sidebar, fixed-height resizable
+	// History pane) applies at >=1024px; below it the app stacks into
+	// flex-col so the History/Server Notifications pane is in normal flow
+	// and can never overlay tab content. The bug this pins (#60): at
+	// 780x437 the fixed-height 300px pane left only ~137px for tab content,
+	// so the Tools tab's "List Tools" button sat geometrically under the
+	// pane header — elementFromPoint at its centre returned the History div
+	// and real clicks never reached the button.
+	// =====================================================================
+
+	@Nested
+	@Disabled("red test before fix: compact <1024px history layout not implemented yet (#60)")
+	@DisplayName("Responsive history layout (compact <1024px / desktop control)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class ResponsiveHistoryLayout {
+
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			openAndConnect();
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@BeforeEach
+		void resetToDesktopViewport() {
+			ResponsiveTabBar.setViewport(1366, 900);
+		}
+
+		@AfterEach
+		void restoreToDesktopViewport() {
+			ResponsiveTabBar.setViewport(1366, 900);
+		}
+
+		/**
+		 * Clickable control in the Tools tab whose centre was covered by the History pane
+		 * before the fix (issue #60 repro: 780x437, elementFromPoint returned the
+		 * History/Clear div).
+		 */
+		private SelenideElement listToolsButton() {
+			clickTab("tools");
+			return activePanel().$(byText("List Tools"));
+		}
+
+		/**
+		 * True when {@code elementFromPoint} at the given element's centre returns it.
+		 */
+		private static boolean clickableAtCenter(SelenideElement element) {
+			return Boolean.TRUE.equals(Selenide.executeJavaScript(
+					"const el = arguments[0];" + "const r = el.getBoundingClientRect();"
+							+ "return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === el;",
+					element));
+		}
+
+		/**
+		 * True when the document has no horizontal overflow (scrollWidth <= clientWidth).
+		 */
+		private static boolean noHorizontalDocumentOverflow() {
+			return Boolean.TRUE.equals(Selenide.executeJavaScript(
+					"return document.documentElement.scrollWidth <= document.documentElement.clientWidth;"));
+		}
+
+		/**
+		 * Bounding boxes of the active tab panel and the History column must not
+		 * intersect. The History column is anchored via the same stable selector as
+		 * {@link #historyColumn()}.
+		 */
+		private static String panesOverlapJs() {
+			return "const panel = document.querySelector('[role=tabpanel][data-state=active]').getBoundingClientRect();"
+					+ "const history = document.querySelector('.flex-1.overflow-y-auto.p-4.border-r');"
+					+ "if (!history) { return 'history-not-found'; }" + "const h = history.getBoundingClientRect();"
+					+ "return !(h.left < panel.right && h.right > panel.left && h.top < panel.bottom"
+					+ "&& h.bottom > panel.top);";
+		}
+
+		@Test
+		@Story("Responsive history layout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At the issue #60 repro viewport (780x437) the List Tools button in the Tools tab is clickable by real coordinates: elementFromPoint at its bounding-box centre returns the button itself, not an overlaying History pane node.")
+		@DisplayName("listToolsClickableAt780x437 — elementFromPoint hits the button")
+		void listTools_at780x437_elementFromPointReturnsButton() {
+			// given
+			ResponsiveTabBar.setViewport(780, 437);
+			SelenideElement listTools = listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
+
+			// then
+			Assertions.assertTrue(clickableAtCenter(listTools),
+					"elementFromPoint at the List Tools centre must return the button itself at 780x437");
+		}
+
+		@Test
+		@Story("Responsive history layout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("At 768px and 1023px (the widest viewport below the inclusive lg breakpoint) the History column and the active tab panel have disjoint bounding boxes and the document does not overflow horizontally.")
+		@DisplayName("panesDisjointAndNoHScrollAt768And1023 — stacked, never overlapping")
+		void historyColumn_at768And1023_disjointFromTabPanelNoHorizontalScroll() {
+			for (int width : new int[] { 768, 1023 }) {
+				// given
+				ResponsiveTabBar.setViewport(width, 800);
+				listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
+
+				// when & then
+				Boolean disjoint = Selenide.executeJavaScript(panesOverlapJs());
+				Assertions.assertEquals(Boolean.TRUE, disjoint,
+						"tab content and the History pane must not overlap at " + width + "px");
+				Assertions.assertTrue(noHorizontalDocumentOverflow(),
+						"document.documentElement must not overflow horizontally at " + width + "px");
+			}
+		}
+
+		@Test
+		@Story("Responsive history layout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Desktop control at exactly 1024px (inclusive lg breakpoint): the side-by-side layout keeps its resizable History pane with a drag handle and the sidebar resize handle, i.e. the compact patch causes no desktop regression.")
+		@DisplayName("desktopPaneResizableAt1024 — drag handles present")
+		void desktopLayout_at1024_resizableHistoryPaneAndSidebarHandlesPresent() {
+			// given
+			ResponsiveTabBar.setViewport(1024, 800);
+			listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
+
+			// then — both desktop-only drag handles are mounted and visible.
+			$("[data-testid=sidebar-drag-handle]").shouldBe(visible, Duration.ofSeconds(5));
+			$("[data-testid=pane-drag-handle]").shouldBe(visible, Duration.ofSeconds(5));
+			Assertions.assertTrue(noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 1024px");
+		}
+
+		@Test
+		@Story("Responsive history layout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("375px regression of the <640px tab-bar wrap fix (PR #69): the TabsList still wraps, all 11 triggers are present and the document does not overflow horizontally after the compact history-layout patch.")
+		@DisplayName("tabBarRegressionAt375 — mobile wrap intact")
+		void tabBar_at375_wrapIntactAfterCompactPatch() {
+			// given
+			ResponsiveTabBar.setViewport(375, 667);
+
+			// then
+			Assertions.assertEquals("wrap", ResponsiveTabBar.tabsListFlexWrap(),
+					"TabsList must still wrap below the sm breakpoint");
+			for (String value : ResponsiveTabBar.ALL_TAB_VALUES) {
+				Assertions.assertTrue($("[role=tab][id$='-trigger-" + value + "']").exists(),
+						"tab trigger '" + value + "' must be present in the DOM at 375px");
+			}
+			Assertions.assertTrue(noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 375px");
 		}
 
 	}
