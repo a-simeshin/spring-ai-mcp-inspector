@@ -99,6 +99,24 @@ class ProxyConnectFailureTests {
 
 		@Test
 		@Story("Classification")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A protocol-level reply from a live server (404 session not found) is unknown, not a transport failure — the pump must not tear the session down for it")
+		void classify_sessionNotFoundFromLiveServer_returnsUnknown() {
+			// given — the SDK surfaces the server's 404 answer to a session-id POST as
+			// McpTransportSessionNotFoundException; the upstream is alive, only the
+			// session is gone, so this must NOT classify as a connect failure
+			final RuntimeException sessionNotFound = new RuntimeException(
+					"Session not found for session ID: 8e50e393-f938-4b6a-8903-0e8ce7806bb2 not found on the server");
+
+			// when
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(sessionNotFound);
+
+			// then
+			assertThat(failure.reason()).isEqualTo(ProxyConnectFailure.Reason.UNKNOWN);
+		}
+
+		@Test
+		@Story("Classification")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("A wrapped cause chain (Reactor-style) is unwrapped to the recognizable root cause")
 		void classify_wrappedCause_returnsInnerReason() {
