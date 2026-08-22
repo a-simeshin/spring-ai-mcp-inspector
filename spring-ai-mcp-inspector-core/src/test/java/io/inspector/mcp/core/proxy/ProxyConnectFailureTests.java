@@ -1,0 +1,150 @@
+/*
+ * Copyright 2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package io.inspector.mcp.core.proxy;
+
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
+import java.net.http.HttpTimeoutException;
+import java.util.concurrent.TimeoutException;
+
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/** Unit tests for {@link ProxyConnectFailure}. */
+@Epic("MCP Inspector Core")
+@Feature("Proxy connect failure classification")
+class ProxyConnectFailureTests {
+
+	@Nested
+	@DisplayName("classify()")
+	class Classify {
+
+		@Test
+		@Story("Classification")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A ConnectionRefused is classified as connection_refused with a human-readable message")
+		void classify_connectException_returnsConnectionRefused() {
+			// given / when
+			final ProxyConnectFailure failure = ProxyConnectFailure
+				.classify(new ConnectException("Connection refused"));
+
+			// then
+			assertThat(failure.reason()).isEqualTo(ProxyConnectFailure.Reason.CONNECTION_REFUSED);
+			assertThat(failure.message()).isNotBlank();
+		}
+
+		@Test
+		@Story("Classification")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("An UnknownHostException is classified as dns")
+		void classify_unknownHostException_returnsDns() {
+			// given / when
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(new UnknownHostException("no-such-host"));
+
+			// then
+			assertThat(failure.reason()).isEqualTo(ProxyConnectFailure.Reason.DNS);
+			assertThat(failure.message()).isNotBlank();
+		}
+
+		@Test
+		@Story("Classification")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("SocketTimeoutException, HttpTimeoutException and TimeoutException are classified as timeout")
+		void classify_timeoutExceptions_returnsTimeout() {
+			// given / when / then
+			assertThat(ProxyConnectFailure.classify(new SocketTimeoutException("read timed out")).reason())
+				.isEqualTo(ProxyConnectFailure.Reason.TIMEOUT);
+			assertThat(ProxyConnectFailure.classify(new HttpTimeoutException("request timed out")).reason())
+				.isEqualTo(ProxyConnectFailure.Reason.TIMEOUT);
+			assertThat(ProxyConnectFailure.classify(new TimeoutException("upstream did not answer")).reason())
+				.isEqualTo(ProxyConnectFailure.Reason.TIMEOUT);
+		}
+
+		@Test
+		@Story("Classification")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("An unrecognized exception is classified as unknown without throwing")
+		void classify_unrecognizedException_returnsUnknown() {
+			// given / when
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(new IllegalStateException("bad state"));
+
+			// then
+			assertThat(failure.reason()).isEqualTo(ProxyConnectFailure.Reason.UNKNOWN);
+			assertThat(failure.message()).isNotBlank();
+		}
+
+		@Test
+		@Story("Classification")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("A wrapped cause chain (Reactor-style) is unwrapped to the recognizable root cause")
+		void classify_wrappedCause_returnsInnerReason() {
+			// given — e.g. what Reactor's block() surfaces: an unchecked wrapper around
+			// the network exception
+			final RuntimeException wrapper = new RuntimeException("block() terminated",
+					new ConnectException("Connection refused"));
+
+			// when
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(wrapper);
+
+			// then
+			assertThat(failure.reason()).isEqualTo(ProxyConnectFailure.Reason.CONNECTION_REFUSED);
+		}
+
+		@Test
+		@Story("Classification")
+		@Severity(SeverityLevel.MINOR)
+		@Description("Classify never returns null for any thrown error")
+		void classify_neverReturnsNull() {
+			// given / when
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(new RuntimeException("boom"));
+
+			// then
+			assertThat(failure).isNotNull();
+			assertThat(failure.reason()).isNotNull();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("Reason wire values")
+	class ReasonWire {
+
+		@Test
+		@Story("Wire contract")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Wire values are stable lowercase identifiers for the HTTP error payload")
+		void reason_wireValues_areStableLowercaseIdentifiers() {
+			// given / when / then
+			assertThat(ProxyConnectFailure.Reason.TIMEOUT.wire()).isEqualTo("timeout");
+			assertThat(ProxyConnectFailure.Reason.CONNECTION_REFUSED.wire()).isEqualTo("connection_refused");
+			assertThat(ProxyConnectFailure.Reason.DNS.wire()).isEqualTo("dns");
+			assertThat(ProxyConnectFailure.Reason.UNKNOWN.wire()).isEqualTo("unknown");
+		}
+
+	}
+
+}
