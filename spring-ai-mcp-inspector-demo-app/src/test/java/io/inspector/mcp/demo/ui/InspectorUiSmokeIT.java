@@ -19,6 +19,7 @@ import com.codeborne.selenide.Configuration;
 import com.codeborne.selenide.Selenide;
 import com.codeborne.selenide.SelenideElement;
 import io.github.bonigarcia.wdm.WebDriverManager;
+import io.inspector.mcp.demo.e2e.E2ePreconditions;
 import io.inspector.mcp.demo.proxy.ProxyAppHarness;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -27,7 +28,6 @@ import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -70,7 +70,7 @@ class InspectorUiSmokeIT {
 	@BeforeAll
 	static void setupBrowser() {
 		String binary = detectChromeBinary();
-		Assumptions.assumeTrue(binary != null && !binary.isBlank(), "Chrome binary not found; e2e skipped");
+		E2ePreconditions.requireChromeOrSkip(binary);
 
 		WebDriverManager wdm = WebDriverManager.chromedriver();
 		String majorVersion = parseMajorVersionFromPath(binary);

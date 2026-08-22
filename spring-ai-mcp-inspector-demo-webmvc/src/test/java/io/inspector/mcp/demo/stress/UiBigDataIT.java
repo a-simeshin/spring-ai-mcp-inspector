@@ -30,7 +30,6 @@ import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -41,6 +40,7 @@ import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import io.inspector.mcp.demo.DemoApplication;
+import io.inspector.mcp.demo.e2e.E2ePreconditions;
 
 import static com.codeborne.selenide.Condition.text;
 import static com.codeborne.selenide.Condition.visible;
@@ -50,10 +50,11 @@ import static com.codeborne.selenide.Selenide.open;
 
 /**
  * Selenide UI smoke for big-data scenarios against the vendored upstream React Inspector.
- * Gated <em>only</em> on Chrome availability — same {@link Assumptions#assumeTrue}
- * pattern as {@link io.inspector.mcp.demo.e2e.InspectorUiIT#setupBrowser()}. On hosts
- * without a usable browser the test is skipped (not failed); on developer laptops with
- * Chrome installed it runs as part of {@code mvn verify}.
+ * Gated <em>only</em> on Chrome availability: the same
+ * {@link E2ePreconditions#requireChromeOrSkip(String)} gate as
+ * {@link io.inspector.mcp.demo.e2e.InspectorUiIT#setupBrowser()}. On a developer host
+ * without a usable browser the test is skipped (not failed); in CI, where the workflow
+ * installs Chrome, a missing binary fails instead of silently disabling the suite.
  *
  * <p>
  * Historical note: this class used to be double-gated behind a {@code STRESS_UI=true}
@@ -88,11 +89,10 @@ class UiBigDataIT {
 	void setupBrowser() {
 		// Single gate: Chrome present. The earlier STRESS_UI=true env opt-in is gone
 		// (see class javadoc): it kept the test perpetually skipped on dev laptops, so
-		// the suite never benefited from it. CI runners without a browser still get a
-		// green skip via the Chrome assumption.
+		// the suite never benefited from it. A dev host without a browser still skips;
+		// CI, which installs one, fails instead of quietly running nothing.
 		String binary = detectChromeBinary();
-		Assumptions.assumeTrue(binary != null && !binary.isBlank(),
-				"Chrome binary not found; UI big-data smoke skipped");
+		E2ePreconditions.requireChromeOrSkip(binary);
 
 		var wdm = WebDriverManager.chromedriver();
 		String majorVersion = parseMajorVersionFromPath(binary);
