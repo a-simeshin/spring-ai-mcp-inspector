@@ -93,10 +93,16 @@ public final class McpProxy {
 				// streamable-request timeout.
 				session.failUpstream(err);
 			});
-		})
-			.onErrorContinue((err, obj) -> LOG.warn("proxy[{}] browser->target stream error: {}", session.sessionId(),
-					err.toString()))
-			.subscribe();
+		}).onErrorContinue((err, obj) -> {
+			LOG.warn("proxy[{}] browser->target stream error: {}", session.sessionId(), err.toString());
+			// Surface the failure to the browser side too. The SDK masks sendMessage
+			// errors (its onErrorComplete hook) so the doOnError above is not a
+			// reliable probe: without this, a dead upstream leaves the per-request
+			// POST awaiter and the SSE backchannel blocked until the
+			// streamable-request timeout. failUpstream is idempotent, so the first
+			// terminal signal wins.
+			session.failUpstream(err);
+		}).subscribe();
 
 		// Route any terminal transport failure (e.g. the upstream MCP server dies
 		// mid-session) onto the targetToBrowser sink so the per-request POST awaiter
