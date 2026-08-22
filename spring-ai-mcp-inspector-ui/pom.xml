@@ -73,6 +73,19 @@
                             <arguments>test</arguments>
                         </configuration>
                     </execution>
+                    <!-- ESLint gate for the vendored client. Bound to `test` alongside npm-test
+                         for the same reason: frontend-maven-plugin only honors -DskipTests for
+                         executions in the test/integration-test phase. -->
+                    <execution>
+                        <id>npm-lint</id>
+                        <goals>
+                            <goal>npm</goal>
+                        </goals>
+                        <phase>test</phase>
+                        <configuration>
+                            <arguments>run lint</arguments>
+                        </configuration>
+                    </execution>
                     <execution>
                         <id>npm-build</id>
                         <goals>
