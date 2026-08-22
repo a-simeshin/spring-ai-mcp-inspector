@@ -89,17 +89,24 @@ public final class McpProxy {
 			return session.targetTransport()
 				.sendMessage(typed)
 				.doOnError((err) -> LOG.warn("proxy[{}] sendMessage failed: {}", session.sessionId(), err.toString()));
-		})
-			.onErrorContinue((err, obj) -> {
-						LOG.warn("proxy[{}] browser->target stream error: {}", session.sessionId(), err.toString());
-						// Surface the failure to the browser side too. The SDK masks sendMessage
-						// errors (its onErrorComplete hook) so the doOnError above is not a
-						// reliable probe: without this, a dead upstream leaves the per-request
-						// POST awaiter and the SSE backchannel blocked until the
-						// streamable-request timeout. failUpstream is idempotent, so the first
-						// terminal signal wins.
-						session.failUpstream(err);
-					}).subscribe();
+		}).onErrorContinue((err, obj) -> {
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(err);
+			LOG.warn("proxy[{}] browser->target stream error ({}): {}", session.sessionId(), failure.reason().wire(),
+					err.toString());
+			// Surface the failure to the browser side too. The SDK masks sendMessage
+			// errors (its onErrorComplete hook) so the doOnError above is not a
+			// reliable probe: without this, a DEAD upstream leaves the per-request
+			// POST awaiter and the SSE backchannel blocked until the
+			// streamable-request timeout. But the SDK also re-surfaces protocol-level
+			// replies from a LIVE server (e.g. a 404 "session not found") through this
+			// same pump, so only transport-level failures (refused / dns / timeout)
+			// justify tearing the session down — anything unrecognized is logged and
+			// the relay keeps forwarding. failUpstream is idempotent, so the first
+			// terminal signal wins.
+			if (failure.reason() != ProxyConnectFailure.Reason.UNKNOWN) {
+				session.failUpstream(err);
+			}
+		}).subscribe();
 
 		// Target → browser: the connect handler is called once per inbound frame.
 		// We serialize the typed frame back to a JsonNode and emit it on the
