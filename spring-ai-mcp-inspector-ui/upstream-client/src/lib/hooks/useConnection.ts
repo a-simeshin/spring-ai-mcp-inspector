@@ -51,6 +51,12 @@ import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/lib/hooks/useToast";
 import { ConnectionStatus, CLIENT_IDENTITY } from "../constants";
 import { isConnectionAuthError } from "../connectionAuthErrors";
+import {
+  ConnectFailedError,
+  connectionFailureFromError,
+  parseConnectFailureResponse,
+  type ConnectFailure,
+} from "../connectErrors";
 import { Notification } from "../notificationTypes";
 import {
   auth,
@@ -126,6 +132,9 @@ export function useConnection({
 }: UseConnectionOptions) {
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
+  const [connectionError, setConnectionError] = useState<ConnectFailure | null>(
+    null,
+  );
   const { toast } = useToast();
   const [serverCapabilities, setServerCapabilities] =
     useState<ServerCapabilities | null>(null);
@@ -449,6 +458,9 @@ export function useConnection({
   };
 
   const connect = async (_e?: unknown, retryCount: number = 0) => {
+    // Clear any previous failure so a new attempt starts fresh.
+    setConnectionError(null);
+
     const clientCapabilities = {
       capabilities: {
         sampling: {},
@@ -721,6 +733,24 @@ export function useConnection({
             mcpProxyServerUrl.searchParams.append("url", sseUrl);
             transportOptions = {
               authProvider: serverAuthProvider,
+              // [spring-ai-mcp-inspector PATCH] Surface the proxy's structured
+              // MCP_CONNECT_FAILED error (non-2xx JSON on POST /mcp) as a
+              // ConnectFailedError instead of letting the SDK swallow the body
+              // into an opaque HTTP-status error. Everything else (ok
+              // responses, non-contract bodies) passes through untouched.
+              fetch: async (
+                url: string | URL | globalThis.Request,
+                init?: RequestInit,
+              ) => {
+                const response = await fetch(url, init);
+                if (!response.ok) {
+                  const failure = await parseConnectFailureResponse(response);
+                  if (failure) {
+                    throw new ConnectFailedError(failure);
+                  }
+                }
+                return response;
+              },
               eventSourceInit: {
                 fetch: (
                   url: string | URL | globalThis.Request,
@@ -837,7 +867,12 @@ export function useConnection({
 
           return;
         }
-        throw error;
+        // [spring-ai-mcp-inspector PATCH] Surface connection failures in the
+        // UI instead of throwing into an unhandled rejection: the sidebar
+        // renders a role=alert with the failure reason and a Retry button.
+        setConnectionError(connectionFailureFromError(error));
+        setConnectionStatus("disconnected");
+        return;
       }
       setServerCapabilities(capabilities ?? null);
       setCompletionsSupported(capabilities?.completions !== undefined);
@@ -1213,6 +1248,7 @@ export function useConnection({
 
   return {
     connectionStatus,
+    connectionError,
     serverCapabilities,
     serverImplementation,
     mcpClient,
