@@ -81,9 +81,18 @@ jobs:
         uses: actions/checkout@v4
 
       # Selenide UI integration tests (InspectorUiIT, UiBigDataIT) drive a real
-      # browser via WebDriverManager; provide one.
+      # browser via WebDriverManager; provide one. The resolved path is exported
+      # as CHROME_BINARY below so the ITs never fall back to guessing. When this
+      # step ever stops producing a binary, they fail the job instead of skipping
+      # (see E2ePreconditions.requireChromeOrSkip).
       - name: Set up Chrome
+        id: setup-chrome
         uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Export the Chrome binary path
+        run: echo "CHROME_BINARY=${{ steps.setup-chrome.outputs.chrome-path }}" >> "$GITHUB_ENV"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -108,7 +117,13 @@ jobs:
       # The reactive demo carries a Selenide smoke IT of its own, so this job
       # needs a browser too.
       - name: Set up Chrome
+        id: setup-chrome
         uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Export the Chrome binary path
+        run: echo "CHROME_BINARY=${{ steps.setup-chrome.outputs.chrome-path }}" >> "$GITHUB_ENV"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4

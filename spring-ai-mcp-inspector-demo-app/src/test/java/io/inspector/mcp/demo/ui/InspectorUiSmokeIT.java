@@ -20,6 +20,7 @@ import com.codeborne.selenide.Selenide;
 import com.codeborne.selenide.SelenideElement;
 import io.github.bonigarcia.wdm.WebDriverManager;
 import io.inspector.mcp.demo.proxy.ProxyAppHarness;
+import io.inspector.mcp.demo.support.E2ePreconditions;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -27,7 +28,6 @@ import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -70,7 +70,7 @@ class InspectorUiSmokeIT {
 	@BeforeAll
 	static void setupBrowser() {
 		String binary = detectChromeBinary();
-		Assumptions.assumeTrue(binary != null && !binary.isBlank(), "Chrome binary not found; e2e skipped");
+		E2ePreconditions.requireChromeOrSkip(binary);
 
 		WebDriverManager wdm = WebDriverManager.chromedriver();
 		String majorVersion = parseMajorVersionFromPath(binary);
@@ -96,8 +96,9 @@ class InspectorUiSmokeIT {
 	 * Resolves a Chrome binary with the same priority list as
 	 * {@code InspectorUiIT#detectChromeBinary()}: {@code webdriver.chrome.binary}
 	 * property → {@code CHROME_BINARY} env → macOS production Chrome → Puppeteer cache →
-	 * Linux fallbacks. Returning {@code null} is not a failure — CI images without a
-	 * browser skip this test rather than break the build.
+	 * Linux fallbacks. Returning {@code null} lets
+	 * {@link E2ePreconditions#requireChromeOrSkip(String)} decide: a skip on a developer
+	 * host, a failure in CI, which installs Chrome itself.
 	 *
 	 * <p>
 	 * Unlike the full suite this takes the <em>first</em> Puppeteer-cached Chrome it

@@ -24,6 +24,7 @@ import com.codeborne.selenide.Selenide;
 import com.codeborne.selenide.SelenideElement;
 import io.github.bonigarcia.wdm.WebDriverManager;
 import io.inspector.mcp.demo.DemoApplication;
+import io.inspector.mcp.demo.support.E2ePreconditions;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -31,7 +32,6 @@ import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -49,10 +49,10 @@ import static com.codeborne.selenide.Selenide.open;
 
 /**
  * Selenide UI smoke for big-data scenarios against the vendored upstream React Inspector.
- * Gated <em>only</em> on Chrome availability — same {@link Assumptions#assumeTrue}
- * pattern as {@link io.inspector.mcp.demo.e2e.InspectorUiIT#setupBrowser()}. On hosts
- * without a usable browser the test is skipped (not failed); on developer laptops with
- * Chrome installed it runs as part of {@code mvn verify}.
+ * Gated <em>only</em> on Chrome availability, via
+ * {@link E2ePreconditions#requireChromeOrSkip(String)}. On developer hosts without a
+ * usable browser the test is skipped (not failed); in CI, which installs Chrome itself, a
+ * missing browser fails the build instead of quietly greening it.
  *
  * <p>
  * Historical note: this class used to be double-gated behind a {@code STRESS_UI=true}
@@ -90,8 +90,7 @@ class UiBigDataIT {
 		// the suite never benefited from it. CI runners without a browser still get a
 		// green skip via the Chrome assumption.
 		String binary = detectChromeBinary();
-		Assumptions.assumeTrue(binary != null && !binary.isBlank(),
-				"Chrome binary not found; UI big-data smoke skipped");
+		E2ePreconditions.requireChromeOrSkip(binary);
 
 		var wdm = WebDriverManager.chromedriver();
 		String majorVersion = parseMajorVersionFromPath(binary);
