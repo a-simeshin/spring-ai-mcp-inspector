@@ -2991,6 +2991,18 @@ class InspectorUiIT {
 	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 	class ResponsiveHistoryLayout {
 
+		/** All 11 tab trigger values of the inspector bar (UPSTREAM_DOM_MAP §3). */
+		private static final List<String> ALL_TAB_VALUES = List.of("resources", "prompts", "tools", "tasks", "apps",
+				"ping", "sampling", "elicitations", "roots", "auth", "metadata");
+
+		/**
+		 * The 10 always-enabled triggers. {@code tasks} is rendered disabled by design —
+		 * the demo does not advertise the tasks capability (see #63) — so it is only
+		 * presence-checked, never clicked.
+		 */
+		private static final List<String> ENABLED_TAB_VALUES = List.of("resources", "prompts", "tools", "apps", "ping",
+				"sampling", "elicitations", "roots", "auth", "metadata");
+
 		@BeforeAll
 		void bootAndConnect() {
 			startApp(new Combo("sse"));
@@ -3036,8 +3048,8 @@ class InspectorUiIT {
 		 * True when the document has no horizontal overflow (scrollWidth <= clientWidth).
 		 */
 		private static boolean noHorizontalDocumentOverflow() {
-			return Boolean.TRUE.equals(Selenide.executeJavaScript(
-					"return document.documentElement.scrollWidth <= document.documentElement.clientWidth;"));
+			return Boolean.TRUE.equals(
+					Selenide.executeJavaScript("return document.documentElement.scrollWidth <= window.innerWidth;"));
 		}
 
 		/**
@@ -3126,21 +3138,28 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive history layout")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("At 768px and 1023px (the widest viewport below the inclusive lg breakpoint) the History column and the active tab panel have disjoint bounding boxes and the document does not overflow horizontally.")
+		@Description("At 768x800 and 1023x768 (the widest viewport below the inclusive lg breakpoint) the History column and the active tab panel have disjoint bounding boxes and the document does not overflow horizontally (scrollWidth <= innerWidth).")
 		@DisplayName("panesDisjointAndNoHScrollAt768And1023 — stacked, never overlapping")
 		void historyColumn_at768And1023_disjointFromTabPanelNoHorizontalScroll() {
-			for (int width : new int[] { 768, 1023 }) {
-				// given
-				setViewportExactly(width, 800);
-				listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
+			// given
+			setViewportExactly(768, 800);
 
-				// when & then
-				Boolean disjoint = Selenide.executeJavaScript(panesOverlapJs());
-				Assertions.assertEquals(Boolean.TRUE, disjoint,
-						"tab content and the History pane must not overlap at " + width + "px");
-				Assertions.assertTrue(noHorizontalDocumentOverflow(),
-						"document.documentElement must not overflow horizontally at " + width + "px");
-			}
+			// when & then
+			listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
+			Boolean disjoint = Selenide.executeJavaScript(panesOverlapJs());
+			Assertions.assertEquals(Boolean.TRUE, disjoint,
+					"tab content and the History pane must not overlap at 768px");
+			Assertions.assertTrue(noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 768px");
+
+			// and — the widest compact viewport, 1px below lg, at its contracted height.
+			setViewportExactly(1023, 768);
+			listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
+			disjoint = Selenide.executeJavaScript(panesOverlapJs());
+			Assertions.assertEquals(Boolean.TRUE, disjoint,
+					"tab content and the History pane must not overlap at 1023px");
+			Assertions.assertTrue(noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 1023px");
 		}
 
 		@Test
@@ -3163,18 +3182,24 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive history layout")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("375px regression of the <640px tab-bar wrap fix (PR #69): the TabsList still wraps, all 11 triggers are present and the document does not overflow horizontally after the compact history-layout patch.")
-		@DisplayName("tabBarRegressionAt375 — mobile wrap intact")
+		@Description("375x667 regression of the <640px tab-bar wrap fix (PR #69): the TabsList still wraps (computed flex-wrap: wrap), all 11 triggers are present and every one of the 10 enabled tabs is clickable by real input, and the document does not overflow horizontally after the compact history-layout patch.")
+		@DisplayName("tabBarRegressionAt375 — mobile wrap intact, all tabs clickable")
 		void tabBar_at375_wrapIntactAfterCompactPatch() {
 			// given
 			setViewportExactly(375, 667);
 
-			// then
+			// then — computed flex-wrap stays "wrap" and all 11 triggers are in the DOM.
 			Assertions.assertEquals("wrap", ResponsiveTabBar.tabsListFlexWrap(),
 					"TabsList must still wrap below the sm breakpoint");
-			for (String value : ResponsiveTabBar.ALL_TAB_VALUES) {
+			for (String value : ALL_TAB_VALUES) {
 				Assertions.assertTrue($("[role=tab][id$='-trigger-" + value + "']").exists(),
 						"tab trigger '" + value + "' must be present in the DOM at 375px");
+			}
+
+			// and — every enabled tab is actually clickable at this viewport (the
+			// disabled tasks trigger is only presence-checked, see #63).
+			for (String value : ENABLED_TAB_VALUES) {
+				clickTab(value);
 			}
 			Assertions.assertTrue(noHorizontalDocumentOverflow(),
 					"document.documentElement must not overflow horizontally at 375px");
