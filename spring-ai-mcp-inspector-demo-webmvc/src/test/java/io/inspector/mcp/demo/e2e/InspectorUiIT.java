@@ -3045,24 +3045,35 @@ class InspectorUiIT {
 		/**
 		 * True when the given inner column is an independently scrolling container under
 		 * real overflow: its scrollHeight exceeds its clientHeight and assigning
-		 * scrollTop actually moves it. The selector is the same one used by the
-		 * History/Notifications column helpers.
+		 * scrollTop actually moves it. The element is the same one used by the
+		 * History/Notifications column helpers, so a future class rename cannot silently
+		 * detach the probe from the stable anchor.
 		 */
-		private static boolean columnScrollsWithOverflow(String selector) {
-			Object result = Selenide.executeJavaScript("const col = document.querySelector(arguments[0]);"
-					+ "if (!col) { return 'column-not-found'; }" + "col.scrollTop = 999;"
-					+ "return col.scrollHeight > col.clientHeight && col.scrollTop > 0;", selector);
+		private static boolean columnScrollsWithOverflow(SelenideElement column) {
+			Object result = Selenide.executeJavaScript(
+					"const col = arguments[0];" + "if (!col) { return 'column-not-found'; }" + "col.scrollTop = 999;"
+							+ "return col.scrollHeight > col.clientHeight && col.scrollTop > 0;",
+					column);
 			if ("column-not-found".equals(result)) {
-				Assertions.fail("column not found via " + selector);
+				Assertions.fail("column not found: " + column.getSearchCriteria());
 			}
 			return Boolean.TRUE.equals(result);
+		}
+
+		/**
+		 * Right-hand "Server Notifications" column of the bottom pane — the sibling of
+		 * {@link #historyColumn()}. The History column carries the unique
+		 * {@code border-r}; the notifications side is anchored by its header text.
+		 */
+		private static SelenideElement notificationsColumn() {
+			return $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications"));
 		}
 
 		@Test
 		@Story("Responsive history layout")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("At the issue #60 repro viewport (780x437) the List Tools button in the Tools tab is clickable by real coordinates: elementFromPoint at its bounding-box centre returns the button itself, not an overlaying History pane node. The compact mode must not mount the desktop-only drag handles, and the History column must scroll independently under real overflow.")
-		@DisplayName("listToolsClickableAt780x437: elementFromPoint hits the button, no drag handles, History scrolls")
+		@Description("At the issue #60 repro viewport (780x437) the List Tools button in the Tools tab is clickable by real coordinates: elementFromPoint at its bounding-box centre returns the button itself, not an overlaying History pane node. The compact mode must not mount the desktop-only drag handles, and both the History and Server Notifications columns must scroll independently under real overflow.")
+		@DisplayName("listToolsClickableAt780x437: elementFromPoint hits the button, no drag handles, both columns scroll")
 		void listTools_at780x437_elementFromPointReturnsButton() {
 			// given
 			setViewportExactly(780, 437);
@@ -3088,8 +3099,29 @@ class InspectorUiIT {
 			for (int i = 0; i < 12; i++) {
 				pingServer.click();
 			}
-			Assertions.assertTrue(columnScrollsWithOverflow(historyColumn().getSearchCriteria()),
+			Assertions.assertTrue(columnScrollsWithOverflow(historyColumn()),
 					"the History column must scroll independently under real overflow at 780x437");
+
+			// and: the Server Notifications column must scroll independently too.
+			// The demo advertises the logging capability and the client subscribes
+			// at connect (defaultLoggingLevel=debug), so each largeOutput call
+			// emits a real notifications/message that overflows the 40vh pane.
+			clickTab("tools");
+			SelenideElement listToolsBtn = activePanel().$(byText("List Tools"));
+			if (listToolsBtn.exists() && listToolsBtn.isEnabled()) {
+				listToolsBtn.click();
+			}
+			selectRow("largeOutput");
+			SelenideElement sizeKb = $("#sizeKb");
+			if (sizeKb.exists()) {
+				sizeKb.setValue("1");
+			}
+			for (int i = 0; i < 12; i++) {
+				activePanel().$(byText("Run Tool")).click();
+				activePanel().$(byText("Run Tool")).shouldBe(visible, Duration.ofSeconds(60));
+			}
+			Assertions.assertTrue(columnScrollsWithOverflow(notificationsColumn()),
+					"the Server Notifications column must scroll independently under real overflow at 780x437");
 		}
 
 		@Test
