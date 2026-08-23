@@ -816,21 +816,31 @@ class InspectorUiIT {
 			SelenideElement searchInput = activePanel().$("input[name=search]");
 
 			// when
+			// React's controlled input filters on every change event; Selenide's
+			// setValue dispatches the input event, so no Enter keypress is needed (and
+			// sending one would blur the field and collapse the search box on empty).
 			searchInput.shouldBe(visible).setValue("sum");
-			// Some upstream implementations debounce or require Enter to commit the
-			// filter.
-			searchInput.sendKeys(org.openqa.selenium.Keys.ENTER);
 
 			// then
-			// Wait for the filter to apply: "sum" row visible, "echo" hidden.
-			activePanel().$(byText("sum")).shouldBe(visible, Duration.ofSeconds(10));
-			activePanel().$(byText("echo")).shouldNotBe(visible, Duration.ofSeconds(10));
+			// Wait for the filter to apply: "sum" row visible, "echo" hidden. Scope
+			// both assertions to the list rows: the right-hand detail panel keeps
+			// showing whatever tool a previous test left selected, so a panel-wide
+			// byText("echo") would match its <h3> header even when the list is
+			// correctly filtered.
+			activePanel().$$(".cursor-pointer .truncate")
+				.findBy(exactText("sum"))
+				.shouldBe(visible, Duration.ofSeconds(10));
+			activePanel().$$(".cursor-pointer .truncate")
+				.findBy(exactText("echo"))
+				.shouldNotBe(visible, Duration.ofSeconds(10));
 
 			// Select-all + Backspace dispatches actual input events so React's controlled
 			// input state updates and the filter is cleared (plain setValue("") doesn't).
 			clearAllSearchInputs();
-			// After clearing, echo is back.
-			activePanel().$(byText("echo")).shouldBe(visible, Duration.ofSeconds(5));
+			// After clearing, echo is back in the list.
+			activePanel().$$(".cursor-pointer .truncate")
+				.findBy(exactText("echo"))
+				.shouldBe(visible, Duration.ofSeconds(5));
 		}
 
 		@Test
