@@ -16,18 +16,21 @@ import org.springframework.stereotype.Component;
 @Component
 public class DemoToolsProvider {
 
-	@McpTool(name = "echo", description = "Echo back input text")
+	@McpTool(name = "echo", description = "Echo back input text",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public String echo(@McpToolParam(description = "text to echo", required = true) String text) {
 		return text;
 	}
 
-	@McpTool(name = "sum", description = "Sum two integers")
+	@McpTool(name = "sum", description = "Sum two integers",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public int sum(@McpToolParam(description = "first addend", required = true) int a,
 			@McpToolParam(description = "second addend", required = true) int b) {
 		return a + b;
 	}
 
-	@McpTool(name = "currentTime", description = "Current time in ISO-8601 (UTC)")
+	@McpTool(name = "currentTime", description = "Current time in ISO-8601 (UTC)",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public String currentTime() {
 		return Instant.now().toString();
 	}
