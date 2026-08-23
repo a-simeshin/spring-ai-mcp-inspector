@@ -45,6 +45,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.openqa.selenium.Dimension;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
 import org.openqa.selenium.logging.LogEntries;
@@ -91,6 +92,11 @@ import static com.codeborne.selenide.Selenide.open;
  * <li>{@link SidebarAndTheme} — collapsibles, custom header add/remove, theme
  * switch.</li>
  * <li>{@link TabsAvailability} — verifies the rendered tab list against expected.</li>
+ * <li>{@link ResponsiveTabBar} — CI regression for the <640px wrap patch (375px /
+ * sm-boundary / 1024px control).</li>
+ * <li>{@link ResponsiveHistoryLayout} — CI regression for the <1024px compact layout
+ * patch (History pane never overlaps tab content; elementFromPoint at 780x437, disjoint
+ * panes at 768/1023, desktop control at 1024px).</li>
  * </ul>
  *
  * <p>
@@ -2805,6 +2811,398 @@ class InspectorUiIT {
 			// After selection, the Combobox closes and the trigger reflects the value.
 			activePanel().$("button[role=combobox][aria-controls=topic]")
 				.shouldHave(text("sports"), Duration.ofSeconds(5));
+		}
+
+	}
+
+	// =====================================================================
+	// X. Responsive tab bar — CI regression for the <sm wrap patch
+	// (upstream-client/src/App.tsx TabsList, NOTICE.txt entry 8). The shared
+	// suite browser is fixed at 1366x900 (setupBrowser), so each scenario
+	// resizes the live headless window to its target viewport and restores it
+	// afterwards.
+	//
+	// Tailwind's `sm` breakpoint is `min-width: 640px` (inclusive): computed
+	// flex-wrap at exactly 640px is already `nowrap` (verified in a real
+	// browser), so the wrap side of the boundary is exercised at 639px — the
+	// widest viewport that still wraps — and the flip back to the single
+	// upstream row is asserted at 640px as part of the desktop control.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Responsive tab bar (375 / sm-boundary / desktop control)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class ResponsiveTabBar {
+
+		/** All 11 tab trigger values of the inspector bar (UPSTREAM_DOM_MAP §3). */
+		private static final List<String> ALL_TAB_VALUES = List.of("resources", "prompts", "tools", "tasks", "apps",
+				"ping", "sampling", "elicitations", "roots", "auth", "metadata");
+
+		/**
+		 * The 10 always-enabled triggers. {@code tasks} is rendered disabled by design —
+		 * the demo does not advertise the tasks capability (see #63) — so it is only
+		 * presence-checked, never clicked.
+		 */
+		private static final List<String> ENABLED_TAB_VALUES = List.of("resources", "prompts", "tools", "apps", "ping",
+				"sampling", "elicitations", "roots", "auth", "metadata");
+
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			openAndConnect();
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@BeforeEach
+		void resetToDesktopViewport() {
+			setViewport(1366, 900);
+		}
+
+		@AfterEach
+		void restoreToDesktopViewport() {
+			setViewport(1366, 900);
+		}
+
+		private static void setViewport(int width, int height) {
+			com.codeborne.selenide.WebDriverRunner.getWebDriver()
+				.manage()
+				.window()
+				.setSize(new Dimension(width, height));
+		}
+
+		/**
+		 * Computed {@code flex-wrap} of the TabsList — "wrap" below sm, "nowrap"
+		 * at/above.
+		 */
+		private static String tabsListFlexWrap() {
+			return (String) Selenide
+				.executeJavaScript("return getComputedStyle(document.querySelector('[role=tablist]')).flexWrap;");
+		}
+
+		/** Computed height of the TabsList in px (single upstream row = h-9 = 36px). */
+		private static double tabsListHeight() {
+			return ((Number) Selenide
+				.executeJavaScript("return document.querySelector('[role=tablist]').getBoundingClientRect().height;"))
+				.doubleValue();
+		}
+
+		/** Right edge of the widest tab trigger, in CSS px, relative to the viewport. */
+		private static double widestTriggerRightEdge() {
+			return ((Number) Selenide
+				.executeJavaScript("return Math.max(...Array.from(document.querySelectorAll('[role=tab]'))"
+						+ ".map(t => t.getBoundingClientRect().right));"))
+				.doubleValue();
+		}
+
+		/**
+		 * True when the document has no horizontal overflow (scrollWidth <= clientWidth).
+		 */
+		private static boolean noHorizontalDocumentOverflow() {
+			return Boolean.TRUE.equals(Selenide.executeJavaScript(
+					"return document.documentElement.scrollWidth <= document.documentElement.clientWidth;"));
+		}
+
+		@Test
+		@Story("Responsive tab bar")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("At a 375px viewport the TabsList wraps (computed flex-wrap: wrap), keeps all 11 tab triggers in the DOM and causes no horizontal document overflow. Clickability/visibility of every tab at 375px is intentionally NOT asserted — the 320px sidebar still clips the inspector column there (separate card t_aa9b879f).")
+		@DisplayName("tabsAt375pxWrapKeepAllTriggersNoHScroll — mobile wrap")
+		void tabs_at375px_wrapKeepAllTriggersAndNoHorizontalOverflow() {
+			// given
+			setViewport(375, 667);
+
+			// then
+			Assertions.assertEquals("wrap", tabsListFlexWrap(), "TabsList must wrap below the sm breakpoint");
+			for (String value : ALL_TAB_VALUES) {
+				Assertions.assertTrue($("[role=tab][id$='-trigger-" + value + "']").exists(),
+						"tab trigger '" + value + "' must be present in the DOM at 375px");
+			}
+			Assertions.assertTrue(noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 375px");
+		}
+
+		@Test
+		@Story("Responsive tab bar")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("At the widest wrapping viewport (639px, just below the inclusive Tailwind sm breakpoint) the TabsList still wraps, all 11 triggers fit inside the viewport (right edge <= viewport width) and the 10 enabled ones are clickable by real input; the disabled tasks trigger is only presence-checked.")
+		@DisplayName("tabsAt639pxWrapAllReachableClickableNoHScroll — sm boundary, wrap side")
+		void tabs_at639px_wrapAllTriggersReachableClickableNoHorizontalOverflow() {
+			// given
+			setViewport(639, 800);
+
+			// then
+			Assertions.assertEquals("wrap", tabsListFlexWrap(),
+					"TabsList must still wrap just below the sm breakpoint");
+			Assertions.assertTrue(widestTriggerRightEdge() <= 639,
+					"every tab trigger must fit inside the 639px viewport (right edge <= viewport width)");
+			for (String value : ENABLED_TAB_VALUES) {
+				clickTab(value); // real WebDriver click input; asserts the trigger
+									// becomes active
+			}
+			Assertions.assertTrue($("[role=tab][id$='-trigger-tasks']").exists(),
+					"disabled tasks trigger must be present at the sm boundary (#63)");
+			Assertions.assertTrue(noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 639px");
+		}
+
+		@Test
+		@Story("Responsive tab bar")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Control scenario: at 640px (Tailwind sm, min-width:640px — inclusive) and at 1024px the TabsList returns to the single upstream row — computed flex-wrap: nowrap and height ~36px (h-9) — so the wrap patch causes no desktop regression.")
+		@DisplayName("tabsAt640And1024ControlSingleRowNoWrap — desktop geometry intact")
+		void tabs_at1024px_controlSingleRowNoWrap() {
+			// when & then — the exact sm flip point plus a wider desktop viewport
+			for (int width : new int[] { 640, 1024 }) {
+				setViewport(width, 800);
+				Assertions.assertEquals("nowrap", tabsListFlexWrap(),
+						"TabsList must be a single row at " + width + "px (sm:flex-nowrap restores upstream geometry)");
+				double height = tabsListHeight();
+				Assertions.assertTrue(height >= 32 && height <= 40,
+						"TabsList must be a single ~36px row at " + width + "px, was " + height + "px");
+			}
+		}
+
+	}
+
+	// =====================================================================
+	// Y. Responsive history layout — CI regression for the <lg compact
+	// layout patch (upstream-client/src/App.tsx root container + bottom
+	// History pane, NOTICE.txt entries 8/9). The shared suite browser is
+	// fixed at 1366x900 (setupBrowser), so each scenario resizes the live
+	// headless window to its target viewport and restores it afterwards.
+	//
+	// Tailwind's `lg` breakpoint is `min-width: 1024px` (inclusive): the
+	// desktop side-by-side layout (draggable sidebar, fixed-height resizable
+	// History pane) applies at >=1024px; below it the app stacks into
+	// flex-col so the History/Server Notifications pane is in normal flow
+	// and can never overlay tab content. The bug this pins (#60): at
+	// 780x437 the fixed-height 300px pane left only ~137px for tab content,
+	// so the Tools tab's "List Tools" button sat geometrically under the
+	// pane header — elementFromPoint at its centre returned the History div
+	// and real clicks never reached the button.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Responsive history layout (compact <1024px / desktop control)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class ResponsiveHistoryLayout {
+
+		/** All 11 tab trigger values of the inspector bar (UPSTREAM_DOM_MAP §3). */
+		private static final List<String> ALL_TAB_VALUES = List.of("resources", "prompts", "tools", "tasks", "apps",
+				"ping", "sampling", "elicitations", "roots", "auth", "metadata");
+
+		/**
+		 * The 10 always-enabled triggers. {@code tasks} is rendered disabled by design —
+		 * the demo does not advertise the tasks capability (see #63) — so it is only
+		 * presence-checked, never clicked.
+		 */
+		private static final List<String> ENABLED_TAB_VALUES = List.of("resources", "prompts", "tools", "apps", "ping",
+				"sampling", "elicitations", "roots", "auth", "metadata");
+
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			openAndConnect();
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@BeforeEach
+		void resetToDesktopViewport() {
+			ResponsiveTabBar.setViewport(1366, 900);
+		}
+
+		@AfterEach
+		void restoreToDesktopViewport() {
+			ResponsiveTabBar.setViewport(1366, 900);
+		}
+
+		/**
+		 * Clickable control in the Tools tab whose centre was covered by the History pane
+		 * before the fix (issue #60 repro: 780x437, elementFromPoint returned the
+		 * History/Clear div).
+		 */
+		private SelenideElement listToolsButton() {
+			clickTab("tools");
+			return activePanel().$(byText("List Tools"));
+		}
+
+		/**
+		 * True when {@code elementFromPoint} at the given element's centre returns it.
+		 */
+		private static boolean clickableAtCenter(SelenideElement element) {
+			return Boolean.TRUE.equals(Selenide.executeJavaScript(
+					"const el = arguments[0];" + "const r = el.getBoundingClientRect();"
+							+ "return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === el;",
+					element));
+		}
+
+		/**
+		 * True when the document has no horizontal overflow (scrollWidth <= clientWidth).
+		 */
+		private static boolean noHorizontalDocumentOverflow() {
+			return Boolean.TRUE.equals(
+					Selenide.executeJavaScript("return document.documentElement.scrollWidth <= window.innerWidth;"));
+		}
+
+		/**
+		 * Resizes the browser window so the page's inner viewport is exactly
+		 * {@code targetWidth} x {@code targetHeight}. ChromeDriver sets the window's
+		 * OUTER rectangle and headless Chromium derives the viewport from a virtual
+		 * screen, so a plain resize can leave {@code window.innerHeight} far short of the
+		 * requested value (observed locally: 294px for a 437px window) — the scenario
+		 * would then silently run at an unintended viewport. The constant outer/inner
+		 * delta of the environment is measured once, the resize is requested at target +
+		 * delta and verified against a stabilized read; the delta is corrected in a
+		 * bounded loop, so every scenario in this group really executes at its documented
+		 * viewport on any driver/environment.
+		 */
+		private static void setViewportExactly(int targetWidth, int targetHeight) {
+			java.util.List<Number> inner = stableInnerViewport();
+			int deltaWidth = outerExtent("Width") - inner.get(0).intValue();
+			int deltaHeight = outerExtent("Height") - inner.get(1).intValue();
+			for (int attempt = 0; attempt < 4; attempt++) {
+				ResponsiveTabBar.setViewport(targetWidth + deltaWidth, targetHeight + deltaHeight);
+				inner = stableInnerViewport();
+				int innerWidth = inner.get(0).intValue();
+				int innerHeight = inner.get(1).intValue();
+				if (innerWidth == targetWidth && innerHeight == targetHeight) {
+					return;
+				}
+				deltaWidth += targetWidth - innerWidth;
+				deltaHeight += targetHeight - innerHeight;
+			}
+			Assertions.fail("browser window never reached the " + targetWidth + "x" + targetHeight
+					+ " inner viewport after compensating resizes");
+		}
+
+		/**
+		 * Reads the inner viewport twice and waits until two consecutive reads agree,
+		 * because WebDriver resizes land asynchronously — an immediate read can still
+		 * observe the previous window size.
+		 */
+		private static java.util.List<Number> stableInnerViewport() {
+			java.util.List<Number> previous = null;
+			for (int read = 0; read < 20; read++) {
+				java.util.List<Number> current = Selenide
+					.executeJavaScript("return [window.innerWidth, window.innerHeight];");
+				if (previous != null && previous.get(0).equals(current.get(0))
+						&& previous.get(1).equals(current.get(1))) {
+					return current;
+				}
+				previous = current;
+				Selenide.sleep(100);
+			}
+			return previous;
+		}
+
+		private static int outerExtent(String dimension) {
+			return ((Number) Selenide.executeJavaScript("return window.outer" + dimension + ";")).intValue();
+		}
+
+		/**
+		 * Bounding boxes of the active tab panel and the History column must not
+		 * intersect. The History column is anchored via the same stable selector as
+		 * {@link #historyColumn()}.
+		 */
+		private static String panesOverlapJs() {
+			return "const panel = document.querySelector('[role=tabpanel][data-state=active]').getBoundingClientRect();"
+					+ "const history = document.querySelector('.flex-1.overflow-y-auto.p-4.border-r');"
+					+ "if (!history) { return 'history-not-found'; }" + "const h = history.getBoundingClientRect();"
+					+ "return !(h.left < panel.right && h.right > panel.left && h.top < panel.bottom"
+					+ "&& h.bottom > panel.top);";
+		}
+
+		@Test
+		@Story("Responsive history layout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At the issue #60 repro viewport (780x437) the List Tools button in the Tools tab is clickable by real coordinates: elementFromPoint at its bounding-box centre returns the button itself, not an overlaying History pane node.")
+		@DisplayName("listToolsClickableAt780x437 — elementFromPoint hits the button")
+		void listTools_at780x437_elementFromPointReturnsButton() {
+			// given
+			setViewportExactly(780, 437);
+			SelenideElement listTools = listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
+
+			// then
+			Assertions.assertTrue(clickableAtCenter(listTools),
+					"elementFromPoint at the List Tools centre must return the button itself at 780x437");
+		}
+
+		@Test
+		@Story("Responsive history layout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("At 768x800 and 1023x768 (the widest viewport below the inclusive lg breakpoint) the History column and the active tab panel have disjoint bounding boxes and the document does not overflow horizontally (scrollWidth <= innerWidth).")
+		@DisplayName("panesDisjointAndNoHScrollAt768And1023 — stacked, never overlapping")
+		void historyColumn_at768And1023_disjointFromTabPanelNoHorizontalScroll() {
+			// given
+			setViewportExactly(768, 800);
+
+			// when & then
+			listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
+			Boolean disjoint = Selenide.executeJavaScript(panesOverlapJs());
+			Assertions.assertEquals(Boolean.TRUE, disjoint,
+					"tab content and the History pane must not overlap at 768px");
+			Assertions.assertTrue(noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 768px");
+
+			// and — the widest compact viewport, 1px below lg, at its contracted height.
+			setViewportExactly(1023, 768);
+			listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
+			disjoint = Selenide.executeJavaScript(panesOverlapJs());
+			Assertions.assertEquals(Boolean.TRUE, disjoint,
+					"tab content and the History pane must not overlap at 1023px");
+			Assertions.assertTrue(noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 1023px");
+		}
+
+		@Test
+		@Story("Responsive history layout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Desktop control at exactly 1024px (inclusive lg breakpoint): the side-by-side layout keeps its resizable History pane with a drag handle and the sidebar resize handle, i.e. the compact patch causes no desktop regression.")
+		@DisplayName("desktopPaneResizableAt1024 — drag handles present")
+		void desktopLayout_at1024_resizableHistoryPaneAndSidebarHandlesPresent() {
+			// given
+			setViewportExactly(1024, 800);
+			listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
+
+			// then — both desktop-only drag handles are mounted and visible.
+			$("[data-testid=sidebar-drag-handle]").shouldBe(visible, Duration.ofSeconds(5));
+			$("[data-testid=pane-drag-handle]").shouldBe(visible, Duration.ofSeconds(5));
+			Assertions.assertTrue(noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 1024px");
+		}
+
+		@Test
+		@Story("Responsive history layout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("375x667 regression of the <640px tab-bar wrap fix (PR #69): the TabsList still wraps (computed flex-wrap: wrap), all 11 triggers are present and every one of the 10 enabled tabs is clickable by real input, and the document does not overflow horizontally after the compact history-layout patch.")
+		@DisplayName("tabBarRegressionAt375 — mobile wrap intact, all tabs clickable")
+		void tabBar_at375_wrapIntactAfterCompactPatch() {
+			// given
+			setViewportExactly(375, 667);
+
+			// then — computed flex-wrap stays "wrap" and all 11 triggers are in the DOM.
+			Assertions.assertEquals("wrap", ResponsiveTabBar.tabsListFlexWrap(),
+					"TabsList must still wrap below the sm breakpoint");
+			for (String value : ALL_TAB_VALUES) {
+				Assertions.assertTrue($("[role=tab][id$='-trigger-" + value + "']").exists(),
+						"tab trigger '" + value + "' must be present in the DOM at 375px");
+			}
+
+			// and — every enabled tab is actually clickable at this viewport (the
+			// disabled tasks trigger is only presence-checked, see #63).
+			for (String value : ENABLED_TAB_VALUES) {
+				clickTab(value);
+			}
+			Assertions.assertTrue(noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 375px");
 		}
 
 	}
