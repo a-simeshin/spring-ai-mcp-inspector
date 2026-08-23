@@ -251,9 +251,27 @@ class InspectorUiIT {
 		if (binaryPath == null) {
 			return null;
 		}
+		// First try Puppeteer-cache-style path (e.g., "linux-151.0.7922.137/...")
 		java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?:mac_arm|mac|linux|win64|win32)-(\\d+)\\.")
 			.matcher(binaryPath);
-		return m.find() ? m.group(1) : null;
+		if (m.find()) {
+			return m.group(1);
+		}
+		// Fallback: run the binary with --version and parse output (e.g., "Chromium
+		// 151.0.7922.137")
+		try {
+			Process proc = new ProcessBuilder(binaryPath, "--version").redirectErrorStream(true).start();
+			String output = new String(proc.getInputStream().readAllBytes()).trim();
+			proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+			java.util.regex.Matcher v = java.util.regex.Pattern.compile("(\\d+)\\.").matcher(output);
+			if (v.find()) {
+				return v.group(1);
+			}
+		}
+		catch (Exception ignored) {
+			// fall through to null
+		}
+		return null;
 	}
 
 	private static int compareVersionDirs(Path a, Path b) {
@@ -799,12 +817,14 @@ class InspectorUiIT {
 
 			// when
 			searchInput.shouldBe(visible).setValue("sum");
+			// Some upstream implementations debounce or require Enter to commit the
+			// filter.
+			searchInput.sendKeys(org.openqa.selenium.Keys.ENTER);
 
 			// then
-			// Only rows whose name/description matches "sum" remain (e.g., sum, possibly
-			// addNumbers).
-			activePanel().$(byText("sum")).shouldBe(visible);
-			activePanel().$(byText("echo")).shouldNotBe(visible);
+			// Wait for the filter to apply: "sum" row visible, "echo" hidden.
+			activePanel().$(byText("sum")).shouldBe(visible, Duration.ofSeconds(10));
+			activePanel().$(byText("echo")).shouldNotBe(visible, Duration.ofSeconds(10));
 
 			// Select-all + Backspace dispatches actual input events so React's controlled
 			// input state updates and the filter is cleared (plain setValue("") doesn't).
