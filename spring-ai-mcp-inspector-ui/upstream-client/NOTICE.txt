@@ -100,3 +100,17 @@ Local patches against upstream v0.22.0
    verification checklist at 375px/<640px (tester card t_ffb31393);
    the existing Selenide E2E suites keep exercising the >=640px layout
    and tab selection/routing.
+
+9. src/components/ToolsTab.tsx — distinguish MCP spec-default hints
+   from values declared by the server. Upstream renders a tool entry
+   without an `annotations` object exactly like an annotated one, so
+   the MCP spec defaults (readOnlyHint=false, destructiveHint=true)
+   are displayed as if the server had asserted them. Local fix:
+   `AnnotationBadges` gains a `declared` prop (true iff the selected
+   entry carries an `annotations` object); when false, the
+   Read-only/Destructive chips render muted with a "(default)" marker
+   and their tooltip reads "Spec default, not declared by server".
+   Entries with annotations render exactly as before. Covered by the
+   ToolsTab vitest suite (spec-default vs declared scenarios) delivered
+   with this change set; the demo server also emits `slowEcho` without
+   annotations so the spec-default path stays demonstrable end-to-end.
