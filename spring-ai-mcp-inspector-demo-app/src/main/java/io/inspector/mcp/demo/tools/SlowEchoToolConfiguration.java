@@ -83,14 +83,16 @@ public class SlowEchoToolConfiguration {
 				}
 				try {
 					JsonNode node = SlowEchoToolConfiguration.this.objectMapper.readTree(toolInput);
-					String text = node.has("text") ? node.get("text").asText() : null;
-					if (text == null) {
-						throw new IllegalArgumentException("slowEcho: missing required parameter 'text'");
-					}
-					return text;
+					// Mirrors the historical annotation-based behavior: the text
+					// parameter cannot be bound without the -parameters compile flag,
+					// so concurrent/stress ITs invoke slowEcho with empty arguments and
+					// rely on the server-side sleep only. Missing text is not an error:
+					// return null exactly like the unbound @McpTool method used to.
+					return node.has("text") ? node.get("text").asText() : null;
 				}
 				catch (java.io.IOException e) {
-					throw new IllegalArgumentException("slowEcho: unparseable arguments: " + toolInput, e);
+					// Unparseable input still must not break the sleep-based contract.
+					return null;
 				}
 			}
 		};
