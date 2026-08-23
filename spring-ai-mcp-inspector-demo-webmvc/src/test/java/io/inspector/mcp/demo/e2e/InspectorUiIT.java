@@ -2884,198 +2884,200 @@ class InspectorUiIT {
 	// =====================================================================
 
 	@Nested
-		@DisplayName("Responsive history layout (compact <1024px / desktop control)")
-		@TestInstance(TestInstance.Lifecycle.PER_CLASS)
-		@Disabled
-		class ResponsiveHistoryLayout {
+	@DisplayName("Responsive history layout (compact <1024px / desktop control)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 
-			@BeforeAll
-			void bootAndConnect() {
-				startApp(new Combo("sse"));
-				openAndConnect();
-			}
+	class ResponsiveHistoryLayout {
 
-			@AfterAll
-			void shutdown() {
-				stopApp();
-			}
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			openAndConnect();
+		}
 
-			@BeforeEach
-			void resetToDesktopViewport() {
-				ResponsiveTabBar.setViewport(1366, 900);
-			}
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
 
-			@AfterEach
-			void restoreToDesktopViewport() {
-				ResponsiveTabBar.setViewport(1366, 900);
-			}
+		@BeforeEach
+		void resetToDesktopViewport() {
+			ResponsiveTabBar.setViewport(1366, 900);
+		}
 
-			/**
-			 * Clickable control in the Tools tab whose centre was covered by the History pane
-			 * before the fix (issue #60 repro: 780x437, elementFromPoint returned the
-			 * History/Clear div).
-			 */
-			private SelenideElement listToolsButton() {
-				clickTab("tools");
-				return activePanel().$(byText("List Tools"));
-			}
+		@AfterEach
+		void restoreToDesktopViewport() {
+			ResponsiveTabBar.setViewport(1366, 900);
+		}
 
-			/**
-			 * True when {@code elementFromPoint} at the given element's centre returns it.
-			 */
-			private static boolean clickableAtCenter(SelenideElement element) {
-				return Boolean.TRUE.equals(Selenide.executeJavaScript(
+		/**
+		 * Clickable control in the Tools tab whose centre was covered by the History pane
+		 * before the fix (issue #60 repro: 780x437, elementFromPoint returned the
+		 * History/Clear div).
+		 */
+		private SelenideElement listToolsButton() {
+			clickTab("tools");
+			return activePanel().$(byText("List Tools"));
+		}
+
+		/**
+		 * True when {@code elementFromPoint} at the given element's centre returns it.
+		 */
+		private static boolean clickableAtCenter(SelenideElement element) {
+			return Boolean.TRUE.equals(Selenide.executeJavaScript(
 					"const el = arguments[0];" + "const r = el.getBoundingClientRect();"
-						+ "return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === el;",
+							+ "return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === el;",
 					element));
-			}
+		}
 
-			/**
-			 * True when the document has no horizontal overflow (scrollWidth <= clientWidth).
-			 */
-			private static boolean noHorizontalDocumentOverflow() {
-				return Boolean.TRUE.equals(Selenide.executeJavaScript(
+		/**
+		 * True when the document has no horizontal overflow (scrollWidth <= clientWidth).
+		 */
+		private static boolean noHorizontalDocumentOverflow() {
+			return Boolean.TRUE.equals(Selenide.executeJavaScript(
 					"return document.documentElement.scrollWidth <= document.documentElement.clientWidth;"));
-			}
+		}
 
-			/**
-			 * Resizes the browser window so the page's inner viewport is exactly
-			 * {@code targetWidth} x {@code targetHeight}. ChromeDriver sets the window's
-			 * OUTER rectangle and headless Chromium derives the viewport from a virtual
-			 * screen, so a plain resize can leave {@code window.innerHeight} far short of the
-			 * requested value (observed locally: 294px for a 437px window) — the scenario
-			 * would then silently run at an unintended viewport. The constant outer/inner
-			 * delta of the environment is measured once, the resize is requested at target +
-			 * delta and verified against a stabilized read; the delta is corrected in a
-			 * bounded loop, so every scenario in this group really executes at its documented
-			 * viewport on any driver/environment.
-			 */
-			private static void setViewportExactly(int targetWidth, int targetHeight) {
-				java.util.List<Number> inner = stableInnerViewport();
-				int deltaWidth = outerExtent("Width") - inner.get(0).intValue();
-				int deltaHeight = outerExtent("Height") - inner.get(1).intValue();
-				for (int attempt = 0; attempt < 4; attempt++) {
-					ResponsiveTabBar.setViewport(targetWidth + deltaWidth, targetHeight + deltaHeight);
-					inner = stableInnerViewport();
-					int innerWidth = inner.get(0).intValue();
-					int innerHeight = inner.get(1).intValue();
-					if (innerWidth == targetWidth && innerHeight == targetHeight) {
-						return;
-					}
-					deltaWidth += targetWidth - innerWidth;
-					deltaHeight += targetHeight - innerHeight;
+		/**
+		 * Resizes the browser window so the page's inner viewport is exactly
+		 * {@code targetWidth} x {@code targetHeight}. ChromeDriver sets the window's
+		 * OUTER rectangle and headless Chromium derives the viewport from a virtual
+		 * screen, so a plain resize can leave {@code window.innerHeight} far short of the
+		 * requested value (observed locally: 294px for a 437px window) — the scenario
+		 * would then silently run at an unintended viewport. The constant outer/inner
+		 * delta of the environment is measured once, the resize is requested at target +
+		 * delta and verified against a stabilized read; the delta is corrected in a
+		 * bounded loop, so every scenario in this group really executes at its documented
+		 * viewport on any driver/environment.
+		 */
+		private static void setViewportExactly(int targetWidth, int targetHeight) {
+			java.util.List<Number> inner = stableInnerViewport();
+			int deltaWidth = outerExtent("Width") - inner.get(0).intValue();
+			int deltaHeight = outerExtent("Height") - inner.get(1).intValue();
+			for (int attempt = 0; attempt < 4; attempt++) {
+				ResponsiveTabBar.setViewport(targetWidth + deltaWidth, targetHeight + deltaHeight);
+				inner = stableInnerViewport();
+				int innerWidth = inner.get(0).intValue();
+				int innerHeight = inner.get(1).intValue();
+				if (innerWidth == targetWidth && innerHeight == targetHeight) {
+					return;
 				}
-				Assertions.fail("browser window never reached the " + targetWidth + "x" + targetHeight
+				deltaWidth += targetWidth - innerWidth;
+				deltaHeight += targetHeight - innerHeight;
+			}
+			Assertions.fail("browser window never reached the " + targetWidth + "x" + targetHeight
 					+ " inner viewport after compensating resizes");
-			}
+		}
 
-			/**
-			 * Reads the inner viewport twice and waits until two consecutive reads agree,
-			 * because WebDriver resizes land asynchronously — an immediate read can still
-			 * observe the previous window size.
-			 */
-			private static java.util.List<Number> stableInnerViewport() {
-				java.util.List<Number> previous = null;
-				for (int read = 0; read < 20; read++) {
-					java.util.List<Number> current = Selenide
-						.executeJavaScript("return [window.innerWidth, window.innerHeight];");
-					if (previous != null && previous.get(0).equals(current.get(0))
+		/**
+		 * Reads the inner viewport twice and waits until two consecutive reads agree,
+		 * because WebDriver resizes land asynchronously — an immediate read can still
+		 * observe the previous window size.
+		 */
+		private static java.util.List<Number> stableInnerViewport() {
+			java.util.List<Number> previous = null;
+			for (int read = 0; read < 20; read++) {
+				java.util.List<Number> current = Selenide
+					.executeJavaScript("return [window.innerWidth, window.innerHeight];");
+				if (previous != null && previous.get(0).equals(current.get(0))
 						&& previous.get(1).equals(current.get(1))) {
-						return current;
-					}
-					previous = current;
-					Selenide.sleep(100);
+					return current;
 				}
-				return previous;
+				previous = current;
+				Selenide.sleep(100);
 			}
+			return previous;
+		}
 
-			private static int outerExtent(String dimension) {
-				return ((Number) Selenide.executeJavaScript("return window.outer" + dimension + ";")).intValue();
-			}
+		private static int outerExtent(String dimension) {
+			return ((Number) Selenide.executeJavaScript("return window.outer" + dimension + ";")).intValue();
+		}
 
-			/**
-			 * Bounding boxes of the active tab panel and the History column must not
-			 * intersect. The History column is anchored via the same stable selector as
-			 * {@link #historyColumn()}.
-			 */
-			private static String panesOverlapJs() {
-				return "const panel = document.querySelector('[role=tabpanel][data-state=active]').getBoundingClientRect();"
+		/**
+		 * Bounding boxes of the active tab panel and the History column must not
+		 * intersect. The History column is anchored via the same stable selector as
+		 * {@link #historyColumn()}.
+		 */
+		private static String panesOverlapJs() {
+			return "const panel = document.querySelector('[role=tabpanel][data-state=active]').getBoundingClientRect();"
 					+ "const history = document.querySelector('.flex-1.overflow-y-auto.p-4.border-r');"
 					+ "if (!history) { return 'history-not-found'; }" + "const h = history.getBoundingClientRect();"
 					+ "return !(h.left < panel.right && h.right > panel.left && h.top < panel.bottom"
 					+ "&& h.bottom > panel.top);";
-			}
+		}
 
-			@Test
-			@Story("Responsive history layout")
-			@Severity(SeverityLevel.CRITICAL)
-			@Description("At the issue #60 repro viewport (780x437) the List Tools button in the Tools tab is clickable by real coordinates: elementFromPoint at its bounding-box centre returns the button itself, not an overlaying History pane node.")
-			@DisplayName("listToolsClickableAt780x437 — elementFromPoint hits the button")
-			void listTools_at780x437_elementFromPointReturnsButton() {
-				// given
-				setViewportExactly(780, 437);
-				SelenideElement listTools = listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
+		@Test
+		@Story("Responsive history layout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At the issue #60 repro viewport (780x437) the List Tools button in the Tools tab is clickable by real coordinates: elementFromPoint at its bounding-box centre returns the button itself, not an overlaying History pane node.")
+		@DisplayName("listToolsClickableAt780x437 — elementFromPoint hits the button")
+		void listTools_at780x437_elementFromPointReturnsButton() {
+			// given
+			setViewportExactly(780, 437);
+			SelenideElement listTools = listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
 
-				// then
-				Assertions.assertTrue(clickableAtCenter(listTools),
+			// then
+			Assertions.assertTrue(clickableAtCenter(listTools),
 					"elementFromPoint at the List Tools centre must return the button itself at 780x437");
-			}
+		}
 
-			@Test
-			@Story("Responsive history layout")
-			@Severity(SeverityLevel.NORMAL)
-			@Description("At 768px and 1023px (the widest viewport below the inclusive lg breakpoint) the History column and the active tab panel have disjoint bounding boxes and the document does not overflow horizontally.")
-			@DisplayName("panesDisjointAndNoHScrollAt768And1023 — stacked, never overlapping")
-			void historyColumn_at768And1023_disjointFromTabPanelNoHorizontalScroll() {
-				for (int width : new int[] { 768, 1023 }) {
-					// given
-					setViewportExactly(width, 800);
-					listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
-
-					// when & then
-					Boolean disjoint = Selenide.executeJavaScript(panesOverlapJs());
-					Assertions.assertEquals(Boolean.TRUE, disjoint,
-						"tab content and the History pane must not overlap at " + width + "px");
-					Assertions.assertTrue(noHorizontalDocumentOverflow(),
-						"document.documentElement must not overflow horizontally at " + width + "px");
-				}
-			}
-
-			@Test
-			@Story("Responsive history layout")
-			@Severity(SeverityLevel.NORMAL)
-			@Description("Desktop control at exactly 1024px (inclusive lg breakpoint): the side-by-side layout keeps its resizable History pane with a drag handle and the sidebar resize handle, i.e. the compact patch causes no desktop regression.")
-			@DisplayName("desktopPaneResizableAt1024 — drag handles present")
-			void desktopLayout_at1024_resizableHistoryPaneAndSidebarHandlesPresent() {
+		@Test
+		@Story("Responsive history layout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("At 768px and 1023px (the widest viewport below the inclusive lg breakpoint) the History column and the active tab panel have disjoint bounding boxes and the document does not overflow horizontally.")
+		@DisplayName("panesDisjointAndNoHScrollAt768And1023 — stacked, never overlapping")
+		void historyColumn_at768And1023_disjointFromTabPanelNoHorizontalScroll() {
+			for (int width : new int[] { 768, 1023 }) {
 				// given
-				setViewportExactly(1024, 800);
+				setViewportExactly(width, 800);
 				listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
 
-				// then — both desktop-only drag handles are mounted and visible.
-				$("[data-testid=sidebar-drag-handle]").shouldBe(visible, Duration.ofSeconds(5));
-				$("[data-testid=pane-drag-handle]").shouldBe(visible, Duration.ofSeconds(5));
+				// when & then
+				Boolean disjoint = Selenide.executeJavaScript(panesOverlapJs());
+				Assertions.assertEquals(Boolean.TRUE, disjoint,
+						"tab content and the History pane must not overlap at " + width + "px");
 				Assertions.assertTrue(noHorizontalDocumentOverflow(),
-					"document.documentElement must not overflow horizontally at 1024px");
+						"document.documentElement must not overflow horizontally at " + width + "px");
 			}
-
-			@Test
-			@Story("Responsive history layout")
-			@Severity(SeverityLevel.NORMAL)
-			@Description("375px regression of the <640px tab-bar wrap fix (PR #73): the TabsList still wraps, all 11 triggers are present and the document does not overflow horizontally after the compact history-layout patch.")
-			@DisplayName("tabBarRegressionAt375 — mobile wrap intact")
-			void tabBar_at375_wrapIntactAfterCompactPatch() {
-				// given
-				setViewportExactly(375, 667);
-
-				// then
-				Assertions.assertEquals("wrap", ResponsiveTabBar.tabsListFlexWrap(),
-					"TabsList must still wrap below the sm breakpoint");
-				for (String value : ResponsiveTabBar.ALL_TAB_VALUES) {
-					Assertions.assertTrue($("[role=tab][id$='-trigger-" + value + "']").exists(),
-						"tab trigger '" + value + "' must be present in the DOM at 375px");
-				}
-				Assertions.assertTrue(noHorizontalDocumentOverflow(),
-					"document.documentElement must not overflow horizontally at 375px");
-			}
-
 		}
+
+		@Test
+		@Story("Responsive history layout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Desktop control at exactly 1024px (inclusive lg breakpoint): the side-by-side layout keeps its resizable History pane with a drag handle and the sidebar resize handle, i.e. the compact patch causes no desktop regression.")
+		@DisplayName("desktopPaneResizableAt1024 — drag handles present")
+		void desktopLayout_at1024_resizableHistoryPaneAndSidebarHandlesPresent() {
+			// given
+			setViewportExactly(1024, 800);
+			listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
+
+			// then — both desktop-only drag handles are mounted and visible.
+			$("[data-testid=sidebar-drag-handle]").shouldBe(visible, Duration.ofSeconds(5));
+			$("[data-testid=pane-drag-handle]").shouldBe(visible, Duration.ofSeconds(5));
+			Assertions.assertTrue(noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 1024px");
+		}
+
+		@Test
+		@Story("Responsive history layout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("375px regression of the <640px tab-bar wrap fix (PR #73): the TabsList still wraps, all 11 triggers are present and the document does not overflow horizontally after the compact history-layout patch.")
+		@DisplayName("tabBarRegressionAt375 — mobile wrap intact")
+		void tabBar_at375_wrapIntactAfterCompactPatch() {
+			// given
+			setViewportExactly(375, 667);
+
+			// then
+			Assertions.assertEquals("wrap", ResponsiveTabBar.tabsListFlexWrap(),
+					"TabsList must still wrap below the sm breakpoint");
+			for (String value : ResponsiveTabBar.ALL_TAB_VALUES) {
+				Assertions.assertTrue($("[role=tab][id$='-trigger-" + value + "']").exists(),
+						"tab trigger '" + value + "' must be present in the DOM at 375px");
+			}
+			Assertions.assertTrue(noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 375px");
+		}
+
+	}
+
+}
