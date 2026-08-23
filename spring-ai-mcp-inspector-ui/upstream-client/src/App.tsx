@@ -1359,7 +1359,10 @@ const App = () => {
     <div className="flex flex-col lg:flex-row lg:h-screen bg-background">
       {/* [spring-ai-mcp-inspector PATCH] Compact (<lg) sidebar (#60): the
           draggable inline width applies only on desktop (>=lg); below it the
-          sidebar is a full-width block with its own scroll. */}
+          sidebar is a full-width block with its own scroll and the
+          desktop-only drag handle is not mounted, so a compact pointer press
+          on the right edge cannot enter the drag path or mutate the hidden
+          sidebar width state. */}
       <div
         style={
           isCompactLayout
@@ -1404,21 +1407,23 @@ const App = () => {
           setConnectionType={setConnectionType}
           serverImplementation={serverImplementation}
         />
-        <div
-          onMouseDown={handleSidebarDragStart}
-          style={{
-            cursor: "col-resize",
-            position: "absolute",
-            top: 0,
-            right: 0,
-            width: 6,
-            height: "100%",
-            zIndex: 10,
-            background: isSidebarDragging ? "rgba(0,0,0,0.08)" : "transparent",
-          }}
-          aria-label="Resize sidebar"
-          data-testid="sidebar-drag-handle"
-        />
+        {!isCompactLayout && (
+          <div
+            onMouseDown={handleSidebarDragStart}
+            style={{
+              cursor: "col-resize",
+              position: "absolute",
+              top: 0,
+              right: 0,
+              width: 6,
+              height: "100%",
+              zIndex: 10,
+              background: isSidebarDragging ? "rgba(0,0,0,0.08)" : "transparent",
+            }}
+            aria-label="Resize sidebar"
+            data-testid="sidebar-drag-handle"
+          />
+        )}
       </div>
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 min-h-0">
         <div className="flex-1 overflow-auto">
@@ -1811,11 +1816,14 @@ const App = () => {
         </div>
         {/* [spring-ai-mcp-inspector PATCH] Compact (<lg) History pane (#60):
             below the breakpoint the fixed inline height and the drag handle
-            are dropped — the pane becomes an in-flow section capped at 40vh
-            with its own scroll, so it can never overlay tab content; >=lg
-            restores the upstream fixed-height resizable pane. */}
+            are dropped; the pane becomes an in-flow section with a definite
+            h-[40vh] height and its own scroll, so it can never overlay tab
+            content. A max-height-only wrapper would resolve the inner h-full
+            chain to auto and leave the History/Notifications columns without
+            an independently scrollable height. >=lg restores the upstream
+            fixed-height resizable pane. */}
         <div
-          className="relative border-t border-border max-h-[40vh] lg:max-h-none"
+          className="relative border-t border-border h-[40vh] lg:h-auto"
           style={
             isCompactLayout
               ? undefined
@@ -1833,7 +1841,7 @@ const App = () => {
               <div className="w-8 h-1 rounded-full bg-border" />
             </div>
           )}
-          <div className={isCompactLayout ? "max-h-[40vh] overflow-auto" : "h-full overflow-auto"}>
+          <div className="h-full overflow-auto">
             <HistoryAndNotifications
               requestHistory={requestHistory}
               serverNotifications={notifications}
