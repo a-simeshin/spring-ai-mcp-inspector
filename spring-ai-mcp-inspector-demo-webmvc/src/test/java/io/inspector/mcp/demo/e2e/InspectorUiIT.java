@@ -58,6 +58,8 @@ import org.springframework.context.ConfigurableApplicationContext;
 
 import io.inspector.mcp.demo.DemoApplication;
 
+import static com.codeborne.selenide.Condition.attributeMatching;
+import static com.codeborne.selenide.Condition.exactText;
 import static com.codeborne.selenide.Condition.text;
 import static com.codeborne.selenide.Condition.visible;
 import static com.codeborne.selenide.Selectors.byText;
@@ -117,6 +119,14 @@ class InspectorUiIT {
 			return protocol;
 		}
 	}
+
+	/**
+	 * Every demo tool advertised by {@code tools/list} (22 entries).
+	 */
+	private static final String[] ALL_DEMO_TOOLS = { "echo", "sum", "currentTime", "addNumbers", "concatenate",
+			"lookupUser", "chooseColor", "toggleFlag", "optionalGreeting", "errorTool", "largeOutput",
+			"structuredOutput", "multiContent", "slowEcho", "deepJson", "blobAttachment", "askLlm", "askUser",
+			"deployService", "findFiles", "authorizeViaUrl", "listMyRoots" };
 
 	/**
 	 * Connect matrix actually exposed by the upstream UI: only the three transport
@@ -362,12 +372,17 @@ class InspectorUiIT {
 	}
 
 	/**
-	 * Selects a row from the active ListPane by its visible name. Waits for the row to
-	 * exist before clicking — {@code findBy(text(...))} doesn't have a built-in retry, so
-	 * we expand the query into wait-then-click.
+	 * Selects a row from the active ListPane by its exact visible name. The name lives in
+	 * a {@code <span class="truncate">} inside the clickable row (see ListPane row
+	 * markup), and {@code findBy(text(...))} matches substrings — so asking for "echo"
+	 * resolved to the "slowEcho" row whenever it rendered first. Match the name span with
+	 * {@code exactText} instead; the click bubbles up to the row.
 	 */
 	private static void selectRow(String name) {
-		activePanel().$$(".cursor-pointer").findBy(text(name)).shouldBe(visible, Duration.ofSeconds(10)).click();
+		activePanel().$$(".cursor-pointer .truncate")
+			.findBy(exactText(name))
+			.shouldBe(visible, Duration.ofSeconds(10))
+			.click();
 	}
 
 	/**
@@ -677,18 +692,99 @@ class InspectorUiIT {
 		@Test
 		@Story("Tool list")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("After listing tools, every one of the 16 demo tools is present in the tool list.")
-		@DisplayName("toolsListShowsAll16Tools — every demo tool appears in the list")
-		void toolsList_afterListTools_showsAll16Tools() {
+		@Description("After listing tools, every one of the 22 demo tools is present in the tool list.")
+		@DisplayName("toolsListShowsAll22Tools — every demo tool appears in the list")
+		void toolsList_afterListTools_showsAll22Tools() {
 			// given
-			String[] expected = { "echo", "sum", "currentTime", "addNumbers", "concatenate", "lookupUser",
-					"chooseColor", "toggleFlag", "optionalGreeting", "errorTool", "largeOutput", "structuredOutput",
-					"multiContent", "slowEcho", "deepJson", "blobAttachment" };
+			String[] expected = ALL_DEMO_TOOLS;
 
 			// when & then
 			for (String name : expected) {
 				activePanel().$(byText(name)).shouldBe(visible);
 			}
+		}
+
+		@Test
+		@Story("Tool annotations")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("After Connect + List Tools the hint chips render honestly: explicitly annotated "
+				+ "echo shows plain Read-only/Destructive chips, and every chip that claims destructive=true "
+				+ "is either disclosed as a spec default ('(default)' + 'Spec default, not declared by server' "
+				+ "tooltip) or is the known spring-ai synthesis gap on the annotation-less slowEcho.")
+		@DisplayName("connectListToolsHonestChips — explicit vs spec-default hint chips and no silent declared destructive")
+		void connectListToolsHonestChips_explicitAndSpecDefaultChips_noDeclaredDestructive() {
+
+			// --- echo: server-declared annotations render as plain chips -------------
+			selectRow("echo");
+			SelenideElement badges = activePanel().$(".gap-1.mt-2").shouldBe(visible, Duration.ofSeconds(10));
+			// Read-only chip is active (✓) with no (default) marker — annotations are
+			// explicit.
+			badges.$(byText("Read-only")).shouldHave(text("✓ Read-only"));
+			badges.$(byText("Read-only")).shouldNotHave(text("(default)"));
+			// Destructive chip is NOT shown as declared true — value is false (✗), plain
+			// chip.
+			badges.$(byText("Destructive")).shouldHave(text("✗ Destructive"));
+			badges.$(byText("Destructive")).shouldNotHave(text("(default)"));
+			// The whole badge row never claims destructive=true for an annotated tool.
+			badges.shouldNotHave(text("✓ Destructive"));
+
+			// --- slowEcho: the spec-default vs synthesis fork ------------------------
+			// slowEcho deliberately ships WITHOUT @McpTool(annotations...) so the UI
+			// could mark its Read-only/Destructive chips as MCP spec defaults. Until
+			// spring-ai stops synthesizing a full annotations object for such tools
+			// (issue mirror below), the wire carries readOnlyHint=false /
+			// destructiveHint=true as if the server had declared them, so the chip
+			// renders plain "✓ Destructive". Both branches below assert real DOM
+			// facts; the test self-upgrades once the framework stops inventing
+			// declarations.
+			selectRow("slowEcho");
+			SelenideElement defaultBadges = activePanel().$(".gap-1.mt-2").shouldBe(visible, Duration.ofSeconds(10));
+			// Read-only: spec-default false renders as ✗ either way; when the chip
+			// carries the '(default)' marker its tooltip must disclose that the value
+			// comes from the spec, not the server (title embeds newlines → DOTALL).
+			SelenideElement defaultReadOnly = defaultBadges.$(byText("Read-only")).shouldBe(visible);
+			defaultReadOnly.shouldHave(text("✗ Read-only"));
+			if (defaultReadOnly.getText().contains("(default)")) {
+				defaultReadOnly.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
+			}
+			// Destructive: same honesty contract on the spec-default true (✓).
+			SelenideElement defaultDestructive = defaultBadges.$(byText("Destructive")).shouldBe(visible);
+			defaultDestructive.shouldHave(text("✓ Destructive"));
+			if (defaultDestructive.getText().contains("(default)")) {
+				defaultDestructive
+					.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
+			}
+
+			// --- sweep: every destructive=true claim is disclosed or accounted for ---
+			for (String name : ALL_DEMO_TOOLS) {
+				selectRow(name);
+				SelenideElement rowBadges = activePanel().$(".gap-1.mt-2").shouldBe(visible, Duration.ofSeconds(10));
+				SelenideElement destructive = rowBadges.$(byText("Destructive")).shouldBe(visible);
+				String chipText = destructive.getText();
+				if (chipText.contains("(default)")) {
+					// Spec-default path: allowed to claim true, but the tooltip must
+					// disclose that the value was not declared by the server.
+					destructive.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
+				}
+				else if (chipText.contains("✓")) {
+					// Declared destructive=true is only tolerable on the annotation-less
+					// slowEcho, and only while spring-ai synthesizes annotations for it;
+					// any other tool hitting this branch means a demo tool really
+					// declares destructive=true — that is a regression.
+					Assertions.assertEquals("slowEcho", name,
+							"Tool renders a server-declared destructive=true chip; only the "
+									+ "annotation-less slowEcho may do so while spring-ai synthesizes "
+									+ "its annotations");
+				}
+				else {
+					// Declared path: the only honest value is destructive=false.
+					destructive.shouldHave(exactText("✗ Destructive"));
+				}
+			}
+
+			// Leave no tool selected so subsequent tests start with a clean list view.
+			// Click the Tools tab label to deselect the current tool.
+			activePanel().$(byText("Tools")).click();
 		}
 
 		@Test
@@ -1844,7 +1940,7 @@ class InspectorUiIT {
 			// then
 			// Refresh Apps trigger must be visible — proves the list pane rendered.
 			activePanel().$(byText("Refresh Apps")).shouldBe(visible, Duration.ofSeconds(10));
-			// Demo registers 16 tools but none with _meta.ui.resourceUri, so the right
+			// Demo registers 22 tools but none with _meta.ui.resourceUri, so the right
 			// pane shows the "No MCP Apps available..." copy. We match a stable substring
 			// to insulate the assertion from upstream wording tweaks like the trailing
 			// "_meta.ui.resourceUri" code span.
