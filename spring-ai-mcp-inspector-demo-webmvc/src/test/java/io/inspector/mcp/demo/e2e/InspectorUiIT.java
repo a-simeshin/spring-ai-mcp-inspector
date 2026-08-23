@@ -3041,6 +3041,61 @@ class InspectorUiIT {
 		}
 
 		/**
+		 * Resizes the browser window so the page's inner viewport is exactly
+		 * {@code targetWidth} x {@code targetHeight}. ChromeDriver sets the window's
+		 * OUTER rectangle and headless Chromium derives the viewport from a virtual
+		 * screen, so a plain resize can leave {@code window.innerHeight} far short of the
+		 * requested value (observed locally: 294px for a 437px window) — the scenario
+		 * would then silently run at an unintended viewport. The constant outer/inner
+		 * delta of the environment is measured once, the resize is requested at target +
+		 * delta and verified against a stabilized read; the delta is corrected in a
+		 * bounded loop, so every scenario in this group really executes at its documented
+		 * viewport on any driver/environment.
+		 */
+		private static void setViewportExactly(int targetWidth, int targetHeight) {
+			java.util.List<Number> inner = stableInnerViewport();
+			int deltaWidth = outerExtent("Width") - inner.get(0).intValue();
+			int deltaHeight = outerExtent("Height") - inner.get(1).intValue();
+			for (int attempt = 0; attempt < 4; attempt++) {
+				ResponsiveTabBar.setViewport(targetWidth + deltaWidth, targetHeight + deltaHeight);
+				inner = stableInnerViewport();
+				int innerWidth = inner.get(0).intValue();
+				int innerHeight = inner.get(1).intValue();
+				if (innerWidth == targetWidth && innerHeight == targetHeight) {
+					return;
+				}
+				deltaWidth += targetWidth - innerWidth;
+				deltaHeight += targetHeight - innerHeight;
+			}
+			Assertions.fail("browser window never reached the " + targetWidth + "x" + targetHeight
+					+ " inner viewport after compensating resizes");
+		}
+
+		/**
+		 * Reads the inner viewport twice and waits until two consecutive reads agree,
+		 * because WebDriver resizes land asynchronously — an immediate read can still
+		 * observe the previous window size.
+		 */
+		private static java.util.List<Number> stableInnerViewport() {
+			java.util.List<Number> previous = null;
+			for (int read = 0; read < 20; read++) {
+				java.util.List<Number> current = Selenide
+					.executeJavaScript("return [window.innerWidth, window.innerHeight];");
+				if (previous != null && previous.get(0).equals(current.get(0))
+						&& previous.get(1).equals(current.get(1))) {
+					return current;
+				}
+				previous = current;
+				Selenide.sleep(100);
+			}
+			return previous;
+		}
+
+		private static int outerExtent(String dimension) {
+			return ((Number) Selenide.executeJavaScript("return window.outer" + dimension + ";")).intValue();
+		}
+
+		/**
 		 * Bounding boxes of the active tab panel and the History column must not
 		 * intersect. The History column is anchored via the same stable selector as
 		 * {@link #historyColumn()}.
@@ -3060,7 +3115,7 @@ class InspectorUiIT {
 		@DisplayName("listToolsClickableAt780x437 — elementFromPoint hits the button")
 		void listTools_at780x437_elementFromPointReturnsButton() {
 			// given
-			ResponsiveTabBar.setViewport(780, 437);
+			setViewportExactly(780, 437);
 			SelenideElement listTools = listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
 
 			// then
@@ -3076,7 +3131,7 @@ class InspectorUiIT {
 		void historyColumn_at768And1023_disjointFromTabPanelNoHorizontalScroll() {
 			for (int width : new int[] { 768, 1023 }) {
 				// given
-				ResponsiveTabBar.setViewport(width, 800);
+				setViewportExactly(width, 800);
 				listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
 
 				// when & then
@@ -3095,7 +3150,7 @@ class InspectorUiIT {
 		@DisplayName("desktopPaneResizableAt1024 — drag handles present")
 		void desktopLayout_at1024_resizableHistoryPaneAndSidebarHandlesPresent() {
 			// given
-			ResponsiveTabBar.setViewport(1024, 800);
+			setViewportExactly(1024, 800);
 			listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
 
 			// then — both desktop-only drag handles are mounted and visible.
@@ -3112,7 +3167,7 @@ class InspectorUiIT {
 		@DisplayName("tabBarRegressionAt375 — mobile wrap intact")
 		void tabBar_at375_wrapIntactAfterCompactPatch() {
 			// given
-			ResponsiveTabBar.setViewport(375, 667);
+			setViewportExactly(375, 667);
 
 			// then
 			Assertions.assertEquals("wrap", ResponsiveTabBar.tabsListFlexWrap(),
