@@ -127,4 +127,35 @@ describe("useIsCompactLayout", () => {
     // then
     expect(result.current).toBe(false);
   });
+
+  it("treats 1023px as compact and 1024px as desktop across the breakpoint", () => {
+    // given: desktop at the smallest desktop width (1024px)
+    const stub = installMatchMedia(false);
+    const { result } = renderHook(() => useIsCompactLayout());
+    expect(result.current).toBe(false);
+
+    // The query must flip strictly between 1023px and 1024px so the React
+    // value mirrors the CSS `lg` breakpoint exactly (Tailwind lg = 64rem).
+    const [query] = jest.mocked(window.matchMedia).mock.calls[0];
+    const match = /^\(max-width:\s*([\d.]+)px\)$/.exec(query);
+    expect(match).not.toBeNull();
+    expect(parseFloat(match![1])).toBeGreaterThanOrEqual(1023);
+    expect(parseFloat(match![1])).toBeLessThan(1024);
+
+    // when: the viewport shrinks to 1023px (query starts matching)
+    act(() => {
+      stub.emit(true);
+    });
+
+    // then: 1023px is still compact
+    expect(result.current).toBe(true);
+
+    // when: the viewport grows back to 1024px (query stops matching)
+    act(() => {
+      stub.emit(false);
+    });
+
+    // then: 1024px is desktop again
+    expect(result.current).toBe(false);
+  });
 });
