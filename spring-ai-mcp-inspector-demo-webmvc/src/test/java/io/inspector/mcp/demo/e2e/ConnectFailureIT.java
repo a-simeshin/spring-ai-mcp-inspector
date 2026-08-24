@@ -186,9 +186,14 @@ class ConnectFailureIT {
 			Process proc = new ProcessBuilder(binaryPath, "--version").redirectErrorStream(true).start();
 			String output = new String(proc.getInputStream().readAllBytes()).trim();
 			proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
-			java.util.regex.Matcher v = java.util.regex.Pattern.compile("(\\d+)\\.").matcher(output);
+			// Chromium can interleave stderr noise (e.g.
+			// "[<pid>:MMDD/HHMMSS.mmm:ERROR:...]")
+			// with the version line. Match the full four-segment version rather than the
+			// first digit run (which may be a pid/timestamp fragment like "231106.") and
+			// return its major part.
+			java.util.regex.Matcher v = java.util.regex.Pattern.compile("(\\d+\\.\\d+\\.\\d+\\.\\d+)").matcher(output);
 			if (v.find()) {
-				return v.group(1);
+				return v.group(1).substring(0, v.group(1).indexOf('.'));
 			}
 		}
 		catch (Exception ignored) {
