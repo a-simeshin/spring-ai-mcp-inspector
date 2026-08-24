@@ -87,7 +87,51 @@ Local patches against upstream v0.22.0
    src/__tests__/App.tasksTabTooltip.test.tsx (hover and focus paths;
    pointer-events polyfill lives in src/testUtils/pointerEventsPolyfill.ts).
 
-8. src/lib/connectErrors.ts + src/lib/hooks/useConnection.ts +
+8. src/App.tsx — wrap the tab bar below `sm` (Tailwind default 640px).
+   The upstream TabsList base is `inline-flex h-9` with no wrapping,
+   so at a 375px viewport the bar is ~1065px wide and the trailing
+   tabs (Sampling/Elicitations/Roots/Auth/Metadata) render fully
+   off-screen with no horizontal scroll (overflow visible) and no
+   "more" affordance. Local fix (CSS-only, no JS/aria): `flex-wrap
+   h-auto` on the TabsList lets the 11 triggers flow into multiple
+   rows, and `sm:h-9 sm:flex-nowrap` restore the single-row upstream
+   layout at >=640px (twMerge drops the base `h-9` in favour of
+   `h-auto` below the breakpoint). Covered by the responsive tab-bar
+   verification checklist at 375px/<640px (tester card t_ffb31393);
+   the existing Selenide E2E suites keep exercising the >=640px layout
+   and tab selection/routing.
+
+9. src/App.tsx + src/lib/hooks/useIsCompactLayout.ts — compact
+   (<1024px, Tailwind `lg`) layout so the bottom History/Server
+   Notifications pane never overlays tab content. Upstream renders a
+   `flex h-screen` row: the config sidebar keeps its draggable inline
+   width at every viewport and the History pane keeps a fixed inline
+   height (useDraggablePane(300)), so at e.g. 780x437 only ~137px of
+   tab content remained visible under the pane and the Tools tab's
+   "List Tools" button sat geometrically under the pane header —
+   elementFromPoint at its centre returned the History/Clear div and
+   real clicks never reached the button. Local fix: a new
+   useIsCompactLayout hook (matchMedia "(max-width: 1023.98px)",
+   change-listener kept in sync) mirrors the CSS breakpoint for React;
+   the root container becomes `flex-col lg:flex-row`; below `lg` the
+   sidebar drops its inline width (full-width block, own scroll) and
+   the History pane drops its fixed height and drag handle (in-flow
+   section capped at max-h-[40vh] with internal scroll); the root
+   container's fixed viewport height (h-screen) is desktop-only too,
+   since 50vh + 40vh caps would otherwise consume the whole compact
+   viewport and squeeze the tab column to zero height; the content
+   column gains min-w-0/min-h-0. Desktop (>=1024px) geometry —
+   sidebar width drag, resizable fixed-height pane — is unchanged.
+   The CSS lg: classes alone cannot remove the desktop-only inline
+   styles, which is why the hook is required. Covered by the @Nested
+   ResponsiveHistoryLayout Selenide group in
+   spring-ai-mcp-inspector-demo-webmvc InspectorUiIT (elementFromPoint
+   at the List Tools centre at 780x437; disjoint History/tab-panel
+   boxes plus no horizontal overflow at 768/1023; drag handles present
+   at 1024px; 375px regression of patch 8) and by the
+   useIsCompactLayout jest unit tests.
+
+10. src/lib/connectErrors.ts + src/lib/hooks/useConnection.ts +
    src/components/Sidebar.tsx + src/App.tsx — surface connect failures
    with a reason and a Retry button. When the Java proxy answers
    POST /mcp-inspector-api/mcp with the structured non-2xx contract
