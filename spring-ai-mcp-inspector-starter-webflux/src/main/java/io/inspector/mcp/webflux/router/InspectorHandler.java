@@ -72,6 +72,11 @@ import io.inspector.mcp.core.dto.ConnectRequest;
 import io.inspector.mcp.core.dto.JsonRpcRelay;
 import io.inspector.mcp.core.dto.RootDto;
 import io.inspector.mcp.core.dto.RootsDto;
+import io.inspector.mcp.core.introspect.McpBeanIntrospector;
+import io.inspector.mcp.core.introspect.check.JsonSchemaCompatibilityChecker;
+import io.inspector.mcp.core.introspect.model.IntrospectionReport;
+import io.inspector.mcp.core.introspect.model.McpElementInfo;
+import io.inspector.mcp.core.introspect.model.SchemaWarning;
 import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthInitiateResponse;
@@ -259,6 +264,46 @@ public class InspectorHandler implements ApplicationContextAware {
 			return new ConfigDto(detected.type().name(), detected.endpoint(), detected.messageEndpoint(),
 					detected.stack(), null, null, this.tokenProvider.token(), Map.of());
 		}).flatMap((dto) -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(dto));
+	}
+
+	/**
+	 * Returns the MCP introspection report: every declared tool/resource with its
+	 * bean/method source plus JSON-schema compatibility warnings. Blocking reflection
+	 * reads are off-loaded to {@link Schedulers#boundedElastic()} so the event loop never
+	 * scans the context synchronously.
+	 * @param request the incoming server request
+	 * @return a {@link Mono} emitting the introspection JSON response
+	 */
+	public Mono<ServerResponse> introspection(final ServerRequest request) {
+		return Mono.fromCallable(() -> buildIntrospectionReport())
+			.subscribeOn(Schedulers.boundedElastic())
+			.flatMap((report) -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(report))
+			.onErrorResume(this::errorResponse);
+	}
+
+	private IntrospectionReport buildIntrospectionReport() {
+		final IntrospectionReport report = new McpBeanIntrospector().introspect(this.applicationContext);
+		final JsonSchemaCompatibilityChecker checker = new JsonSchemaCompatibilityChecker();
+		final List<SchemaWarning> warnings = new ArrayList<>(report.warnings());
+		for (final McpElementInfo element : report.tools()) {
+			checkElementSchema(checker, element, warnings);
+		}
+		for (final McpElementInfo element : report.resources()) {
+			checkElementSchema(checker, element, warnings);
+		}
+		return new IntrospectionReport(report.tools(), report.resources(), warnings);
+	}
+
+	private void checkElementSchema(final JsonSchemaCompatibilityChecker checker, final McpElementInfo element,
+			final List<SchemaWarning> warnings) {
+		if (element.inputSchema() != null) {
+			warnings.addAll(
+					checker.check(element.name(), this.objectMapper.valueToTree(element.inputSchema()), "inputSchema"));
+		}
+		if (element.outputSchema() != null) {
+			warnings.addAll(checker.check(element.name(), this.objectMapper.valueToTree(element.outputSchema()),
+					"outputSchema"));
+		}
 	}
 
 	/**
