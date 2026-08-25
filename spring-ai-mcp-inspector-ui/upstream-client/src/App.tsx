@@ -108,6 +108,12 @@ import {
   migrateFromLegacyAuth,
 } from "./lib/types/customHeaders";
 import MetadataTab from "./components/MetadataTab";
+// [spring-ai-mcp-inspector PATCH] Named auth profiles + legacy secret
+// migration (issue #54, plan v15 D1/D2/D7/D9B/D10).
+import {
+  AuthProfileSummary,
+  migrateLegacyAuthStorage,
+} from "./lib/auth-profiles";
 
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
 
@@ -161,6 +167,18 @@ const filterReservedMetadata = (
 };
 
 const App = () => {
+  // [spring-ai-mcp-inspector PATCH] D10 legacy localStorage secret migration:
+  // MUST run synchronously BEFORE the state initializers below read the six
+  // legacy keys (read → seed state → removeItem). Idempotent: after the first
+  // call the keys are gone and the seed is empty.
+  const legacyAuthSeed = migrateLegacyAuthStorage();
+
+  // [spring-ai-mcp-inspector PATCH] Named auth profiles (issue #54): the
+  // active profile is handed off to the backend via `?profileId=` (server
+  // owns secrets); profiles list is owner-scoped, secrets never persisted.
+  const [profiles, setProfiles] = useState<AuthProfileSummary[]>([]);
+  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
+
   const [resources, setResources] = useState<Resource[]>([]);
   const [resourceTemplates, setResourceTemplates] = useState<
     ResourceTemplate[]
@@ -209,44 +227,29 @@ const App = () => {
   const [config, setConfig] = useState<InspectorConfig>(() =>
     initializeInspectorConfig(CONFIG_LOCAL_STORAGE_KEY),
   );
-  const [bearerToken, setBearerToken] = useState<string>(() => {
-    return localStorage.getItem("lastBearerToken") || "";
-  });
+  // [spring-ai-mcp-inspector PATCH] D10: seeded from migrateLegacyAuthStorage()
+  // (React state only — nothing is re-persisted to localStorage).
+  const [bearerToken, setBearerToken] = useState<string>(legacyAuthSeed.bearerToken);
 
-  const [headerName, setHeaderName] = useState<string>(() => {
-    return localStorage.getItem("lastHeaderName") || "";
-  });
+  const [headerName, setHeaderName] = useState<string>(legacyAuthSeed.headerName);
 
-  const [oauthClientId, setOauthClientId] = useState<string>(() => {
-    return localStorage.getItem("lastOauthClientId") || "";
-  });
+  const [oauthClientId, setOauthClientId] = useState<string>(
+    legacyAuthSeed.oauthClientId,
+  );
 
-  const [oauthScope, setOauthScope] = useState<string>(() => {
-    return localStorage.getItem("lastOauthScope") || "";
-  });
+  const [oauthScope, setOauthScope] = useState<string>(legacyAuthSeed.oauthScope);
 
-  const [oauthClientSecret, setOauthClientSecret] = useState<string>(() => {
-    return localStorage.getItem("lastOauthClientSecret") || "";
-  });
+  const [oauthClientSecret, setOauthClientSecret] = useState<string>(
+    legacyAuthSeed.oauthClientSecret,
+  );
 
   // Custom headers state with migration from legacy auth
   const [customHeaders, setCustomHeaders] = useState<CustomHeaders>(() => {
-    const savedHeaders = localStorage.getItem("lastCustomHeaders");
-    if (savedHeaders) {
-      try {
-        return JSON.parse(savedHeaders);
-      } catch (error) {
-        console.warn(
-          `Failed to parse custom headers: "${savedHeaders}", will try legacy migration`,
-          error,
-        );
-        // Fall back to migration if JSON parsing fails
-      }
+    if (legacyAuthSeed.customHeaders.length > 0) {
+      return legacyAuthSeed.customHeaders;
     }
-
-    // Migrate from legacy auth if available
-    const legacyToken = localStorage.getItem("lastBearerToken") || "";
-    const legacyHeaderName = localStorage.getItem("lastHeaderName") || "";
+    const legacyToken = legacyAuthSeed.bearerToken;
+    const legacyHeaderName = legacyAuthSeed.headerName;
 
     if (legacyToken) {
       return migrateFromLegacyAuth(legacyToken, legacyHeaderName);
@@ -408,6 +411,8 @@ const App = () => {
 
   const {
     connectionStatus,
+    // [spring-ai-mcp-inspector PATCH] D3 structured error DTO (issue #54).
+    connectionError,
     serverCapabilities,
     serverImplementation,
     mcpClient,
@@ -431,6 +436,8 @@ const App = () => {
     oauthClientId,
     oauthClientSecret,
     oauthScope,
+    // [spring-ai-mcp-inspector PATCH] Active named auth profile (issue #54).
+    activeProfileId,
     config,
     connectionType,
     onNotification: (notification) => {
@@ -582,25 +589,13 @@ const App = () => {
     localStorage.setItem("lastConnectionType", connectionType);
   }, [connectionType]);
 
-  useEffect(() => {
-    if (bearerToken) {
-      localStorage.setItem("lastBearerToken", bearerToken);
-    } else {
-      localStorage.removeItem("lastBearerToken");
-    }
-  }, [bearerToken]);
-
-  useEffect(() => {
-    if (headerName) {
-      localStorage.setItem("lastHeaderName", headerName);
-    } else {
-      localStorage.removeItem("lastHeaderName");
-    }
-  }, [headerName]);
-
-  useEffect(() => {
-    localStorage.setItem("lastCustomHeaders", JSON.stringify(customHeaders));
-  }, [customHeaders]);
+  // [spring-ai-mcp-inspector PATCH] D10: the six legacy auth persistence
+  // effects (lastBearerToken / lastHeaderName / lastCustomHeaders /
+  // lastOauthClientId / lastOauthScope / lastOauthClientSecret) are REMOVED.
+  // Secrets live in React state only and travel backend-ward via the
+  // `/auth-profile` handoff; nothing secret-bearing is written to
+  // localStorage anymore. migrateLegacyAuthStorage() consumed and removed any
+  // pre-existing values on mount.
 
   // Auto-migrate from legacy auth when custom headers are empty but legacy auth exists
   useEffect(() => {
@@ -614,18 +609,6 @@ const App = () => {
       }
     }
   }, [bearerToken, headerName, customHeaders, setCustomHeaders]);
-
-  useEffect(() => {
-    localStorage.setItem("lastOauthClientId", oauthClientId);
-  }, [oauthClientId]);
-
-  useEffect(() => {
-    localStorage.setItem("lastOauthScope", oauthScope);
-  }, [oauthScope]);
-
-  useEffect(() => {
-    localStorage.setItem("lastOauthClientSecret", oauthClientSecret);
-  }, [oauthClientSecret]);
 
   useEffect(() => {
     saveInspectorConfig(CONFIG_LOCAL_STORAGE_KEY, config);
@@ -1343,7 +1326,16 @@ const App = () => {
     );
     return (
       <Suspense fallback={<div>Loading...</div>}>
-        <OAuthCallback onConnect={onOAuthConnect} />
+        {/* [spring-ai-mcp-inspector PATCH] Auth-code profile exchange callback
+            (issue #54, D9B): on success the profile becomes active and the
+            connection starts; the debugger flow falls through unchanged. */}
+        <OAuthCallback
+          onConnect={onOAuthConnect}
+          onProfileAuthorized={(profileId) => {
+            setActiveProfileId(profileId);
+            void connectMcpServer();
+          }}
+        />
       </Suspense>
     );
   }
@@ -1407,6 +1399,13 @@ const App = () => {
           setOauthClientSecret={setOauthClientSecret}
           oauthScope={oauthScope}
           setOauthScope={setOauthScope}
+          // [spring-ai-mcp-inspector PATCH] Named auth profiles + D3 error
+          // banner (issue #54).
+          profiles={profiles}
+          onProfilesChange={setProfiles}
+          activeProfileId={activeProfileId}
+          onActiveProfileChange={setActiveProfileId}
+          connectionError={connectionError}
           onConnect={connectMcpServer}
           onDisconnect={disconnectMcpServer}
           logLevel={logLevel}
