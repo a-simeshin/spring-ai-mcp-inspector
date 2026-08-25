@@ -29,6 +29,7 @@ import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.webflux.auth.AuthProfileHandler;
 import io.inspector.mcp.webflux.proxy.ProxyHandler;
 
 import static org.springframework.web.reactive.function.server.RequestPredicates.DELETE;
@@ -101,6 +102,27 @@ public class InspectorRouterConfig {
 			.andRoute(DELETE(apiPath + "/session/{id}"), handler::deleteSession)
 			.and(RouterFunctions.resources(basePath + "/**", UI_ROOT,
 					(resource, headers) -> headers.setCacheControl(ASSET_CACHE_CONTROL)));
+	}
+
+	/**
+	 * Owner-scoped auth-profile routes (D2/D8): POST/GET/PUT/DELETE
+	 * {@code /auth-profile[/{profileId}]} + GET {@code /prefill} + POST
+	 * {@code /{profileId}/exchange}. Declared as a separate {@link RouterFunction} bean —
+	 * Boot combines every router bean into the single handler mapping.
+	 * @param authProfileHandler the auth-profile handler
+	 * @param properties the inspector properties
+	 * @return the router function for the auth-profile endpoints
+	 */
+	@Bean
+	public RouterFunction<ServerResponse> authProfileRouter(final AuthProfileHandler authProfileHandler,
+			final McpInspectorProperties properties) {
+		final String apiPath = properties.getPath() + "/api";
+		return route(POST(apiPath + "/auth-profile"), authProfileHandler::register)
+			.andRoute(GET(apiPath + "/auth-profile"), authProfileHandler::list)
+			.andRoute(GET(apiPath + "/auth-profile/prefill"), authProfileHandler::prefill)
+			.andRoute(PUT(apiPath + "/auth-profile/{profileId}"), authProfileHandler::update)
+			.andRoute(DELETE(apiPath + "/auth-profile/{profileId}"), authProfileHandler::delete)
+			.andRoute(POST(apiPath + "/auth-profile/{profileId}/exchange"), authProfileHandler::exchange);
 	}
 
 	/**
