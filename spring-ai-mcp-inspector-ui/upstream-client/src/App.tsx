@@ -1355,14 +1355,19 @@ const App = () => {
     // page scrolls vertically instead of squeezing the tab column to zero
     // (50vh sidebar cap + 40vh history cap would otherwise consume 100vh and
     // leave no interactive tab content inside a short viewport, e.g. 780x437);
-    // `lg:flex-row` + `lg:h-screen` restore the upstream desktop layout.
-    <div className="flex flex-col lg:flex-row lg:h-screen bg-background">
+    // `lg:flex-row` + `lg:h-screen` restore the upstream desktop layout; the
+    // root keeps `min-h-screen` so the bg-background always covers the whole
+    // viewport below lg (Vite's `:root` background-color #242424 would
+    // otherwise show as a band under a short compact page).
+    <div className="flex flex-col lg:flex-row lg:h-screen min-h-screen bg-background">
       {/* [spring-ai-mcp-inspector PATCH] Compact (<lg) sidebar (#60): the
           draggable inline width applies only on desktop (>=lg); below it the
-          sidebar is a full-width block with its own scroll and the
+          sidebar is a full-width block with a definite h-[50vh] height and the
           desktop-only drag handle is not mounted, so a compact pointer press
           on the right edge cannot enter the drag path or mutate the hidden
-          sidebar width state. */}
+          sidebar width state. A max-height-only wrapper would resolve the
+          Sidebar's internal h-full chain to auto and scroll the whole block
+          (header included) instead of its body column. */}
       <div
         style={
           isCompactLayout
@@ -1374,7 +1379,7 @@ const App = () => {
                 transition: isSidebarDragging ? "none" : "width 0.15s",
               }
         }
-        className="bg-card border-border flex flex-col relative w-full lg:w-auto lg:border-r border-b lg:border-b-0 max-h-[50vh] lg:max-h-full overflow-y-auto lg:overflow-y-visible"
+        className="bg-card border-border flex flex-col relative w-full lg:w-auto lg:border-r border-b lg:border-b-0 h-[50vh] lg:h-auto overflow-y-auto lg:overflow-y-visible"
       >
         <Sidebar
           connectionStatus={connectionStatus}
@@ -1425,6 +1430,9 @@ const App = () => {
           />
         )}
       </div>
+      {/* [spring-ai-mcp-inspector PATCH] min-w-0/min-h-0 (#60): let the
+          content column shrink inside both flex axes so the stacked compact
+          layout and the desktop row never force horizontal overflow. */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 min-h-0">
         <div className="flex-1 overflow-auto">
           {mcpClient ? (
