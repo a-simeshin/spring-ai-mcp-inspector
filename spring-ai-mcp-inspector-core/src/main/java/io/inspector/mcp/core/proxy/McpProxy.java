@@ -16,6 +16,9 @@
 
 package io.inspector.mcp.core.proxy;
 
+import java.util.Optional;
+import java.util.function.Function;
+
 import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema;
@@ -24,8 +27,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
+
+import io.inspector.mcp.core.auth.AuthProfile;
+import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
+import io.inspector.mcp.core.auth.OAuth2GrantMode;
+import io.inspector.mcp.core.auth.OAuth2Profile;
 
 /**
  * Wires a {@link ProxySession}'s two sinks to the target {@link McpClientTransport}.
@@ -47,6 +58,18 @@ import tools.jackson.databind.json.JsonMapper;
  * originates JSON-RPC frames itself, so there is nothing to send back through the
  * handler.
  *
+ * <p>
+ * <strong>OAuth2 one-retry (D9).</strong> When the session is bound to a
+ * client-credentials profile and the upstream answers a transport call with {@code 401},
+ * the proxy refreshes the token once via
+ * {@link OAuth2ClientCredentialsTokenManager#getAccessToken(String, boolean)} and
+ * re-issues the SAME call (connect or sendMessage) exactly once. The refreshed
+ * authorization value is pushed into {@code session.authorizationRef()} so the
+ * transport's request customizer picks it up without rebuilding the transport. A second
+ * {@code 401} (or any other failure) propagates to the call site, which maps it to the
+ * structured D3 DTO. The SDK's implicit authorization retry is disabled at the transport
+ * builder (see {@link ProxyTransportFactory}).
+ *
  * @author Artem Simeshin
  */
 public final class McpProxy {
@@ -57,9 +80,34 @@ public final class McpProxy {
 
 	private final JacksonMcpJsonMapper mcpJsonMapper;
 
+	/** Owner-scoped auth-profile store; {@code null} in bare (non-Spring) wiring. */
+	private final AuthProfileStore authProfileStore;
+
+	/** Client-credentials token manager; {@code null} in bare wiring. */
+	private final OAuth2ClientCredentialsTokenManager ccTokenManager;
+
+	/** Auth-code exchanger; {@code null} in bare wiring. */
+	private final OAuth2AuthCodeTokenExchanger authCodeExchanger;
+
 	public McpProxy(final JsonMapper objectMapper) {
+		this(objectMapper, null, null, null);
+	}
+
+	/**
+	 * Creates a proxy with the OAuth2 wiring for the D9 one-retry.
+	 * @param objectMapper the JSON mapper backing the relay
+	 * @param authProfileStore the owner-scoped profile store (may be {@code null})
+	 * @param ccTokenManager the client-credentials token manager (may be {@code null})
+	 * @param authCodeExchanger the auth-code exchanger (may be {@code null})
+	 */
+	public McpProxy(final JsonMapper objectMapper, final AuthProfileStore authProfileStore,
+			final OAuth2ClientCredentialsTokenManager ccTokenManager,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.mcpJsonMapper = new JacksonMcpJsonMapper(this.objectMapper);
+		this.authProfileStore = authProfileStore;
+		this.ccTokenManager = ccTokenManager;
+		this.authCodeExchanger = authCodeExchanger;
 	}
 
 	/**
@@ -77,7 +125,8 @@ public final class McpProxy {
 	 */
 	public Mono<Void> start(final ProxySession session) {
 		// Browser → target: every frame the controllers push into browserToTarget
-		// is deserialized then forwarded to the upstream transport.
+		// is deserialized then forwarded to the upstream transport, with the D9
+		// OAuth2 one-retry applied on 401.
 		// takeUntilOther: close() may fail to complete the sink if another thread owns
 		// it at that instant, so the pump is unsubscribed off the session's lock-free
 		// close signal instead of trusting the sink's terminal event to arrive.
@@ -86,13 +135,7 @@ public final class McpProxy {
 			if (typed == null) {
 				return Mono.empty();
 			}
-			return session.targetTransport().sendMessage(typed).doOnError((err) -> {
-				LOG.warn("proxy[{}] sendMessage failed: {}", session.sessionId(), err.toString());
-				// A failed send to a dead upstream must release any per-request awaiter
-				// and the SSE backchannel immediately rather than waiting for the
-				// streamable-request timeout.
-				session.failUpstream(err);
-			});
+			return sendWithOneRetry(session, typed);
 		})
 			.onErrorContinue((err, obj) -> LOG.warn("proxy[{}] browser->target stream error: {}", session.sessionId(),
 					err.toString()))
@@ -115,17 +158,99 @@ public final class McpProxy {
 		// The inbound flux's terminal signals are surfaced too: an upstream
 		// disconnect that completes/errors the inbound stream is propagated via
 		// failUpstream so awaiters and the SSE subscriber are released promptly.
-		return session.targetTransport().connect((inbound) -> inbound.flatMap((message) -> {
-			final JsonNode body = toJsonNode(message);
-			if (body != null) {
-				final Sinks.EmitResult er = session.targetToBrowser().tryEmitNext(body);
-				if (er.isFailure()) {
-					LOG.debug("proxy[{}] target->browser emit failure: {}", session.sessionId(), er.name());
+		final Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>> inboundHandler = (inbound) -> inbound
+			.flatMap((message) -> {
+				final JsonNode body = toJsonNode(message);
+				if (body != null) {
+					final Sinks.EmitResult er = session.targetToBrowser().tryEmitNext(body);
+					if (er.isFailure()) {
+						LOG.debug("proxy[{}] target->browser emit failure: {}", session.sessionId(), er.name());
+					}
+					session.touch();
 				}
-				session.touch();
+				return Mono.<JSONRPCMessage>empty();
+			})
+			.doOnError((err) -> session.failUpstream(err));
+		return connectWithOneRetry(session, inboundHandler, 0);
+	}
+
+	/**
+	 * Sends one frame upstream, applying the D9 one-retry: a {@code 401} on a session
+	 * bound to a client-credentials profile triggers a token refresh and a single re-send
+	 * with the fresh token. The first {@code 401} does NOT fail the session (the awaiter
+	 * must see the retried response); any later failure does.
+	 * @param session the session
+	 * @param typed the typed frame to send
+	 * @return the send result
+	 */
+	private Mono<Void> sendWithOneRetry(final ProxySession session, final JSONRPCMessage typed) {
+		return session.targetTransport().sendMessage(typed).onErrorResume((err) -> {
+			if (isRetryableAuthError(err, session)) {
+				return Mono.defer(() -> refreshToken(session).then(session.targetTransport().sendMessage(typed)))
+					.doOnError((err2) -> {
+						LOG.warn("proxy[{}] sendMessage failed after one retry: {}", session.sessionId(),
+								err2.toString());
+						session.failUpstream(err2);
+					});
 			}
-			return Mono.<JSONRPCMessage>empty();
-		}).doOnError((err) -> session.failUpstream(err))).doOnError((err) -> session.failUpstream(err));
+			LOG.warn("proxy[{}] sendMessage failed: {}", session.sessionId(), err.toString());
+			session.failUpstream(err);
+			return Mono.error(err);
+		});
+	}
+
+	/**
+	 * Runs the upstream {@code connect()} with the D9 one-retry: a {@code 401} on a
+	 * session bound to a client-credentials profile triggers a token refresh and a single
+	 * re-connect. Any later failure propagates to the caller.
+	 * @param session the session
+	 * @param handler the inbound frame handler
+	 * @param attempt current attempt (0 = first)
+	 * @return the connect result
+	 */
+	private Mono<Void> connectWithOneRetry(final ProxySession session,
+			final Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>> handler, final int attempt) {
+		return session.targetTransport().connect(handler).onErrorResume((err) -> {
+			if (attempt == 0 && isRetryableAuthError(err, session)) {
+				return Mono.defer(() -> refreshToken(session).then(connectWithOneRetry(session, handler, 1)));
+			}
+			return Mono.error(err);
+		});
+	}
+
+	/**
+	 * Whether {@code err} qualifies for the one-retry: a {@code 401} extracted by the D3
+	 * status rule, on a session bound to an OAuth2 CLIENT_CREDENTIALS profile with the
+	 * token manager wired.
+	 * @param err the transport failure
+	 * @param session the session
+	 * @return {@code true} when the retry applies
+	 */
+	private boolean isRetryableAuthError(final Throwable err, final ProxySession session) {
+		if (this.ccTokenManager == null || this.authProfileStore == null || session.profileId() == null) {
+			return false;
+		}
+		final Optional<Integer> status = ProxyErrorMapper.extractStatus(err);
+		if (status.isEmpty() || status.get() != 401) {
+			return false;
+		}
+		final Optional<AuthProfile> profile = this.authProfileStore.resolve(session.ownerId(), session.profileId());
+		return profile.isPresent() && profile.get() instanceof OAuth2Profile oauth2
+				&& oauth2.grantMode() == OAuth2GrantMode.CLIENT_CREDENTIALS;
+	}
+
+	/**
+	 * Refreshes the session's client-credentials token and pushes the fresh
+	 * {@code Bearer} value into the transport's live authorization reference. Runs the
+	 * blocking token exchange off the reactive thread.
+	 * @param session the session
+	 * @return a {@link Mono} completing after the refresh
+	 */
+	private Mono<Void> refreshToken(final ProxySession session) {
+		return Mono.fromCallable(() -> this.ccTokenManager.getAccessToken(session.profileId(), true))
+			.subscribeOn(Schedulers.boundedElastic())
+			.doOnNext((handle) -> session.authorizationRef().set("Bearer " + handle.accessToken()))
+			.then();
 	}
 
 	/**
