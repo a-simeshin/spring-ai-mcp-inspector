@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentMap;
 
 import io.modelcontextprotocol.client.McpSyncClient;
+import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -34,6 +35,9 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import tools.jackson.databind.JsonNode;
@@ -47,6 +51,9 @@ import io.inspector.mcp.core.dto.ConfigDto;
 import io.inspector.mcp.core.dto.JsonRpcRelay;
 import io.inspector.mcp.core.dto.RootDto;
 import io.inspector.mcp.core.dto.RootsDto;
+import io.inspector.mcp.core.introspect.model.IntrospectionReport;
+import io.inspector.mcp.core.introspect.model.SchemaWarning;
+import io.inspector.mcp.core.introspect.model.WarningCode;
 import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthInitiateResponse;
@@ -1087,6 +1094,73 @@ class InspectorRestControllerTests {
 			// then
 			assertThat(c).isNotNull();
 			assertThat(c.sessions()).isEmpty();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("introspection()")
+	class Introspection {
+
+		@Test
+		@Story("Introspection endpoint")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("introspection() reports every registered tool/resource with a non-null source and a warnings list")
+		void introspectionEndpoint_returnsContract() {
+			// given
+			final AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(
+					IntrospectionToolConfig.class);
+			InspectorRestControllerTests.this.controller.setApplicationContext(context);
+
+			// when
+			final IntrospectionReport report = InspectorRestControllerTests.this.controller.introspection();
+
+			// then
+			assertThat(report.tools()).singleElement().satisfies((tool) -> {
+				assertThat(tool.name()).isEqualTo("introspectionTool");
+				assertThat(tool.inputSchema()).isNotNull();
+				assertThat(tool.source()).isNotNull();
+				assertThat(tool.source().registered()).isTrue();
+			});
+			assertThat(report.resources()).isEmpty();
+			assertThat(report.warnings()).isEmpty();
+		}
+
+		@Test
+		@Story("Empty context")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a context without MCP elements yields NO_MCP_ELEMENTS and empty lists, never an error")
+		void emptyContext_noMcpElements() {
+			// given
+			final AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
+			context.refresh();
+			InspectorRestControllerTests.this.controller.setApplicationContext(context);
+
+			// when
+			final IntrospectionReport report = InspectorRestControllerTests.this.controller.introspection();
+
+			// then
+			assertThat(report.tools()).isEmpty();
+			assertThat(report.resources()).isEmpty();
+			assertThat(report.warnings()).extracting(SchemaWarning::code).contains(WarningCode.NO_MCP_ELEMENTS);
+		}
+
+	}
+
+	@Configuration
+	static class IntrospectionToolConfig {
+
+		@Bean
+		List<McpServerFeatures.SyncToolSpecification> toolSpecs() {
+			final Map<String, Object> inputSchema = Map.of("type", "object", "properties",
+					Map.of("message", Map.of("type", "string")));
+			final McpSchema.Tool tool = McpSchema.Tool.builder("introspectionTool", inputSchema)
+				.description("Introspection test tool")
+				.build();
+			return List.of(McpServerFeatures.SyncToolSpecification.builder()
+				.tool(tool)
+				.callHandler((exchange, request) -> McpSchema.CallToolResult.builder(List.of()).build())
+				.build());
 		}
 
 	}
