@@ -259,4 +259,109 @@ class JsonSchemaCompatibilityCheckerTests {
 
 	}
 
+	@Nested
+	@DisplayName("oversized array index")
+	class OversizedArrayIndex {
+
+		@Test
+		@Story("An array index beyond int range is unresolved, not an exception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("RFC-6901 array token '999999999999' must yield UNRESOLVED_REF instead of throwing NumberFormatException")
+		void oversizedArrayIndex_unresolved_warned() throws Exception {
+			// given
+			final JsonNode schema = schema("""
+					{
+					  "type": "object",
+					  "properties": {
+					    "payload": { "$ref": "#/definitions/arr/999999999999" }
+					  },
+					  "definitions": {
+					    "arr": [ 1, 2 ]
+					  }
+					}
+					""");
+			// when
+			final List<SchemaWarning> warnings = JsonSchemaCompatibilityCheckerTests.this.checker.check("echoTool",
+					schema, "inputSchema");
+			// then
+			assertThat(warnings).hasSize(1);
+			assertThat(warnings.get(0).code()).isEqualTo(WarningCode.UNRESOLVED_REF);
+			assertThat(warnings.get(0).severity()).isEqualTo(WarningCode.UNRESOLVED_REF.defaultSeverity());
+			assertThat(warnings.get(0).element()).isEqualTo("echoTool");
+			assertThat(warnings.get(0).path()).isEqualTo("inputSchema/properties/payload/$ref");
+			assertThat(warnings.get(0).message()).isNotBlank();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("trailing empty token")
+	class TrailingEmptyToken {
+
+		@Test
+		@Story("A ref ending with '/' targets the empty member and stays unresolved")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("RFC-6901 pointer '#/definitions/foo/' must not be collapsed to '#/definitions/foo'; missing '' member yields UNRESOLVED_REF")
+		void refEndingWithSlash_unresolved_warned() throws Exception {
+			// given
+			final JsonNode schema = schema("""
+					{
+					  "type": "object",
+					  "properties": {
+					    "payload": { "$ref": "#/definitions/foo/" }
+					  },
+					  "definitions": {
+					    "foo": { "type": "object" }
+					  }
+					}
+					""");
+			// when
+			final List<SchemaWarning> warnings = JsonSchemaCompatibilityCheckerTests.this.checker.check("echoTool",
+					schema, "inputSchema");
+			// then
+			assertThat(warnings).hasSize(1);
+			assertThat(warnings.get(0).code()).isEqualTo(WarningCode.UNRESOLVED_REF);
+			assertThat(warnings.get(0).severity()).isEqualTo(WarningCode.UNRESOLVED_REF.defaultSeverity());
+			assertThat(warnings.get(0).element()).isEqualTo("echoTool");
+			assertThat(warnings.get(0).path()).isEqualTo("inputSchema/properties/payload/$ref");
+			assertThat(warnings.get(0).message()).isNotBlank();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("$ref with union siblings")
+	class RefWithUnionSiblings {
+
+		@Test
+		@Story("A $ref with sibling anyOf reports both constructs")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("$ref plus sibling anyOf yields EXTERNAL_REF and UNION_TYPE with exact RFC-6901 paths")
+		void refWithUnionSiblings_bothWarned() throws Exception {
+			// given
+			final JsonNode schema = schema("""
+					{
+					  "type": "object",
+					  "properties": {
+					    "payload": {
+					      "$ref": "https://example.com/schemas/base",
+					      "anyOf": [ { "type": "string" }, { "type": "number" } ]
+					    }
+					  }
+					}
+					""");
+			// when
+			final List<SchemaWarning> warnings = JsonSchemaCompatibilityCheckerTests.this.checker.check("echoTool",
+					schema, "inputSchema");
+			// then
+			assertThat(warnings).hasSize(2);
+			assertThat(warnings).extracting(SchemaWarning::code)
+				.containsExactly(WarningCode.EXTERNAL_REF, WarningCode.UNION_TYPE);
+			assertThat(warnings).extracting(SchemaWarning::path)
+				.containsExactly("inputSchema/properties/payload/$ref", "inputSchema/properties/payload/anyOf");
+			assertThat(warnings).extracting(SchemaWarning::severity).containsOnly("warning");
+		}
+
+	}
+
 }

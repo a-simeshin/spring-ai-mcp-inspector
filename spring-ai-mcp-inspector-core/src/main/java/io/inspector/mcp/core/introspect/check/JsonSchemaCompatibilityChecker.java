@@ -75,7 +75,6 @@ public class JsonSchemaCompatibilityChecker {
 		final JsonNode ref = object.get("$ref");
 		if (ref != null) {
 			checkRef(elementName, root, ref, pathPrefix, pointer, warnings);
-			return;
 		}
 		for (final Map.Entry<String, JsonNode> property : object.properties()) {
 			final String key = property.getKey();
@@ -105,7 +104,7 @@ public class JsonSchemaCompatibilityChecker {
 
 	private static boolean resolves(final JsonNode root, final String ref) {
 		JsonNode current = root;
-		for (final String segment : ref.substring(2).split("/")) {
+		for (final String segment : ref.substring(2).split("/", -1)) {
 			current = resolveSegment(current, unescape(segment));
 			if (current == null) {
 				return false;
@@ -116,8 +115,11 @@ public class JsonSchemaCompatibilityChecker {
 
 	private static JsonNode resolveSegment(final JsonNode node, final String segment) {
 		if (node.isArray()) {
-			final boolean numeric = !segment.isEmpty() && segment.chars().allMatch(Character::isDigit);
-			return numeric ? node.get(Integer.parseInt(segment)) : null;
+			if (segment.isEmpty() || segment.length() > 10 || !segment.chars().allMatch(Character::isDigit)) {
+				return null;
+			}
+			final long index = Long.parseLong(segment);
+			return (index <= Integer.MAX_VALUE) ? node.get((int) index) : null;
 		}
 		return node.get(segment);
 	}
