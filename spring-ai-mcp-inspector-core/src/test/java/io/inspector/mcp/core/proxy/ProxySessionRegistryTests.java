@@ -32,6 +32,9 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
 
+import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.BearerProfile;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
@@ -373,6 +376,116 @@ class ProxySessionRegistryTests {
 			assertThat(late.isClosed()).as("late session closed on arrival").isTrue();
 			assertThat(ProxySessionRegistryTests.this.registry.size()).as("late session not registered").isZero();
 			assertThat(ProxySessionRegistryTests.this.registry.get("late")).isNull();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("auth-profile store hooks (D4)")
+	class AuthProfileHooks {
+
+		@Test
+		@Story("Cleanup race")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("bind → closed registry → put: the late-closed session clears its bound profile mapping")
+		void put_afterCloseAll_clearsBoundAuthProfile() {
+			// given — a profile BOUND to the session that will arrive late
+			final AuthProfileStore store = new AuthProfileStore();
+			final String ownerId = "owner-a";
+			final String profileId = store.register(ownerId, new BearerProfile("prod", "tok"));
+			store.bind(ownerId, profileId, "s-late");
+			ProxySessionRegistryTests.this.registry.setAuthProfileStore(store);
+			ProxySessionRegistryTests.this.registry.closeAll();
+			final ProxySession late = sessionWith("s-late", mockTransport());
+			late.bindProfile(ownerId, profileId);
+
+			// when
+			ProxySessionRegistryTests.this.registry.put(late);
+
+			// then — the mapping is removed with the session (no stale profile binding
+			// survives)
+			assertThat(late.isClosed()).isTrue();
+			assertThat(store.resolve(ownerId, profileId)).isEmpty();
+			assertThat(store.size()).isZero();
+		}
+
+		@Test
+		@Story("Cleanup race")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("removeAndClose() clears the session's bound profile mapping")
+		void removeAndClose_clearsBoundAuthProfile() {
+			// given
+			final AuthProfileStore store = new AuthProfileStore();
+			final String ownerId = "owner-a";
+			final String profileId = store.register(ownerId, new BearerProfile("prod", "tok"));
+			store.bind(ownerId, profileId, "s-1");
+			ProxySessionRegistryTests.this.registry.setAuthProfileStore(store);
+			final ProxySession session = sessionWith("s-1", mockTransport());
+			session.bindProfile(ownerId, profileId);
+			ProxySessionRegistryTests.this.registry.put(session);
+
+			// when
+			ProxySessionRegistryTests.this.registry.removeAndClose("s-1");
+
+			// then
+			assertThat(store.resolve(ownerId, profileId)).isEmpty();
+			assertThat(store.size()).isZero();
+		}
+
+		@Test
+		@Story("Cleanup race")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("closeSession() clears the session's bound profile mapping without removing the session")
+		void closeSession_clearsBoundAuthProfile() {
+			// given
+			final AuthProfileStore store = new AuthProfileStore();
+			final String ownerId = "owner-a";
+			final String profileId = store.register(ownerId, new BearerProfile("prod", "tok"));
+			store.bind(ownerId, profileId, "s-1");
+			ProxySessionRegistryTests.this.registry.setAuthProfileStore(store);
+			final ProxySession session = sessionWith("s-1", mockTransport());
+			session.bindProfile(ownerId, profileId);
+			ProxySessionRegistryTests.this.registry.put(session);
+
+			// when
+			ProxySessionRegistryTests.this.registry.closeSession("s-1");
+
+			// then
+			assertThat(store.resolve(ownerId, profileId)).isEmpty();
+		}
+
+		@Test
+		@Story("TTL sweep")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("reap() drives the store's expired-profile sweep when the store is present")
+		void reap_delegatesExpiredProfileSweepToStore() {
+			// given
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			ProxySessionRegistryTests.this.registry.setAuthProfileStore(store);
+
+			// when
+			ProxySessionRegistryTests.this.registry.reap();
+
+			// then
+			verify(store).removeExpired(org.mockito.ArgumentMatchers.any(java.time.Instant.class));
+		}
+
+		@Test
+		@Story("Cleanup race")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("closeSession() on an unbounded session never touches the store")
+		void closeSession_withoutProfileId_doesNotClearStore() {
+			// given
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			ProxySessionRegistryTests.this.registry.setAuthProfileStore(store);
+			final ProxySession session = sessionWith("s-1", mockTransport());
+			ProxySessionRegistryTests.this.registry.put(session);
+
+			// when
+			ProxySessionRegistryTests.this.registry.closeSession("s-1");
+
+			// then
+			verify(store, never()).clearBySession(org.mockito.ArgumentMatchers.anyString());
 		}
 
 	}
