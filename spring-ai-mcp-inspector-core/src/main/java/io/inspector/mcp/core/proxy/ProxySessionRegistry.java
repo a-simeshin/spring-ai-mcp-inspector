@@ -31,6 +31,7 @@ import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
 import org.springframework.scheduling.annotation.Scheduled;
 
+import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.shutdown.ShutdownDrain;
 
 /**
@@ -94,6 +95,21 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	private volatile boolean closed;
 
 	/**
+	 * Optional owner-scoped auth-profile store; when present, session teardown clears the
+	 * session's bound profile and the reaper sweeps expired profiles (D4).
+	 */
+	private volatile AuthProfileStore authProfileStore;
+
+	/**
+	 * Sets the optional auth-profile store whose bound profiles are cleared with the
+	 * session and whose expired entries are swept by {@link #reap()}.
+	 * @param authProfileStore the store, or {@code null} to disable the hooks
+	 */
+	public void setAuthProfileStore(final AuthProfileStore authProfileStore) {
+		this.authProfileStore = authProfileStore;
+	}
+
+	/**
 	 * Adds {@code session} under {@code session.sessionId()}, unless the registry has
 	 * already been drained — in which case the session is closed immediately instead.
 	 *
@@ -110,14 +126,14 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	 */
 	public void put(final ProxySession session) {
 		if (this.closed) {
-			session.close();
+			closeSession(session);
 			return;
 		}
 		this.sessions.put(session.sessionId(), session);
 		if (this.closed) {
 			// Lost the race: closeAll() flipped the flag after our first check but swept
 			// before our put landed. Double-checking closes it without needing a lock.
-			removeAndClose(session.sessionId());
+			closeSession(session);
 		}
 	}
 
@@ -143,8 +159,31 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 		if (session == null) {
 			return false;
 		}
-		session.close();
+		closeSession(session);
 		return true;
+	}
+
+	/**
+	 * Closes the session for {@code sessionId} (when registered) and clears its bound
+	 * auth profile from the store (D4 cleanup race fix): the early-closed
+	 * {@link #put(ProxySession)} path and {@link #removeAndClose(String)} both route
+	 * through the object-level {@link #closeSession(ProxySession)} helper so no session
+	 * teardown can leave a stale profile binding behind.
+	 * @param sessionId the session id to close and unbind
+	 */
+	public void closeSession(final String sessionId) {
+		final ProxySession session = (sessionId != null) ? this.sessions.get(sessionId) : null;
+		if (session != null) {
+			closeSession(session);
+		}
+	}
+
+	private void closeSession(final ProxySession session) {
+		final AuthProfileStore store = this.authProfileStore;
+		if (store != null && session.profileId() != null) {
+			store.clearBySession(session.sessionId());
+		}
+		session.close();
 	}
 
 	/**
@@ -241,6 +280,10 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	@Scheduled(fixedDelayString = "${spring.ai.mcp.inspector.timeouts.reaper-interval:PT1M}")
 	public void reap() {
 		final Instant now = Instant.now();
+		final AuthProfileStore store = this.authProfileStore;
+		if (store != null) {
+			store.removeExpired(now);
+		}
 		final Duration budget = this.inactivityBudget;
 		for (final ProxySession session : this.sessions.values()) {
 			final boolean closed = session.isClosed();

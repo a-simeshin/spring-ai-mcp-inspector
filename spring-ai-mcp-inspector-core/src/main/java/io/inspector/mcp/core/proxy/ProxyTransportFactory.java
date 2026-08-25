@@ -17,21 +17,31 @@
 package io.inspector.mcp.core.proxy;
 
 import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
+import io.modelcontextprotocol.client.transport.HttpRequestSnapshot;
 import io.modelcontextprotocol.client.transport.ServerParameters;
 import io.modelcontextprotocol.client.transport.SseMessageEndpointValidator;
 import io.modelcontextprotocol.client.transport.StdioClientTransport;
+import io.modelcontextprotocol.client.transport.customizer.McpHttpClientTransportAuthorizationErrorHandler;
 import io.modelcontextprotocol.client.transport.customizer.McpSyncHttpClientRequestCustomizer;
+import io.modelcontextprotocol.common.McpTransportContext;
 import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
+import org.reactivestreams.Publisher;
+import reactor.core.publisher.Mono;
 import tools.jackson.databind.json.JsonMapper;
+
+import io.inspector.mcp.core.auth.AuthHeaders;
 
 /**
  * Builds <strong>bare</strong> {@link McpClientTransport} instances that the proxy
@@ -102,7 +112,7 @@ public class ProxyTransportFactory {
 	 * @return a configured {@link McpClientTransport} for SSE
 	 */
 	public McpClientTransport openSse(final URI sseUri) {
-		return openSse(sseUri, null, null);
+		return openSse(sseUri, (String) null, (Map<String, String>) null);
 	}
 
 	/**
@@ -140,6 +150,41 @@ public class ProxyTransportFactory {
 	}
 
 	/**
+	 * Builds an SSE client transport that applies the resolved {@link AuthHeaders}
+	 * (Authorization header + custom headers + query parameters) on every outbound
+	 * request. The authorization value is read through {@code authorizationRef} when
+	 * provided, so the OAuth2 one-retry path can refresh the token without rebuilding the
+	 * transport.
+	 * <p>
+	 * Named {@code openSseWithAuth} (not an {@code openSse} overload) so callers passing
+	 * literal {@code null}s cannot hit an ambiguous overload against the legacy
+	 * {@code openSse(URI, String, Map)}.
+	 * @param sseUri the full SSE endpoint URI (must not be {@code null})
+	 * @param headers the resolved auth headers (never {@code null})
+	 * @param authorizationRef live authorization value source, or {@code null} to use the
+	 * static value from {@code headers}
+	 * @return a configured {@link McpClientTransport} for SSE
+	 */
+	public McpClientTransport openSseWithAuth(final URI sseUri, final AuthHeaders headers,
+			final AtomicReference<String> authorizationRef) {
+		if (sseUri == null) {
+			throw new IllegalArgumentException("sseUri must not be null");
+		}
+		final String baseUri = stripPath(sseUri);
+		final String ssePath = (sseUri.getRawPath() == null || sseUri.getRawPath().isBlank()) ? "/sse"
+				: sseUri.getRawPath();
+		final HttpClientSseClientTransport.Builder builder = HttpClientSseClientTransport.builder(baseUri)
+			.sseEndpoint(appendQuery(ssePath, headers.queryParams()))
+			.messageEndpointValidator(noopValidator())
+			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR));
+		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(headers, authorizationRef);
+		if (customizer != null) {
+			builder.httpRequestCustomizer(customizer);
+		}
+		return builder.build();
+	}
+
+	/**
 	 * Builds a streamable-HTTP transport that targets the supplied {@code mcpUri}.
 	 *
 	 * <p>
@@ -148,7 +193,7 @@ public class ProxyTransportFactory {
 	 * @return a configured {@link McpClientTransport} for streamable-HTTP
 	 */
 	public McpClientTransport openStreamable(final URI mcpUri) {
-		return openStreamable(mcpUri, null, null);
+		return openStreamable(mcpUri, (String) null, (Map<String, String>) null);
 	}
 
 	/**
@@ -175,8 +220,46 @@ public class ProxyTransportFactory {
 				: mcpUri.getRawPath();
 		final HttpClientStreamableHttpTransport.Builder builder = HttpClientStreamableHttpTransport.builder(baseUri)
 			.endpoint(path)
+			.authorizationErrorHandler(noAuthRetryHandler())
 			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR));
 		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(authorization, customHeaders);
+		if (customizer != null) {
+			builder.httpRequestCustomizer(customizer);
+		}
+		return builder.build();
+	}
+
+	/**
+	 * Builds a streamable-HTTP transport that applies the resolved {@link AuthHeaders}
+	 * (Authorization header + custom headers + query parameters) on every outbound
+	 * request. The SDK's implicit authorization auto-retry is DISABLED
+	 * ({@code authorizationErrorHandler} returns {@code false}) — the single explicit
+	 * retry lives at the call site (D9). The authorization value is read through
+	 * {@code authorizationRef} when provided, so the OAuth2 one-retry path can refresh
+	 * the token without rebuilding the transport.
+	 * <p>
+	 * Named {@code openStreamableWithAuth} (not an {@code openStreamable} overload) so
+	 * callers passing literal {@code null}s cannot hit an ambiguous overload against the
+	 * legacy {@code openStreamable(URI, String, Map)}.
+	 * @param mcpUri the full MCP endpoint URI (must not be {@code null})
+	 * @param headers the resolved auth headers (never {@code null})
+	 * @param authorizationRef live authorization value source, or {@code null} to use the
+	 * static value from {@code headers}
+	 * @return a configured {@link McpClientTransport} for streamable-HTTP
+	 */
+	public McpClientTransport openStreamableWithAuth(final URI mcpUri, final AuthHeaders headers,
+			final AtomicReference<String> authorizationRef) {
+		if (mcpUri == null) {
+			throw new IllegalArgumentException("mcpUri must not be null");
+		}
+		final String baseUri = stripPath(mcpUri);
+		final String path = (mcpUri.getRawPath() == null || mcpUri.getRawPath().isBlank()) ? "/mcp"
+				: mcpUri.getRawPath();
+		final HttpClientStreamableHttpTransport.Builder builder = HttpClientStreamableHttpTransport.builder(baseUri)
+			.endpoint(appendQuery(path, headers.queryParams()))
+			.authorizationErrorHandler(noAuthRetryHandler())
+			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR));
+		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(headers, authorizationRef);
 		if (customizer != null) {
 			builder.httpRequestCustomizer(customizer);
 		}
@@ -239,6 +322,90 @@ public class ProxyTransportFactory {
 				});
 			}
 		};
+	}
+
+	/**
+	 * Builds a customizer for resolved {@link AuthHeaders}: the authorization header is
+	 * read from {@code authorizationRef} when provided (live token refresh support) else
+	 * from the static {@code headers.authorization()}; custom headers are applied
+	 * verbatim. Returns {@code null} when nothing needs forwarding.
+	 * @param headers the resolved auth headers (never {@code null})
+	 * @param authorizationRef live authorization source, or {@code null}
+	 * @return a customizer, or {@code null} when no headers need forwarding
+	 */
+	private static McpSyncHttpClientRequestCustomizer headerCustomizer(final AuthHeaders headers,
+			final AtomicReference<String> authorizationRef) {
+		final boolean hasAuth = (authorizationRef != null)
+				|| (headers.authorization() != null && !headers.authorization().isBlank());
+		final boolean hasCustom = headers.customHeaders() != null && !headers.customHeaders().isEmpty();
+		if (!hasAuth && !hasCustom) {
+			return null;
+		}
+		return (builder, method, endpoint, body, context) -> {
+			final String authorization = (authorizationRef != null) ? authorizationRef.get() : headers.authorization();
+			if (authorization != null && !authorization.isBlank()) {
+				builder.setHeader("Authorization", authorization);
+			}
+			if (hasCustom) {
+				headers.customHeaders().forEach((name, value) -> {
+					if (name != null && !name.isBlank() && value != null) {
+						try {
+							builder.setHeader(name, value);
+						}
+						catch (final IllegalArgumentException ignored) {
+							// restricted header names are silently skipped
+						}
+					}
+				});
+			}
+		};
+	}
+
+	/**
+	 * Disables the SDK's implicit authorization auto-retry (D9): the handler always
+	 * answers {@code false} with zero retries, so a 401/403 surfaces as
+	 * {@code McpHttpClientTransportAuthorizationException} and the ONE explicit retry is
+	 * performed by the call site (observable, never a silent loop).
+	 * @return the no-retry authorization error handler
+	 */
+	private static McpHttpClientTransportAuthorizationErrorHandler noAuthRetryHandler() {
+		return new McpHttpClientTransportAuthorizationErrorHandler() {
+			@Override
+			public Publisher<Boolean> handle(final HttpRequestSnapshot snapshot,
+					final java.net.http.HttpResponse.ResponseInfo responseInfo, final McpTransportContext context) {
+				return Mono.just(false);
+			}
+
+			@Override
+			public int maxRetries() {
+				return 0;
+			}
+		};
+	}
+
+	/**
+	 * Appends URL-encoded query parameters to a path/endpoint string.
+	 * @param path the base path
+	 * @param queryParams the parameters to append (ignored when empty)
+	 * @return {@code path} or {@code path?k=v&...}
+	 */
+	private static String appendQuery(final String path, final Map<String, String> queryParams) {
+		if (queryParams == null || queryParams.isEmpty()) {
+			return path;
+		}
+		final StringBuilder sb = new StringBuilder(path);
+		sb.append(path.contains("?") ? '&' : '?');
+		boolean first = true;
+		for (final Map.Entry<String, String> entry : queryParams.entrySet()) {
+			if (!first) {
+				sb.append('&');
+			}
+			first = false;
+			sb.append(URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8))
+				.append('=')
+				.append(URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8));
+		}
+		return sb.toString();
 	}
 
 	/**
