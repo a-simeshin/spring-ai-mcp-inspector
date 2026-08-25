@@ -2931,11 +2931,14 @@ class InspectorUiIT {
 
 		/**
 		 * True when the document has no horizontal overflow (scrollWidth <=
-		 * window.innerWidth).
+		 * document.documentElement.clientWidth). Compared against the document's own
+		 * client width rather than window.innerWidth, because innerWidth includes the
+		 * vertical scrollbar and would let up to a scrollbar-width (~15px) of horizontal
+		 * overflow slip through as a blind window.
 		 */
 		private static boolean noHorizontalDocumentOverflow() {
-			return Boolean.TRUE.equals(
-					Selenide.executeJavaScript("return document.documentElement.scrollWidth <= window.innerWidth;"));
+			return Boolean.TRUE.equals(Selenide.executeJavaScript(
+					"return document.documentElement.scrollWidth <= document.documentElement.clientWidth;"));
 		}
 
 		/**
