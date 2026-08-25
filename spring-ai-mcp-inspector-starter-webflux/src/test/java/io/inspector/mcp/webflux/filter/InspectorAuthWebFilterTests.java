@@ -26,7 +26,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.Ordered;
+import org.springframework.http.HttpCookie;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseCookie;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.web.server.WebFilterChain;
@@ -34,7 +37,10 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
+import io.inspector.mcp.core.auth.OwnerTokenCodec;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.webflux.auth.InspectorSessionAttributes;
+import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.BDDMockito.given;
@@ -277,6 +283,134 @@ class InspectorAuthWebFilterTests {
 		public Mono<Void> filter(final org.springframework.web.server.ServerWebExchange exchange) {
 			this.invoked = true;
 			return Mono.empty();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("session-owner cookie (D8)")
+	class SessionOwner {
+
+		private InspectorAuthWebFilter ownerFilter;
+
+		private OwnerTokenCodec codec;
+
+		@BeforeEach
+		void setUp() {
+			InspectorAuthWebFilterTests.this.properties.setAuthToken("fixed-test-token");
+			this.codec = new OwnerTokenCodec();
+			this.ownerFilter = new InspectorAuthWebFilter(InspectorAuthWebFilterTests.this.properties,
+					InspectorAuthWebFilterTests.this.tokenProvider, Ordered.HIGHEST_PRECEDENCE + 100,
+					new ReactiveSessionOwnerResolver(this.codec));
+		}
+
+		private MockServerHttpRequest requestWithCookie(final String value) {
+			final MockServerHttpRequest.BaseBuilder<?> builder = MockServerHttpRequest.get("/mcp-inspector/api/config")
+				.header(InspectorAuthWebFilter.HEADER, InspectorAuthWebFilterTests.this.token);
+			if (value != null) {
+				builder.cookie(new HttpCookie(OwnerTokenCodec.COOKIE_NAME, value));
+			}
+			return builder.build();
+		}
+
+		@Test
+		@Story("Owner mint")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a first request with a valid auth token and NO cookie passes and mints a signed Set-Cookie (never 401)")
+		void firstRequestWithoutCookie_mintsOwnerCookie() {
+			// given
+			final MockServerWebExchange exchange = MockServerWebExchange.from(requestWithCookie(null));
+			final ChainSpy chain = new ChainSpy();
+
+			// when
+			StepVerifier.create(this.ownerFilter.filter(exchange, chain)).verifyComplete();
+
+			// then
+			assertThat(chain.invoked).isTrue();
+			assertThat(exchange.getResponse().getStatusCode()).isNull();
+			final ResponseCookie cookie = exchange.getResponse().getCookies().getFirst(OwnerTokenCodec.COOKIE_NAME);
+			assertThat(cookie).isNotNull();
+			assertThat(cookie.isHttpOnly()).isTrue();
+			assertThat(cookie.getSameSite()).isEqualTo("Lax");
+			final Object attribute = exchange.getAttribute(InspectorSessionAttributes.OWNER_ID);
+			assertThat(attribute).isInstanceOf(String.class);
+			assertThat(this.codec.validate(cookie.getValue())).contains((String) attribute);
+		}
+
+		@Test
+		@Story("Owner parse")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a valid signed cookie is reused — same owner, no re-mint")
+		void validCookie_isReusedWithoutReMint() {
+			// given
+			final String token = this.codec.mint("owner-stable", java.time.Instant.now());
+			final MockServerWebExchange exchange = MockServerWebExchange.from(requestWithCookie(token));
+			final ChainSpy chain = new ChainSpy();
+
+			// when
+			StepVerifier.create(this.ownerFilter.filter(exchange, chain)).verifyComplete();
+
+			// then
+			assertThat((Object) exchange.getAttribute(InspectorSessionAttributes.OWNER_ID)).isEqualTo("owner-stable");
+			assertThat(exchange.getResponse().getCookies()).isEmpty();
+		}
+
+		@Test
+		@Story("Owner re-mint")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a forged cookie is treated as absent — a NEW owner is minted (old scope NOT inherited)")
+		void forgedCookie_reMintsNewOwner() {
+			// given — structurally valid but unsigned
+			final MockServerWebExchange exchange = MockServerWebExchange
+				.from(requestWithCookie("owner-victim.1750000000.deadbeef"));
+			final ChainSpy chain = new ChainSpy();
+
+			// when
+			StepVerifier.create(this.ownerFilter.filter(exchange, chain)).verifyComplete();
+
+			// then
+			assertThat((Object) exchange.getAttribute(InspectorSessionAttributes.OWNER_ID))
+				.isNotEqualTo("owner-victim");
+			assertThat(exchange.getResponse().getCookies().getFirst(OwnerTokenCodec.COOKIE_NAME)).isNotNull();
+		}
+
+		@Test
+		@Story("Owner re-mint")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("an expired signed cookie is re-minted to a new owner")
+		void expiredCookie_reMintsNewOwner() {
+			// given
+			final String expired = this.codec.mint("owner-old", java.time.Instant.now().minusSeconds(25 * 3600));
+			final MockServerWebExchange exchange = MockServerWebExchange.from(requestWithCookie(expired));
+			final ChainSpy chain = new ChainSpy();
+
+			// when
+			StepVerifier.create(this.ownerFilter.filter(exchange, chain)).verifyComplete();
+
+			// then
+			assertThat((Object) exchange.getAttribute(InspectorSessionAttributes.OWNER_ID)).isNotEqualTo("owner-old");
+			assertThat(exchange.getResponse().getCookies().getFirst(OwnerTokenCodec.COOKIE_NAME)).isNotNull();
+		}
+
+		@Test
+		@Story("Guard first")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a request that FAILS the X-MCP-Inspector-Auth guard gets 401 and NO cookie is minted")
+		void failedGuard_doesNotMintCookie() {
+			// given
+			final MockServerWebExchange exchange = MockServerWebExchange
+				.from(MockServerHttpRequest.get("/mcp-inspector/api/config")
+					.header(InspectorAuthWebFilter.HEADER, "wrong-token"));
+			final ChainSpy chain = new ChainSpy();
+
+			// when
+			StepVerifier.create(this.ownerFilter.filter(exchange, chain)).verifyComplete();
+
+			// then
+			assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+			assertThat(chain.invoked).isFalse();
+			assertThat(exchange.getResponse().getCookies()).isEmpty();
+			assertThat((Object) exchange.getAttribute(InspectorSessionAttributes.OWNER_ID)).isNull();
 		}
 
 	}

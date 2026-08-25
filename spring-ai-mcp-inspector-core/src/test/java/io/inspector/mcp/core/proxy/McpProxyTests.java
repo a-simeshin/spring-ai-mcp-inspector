@@ -16,9 +16,23 @@
 
 package io.inspector.mcp.core.proxy;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.http.HttpHeaders;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+import io.modelcontextprotocol.client.transport.HttpRequestSnapshot;
+import io.modelcontextprotocol.client.transport.McpHttpClientTransportAuthorizationException;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
@@ -28,6 +42,7 @@ import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -38,6 +53,11 @@ import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
+
+import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
+import io.inspector.mcp.core.auth.OAuth2GrantMode;
+import io.inspector.mcp.core.auth.OAuth2Profile;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -265,6 +285,203 @@ class McpProxyTests {
 
 			// then
 			StepVerifier.create(started).verifyComplete();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("OAuth2 one-retry (D9)")
+	class OAuth2OneRetry {
+
+		private StubTokenServer tokenServer;
+
+		private OAuth2ClientCredentialsTokenManager manager;
+
+		private AuthProfileStore store;
+
+		@BeforeEach
+		void setUp() throws IOException {
+			this.tokenServer = new StubTokenServer();
+			this.tokenServer.start();
+			this.manager = new OAuth2ClientCredentialsTokenManager(
+					java.net.http.HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build(), null);
+			this.store = new AuthProfileStore();
+			McpProxyTests.this.proxy = new McpProxy(McpProxyTests.this.mapper, this.store, this.manager, null);
+		}
+
+		@AfterEach
+		void tearDown() {
+			this.tokenServer.stop();
+		}
+
+		@Test
+		@Story("One-retry")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a 401 on a client-credentials session refreshes the token (client_credentials, never refresh_token) and re-sends ONCE")
+		void sendMessage_401_refreshesTokenAndRetriesOnce() {
+			// given — a session bound to a client-credentials profile with stored
+			// credentials and a cached token
+			bindClientCredentialsSession();
+			this.tokenServer.respond(200, "{\"access_token\":\"tok-2\",\"expires_in\":3600,\"token_type\":\"Bearer\"}");
+			final Throwable unauthorized = authz401();
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any())).willReturn(Mono.error(unauthorized))
+				.willReturn(Mono.empty());
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+
+			// when
+			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
+
+			// then — exactly two send attempts: the original and the retry with the
+			// fresh token; the refresh re-exchanged stored client credentials (no
+			// refresh_token grant) and the session survived
+			awaitTrue(() -> "Bearer tok-2".equals(McpProxyTests.this.session.authorizationRef().get()),
+					Duration.ofSeconds(3));
+			verify(McpProxyTests.this.transport, timeout(3000).times(2)).sendMessage(any());
+			final String refreshBody = this.tokenServer.requestBodies().get(1);
+			assertThat(refreshBody).contains("grant_type=client_credentials");
+			assertThat(refreshBody).doesNotContain("refresh_token");
+			assertThat(this.tokenServer.requestCount()).isEqualTo(2);
+			assertThat(McpProxyTests.this.session.authorizationRef().get()).isEqualTo("Bearer tok-2");
+			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isFalse();
+		}
+
+		@Test
+		@Story("One-retry")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a second 401 after the refresh aborts: exactly one retry, then the session fails upstream")
+		void sendMessage_second401_abortsAfterOneRetry() {
+			// given
+			bindClientCredentialsSession();
+			this.tokenServer.respond(200, "{\"access_token\":\"tok-2\",\"expires_in\":3600,\"token_type\":\"Bearer\"}");
+			final Throwable unauthorized = authz401();
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any())).willReturn(Mono.error(unauthorized));
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+
+			// when
+			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
+
+			// then — one retry happened (two sends total), then the session failed
+			// upstream instead of retrying again
+			awaitTrue(() -> McpProxyTests.this.session.isUpstreamTerminated(), Duration.ofSeconds(3));
+			verify(McpProxyTests.this.transport, timeout(3000).times(2)).sendMessage(any());
+			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
+		}
+
+		@Test
+		@Story("One-retry")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a non-auth transport failure is NOT retried")
+		void sendMessage_plainFailure_isNotRetried() {
+			// given
+			bindClientCredentialsSession();
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any()))
+				.willReturn(Mono.error(new IllegalStateException("boom")));
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+
+			// when
+			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
+
+			// then — a single send attempt, no refresh, session failed upstream
+			awaitTrue(() -> McpProxyTests.this.session.isUpstreamTerminated(), Duration.ofSeconds(3));
+			verify(McpProxyTests.this.transport, timeout(3000)).sendMessage(any());
+			assertThat(this.tokenServer.requestCount()).isEqualTo(1);
+			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
+		}
+
+		private void bindClientCredentialsSession() {
+			this.tokenServer.respond(200, "{\"access_token\":\"tok-1\",\"expires_in\":3600,\"token_type\":\"Bearer\"}");
+			final OAuth2Profile cc = new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS, this.tokenServer.url(),
+					"client-1", "secret-1", "mcp.read mcp.write", null, null, null, null);
+			final String profileId = this.store.register("owner-a", cc);
+			this.manager.acquire(profileId, cc);
+			McpProxyTests.this.session.bindProfile("owner-a", profileId);
+		}
+
+		private static McpHttpClientTransportAuthorizationException authz401() {
+			final HttpRequestSnapshot snapshot = new HttpRequestSnapshot(URI.create("https://target/sse"), "POST",
+					HttpHeaders.of(java.util.Map.of(), (name, value) -> true));
+			final HttpResponse.ResponseInfo responseInfo = mock(HttpResponse.ResponseInfo.class);
+			given(responseInfo.statusCode()).willReturn(401);
+			return new McpHttpClientTransportAuthorizationException("Unauthorized", snapshot, responseInfo);
+		}
+
+		private static JsonNode toolsListFrame() {
+			return new JsonMapper().createObjectNode().put("jsonrpc", "2.0").put("id", 7).put("method", "tools/list");
+		}
+
+		private static void awaitTrue(final java.util.function.BooleanSupplier condition, final Duration timeout) {
+			final long deadline = System.nanoTime() + timeout.toNanos();
+			while (System.nanoTime() < deadline && !condition.getAsBoolean()) {
+				try {
+					Thread.sleep(10);
+				}
+				catch (final InterruptedException ex) {
+					Thread.currentThread().interrupt();
+					break;
+				}
+			}
+			assertThat(condition.getAsBoolean()).isTrue();
+		}
+
+	}
+
+	static final class StubTokenServer {
+
+		private final HttpServer server;
+
+		private final List<String> requestBodies = new ArrayList<>();
+
+		private final AtomicInteger requestCount = new AtomicInteger();
+
+		private volatile int status = 200;
+
+		private volatile String body = "{}";
+
+		StubTokenServer() throws IOException {
+			this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+			this.server.createContext("/token", this::handle);
+			this.server.setExecutor(null);
+		}
+
+		void start() {
+			this.server.start();
+		}
+
+		void stop() {
+			this.server.stop(0);
+		}
+
+		String url() {
+			return "http://127.0.0.1:" + this.server.getAddress().getPort() + "/token";
+		}
+
+		void respond(final int status, final String body) {
+			this.status = status;
+			this.body = body;
+		}
+
+		int requestCount() {
+			return this.requestCount.get();
+		}
+
+		List<String> requestBodies() {
+			return this.requestBodies;
+		}
+
+		private void handle(final HttpExchange exchange) throws IOException {
+			final String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+			synchronized (this.requestBodies) {
+				this.requestBodies.add(requestBody);
+			}
+			this.requestCount.incrementAndGet();
+			final byte[] response = this.body.getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(this.status, response.length);
+			try (OutputStream out = exchange.getResponseBody()) {
+				out.write(response);
+			}
 		}
 
 	}
