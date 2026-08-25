@@ -38,7 +38,13 @@ import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.auth.AuthProfilePrefillProvider;
+import io.inspector.mcp.core.auth.AuthProfileProperties;
+import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
+import io.inspector.mcp.core.auth.OwnerTokenCodec;
 import io.inspector.mcp.core.bootstrap.BootstrapHtmlRenderer;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapAssembler;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapCustomizer;
@@ -51,6 +57,8 @@ import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.shutdown.McpServerTransportDrain;
 import io.inspector.mcp.core.transport.TransportDetector;
+import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
+import io.inspector.mcp.webmvc.controller.AuthProfileController;
 import io.inspector.mcp.webmvc.controller.InspectorConfigController;
 import io.inspector.mcp.webmvc.controller.InspectorIndexController;
 import io.inspector.mcp.webmvc.controller.InspectorRestController;
@@ -85,11 +93,11 @@ import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 @ConditionalOnProperty(prefix = "spring.ai.mcp.inspector", name = "enabled", havingValue = "true",
 		matchIfMissing = true)
-@EnableConfigurationProperties(McpInspectorProperties.class)
+@EnableConfigurationProperties({ McpInspectorProperties.class, AuthProfileProperties.class })
 @EnableScheduling
 @Import({ InspectorRestController.class, InspectorIndexController.class, InspectorConfigController.class,
-		SseProxyController.class, StreamableHttpProxyController.class, ProxyConfigController.class,
-		ProxyHealthController.class, ProxyFetchController.class })
+		AuthProfileController.class, SseProxyController.class, StreamableHttpProxyController.class,
+		ProxyConfigController.class, ProxyHealthController.class, ProxyFetchController.class })
 public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	private final McpInspectorProperties properties;
@@ -134,6 +142,47 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Bean
 	@ConditionalOnMissingBean
+	public OwnerTokenCodec mcpInspectorOwnerTokenCodec() {
+		return new OwnerTokenCodec();
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public ServletSessionOwnerResolver mcpInspectorServletSessionOwnerResolver(final OwnerTokenCodec ownerTokenCodec) {
+		return new ServletSessionOwnerResolver(ownerTokenCodec);
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public AuthProfileStore mcpInspectorAuthProfileStore() {
+		return new AuthProfileStore();
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public OAuth2ClientCredentialsTokenManager mcpInspectorTokenManager(final AuthProfileStore authProfileStore) {
+		final OAuth2ClientCredentialsTokenManager manager = new OAuth2ClientCredentialsTokenManager();
+		// D9A: the manager is wired as the store's TokenEvictor so every removal path
+		// (delete/clear/clearBySession/removeExpired/update) drops the cached token AND
+		// the stored credentials together with the profile.
+		authProfileStore.setTokenEvictor(manager);
+		return manager;
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public OAuth2AuthCodeTokenExchanger mcpInspectorAuthCodeTokenExchanger() {
+		return new OAuth2AuthCodeTokenExchanger();
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public AuthProfilePrefillProvider mcpInspectorAuthProfilePrefillProvider(final AuthProfileProperties properties) {
+		return new AuthProfilePrefillProvider(properties);
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
 	public InspectorAuthTokenProvider mcpInspectorAuthTokenProvider() {
 		return new InspectorAuthTokenProvider(this.properties);
 	}
@@ -172,8 +221,9 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Bean
 	public FilterRegistrationBean<InspectorAuthFilter> mcpInspectorAuthFilterRegistration(
-			final InspectorAuthTokenProvider tokenProvider) {
-		final InspectorAuthFilter filter = new InspectorAuthFilter(this.properties, tokenProvider);
+			final InspectorAuthTokenProvider tokenProvider, final ServletSessionOwnerResolver sessionOwnerResolver) {
+		final InspectorAuthFilter filter = new InspectorAuthFilter(this.properties, tokenProvider,
+				sessionOwnerResolver);
 		final FilterRegistrationBean<InspectorAuthFilter> registration = new FilterRegistrationBean<>(filter);
 		registration.addUrlPatterns(this.properties.getPath() + "/api/*");
 		registration.setName("mcpInspectorAuthFilter");
@@ -183,9 +233,12 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxySessionRegistry mcpInspectorProxySessionRegistry() {
+	public ProxySessionRegistry mcpInspectorProxySessionRegistry(final AuthProfileStore authProfileStore) {
 		final ProxySessionRegistry registry = new ProxySessionRegistry();
 		registry.setInactivityBudget(this.properties.getTimeouts().getSessionReaper());
+		// D4: session teardown clears the bound profile; the reaper sweeps expired
+		// profiles.
+		registry.setAuthProfileStore(authProfileStore);
 		return registry;
 	}
 
@@ -218,8 +271,10 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public McpProxy mcpInspectorMcpProxy(final JsonMapper objectMapper) {
-		return new McpProxy(objectMapper);
+	public McpProxy mcpInspectorMcpProxy(final JsonMapper objectMapper, final AuthProfileStore authProfileStore,
+			final OAuth2ClientCredentialsTokenManager tokenManager,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
+		return new McpProxy(objectMapper, authProfileStore, tokenManager, authCodeExchanger);
 	}
 
 	@Bean

@@ -23,10 +23,13 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,13 +49,22 @@ import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.auth.AuthHeaders;
+import io.inspector.mcp.core.auth.AuthProfile;
+import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyErrorDto;
+import io.inspector.mcp.core.proxy.ProxyErrorMapper;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.proxy.TransportKind;
 import io.inspector.mcp.webmvc.InspectorServerPortHolder;
+import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
 
 /**
  * Upstream-compatible proxy endpoints for SSE-style sessions.
@@ -95,21 +107,56 @@ public class SseProxyController {
 
 	private final InspectorServerPortHolder portHolder;
 
+	private final ServletSessionOwnerResolver sessionOwnerResolver;
+
+	private final AuthProfileStore authProfileStore;
+
+	private final OAuth2ClientCredentialsTokenManager ccTokenManager;
+
+	private final OAuth2AuthCodeTokenExchanger authCodeExchanger;
+
 	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final JsonMapper objectMapper, final McpInspectorProperties properties) {
-		this(registry, transportFactory, mcpProxy, objectMapper, properties, null);
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, null, null, null, null, null);
 	}
 
-	@Autowired
 	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final JsonMapper objectMapper, final McpInspectorProperties properties,
 			final InspectorServerPortHolder portHolder) {
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, null, null, null, null);
+	}
+
+	/**
+	 * Full constructor with the D8/D9 wiring: the session-owner resolver (owner id from
+	 * the signed cookie) and the owner-scoped auth-profile store + OAuth2 managers used
+	 * to resolve the bound profile into transport headers.
+	 * @param registry the proxy session registry
+	 * @param transportFactory the transport factory
+	 * @param mcpProxy the proxy pump
+	 * @param objectMapper the JSON mapper
+	 * @param properties the inspector properties
+	 * @param portHolder the loopback port holder
+	 * @param sessionOwnerResolver the signed-cookie owner resolver
+	 * @param authProfileStore the owner-scoped profile store
+	 * @param ccTokenManager the client-credentials token manager
+	 * @param authCodeExchanger the auth-code exchanger
+	 */
+	@Autowired
+	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
+			final McpProxy mcpProxy, final JsonMapper objectMapper, final McpInspectorProperties properties,
+			final InspectorServerPortHolder portHolder, final ServletSessionOwnerResolver sessionOwnerResolver,
+			final AuthProfileStore authProfileStore, final OAuth2ClientCredentialsTokenManager ccTokenManager,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.properties = properties;
 		this.portHolder = portHolder;
+		this.sessionOwnerResolver = sessionOwnerResolver;
+		this.authProfileStore = authProfileStore;
+		this.ccTokenManager = ccTokenManager;
+		this.authCodeExchanger = authCodeExchanger;
 	}
 
 	private int loopbackPort() {
@@ -149,7 +196,33 @@ public class SseProxyController {
 			@RequestParam(value = "command", required = false) final String command,
 			@RequestParam(value = "args", required = false) final String args,
 			@RequestParam(value = "env", required = false) final String env, final HttpServletRequest request) {
-		return openProxiedSession(transportType, url, command, args, env, contextPath(request));
+		return openSse(transportType, url, command, args, env, null, request);
+	}
+
+	/**
+	 * {@code GET /sse} variant for a bound auth profile: the {@code profileId} query
+	 * parameter selects the owner-scoped profile whose resolved headers are applied to
+	 * every upstream request (D8).
+	 * @param transportType the transport type ({@code sse}, {@code streamable-http}, or
+	 * {@code stdio})
+	 * @param url the target URL for SSE or streamable-HTTP transports
+	 * @param command the executable for stdio transport
+	 * @param args the arguments for stdio transport
+	 * @param env the environment variables for stdio transport as JSON
+	 * @param profileId the owner-scoped auth profile id, or {@code null}
+	 * @param request the current request, read for its context path
+	 * @return the {@link SseEmitter} for the opened session
+	 */
+	@GetMapping(path = "/sse", params = "profileId", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+	public SseEmitter openSse(
+			@RequestParam(value = "transportType", required = false, defaultValue = "sse") final String transportType,
+			@RequestParam(value = "url", required = false) final String url,
+			@RequestParam(value = "command", required = false) final String command,
+			@RequestParam(value = "args", required = false) final String args,
+			@RequestParam(value = "env", required = false) final String env,
+			@RequestParam(value = "profileId", required = false) final String profileId,
+			final HttpServletRequest request) {
+		return openProxiedSession(transportType, url, command, args, env, profileId, contextPath(request));
 	}
 
 	/**
@@ -164,7 +237,25 @@ public class SseProxyController {
 	public SseEmitter openStdio(@RequestParam("command") final String command,
 			@RequestParam(value = "args", required = false) final String args,
 			@RequestParam(value = "env", required = false) final String env, final HttpServletRequest request) {
-		return openProxiedSession("stdio", null, command, args, env, contextPath(request));
+		return openProxiedSession("stdio", null, command, args, env, null, contextPath(request));
+	}
+
+	/**
+	 * {@code GET /stdio} variant for a bound auth profile (D8).
+	 * @param command the executable for stdio transport
+	 * @param args the arguments for stdio transport
+	 * @param env the environment variables for stdio transport as JSON
+	 * @param profileId the owner-scoped auth profile id, or {@code null}
+	 * @param request the current request, read for its context path
+	 * @return the {@link SseEmitter} for the opened session
+	 */
+	@GetMapping(path = "/stdio", params = "profileId", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+	public SseEmitter openStdio(@RequestParam("command") final String command,
+			@RequestParam(value = "args", required = false) final String args,
+			@RequestParam(value = "env", required = false) final String env,
+			@RequestParam(value = "profileId", required = false) final String profileId,
+			final HttpServletRequest request) {
+		return openProxiedSession("stdio", null, command, args, env, profileId, contextPath(request));
 	}
 
 	/**
@@ -202,13 +293,36 @@ public class SseProxyController {
 	}
 
 	private SseEmitter openProxiedSession(final String transportType, final String url, final String command,
-			final String args, final String env, final String contextPath) {
+			final String args, final String env, final String profileId, final String contextPath) {
 		final String sessionId = UUID.randomUUID().toString();
 		final SseEmitter emitter = new SseEmitter(resolveTimeouts().getSseSession().toMillis());
 
+		// D8: resolve the owner from the signed session cookie (mint on demand) and the
+		// bound profile when a profileId is supplied. A foreign/unknown profileId is a
+		// structured 400 — existence is not leaked.
+		final String ownerId = resolveOwner();
+		final AuthHeaders headers;
+		if (profileId != null && !profileId.isBlank()) {
+			if (this.authProfileStore == null || this.sessionOwnerResolver == null) {
+				throw new IllegalStateException("auth-profile support is not wired");
+			}
+			final Optional<AuthProfile> profile = this.authProfileStore.resolve(ownerId, profileId);
+			if (profile.isEmpty()) {
+				return structuredErrorEmitter(emitter,
+						new ProxyErrorDto(400, "bad_request", "Invalid or missing auth profile or session reference.",
+								"Check the profile fields and profileId, then reconnect.", null));
+			}
+			headers = AuthHeaders.resolve(profile.get(), profileId, this.ccTokenManager, this.authCodeExchanger);
+		}
+		else {
+			headers = null;
+		}
+
+		final AtomicReference<String> authorizationRef = new AtomicReference<>(
+				(headers != null) ? headers.authorization() : null);
 		final McpClientTransport target;
 		try {
-			target = buildTargetTransport(transportType, url, command, args, env);
+			target = buildTargetTransport(transportType, url, command, args, env, headers, authorizationRef);
 		}
 		catch (final Exception ex) {
 			LOG.warn("proxy[{}] failed to build target transport: {}", sessionId, ex.toString());
@@ -223,7 +337,18 @@ public class SseProxyController {
 		// unicast contract.
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
-		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
+		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser,
+				authorizationRef);
+		if (profileId != null && !profileId.isBlank()) {
+			// One-time bind: rejected reuse / foreign ids close the handoff (D4/D8).
+			if (!this.authProfileStore.bind(ownerId, profileId, sessionId)) {
+				this.registry.removeAndClose(sessionId);
+				return structuredErrorEmitter(emitter,
+						new ProxyErrorDto(400, "bad_request", "Invalid or missing auth profile or session reference.",
+								"Check the profile fields and profileId, then reconnect.", null));
+			}
+			session.bindProfile(ownerId, profileId);
+		}
 		this.registry.put(session);
 
 		// SSE prologue — tells SSEClientTransport on the browser where to POST.
@@ -250,7 +375,7 @@ public class SseProxyController {
 			.takeUntilOther(session.closeSignal())
 			.subscribe((frame) -> sendMessageEvent(emitter, sessionId, frame), (err) -> {
 				LOG.warn("proxy[{}] target stream errored: {}", sessionId, err.toString());
-				emitter.completeWithError(err);
+				completeWithMappedError(emitter, err, TransportKind.SSE, targetUri(transportType, url));
 			}, () -> emitter.complete());
 
 		emitter.onCompletion(() -> this.registry.removeAndClose(sessionId));
@@ -263,10 +388,87 @@ public class SseProxyController {
 		}, (err) -> {
 			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
 			this.registry.removeAndClose(sessionId);
-			emitter.completeWithError(err);
+			completeWithMappedError(emitter, err, TransportKind.SSE, targetUri(transportType, url));
 		});
 
 		return emitter;
+	}
+
+	/**
+	 * Completes the emitter with the D3 contract: a mappable transport failure emits a
+	 * structured {@code error} event and completes normally; anything else falls back to
+	 * the legacy {@code completeWithError}.
+	 * @param emitter the SSE emitter to complete
+	 * @param err the transport failure
+	 * @param kind the transport kind gating the mapping
+	 * @param target the upstream target URI for the D5-redacted {@code url} field
+	 */
+	private void completeWithMappedError(final SseEmitter emitter, final Throwable err, final TransportKind kind,
+			final URI target) {
+		final ProxyErrorDto dto = ProxyErrorMapper.map(err, kind);
+		if (dto == null) {
+			emitter.completeWithError(err);
+			return;
+		}
+		try {
+			final ProxyErrorDto withUrl = dto.withUrl(ProxyErrorDto.redactUrl(target));
+			emitter.send(SseEmitter.event().name("error").data(this.objectMapper.writeValueAsString(withUrl)));
+			emitter.complete();
+		}
+		catch (final IOException ex) {
+			emitter.completeWithError(ex);
+		}
+	}
+
+	/**
+	 * Emits a structured {@code error} event with the DTO body and completes the emitter
+	 * normally (the handoff-rejection path).
+	 * @param emitter the SSE emitter to complete
+	 * @param dto the structured error DTO
+	 * @return the completed emitter
+	 */
+	private SseEmitter structuredErrorEmitter(final SseEmitter emitter, final ProxyErrorDto dto) {
+		try {
+			emitter.send(SseEmitter.event().name("error").data(this.objectMapper.writeValueAsString(dto)));
+		}
+		catch (final IOException ex) {
+			LOG.warn("proxy: failed to emit structured error event: {}", ex.toString());
+		}
+		emitter.complete();
+		return emitter;
+	}
+
+	/**
+	 * Resolves the request's session owner via the signed cookie (D8); re-mints on
+	 * absent/forged/expired.
+	 * @return the validated owner id
+	 */
+	private String resolveOwner() {
+		if (this.sessionOwnerResolver == null) {
+			return null;
+		}
+		return this.sessionOwnerResolver.resolve(currentRequest(), currentResponse());
+	}
+
+	private static HttpServletResponse currentResponse() {
+		final var attrs = RequestContextHolder.getRequestAttributes();
+		return (attrs instanceof ServletRequestAttributes sra) ? sra.getResponse() : null;
+	}
+
+	/**
+	 * Resolves the upstream target URI for the D5-redacted {@code url} field of error
+	 * DTOs. {@code null} for stdio targets (no URL to redact).
+	 * @param transportType the transport type
+	 * @param url the target URL
+	 * @return the resolved target URI, or {@code null}
+	 */
+	private URI targetUri(final String transportType, final String url) {
+		final String type = (transportType != null) ? transportType.toLowerCase() : "sse";
+		return switch (type) {
+			case "sse" -> ProxyTargetResolver.resolve(url, loopbackPort(), "/sse");
+			case "streamable-http" -> ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
+			default -> null;
+		};
 	}
 
 	private void sendMessageEvent(final SseEmitter emitter, final String sessionId, final JsonNode frame) {
@@ -280,21 +482,20 @@ public class SseProxyController {
 	}
 
 	private McpClientTransport buildTargetTransport(final String transportType, final String url, final String command,
-			final String args, final String env) throws Exception {
+			final String args, final String env, final AuthHeaders headers,
+			final AtomicReference<String> authorizationRef) throws Exception {
 		final String type = (transportType != null) ? transportType.toLowerCase() : "sse";
-		final String authorization = inboundAuthorization();
-		final Map<String, String> customHeaders = inboundCustomHeaders();
-		final boolean noHeaders = authorization == null && customHeaders.isEmpty();
 		return switch (type) {
 			case "sse" -> {
 				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/sse");
-				yield noHeaders ? this.transportFactory.openSse(target)
-						: this.transportFactory.openSse(target, authorization, customHeaders);
+				yield (headers != null) ? this.transportFactory.openSseWithAuth(target, headers, authorizationRef)
+						: openSseWithInboundHeaders(target);
 			}
 			case "streamable-http" -> {
 				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
-				yield noHeaders ? this.transportFactory.openStreamable(target)
-						: this.transportFactory.openStreamable(target, authorization, customHeaders);
+				yield (headers != null)
+						? this.transportFactory.openStreamableWithAuth(target, headers, authorizationRef)
+						: openStreamableWithInboundHeaders(target);
 			}
 			case "stdio" -> {
 				if (command == null || command.isBlank()) {
@@ -307,6 +508,36 @@ public class SseProxyController {
 			}
 			default -> throw new IllegalArgumentException("unsupported transportType: " + transportType);
 		};
+	}
+
+	/**
+	 * Opens an SSE transport forwarding the inbound {@code Authorization} header and the
+	 * headers named by {@code x-custom-auth-headers} (legacy no-profile path); falls back
+	 * to the single-arg overload when nothing needs forwarding.
+	 * @param target the resolved target URI
+	 * @return a configured SSE transport
+	 */
+	private McpClientTransport openSseWithInboundHeaders(final URI target) {
+		final String authorization = inboundAuthorization();
+		final Map<String, String> customHeaders = inboundCustomHeaders();
+		final boolean noHeaders = authorization == null && customHeaders.isEmpty();
+		return noHeaders ? this.transportFactory.openSse(target)
+				: this.transportFactory.openSse(target, authorization, customHeaders);
+	}
+
+	/**
+	 * Opens a streamable transport forwarding the inbound {@code Authorization} header
+	 * and the headers named by {@code x-custom-auth-headers} (legacy no-profile path);
+	 * falls back to the single-arg overload when nothing needs forwarding.
+	 * @param target the resolved target URI
+	 * @return a configured streamable transport
+	 */
+	private McpClientTransport openStreamableWithInboundHeaders(final URI target) {
+		final String authorization = inboundAuthorization();
+		final Map<String, String> customHeaders = inboundCustomHeaders();
+		final boolean noHeaders = authorization == null && customHeaders.isEmpty();
+		return noHeaders ? this.transportFactory.openStreamable(target)
+				: this.transportFactory.openStreamable(target, authorization, customHeaders);
 	}
 
 	/**
