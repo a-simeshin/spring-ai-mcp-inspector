@@ -14,15 +14,15 @@ Local patches against upstream v0.22.0
    from the `window.__MCP_INSPECTOR_BOOTSTRAP` global that the backend's
    `InspectorIndexController` / `InspectorHandler` injects above it via
    `BootstrapHtmlRenderer`:
-    - `inspectorConfig_v1` (localStorage) — persistent InspectorConfig
-      entries keyed by `MCP_*` (e.g. `MCP_PROXY_FULL_ADDRESS`), in the
-      `{value, label?, description?, is_session_item?}` shape expected by
-      `initializeInspectorConfig` (`src/utils/configUtils.ts`).
-    - `inspectorConfig_v1_ephemeral` (sessionStorage) — session-scoped
-      entries in the same shape (e.g. `MCP_PROXY_AUTH_TOKEN`).
-    - `lastTransportType` / `lastSseUrl` (localStorage, top-level) — the
-      standalone keys consumed by `getInitialTransportType` and
-      `getInitialSseUrl`.
+     - `inspectorConfig_v1` (localStorage) — persistent InspectorConfig
+       entries keyed by `MCP_*` (e.g. `MCP_PROXY_FULL_ADDRESS`), in the
+       `{value, label?, description?, is_session_item?}` shape expected by
+       `initializeInspectorConfig` (`src/utils/configUtils.ts`).
+     - `inspectorConfig_v1_ephemeral` (sessionStorage) — session-scoped
+       entries in the same shape (e.g. `MCP_PROXY_AUTH_TOKEN`).
+     - `lastTransportType` / `lastSseUrl` (localStorage, top-level) — the
+       standalone keys consumed by `getInitialTransportType` and
+       `getInitialSseUrl`.
    The seed merges into existing values so user-edited Settings survive a
    reload, and it resolves any path-only `proxyAddress` (e.g.
    `/mcp-inspector-api`) against the current origin before persisting it
@@ -158,4 +158,3 @@ Local patches against upstream v0.22.0
     reason and a Retry button that repeats connect. Covered by
     src/lib/__tests__/connectErrors.test.ts and
     src/components/__tests__/Sidebar.connectFailureAlert.test.tsx.
-
