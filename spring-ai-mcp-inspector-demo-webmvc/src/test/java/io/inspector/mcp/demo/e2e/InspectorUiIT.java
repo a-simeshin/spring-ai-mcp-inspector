@@ -3329,4 +3329,208 @@ class InspectorUiIT {
 
 	}
 
+	// =====================================================================
+	// Responsive tools critical path — 375x667 clickability of the six
+	// canonical List Tools controls (issue #58). The config/list/detail panes
+	// stack vertically below sm; every scenario proves with elementFromPoint
+	// at the control's bounding-box centre that nothing overlays it
+	// (asserted, not just computed), then performs a real click and asserts
+	// the observable state. Tools scenarios use the fresh setup
+	// startApp(new Combo("sse")) → openAndConnect() → clickTab("tools") →
+	// setViewport(375, 667); the Connect scenario stays on the pre-connect
+	// page.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Responsive tools critical path (375x667 clickability)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class ResponsiveToolsCriticalPath {
+
+		/** Each scenario boots a fresh app — clean up after every method. */
+		@AfterEach
+		void tearDown() {
+			stopApp();
+		}
+
+		/**
+		 * True when {@code document.elementFromPoint} at the element's bounding-box
+		 * centre returns the element itself or a descendant — i.e. nothing overlays the
+		 * element's centre at the current scroll position.
+		 */
+		private static boolean elementAtCenter(final SelenideElement element) {
+			return Boolean.TRUE
+				.equals(Selenide.executeJavaScript("const el = arguments[0];" + "const r = el.getBoundingClientRect();"
+						+ "const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);"
+						+ "return !!(hit && (hit === el || el.contains(hit)));", element));
+		}
+
+		/**
+		 * Scrolls the given element into view (its top aligned with the viewport) so an
+		 * {@code elementFromPoint} probe at its bounding-box centre really samples the
+		 * current viewport — Selenide's {@code shouldBe(visible)} only checks the
+		 * rendered state, not the scroll position.
+		 */
+		private static void scrollIntoView(final SelenideElement element) {
+			Selenide.executeJavaScript("arguments[0].scrollIntoView();", element);
+		}
+
+		@Test
+		@Story("Responsive tools critical path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At the 375x667 mobile viewport the pre-connect Connect button inside the stacked config pane is clickable: elementFromPoint at its bounding-box centre returns the button itself (no overlaying subtree intercepts pointer events) and a real click transitions the sidebar into the connected branch — the [data-testid=connect-button] Restart/Reconnect control mounts.")
+		@DisplayName("connect_clickable_at375x667 — Connect reachable and clickable at 375x667")
+		void connect_clickable_at375x667() {
+			// given
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+			ResponsiveTestHelpers.setViewport(375, 667);
+			SelenideElement connect = sidebar().$(byText("Connect")).shouldBe(visible, Duration.ofSeconds(15));
+
+			// then: the config pane is rendered in the mobile layout and nothing
+			// overlays the Connect button — elementFromPoint at its centre returns
+			// the button itself.
+			$("[data-testid=config-pane]").shouldBe(visible, Duration.ofSeconds(10));
+			scrollIntoView(connect);
+			Assertions.assertTrue(elementAtCenter(connect),
+					"elementFromPoint at the Connect centre must return the button itself at 375x667");
+
+			// when: a real click on the Connect button
+			connect.click();
+
+			// then: the connected branch mounts the Restart/Reconnect control.
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+		}
+
+		@Test
+		@Story("Responsive tools critical path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At the 375x667 mobile viewport the List Tools button inside the stacked Tools list pane is clickable: after scrolling it into view, elementFromPoint at its centre returns the button itself — the exact condition the #58 report lacked (an overlaying subtree intercepted pointer events).")
+		@DisplayName("listTools_clickable_at375x667_elementFromPointReturnsButton — List Tools not intercepted at 375x667")
+		void listTools_clickable_at375x667_elementFromPointReturnsButton() {
+			// given
+			startApp(new Combo("sse"));
+			openAndConnect();
+			clickTab("tools");
+			ResponsiveTestHelpers.setViewport(375, 667);
+			$("[data-testid=tools-list-pane]").shouldBe(visible, Duration.ofSeconds(10));
+			SelenideElement listTools = activePanel().$(byText("List Tools")).shouldBe(visible, Duration.ofSeconds(10));
+
+			// then: elementFromPoint at the List Tools centre returns the button
+			// itself.
+			scrollIntoView(listTools);
+			Assertions.assertTrue(elementAtCenter(listTools),
+					"elementFromPoint at the List Tools centre must return the button itself at 375x667");
+		}
+
+		@Test
+		@Story("Responsive tools critical path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At the 375x667 mobile viewport a real click on List Tools loads the tool rows into the stacked list pane, and a real click on the first row (tool-row-0) selects it — the detail pane then renders the Run Tool button.")
+		@DisplayName("listTools_realClick_listsToolsAndSelectsRow — real click lists tools and selects the first row")
+		void listTools_realClick_listsToolsAndSelectsRow() {
+			// given
+			startApp(new Combo("sse"));
+			openAndConnect();
+			clickTab("tools");
+			ResponsiveTestHelpers.setViewport(375, 667);
+			SelenideElement listTools = activePanel().$(byText("List Tools")).shouldBe(visible, Duration.ofSeconds(10));
+
+			// when: a real click on List Tools loads the rows...
+			scrollIntoView(listTools);
+			Assertions.assertTrue(elementAtCenter(listTools),
+					"elementFromPoint at the List Tools centre must return the button itself at 375x667");
+			listTools.click();
+			activePanel().$$(".cursor-pointer")
+				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
+
+			// ...and a real click on the first row selects it.
+			SelenideElement firstRow = $("[data-testid=tool-row-0]").shouldBe(visible, Duration.ofSeconds(10));
+			scrollIntoView(firstRow);
+			Assertions.assertTrue(ResponsiveTestHelpers.elementAtCenter("tool-row-0"),
+					"elementFromPoint at the first row centre must return the row itself at 375x667");
+			firstRow.click();
+
+			// then: the detail pane renders the Run Tool button for the selected
+			// tool.
+			$("[data-testid=tools-detail-pane]").shouldBe(visible, Duration.ofSeconds(10));
+			$("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofSeconds(10));
+		}
+
+		@Test
+		@Story("Responsive tools critical path")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("At the 375x667 mobile viewport the search controls of the stacked Tools list pane are reachable: the search button and the expanded search input are not intercepted (elementFromPoint at their centres returns the control), and typing a query filters the visible rows.")
+		@DisplayName("search_reachable_at375x667 — search button and input reachable, filter works")
+		void search_reachable_at375x667() {
+			// given
+			startApp(new Combo("sse"));
+			openAndConnect();
+			clickTab("tools");
+			ResponsiveTestHelpers.setViewport(375, 667);
+			$("[data-testid=tools-list-pane]").shouldBe(visible, Duration.ofSeconds(10));
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$(".cursor-pointer")
+				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
+
+			// then: the search button is not intercepted at 375px...
+			SelenideElement searchButton = $("[data-testid=search-button]").shouldBe(visible, Duration.ofSeconds(10));
+			scrollIntoView(searchButton);
+			Assertions.assertTrue(ResponsiveTestHelpers.elementAtCenter("search-button"),
+					"elementFromPoint at the search-button centre must return the button itself at 375x667");
+
+			// when: a real click expands the search input, and a query is typed...
+			searchButton.click();
+			SelenideElement searchInput = $("[data-testid=search-input]").shouldBe(visible, Duration.ofSeconds(10));
+			scrollIntoView(searchInput);
+			Assertions.assertTrue(ResponsiveTestHelpers.elementAtCenter("search-input"),
+					"elementFromPoint at the search-input centre must return the input itself at 375x667");
+			searchInput.setValue("sum");
+
+			// then: only the matching rows remain visible.
+			activePanel().$(byText("sum")).shouldBe(visible);
+			activePanel().$(byText("echo")).shouldNotBe(visible);
+		}
+
+		@Test
+		@Story("Responsive tools critical path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At the 375x667 mobile viewport the Run Tool button of the stacked detail pane is clickable for the sum tool: elementFromPoint at its centre returns the button itself, and running 7 + 8 through the DynamicJsonForm inputs (id=a / id=b) produces the deterministic result text \"15\".")
+		@DisplayName("runTool_sum_7_8_returns15 — Run Tool clickable at 375x667, sum 7+8 -> 15")
+		void runTool_sum_7_8_returns15() {
+			// given
+			startApp(new Combo("sse"));
+			openAndConnect();
+			clickTab("tools");
+			ResponsiveTestHelpers.setViewport(375, 667);
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$(".cursor-pointer")
+				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
+			selectRow("sum");
+			$("[data-testid=tools-detail-pane]").shouldBe(visible, Duration.ofSeconds(10));
+			SelenideElement runTool = $("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofSeconds(10));
+
+			// then: the Run Tool button is not intercepted at 375px.
+			scrollIntoView(runTool);
+			Assertions.assertTrue(ResponsiveTestHelpers.elementAtCenter("run-tool-button"),
+					"elementFromPoint at the Run Tool centre must return the button itself at 375x667");
+
+			// when: 7 + 8 through the DynamicJsonForm inputs (id=a / id=b), then a
+			// real click on Run Tool
+			$("#a").shouldBe(visible).setValue("7");
+			$("#b").shouldBe(visible).setValue("8");
+			runTool.click();
+
+			// then: the deterministic sum result appears in the active panel.
+			activePanel().shouldHave(text("15"), Duration.ofSeconds(15));
+			activePanel().shouldHave(text("15"));
+		}
+
+	}
+
 }
