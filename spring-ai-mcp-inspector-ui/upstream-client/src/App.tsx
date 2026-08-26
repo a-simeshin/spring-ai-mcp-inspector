@@ -49,6 +49,8 @@ import {
   useDraggablePane,
   useDraggableSidebar,
 } from "./lib/hooks/useDraggablePane";
+// [spring-ai-mcp-inspector PATCH] Compact (<1024px) layout switch (#60).
+import { useIsCompactLayout } from "./lib/hooks/useIsCompactLayout";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -394,6 +396,10 @@ const App = () => {
     isDragging: isSidebarDragging,
     handleDragStart: handleSidebarDragStart,
   } = useDraggableSidebar(320);
+  // [spring-ai-mcp-inspector PATCH] Compact (<lg, 1024px) layout (#60): below
+  // the breakpoint the app stacks vertically and desktop-only inline geometry
+  // (sidebar width drag, fixed History pane height) must not apply.
+  const isCompactLayout = useIsCompactLayout();
 
   const selectedTaskRef = useRef<Task | null>(null);
   useEffect(() => {
@@ -1343,15 +1349,38 @@ const App = () => {
   }
 
   return (
-    <div className="flex h-screen bg-background">
+    // [spring-ai-mcp-inspector PATCH] Compact (<lg, 1024px) layout (#60):
+    // stack sidebar / content / history vertically below the breakpoint so
+    // the History pane is in normal flow and can never overlay tab content;
+    // the fixed viewport height is desktop-only (lg:h-screen) so the compact
+    // page scrolls vertically instead of squeezing the tab column to zero
+    // (50vh sidebar cap + 40vh history cap would otherwise consume 100vh and
+    // leave no interactive tab content inside a short viewport, e.g. 780x437);
+    // `lg:flex-row` + `lg:h-screen` restore the upstream desktop layout; the
+    // root keeps `min-h-screen` so the bg-background always covers the whole
+    // viewport below lg (Vite's `:root` background-color #242424 would
+    // otherwise show as a band under a short compact page).
+    <div className="flex flex-col lg:flex-row lg:h-screen min-h-screen bg-background">
+      {/* [spring-ai-mcp-inspector PATCH] Compact (<lg) sidebar (#60): the
+          draggable inline width applies only on desktop (>=lg); below it the
+          sidebar is a full-width block with a definite h-[50vh] height and the
+          desktop-only drag handle is not mounted, so a compact pointer press
+          on the right edge cannot enter the drag path or mutate the hidden
+          sidebar width state. A max-height-only wrapper would resolve the
+          Sidebar's internal h-full chain to auto and scroll the whole block
+          (header included) instead of its body column. */}
       <div
-        style={{
-          width: sidebarWidth,
-          minWidth: 200,
-          maxWidth: 600,
-          transition: isSidebarDragging ? "none" : "width 0.15s",
-        }}
-        className="bg-card border-r border-border flex flex-col h-full relative"
+        style={
+          isCompactLayout
+            ? undefined
+            : {
+                width: sidebarWidth,
+                minWidth: 200,
+                maxWidth: 600,
+                transition: isSidebarDragging ? "none" : "width 0.15s",
+              }
+        }
+        className="bg-card border-border flex flex-col relative w-full lg:w-auto lg:border-r border-b lg:border-b-0 h-[50vh] lg:h-auto overflow-y-auto lg:overflow-y-visible"
       >
         <Sidebar
           connectionStatus={connectionStatus}
@@ -1385,23 +1414,28 @@ const App = () => {
           setConnectionType={setConnectionType}
           serverImplementation={serverImplementation}
         />
-        <div
-          onMouseDown={handleSidebarDragStart}
-          style={{
-            cursor: "col-resize",
-            position: "absolute",
-            top: 0,
-            right: 0,
-            width: 6,
-            height: "100%",
-            zIndex: 10,
-            background: isSidebarDragging ? "rgba(0,0,0,0.08)" : "transparent",
-          }}
-          aria-label="Resize sidebar"
-          data-testid="sidebar-drag-handle"
-        />
+        {!isCompactLayout && (
+          <div
+            onMouseDown={handleSidebarDragStart}
+            style={{
+              cursor: "col-resize",
+              position: "absolute",
+              top: 0,
+              right: 0,
+              width: 6,
+              height: "100%",
+              zIndex: 10,
+              background: isSidebarDragging ? "rgba(0,0,0,0.08)" : "transparent",
+            }}
+            aria-label="Resize sidebar"
+            data-testid="sidebar-drag-handle"
+          />
+        )}
       </div>
-      <div className="flex-1 flex flex-col overflow-hidden">
+      {/* [spring-ai-mcp-inspector PATCH] min-w-0/min-h-0 (#60): let the
+          content column shrink inside both flex axes so the stacked compact
+          layout and the desktop row never force horizontal overflow. */}
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0 min-h-0">
         <div className="flex-1 overflow-auto">
           {mcpClient ? (
             <Tabs
@@ -1790,18 +1824,33 @@ const App = () => {
             </div>
           )}
         </div>
+        {/* [spring-ai-mcp-inspector PATCH] Compact (<lg) History pane (#60):
+            below the breakpoint the fixed inline height and the drag handle
+            are dropped; the pane becomes an in-flow section with a definite
+            h-[40vh] height and its own scroll, so it can never overlay tab
+            content. A max-height-only wrapper would resolve the inner h-full
+            chain to auto and leave the History/Notifications columns without
+            an independently scrollable height. >=lg restores the upstream
+            fixed-height resizable pane. */}
         <div
-          className="relative border-t border-border"
-          style={{
-            height: `${historyPaneHeight}px`,
-          }}
+          className="relative border-t border-border h-[40vh] lg:h-auto"
+          style={
+            isCompactLayout
+              ? undefined
+              : {
+                  height: `${historyPaneHeight}px`,
+                }
+          }
         >
-          <div
-            className="absolute w-full h-4 -top-2 cursor-row-resize flex items-center justify-center hover:bg-accent/50 dark:hover:bg-input/40"
-            onMouseDown={handleDragStart}
-          >
-            <div className="w-8 h-1 rounded-full bg-border" />
-          </div>
+          {!isCompactLayout && (
+            <div
+              className="absolute w-full h-4 -top-2 cursor-row-resize flex items-center justify-center hover:bg-accent/50 dark:hover:bg-input/40"
+              onMouseDown={handleDragStart}
+              data-testid="pane-drag-handle"
+            >
+              <div className="w-8 h-1 rounded-full bg-border" />
+            </div>
+          )}
           <div className="h-full overflow-auto">
             <HistoryAndNotifications
               requestHistory={requestHistory}
