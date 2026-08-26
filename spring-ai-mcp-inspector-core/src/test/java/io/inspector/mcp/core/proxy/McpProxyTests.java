@@ -144,6 +144,34 @@ class McpProxyTests {
 			verify(McpProxyTests.this.transport, timeout(1000).times(2)).sendMessage(any());
 		}
 
+		@Test
+		@Story("sendMessage failure is surfaced")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a sendMessage failure (e.g. connection refused) fails the session upstream so per-request awaiters and the SSE backchannel wake fast")
+		void start_whenSendMessageFails_terminatesUpstream() {
+			// given — the SDK masks sendMessage errors and re-surfaces them on the
+			// pump as a wrapped completion failure
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			final java.util.concurrent.CompletionException connectError = new java.util.concurrent.CompletionException(
+					new java.net.ConnectException("Connection refused"));
+			given(McpProxyTests.this.transport.sendMessage(any())).willReturn(Mono.error(connectError));
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+
+			// when
+			McpProxyTests.this.browserToTarget.tryEmitNext(McpProxyTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.put("method", "ping"));
+
+			// then — the upstream failure is propagated to the browser side instead of
+			// being swallowed until the streamable-request timeout
+			verify(McpProxyTests.this.transport, timeout(1000)).sendMessage(any());
+			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
+			StepVerifier.create(McpProxyTests.this.targetToBrowser.asFlux())
+				.expectError()
+				.verify(Duration.ofSeconds(1));
+		}
+
 	}
 
 	@Nested

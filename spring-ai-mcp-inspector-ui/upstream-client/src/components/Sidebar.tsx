@@ -32,6 +32,10 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { InspectorConfig } from "@/lib/configurationTypes";
 import { ConnectionStatus } from "@/lib/constants";
+import {
+  humanReadableReason,
+  type ConnectFailure,
+} from "@/lib/connectErrors";
 import useTheme from "../lib/hooks/useTheme";
 // Vendored: upstream imports version from monorepo root package.json
 // (../../../package.json). In our vendored layout we point at the client's
@@ -50,6 +54,7 @@ import { validateRedirectUrl } from "@/utils/urlValidation";
 
 interface SidebarProps {
   connectionStatus: ConnectionStatus;
+  connectionError: ConnectFailure | null;
   transportType: "stdio" | "sse" | "streamable-http";
   setTransportType: (type: "stdio" | "sse" | "streamable-http") => void;
   command: string;
@@ -85,6 +90,7 @@ interface SidebarProps {
 
 const Sidebar = ({
   connectionStatus,
+  connectionError,
   transportType,
   setTransportType,
   command,
@@ -724,6 +730,42 @@ const Sidebar = ({
               </div>
             )}
           </div>
+
+          {/* [spring-ai-mcp-inspector PATCH] Surface connect failures with a
+              human-readable reason and a Retry button instead of only
+              logging them (see NOTICE.txt entry on connect errors). */}
+          {connectionError && (
+            <div
+              role="alert"
+              className="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200 rounded-lg p-3 mb-4"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                <span className="text-sm font-medium">
+                  Failed to connect to the MCP server
+                </span>
+              </div>
+              <p className="text-xs mb-2">
+                {humanReadableReason(connectionError.reason)}
+                {connectionError.message && (
+                  <>
+                    <br />
+                    {connectionError.message}
+                  </>
+                )}
+              </p>
+              <Button
+                data-testid="retry-connect-button"
+                size="sm"
+                variant="outline"
+                className="w-full"
+                onClick={onConnect}
+              >
+                <RotateCcw className="w-4 h-4 mr-2" />
+                Retry
+              </Button>
+            </div>
+          )}
 
           <div className="space-y-2">
             {connectionStatus === "connected" && (
