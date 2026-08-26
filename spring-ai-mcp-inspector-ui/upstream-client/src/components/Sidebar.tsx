@@ -733,7 +733,7 @@ const Sidebar = ({
 
           {/* [spring-ai-mcp-inspector PATCH] Surface connect failures with a
               human-readable reason and a Retry button instead of only
-              logging them (see NOTICE.txt entry on connect errors). */}
+              logging them (see NOTICE.d/connect-error-alert.txt). */}
           {connectionError && (
             <div
               role="alert"
