@@ -16,7 +16,9 @@
 
 package io.inspector.mcp.core.auth;
 
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.HexFormat;
 
 import javax.crypto.Mac;
@@ -48,7 +50,7 @@ class OwnerTokenCodecTests {
 		}
 	}
 
-	private final OwnerTokenCodec codec = new OwnerTokenCodec(SECRET);
+	private final OwnerTokenCodec codec = new OwnerTokenCodec(SECRET, Clock.fixed(NOW, ZoneOffset.UTC));
 
 	private static final Instant NOW = Instant.parse("2026-08-25T10:00:00Z");
 
@@ -62,7 +64,7 @@ class OwnerTokenCodecTests {
 		@Description("mint() produces a three-part ownerId.expiresAt.hmac token whose signature validates")
 		void mint_validOwner_returnsSignedToken() {
 			// when
-			final String token = OwnerTokenCodecTests.this.codec.mint("owner-1", NOW);
+			final String token = OwnerTokenCodecTests.this.codec.mint("owner-1");
 
 			// then
 			final String[] parts = token.split("\\.");
@@ -79,7 +81,7 @@ class OwnerTokenCodecTests {
 		@Description("mint() rejects a blank owner id")
 		void mint_withBlankOwner_throws() {
 			// when/then
-			org.assertj.core.api.Assertions.assertThatThrownBy(() -> OwnerTokenCodecTests.this.codec.mint("  ", NOW))
+			org.assertj.core.api.Assertions.assertThatThrownBy(() -> OwnerTokenCodecTests.this.codec.mint("  "))
 				.isInstanceOf(IllegalArgumentException.class);
 		}
 
@@ -95,7 +97,7 @@ class OwnerTokenCodecTests {
 		@Description("validate() returns the embedded owner id for a freshly minted token")
 		void validate_withMintedToken_returnsOwnerId() {
 			// given
-			final String token = OwnerTokenCodecTests.this.codec.mint("owner-42", NOW);
+			final String token = OwnerTokenCodecTests.this.codec.mint("owner-42");
 
 			// when
 			final java.util.Optional<String> ownerId = OwnerTokenCodecTests.this.codec.validate(token);
@@ -160,16 +162,36 @@ class OwnerTokenCodecTests {
 		@Test
 		@Story("Expired token")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("validate() rejects an expired token even when the signature is valid")
+		@Description("validate() rejects a token once the codec clock passes its TTL, even when the signature is valid")
 		void validate_withExpiredToken_returnsEmpty() {
-			// given — minted 25h ago, TTL is 24h
-			final String token = OwnerTokenCodecTests.this.codec.mint("owner-1", NOW.minusSeconds(25 * 3600));
+			// given — minted at NOW, validated one second past the 24h TTL
+			final OwnerTokenCodec later = new OwnerTokenCodec(SECRET,
+					Clock.fixed(NOW.plus(OwnerTokenCodec.TOKEN_TTL).plusSeconds(1), ZoneOffset.UTC));
+			final String token = OwnerTokenCodecTests.this.codec.mint("owner-1");
 
 			// when
-			final java.util.Optional<String> ownerId = OwnerTokenCodecTests.this.codec.validate(token);
+			final java.util.Optional<String> ownerId = later.validate(token);
 
 			// then
 			assertThat(ownerId).isEmpty();
+		}
+
+		@Test
+		@Story("Valid token")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("validate() still accepts a token at the exact TTL boundary (expiresAt == now)")
+		void validate_atExactTtl_returnsOwnerId() {
+			// given — minted at NOW, validated exactly at the 24h TTL (expiry is
+			// exclusive)
+			final OwnerTokenCodec atTtl = new OwnerTokenCodec(SECRET,
+					Clock.fixed(NOW.plus(OwnerTokenCodec.TOKEN_TTL), ZoneOffset.UTC));
+			final String token = OwnerTokenCodecTests.this.codec.mint("owner-1");
+
+			// when
+			final java.util.Optional<String> ownerId = atTtl.validate(token);
+
+			// then
+			assertThat(ownerId).contains("owner-1");
 		}
 
 		@Test
@@ -193,8 +215,8 @@ class OwnerTokenCodecTests {
 		@Description("validate() accepts a token minted with a different codec instance sharing the same secret")
 		void validate_withSameSecretDifferentInstance_returnsOwnerId() {
 			// given
-			final OwnerTokenCodec other = new OwnerTokenCodec(SECRET);
-			final String token = other.mint("owner-shared", NOW);
+			final OwnerTokenCodec other = new OwnerTokenCodec(SECRET, Clock.fixed(NOW, ZoneOffset.UTC));
+			final String token = other.mint("owner-shared");
 
 			// when
 			final java.util.Optional<String> ownerId = OwnerTokenCodecTests.this.codec.validate(token);

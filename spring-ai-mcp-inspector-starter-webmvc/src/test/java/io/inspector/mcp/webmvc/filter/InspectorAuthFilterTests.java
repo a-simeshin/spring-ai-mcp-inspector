@@ -16,6 +16,10 @@
 
 package io.inspector.mcp.webmvc.filter;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -221,7 +225,7 @@ class InspectorAuthFilterTests {
 		@Description("a valid signed cookie is reused — same owner, no re-mint")
 		void validCookie_isReusedWithoutReMint() throws Exception {
 			// given
-			final String token = this.codec.mint("owner-stable", java.time.Instant.now());
+			final String token = this.codec.mint("owner-stable");
 			final MockHttpServletRequest request = requestWithCookie(token);
 			final MockHttpServletResponse response = new MockHttpServletResponse();
 			final MockFilterChain chain = new MockFilterChain();
@@ -260,7 +264,9 @@ class InspectorAuthFilterTests {
 		@Description("an expired signed cookie is re-minted to a new owner")
 		void expiredCookie_reMintsNewOwner() throws Exception {
 			// given
-			final String expired = this.codec.mint("owner-old", java.time.Instant.now().minusSeconds(25 * 3600));
+			final OwnerTokenCodec pastClockCodec = new OwnerTokenCodec(
+					Clock.fixed(Instant.now().minusSeconds(25 * 3600), ZoneOffset.UTC));
+			final String expired = pastClockCodec.mint("owner-old");
 			final MockHttpServletRequest request = requestWithCookie(expired);
 			final MockHttpServletResponse response = new MockHttpServletResponse();
 			final MockFilterChain chain = new MockFilterChain();

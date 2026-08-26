@@ -16,6 +16,10 @@
 
 package io.inspector.mcp.webflux.filter;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -343,7 +347,7 @@ class InspectorAuthWebFilterTests {
 		@Description("a valid signed cookie is reused — same owner, no re-mint")
 		void validCookie_isReusedWithoutReMint() {
 			// given
-			final String token = this.codec.mint("owner-stable", java.time.Instant.now());
+			final String token = this.codec.mint("owner-stable");
 			final MockServerWebExchange exchange = MockServerWebExchange.from(requestWithCookie(token));
 			final ChainSpy chain = new ChainSpy();
 
@@ -380,7 +384,9 @@ class InspectorAuthWebFilterTests {
 		@Description("an expired signed cookie is re-minted to a new owner")
 		void expiredCookie_reMintsNewOwner() {
 			// given
-			final String expired = this.codec.mint("owner-old", java.time.Instant.now().minusSeconds(25 * 3600));
+			final OwnerTokenCodec pastClockCodec = new OwnerTokenCodec(
+					Clock.fixed(Instant.now().minusSeconds(25 * 3600), ZoneOffset.UTC));
+			final String expired = pastClockCodec.mint("owner-old");
 			final MockServerWebExchange exchange = MockServerWebExchange.from(requestWithCookie(expired));
 			final ChainSpy chain = new ChainSpy();
 

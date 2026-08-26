@@ -69,7 +69,7 @@ public class ServletSessionOwnerResolver {
 			return validated.get();
 		}
 		final String ownerId = UUID.randomUUID().toString();
-		final String token = this.codec.mint(ownerId, java.time.Instant.now());
+		final String token = this.codec.mint(ownerId);
 		if (response != null) {
 			final ResponseCookie cookie = ResponseCookie.from(OwnerTokenCodec.COOKIE_NAME, token)
 				.httpOnly(true)
