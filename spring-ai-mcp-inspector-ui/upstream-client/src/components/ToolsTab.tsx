@@ -274,7 +274,15 @@ const ToolsTab = ({
 
   return (
     <TabsContent value="tools">
-      <div className="grid grid-cols-2 gap-4">
+      {/* [spring-ai-mcp-inspector PATCH] Responsive Tools list/detail grid
+          (#58): upstream hard-codes two columns, which overlap at a 375px
+          viewport. Stack into one column below the `sm` (640px) breakpoint,
+          keep two columns at and above it. data-testid anchors the grid for
+          deterministic Selenide geometry assertions. */}
+      <div
+        className="grid grid-cols-1 sm:grid-cols-2 gap-4"
+        data-testid="tools-list-detail-grid"
+      >
         <ListPane
           items={tools}
           listItems={listTools}
@@ -303,7 +311,12 @@ const ToolsTab = ({
           isButtonDisabled={!nextCursor && tools.length > 0}
         />
 
-        <div className="bg-card border border-border rounded-lg shadow">
+        {/* [spring-ai-mcp-inspector PATCH] Tool detail pane (#58): data-testid
+            anchor for Selenide geometry assertions on the responsive grid. */}
+        <div
+          className="bg-card border border-border rounded-lg shadow"
+          data-testid="tools-detail-pane"
+        >
           <div className="p-4 border-b border-gray-200 dark:border-border">
             <div className="flex items-center gap-2">
               {selectedTool && (
@@ -803,7 +816,10 @@ const ToolsTab = ({
                     </Label>
                   </div>
                 )}
+                {/* [spring-ai-mcp-inspector PATCH] Run Tool button (#58):
+                    data-testid anchor for the Selenide critical-path click. */}
                 <Button
+                  data-testid="run-tool-button"
                   onClick={async () => {
                     // Validate JSON inputs before calling tool
                     if (checkValidationErrors(true)) return;
