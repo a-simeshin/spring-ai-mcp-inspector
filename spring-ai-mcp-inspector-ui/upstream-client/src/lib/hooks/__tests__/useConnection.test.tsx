@@ -1815,4 +1815,53 @@ describe("useConnection", () => {
       ).toBeNull();
     });
   });
+
+  describe("Connect failure state", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockClient.connect.mockResolvedValue(undefined);
+    });
+
+    afterAll(() => {
+      mockClient.connect.mockResolvedValue(undefined);
+    });
+
+    // The sidebar paints its status dot and label off connectionStatus alone:
+    // "error" is the red dot plus "Connection Error ...", anything else falls
+    // through to a grey dot and "Disconnected". A failed connect that leaves
+    // the status at "disconnected" therefore reproduces the exact symptom of
+    // issue #56 (an unreachable server looks idle) even while the alert is up.
+    test("a failed connect reports the error status, not disconnected", async () => {
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+    });
+
+    test("a failed connect keeps the structured failure for the alert", async () => {
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionError).toEqual(
+        expect.objectContaining({
+          reason: "unknown",
+          message: "connection to the MCP server was refused",
+        }),
+      );
+    });
+  });
 });
