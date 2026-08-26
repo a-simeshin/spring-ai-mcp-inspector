@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
@@ -79,13 +80,26 @@ public class OwnerTokenCodec {
 	/** Per-boot signing secret. */
 	private final byte[] serverSecret;
 
+	/** Source of the current time for minting and expiry checks. */
+	private final Clock clock;
+
 	/**
-	 * Creates the codec and draws a fresh 32-byte {@link SecureRandom} secret for this
-	 * boot.
+	 * Creates the codec drawing a fresh 32-byte {@link SecureRandom} secret for this boot
+	 * and reading the current time from {@link Clock#systemUTC()}.
 	 */
 	public OwnerTokenCodec() {
+		this(Clock.systemUTC());
+	}
+
+	/**
+	 * Creates the codec with a caller-supplied clock — test seam.
+	 * @param clock the clock supplying the current time (must not be null)
+	 */
+	public OwnerTokenCodec(final Clock clock) {
+		Assert.notNull(clock, "clock must not be null");
 		this.serverSecret = new byte[SECRET_LENGTH_BYTES];
 		new SecureRandom().nextBytes(this.serverSecret);
+		this.clock = clock;
 	}
 
 	/**
@@ -93,21 +107,30 @@ public class OwnerTokenCodec {
 	 * @param serverSecret the signing secret (must be non-empty)
 	 */
 	OwnerTokenCodec(final byte[] serverSecret) {
-		Assert.notNull(serverSecret, "serverSecret must not be null");
-		Assert.isTrue(serverSecret.length > 0, "serverSecret must not be empty");
-		this.serverSecret = serverSecret.clone();
+		this(serverSecret, Clock.systemUTC());
 	}
 
 	/**
-	 * Mints a signed owner token valid for {@value #TOKEN_TTL} from {@code now}.
+	 * Creates the codec with a caller-supplied secret and clock — test seam.
+	 * @param serverSecret the signing secret (must be non-empty)
+	 * @param clock the clock supplying the current time (must not be null)
+	 */
+	OwnerTokenCodec(final byte[] serverSecret, final Clock clock) {
+		Assert.notNull(serverSecret, "serverSecret must not be null");
+		Assert.isTrue(serverSecret.length > 0, "serverSecret must not be empty");
+		Assert.notNull(clock, "clock must not be null");
+		this.serverSecret = serverSecret.clone();
+		this.clock = clock;
+	}
+
+	/**
+	 * Mints a signed owner token valid for {@value #TOKEN_TTL} from the codec's clock.
 	 * @param ownerId the server-issued owner id (typically a random UUID)
-	 * @param now the minting timestamp
 	 * @return the cookie value {@code ownerId.expiresAtEpochSeconds.hmac}
 	 */
-	public String mint(final String ownerId, final Instant now) {
+	public String mint(final String ownerId) {
 		Assert.hasText(ownerId, "ownerId must not be blank");
-		Assert.notNull(now, "now must not be null");
-		final long expiresAt = now.plus(TOKEN_TTL).getEpochSecond();
+		final long expiresAt = this.clock.instant().plus(TOKEN_TTL).getEpochSecond();
 		return ownerId + "." + expiresAt + "." + hmac(ownerId, expiresAt);
 	}
 
@@ -138,7 +161,7 @@ public class OwnerTokenCodec {
 				hmac(ownerId, expiresAt).getBytes(StandardCharsets.US_ASCII))) {
 			return Optional.empty();
 		}
-		if (Instant.ofEpochSecond(expiresAt).isBefore(Instant.now())) {
+		if (Instant.ofEpochSecond(expiresAt).isBefore(this.clock.instant())) {
 			return Optional.empty();
 		}
 		return Optional.of(ownerId);

@@ -64,7 +64,7 @@ public class ReactiveSessionOwnerResolver {
 			return validated.get();
 		}
 		final String ownerId = UUID.randomUUID().toString();
-		final String token = this.codec.mint(ownerId, java.time.Instant.now());
+		final String token = this.codec.mint(ownerId);
 		final ResponseCookie cookie = ResponseCookie.from(OwnerTokenCodec.COOKIE_NAME, token)
 			.httpOnly(true)
 			.sameSite("Lax")

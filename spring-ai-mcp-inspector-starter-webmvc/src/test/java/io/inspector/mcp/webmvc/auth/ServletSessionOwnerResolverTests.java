@@ -16,6 +16,10 @@
 
 package io.inspector.mcp.webmvc.auth;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -63,8 +67,7 @@ class ServletSessionOwnerResolverTests {
 		@Description("resolve() delegates to the codec and returns the embedded owner id without re-minting")
 		void resolve_validCookie_returnsOwnerIdAndNoSetCookie() {
 			// given
-			final String token = ServletSessionOwnerResolverTests.this.codec.mint("owner-valid",
-					java.time.Instant.now());
+			final String token = ServletSessionOwnerResolverTests.this.codec.mint("owner-valid");
 			final MockHttpServletRequest request = requestWithCookie(token);
 			final MockHttpServletResponse response = new MockHttpServletResponse();
 
@@ -123,8 +126,9 @@ class ServletSessionOwnerResolverTests {
 		@Description("resolve() re-mints a NEW owner for an expired signed cookie")
 		void resolve_expiredCookie_reMintsNewOwner() {
 			// given — minted 25h ago (TTL is 24h)
-			final String expired = ServletSessionOwnerResolverTests.this.codec.mint("owner-old",
-					java.time.Instant.now().minusSeconds(25 * 3600));
+			final OwnerTokenCodec pastClockCodec = new OwnerTokenCodec(
+					Clock.fixed(Instant.now().minusSeconds(25 * 3600), ZoneOffset.UTC));
+			final String expired = pastClockCodec.mint("owner-old");
 			final MockHttpServletRequest request = requestWithCookie(expired);
 			final MockHttpServletResponse response = new MockHttpServletResponse();
 
