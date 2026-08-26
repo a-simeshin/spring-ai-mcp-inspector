@@ -95,10 +95,19 @@ const hasAnnotations = (
 
 // Helper to render annotation badges
 // Shows all 4 annotation values with their state (true/false/implied default)
+// [spring-ai-mcp-inspector PATCH] Honest hint sourcing: per the MCP spec a tool
+// entry without an `annotations` object falls back to the spec defaults
+// (readOnlyHint=false, destructiveHint=true), but upstream renders those
+// implied values exactly like server-declared ones. With `declared=false`
+// the Read-only/Destructive chips get a muted "(default)" marker and a
+// "Spec default, not declared by server" tooltip, so spec defaults are not
+// mistaken for values declared by the server.
 const AnnotationBadges = ({
   annotations,
+  declared,
 }: {
   annotations: ToolAnnotations | undefined;
+  declared: boolean;
 }) => {
   // Spec defaults: readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=true
   const getValueAndImplied = (
@@ -115,12 +124,16 @@ const AnnotationBadges = ({
   const openWorld = getValueAndImplied(annotations?.openWorldHint, true);
 
   // Descriptions from MCP spec
+  // [spring-ai-mcp-inspector PATCH] When no annotations object was declared,
+  // the Read-only/Destructive chips carry an honest "(default)" marker so
+  // spec defaults are visually distinguishable from server-declared values.
   const badges = [
     {
       label: "Read-only",
       value: readOnly.value,
       implied: readOnly.implied,
       description: "Tool does not modify its environment",
+      showDefaultMarker: !declared,
     },
     {
       label: "Destructive",
@@ -128,12 +141,14 @@ const AnnotationBadges = ({
       implied: destructive.implied,
       description:
         "Tool may perform destructive updates (delete/overwrite data)",
+      showDefaultMarker: !declared,
     },
     {
       label: "Idempotent",
       value: idempotent.value,
       implied: idempotent.implied,
       description: "Calling repeatedly with same args has no additional effect",
+      showDefaultMarker: false,
     },
     {
       label: "Open-world",
@@ -141,25 +156,41 @@ const AnnotationBadges = ({
       implied: openWorld.implied,
       description:
         "Tool may interact with external entities beyond its local environment",
+      showDefaultMarker: false,
     },
   ];
 
   return (
     <div className="flex flex-wrap gap-1 mt-2">
-      {badges.map(({ label, value, implied, description }) => (
-        <span
-          key={label}
-          title={`${description}\n\nValue: ${value ? "Yes" : "No"} (${implied ? "implied default" : "explicitly set"})`}
-          className={cn(
-            "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border",
-            "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-600",
-            implied && "border-dashed opacity-60",
-            !implied && "border-solid",
-          )}
-        >
-          {value ? "✓" : "✗"} {label}
-        </span>
-      ))}
+      {badges.map(
+        ({ label, value, implied, description, showDefaultMarker }) => (
+          <span
+            key={label}
+            title={`${description}\n\nValue: ${
+              value ? "Yes" : "No"
+            } (${
+              showDefaultMarker
+                ? "Spec default, not declared by server"
+                : implied
+                  ? "implied default"
+                  : "explicitly set"
+            })`}
+            className={cn(
+              "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border",
+              "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-600",
+              implied && "border-dashed opacity-60",
+              !implied && "border-solid",
+            )}
+          >
+            {value ? "✓" : "✗"} {label}
+            {showDefaultMarker && (
+              <span className="ml-1 font-normal italic opacity-75">
+                (default)
+              </span>
+            )}
+          </span>
+        ),
+      )}
     </div>
   );
 };
@@ -334,12 +365,17 @@ const ToolsTab = ({
                 <p className="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap max-h-48 overflow-y-auto">
                   {selectedTool.description}
                 </p>
+                {/* [spring-ai-mcp-inspector PATCH] Honest hint sourcing: a tool
+                    entry without an `annotations` object means the displayed
+                    Read-only/Destructive hints are MCP spec defaults, not
+                    values declared by the server. */}
                 <AnnotationBadges
                   annotations={
                     hasAnnotations(selectedTool)
                       ? selectedTool.annotations
                       : undefined
                   }
+                  declared={hasAnnotations(selectedTool)}
                 />
                 {Object.entries(selectedTool.inputSchema.properties ?? []).map(
                   ([key, value]) => {

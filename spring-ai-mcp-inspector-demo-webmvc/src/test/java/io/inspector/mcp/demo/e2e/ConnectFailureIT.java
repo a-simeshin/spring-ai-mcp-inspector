@@ -363,8 +363,8 @@ class ConnectFailureIT {
 	@Test
 	@Story("Connect failure")
 	@Severity(SeverityLevel.NORMAL)
-	@Description("Clicking Retry re-runs connect: the alert clears while the attempt is in flight, then re-renders with the same reason.")
-	@DisplayName("retryReposts — alert clears and re-appears after Retry")
+	@Description("Clicking Retry re-runs connect: the re-post fails the same way and the alert still names the reason.")
+	@DisplayName("retryReposts: Retry re-posts and the alert still names the reason")
 	void retry_repostsAndShowsAlertAgain() {
 		// given — the same unreachable-server setup, alert already visible.
 		startApp();
@@ -373,13 +373,20 @@ class ConnectFailureIT {
 		alert().shouldBe(visible, Duration.ofSeconds(30));
 		alert().shouldHave(text("Connection refused (connection_refused)"));
 
-		// when — Retry invokes connect() again; connect() clears the previous error
-		// synchronously, so the alert unmounts while the new POST is in flight.
+		// when — Retry invokes connect() again.
 		$("[data-testid=retry-connect-button]").shouldBe(visible).click();
 
-		// then — the alert disappears during the attempt and re-appears with the same
-		// reason once the re-post fails the same way.
-		alert().shouldNotBe(visible, Duration.ofSeconds(5));
+		// then — the re-post fails the same way and the alert still names the same
+		// reason, with Retry still available for another attempt.
+		//
+		// The in-flight gap is deliberately NOT asserted. connect() clears the
+		// previous error synchronously, so the alert does unmount while the new POST
+		// is on the wire, but that POST hits a closed loopback port: ECONNREFUSED
+		// comes back in milliseconds and the alert is already re-rendered before
+		// Selenide can poll for its absence. Waiting for a gap that has usually
+		// closed by the first poll made this scenario flaky (observed on PR #83,
+		// demo E2E webmvc). That the click really re-invokes connect() is covered
+		// without a race by the Sidebar.connectFailureAlert unit test.
 		alert().shouldBe(visible, Duration.ofSeconds(30));
 		alert().shouldHave(text("Connection refused (connection_refused)"));
 		$("[data-testid=retry-connect-button]").shouldBe(visible);
