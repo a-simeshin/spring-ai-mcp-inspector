@@ -66,6 +66,11 @@ import io.inspector.mcp.core.dto.ConnectRequest;
 import io.inspector.mcp.core.dto.JsonRpcRelay;
 import io.inspector.mcp.core.dto.RootDto;
 import io.inspector.mcp.core.dto.RootsDto;
+import io.inspector.mcp.core.introspect.McpBeanIntrospector;
+import io.inspector.mcp.core.introspect.check.JsonSchemaCompatibilityChecker;
+import io.inspector.mcp.core.introspect.model.IntrospectionReport;
+import io.inspector.mcp.core.introspect.model.McpElementInfo;
+import io.inspector.mcp.core.introspect.model.SchemaWarning;
 import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthInitiateResponse;
@@ -172,6 +177,39 @@ public class InspectorRestController implements ApplicationContextAware {
 		final DetectedTransport t = this.transportDetector.detect();
 		return new ConfigDto(t.type().name(), t.endpoint(), t.messageEndpoint(), t.stack(), this.serverName,
 				INSPECTOR_VERSION, this.authTokenProvider.token(), new LinkedHashMap<>());
+	}
+
+	@GetMapping(path = "/introspection", produces = MediaType.APPLICATION_JSON_VALUE)
+	public IntrospectionReport introspection() {
+		final IntrospectionReport report = new McpBeanIntrospector().introspect(this.applicationContext);
+		final JsonSchemaCompatibilityChecker checker = new JsonSchemaCompatibilityChecker();
+		final List<SchemaWarning> warnings = new ArrayList<>(report.warnings());
+		for (final McpElementInfo element : report.tools()) {
+			checkElementSchema(checker, element, warnings);
+		}
+		for (final McpElementInfo element : report.resources()) {
+			checkElementSchema(checker, element, warnings);
+		}
+		return new IntrospectionReport(report.tools(), report.resources(), warnings);
+	}
+
+	/**
+	 * Runs the JSON-schema compatibility check for an element's input/output schema and
+	 * appends any findings to the report warnings.
+	 * @param checker the compatibility checker
+	 * @param element the tool or resource being checked
+	 * @param warnings the mutable warning list to append to
+	 */
+	private void checkElementSchema(final JsonSchemaCompatibilityChecker checker, final McpElementInfo element,
+			final List<SchemaWarning> warnings) {
+		if (element.inputSchema() != null) {
+			warnings.addAll(
+					checker.check(element.name(), this.objectMapper.valueToTree(element.inputSchema()), "inputSchema"));
+		}
+		if (element.outputSchema() != null) {
+			warnings.addAll(checker.check(element.name(), this.objectMapper.valueToTree(element.outputSchema()),
+					"outputSchema"));
+		}
 	}
 
 	@PostMapping(path = "/connect", produces = MediaType.APPLICATION_JSON_VALUE)

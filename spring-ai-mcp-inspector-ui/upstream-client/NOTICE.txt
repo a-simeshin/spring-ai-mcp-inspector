@@ -14,15 +14,15 @@ Local patches against upstream v0.22.0
    from the `window.__MCP_INSPECTOR_BOOTSTRAP` global that the backend's
    `InspectorIndexController` / `InspectorHandler` injects above it via
    `BootstrapHtmlRenderer`:
-     - `inspectorConfig_v1` (localStorage) — persistent InspectorConfig
-       entries keyed by `MCP_*` (e.g. `MCP_PROXY_FULL_ADDRESS`), in the
-       `{value, label?, description?, is_session_item?}` shape expected by
-       `initializeInspectorConfig` (`src/utils/configUtils.ts`).
-     - `inspectorConfig_v1_ephemeral` (sessionStorage) — session-scoped
-       entries in the same shape (e.g. `MCP_PROXY_AUTH_TOKEN`).
-     - `lastTransportType` / `lastSseUrl` (localStorage, top-level) — the
-       standalone keys consumed by `getInitialTransportType` and
-       `getInitialSseUrl`.
+    - `inspectorConfig_v1` (localStorage) — persistent InspectorConfig
+      entries keyed by `MCP_*` (e.g. `MCP_PROXY_FULL_ADDRESS`), in the
+      `{value, label?, description?, is_session_item?}` shape expected by
+      `initializeInspectorConfig` (`src/utils/configUtils.ts`).
+    - `inspectorConfig_v1_ephemeral` (sessionStorage) — session-scoped
+      entries in the same shape (e.g. `MCP_PROXY_AUTH_TOKEN`).
+    - `lastTransportType` / `lastSseUrl` (localStorage, top-level) — the
+      standalone keys consumed by `getInitialTransportType` and
+      `getInitialSseUrl`.
    The seed merges into existing values so user-edited Settings survive a
    reload, and it resolves any path-only `proxyAddress` (e.g.
    `/mcp-inspector-api`) against the current origin before persisting it
@@ -142,3 +142,20 @@ Local patches against upstream v0.22.0
    1023x768; drag handles present at 1024px; 375px regression of patch
    8 with all 10 enabled tabs clickable) and by the useIsCompactLayout
    jest unit tests.
+
+10. src/lib/connectErrors.ts + src/lib/hooks/useConnection.ts +
+    src/components/Sidebar.tsx + src/App.tsx — surface connect failures
+    with a reason and a Retry button. When the Java proxy answers
+    POST /mcp-inspector-api/mcp with the structured non-2xx contract
+    `{"error":{"code":"MCP_CONNECT_FAILED","reason":"<timeout|connection_refused|dns|unknown>","message":"...","retryable":true}}`,
+    the SDK transport would only see an opaque HTTP-status error and the
+    sidebar silently stayed "Disconnected". Local fix: the proxy
+    streamable-http transport gets a fetch wrapper that parses the
+    contract out of non-ok responses and throws `ConnectFailedError`
+    (non-contract bodies pass through untouched); the connect() catch
+    stores the failure instead of throwing into an unhandled rejection;
+    the sidebar renders it as a `role=alert` with a human-readable
+    reason and a Retry button that repeats connect. Covered by
+    src/lib/__tests__/connectErrors.test.ts and
+    src/components/__tests__/Sidebar.connectFailureAlert.test.tsx.
+
