@@ -2944,7 +2944,7 @@ class InspectorUiIT {
 
 	// =====================================================================
 	// X. Responsive tab bar — CI regression for the <sm wrap patch
-	// (upstream-client/src/App.tsx TabsList, NOTICE.txt entry 8). The shared
+	// (upstream-client/src/App.tsx TabsList, NOTICE.d/tab-bar-wrap.txt). The shared
 	// suite browser is fixed at 1366x900 (setupBrowser), so each scenario
 	// resizes the live headless window to its target viewport and restores it
 	// afterwards.
@@ -3098,7 +3098,7 @@ class InspectorUiIT {
 	// =====================================================================
 	// Y. Responsive history layout — CI regression for the <lg compact
 	// layout patch (upstream-client/src/App.tsx root container + bottom
-	// History pane, NOTICE.txt entries 8/9). The shared suite browser is
+	// History pane, NOTICE.d/compact-layout.txt). The shared suite browser is
 	// fixed at 1366x900 (setupBrowser), so each scenario resizes the live
 	// headless window to its target viewport and restores it afterwards.
 	//

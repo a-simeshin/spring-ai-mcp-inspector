@@ -1,0 +1,9 @@
+src/App.tsx — explain the disabled Tasks tab. When the connected
+server does not advertise the `tasks` capability (Spring AI / MCP
+Java SDK 2.0.0 cannot declare it), the disabled `TabsTrigger` is
+wrapped in a keyboard-focusable span (`tabIndex={0}`, `title`,
+`aria-label`, `pointer-events-auto`) carrying a Radix Tooltip with
+the reason and a SEP-1686 documentation link. The wrapper is needed
+because the disabled trigger has `pointer-events:none`. Covered by
+src/__tests__/App.tasksTabTooltip.test.tsx (hover and focus paths;
+pointer-events polyfill lives in src/testUtils/pointerEventsPolyfill.ts).
