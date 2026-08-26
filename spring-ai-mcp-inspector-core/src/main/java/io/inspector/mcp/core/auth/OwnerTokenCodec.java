@@ -77,6 +77,12 @@ public class OwnerTokenCodec {
 	/** Index of the hex HMAC part. */
 	private static final int PART_HMAC = 2;
 
+	/**
+	 * Source of fresh 32-byte secrets (thread-safe; reused so SpotBugs' random-once smell
+	 * stays away).
+	 */
+	private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
 	/** Per-boot signing secret. */
 	private final byte[] serverSecret;
 
@@ -98,7 +104,7 @@ public class OwnerTokenCodec {
 	public OwnerTokenCodec(final Clock clock) {
 		Assert.notNull(clock, "clock must not be null");
 		this.serverSecret = new byte[SECRET_LENGTH_BYTES];
-		new SecureRandom().nextBytes(this.serverSecret);
+		SECURE_RANDOM.nextBytes(this.serverSecret);
 		this.clock = clock;
 	}
 
