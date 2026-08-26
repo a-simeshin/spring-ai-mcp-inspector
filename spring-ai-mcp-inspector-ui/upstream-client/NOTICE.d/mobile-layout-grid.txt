@@ -1,0 +1,18 @@
+src/components/ToolsTab.tsx + src/components/ListPane.tsx + src/App.tsx
+(+ src/components/__tests__/ToolsTab.test.tsx): responsive Tools
+list/detail grid and stable testid anchors for the 375px mobile-layout
+fix. Upstream hard-codes `grid grid-cols-2 gap-4` for the Tools
+list/detail split, so at a 375px viewport the two columns overlap and
+the tool list is unusable. Local fix: the grid becomes
+`grid grid-cols-1 sm:grid-cols-2 gap-4` (one column below the `sm`
+640px breakpoint, two columns at and above it) and the
+geometry-critical nodes gain stable anchors: `tools-list-detail-grid`
+and `tools-detail-pane` and `run-tool-button` (ToolsTab.tsx),
+`tools-list-pane`, `search-button`, `search-input` (existing
+`name="search"` kept) and `tool-row-${index}` (ListPane.tsx), and
+`config-pane` on the App.tsx sidebar wrapper (testid only, no layout
+change). Covered by the ToolsTab.test.tsx unit suite (grid classes +
+testids) delivered with this change set and by the Selenide
+ResponsiveLayout / ResponsiveToolsCriticalPath groups in InspectorUiIT
+(geometry at 375x667, 639/640 grid flip, clickability of the six
+canonical controls).

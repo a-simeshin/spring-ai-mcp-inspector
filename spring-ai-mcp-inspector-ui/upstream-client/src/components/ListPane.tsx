@@ -56,7 +56,12 @@ const ListPane = <T extends object>({
   };
 
   return (
-    <div className="bg-card border border-border rounded-lg shadow">
+    <div
+      className="bg-card border border-border rounded-lg shadow"
+      data-testid="tools-list-pane"
+    >
+      {/* [spring-ai-mcp-inspector PATCH] Tools list pane (#58): data-testid
+          anchor for Selenide geometry assertions on the responsive grid. */}
       <div className="p-4 border-b border-gray-200 dark:border-border">
         <div className="flex items-center justify-between gap-4">
           <h3 className="font-semibold dark:text-white flex-shrink-0">
@@ -67,18 +72,24 @@ const ListPane = <T extends object>({
               <button
                 name="search"
                 aria-label="Search"
+                data-testid="search-button"
                 onClick={handleSearchClick}
                 className="p-2 hover:bg-gray-100 dark:hover:bg-secondary rounded-md transition-all duration-300 ease-in-out"
               >
+                {/* [spring-ai-mcp-inspector PATCH] Search button (#58):
+                    data-testid anchor for the Selenide clickability check. */}
                 <Search className="w-4 h-4 text-muted-foreground" />
               </button>
             ) : (
               <div className="flex items-center w-full max-w-xs">
                 <div className="relative w-full">
+                  {/* [spring-ai-mcp-inspector PATCH] Search input (#58):
+                      data-testid anchor for the Selenide filter test. */}
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none z-10" />
                   <Input
                     ref={searchInputRef}
                     name="search"
+                    data-testid="search-input"
                     type="text"
                     placeholder="Search..."
                     value={searchQuery}
@@ -115,9 +126,13 @@ const ListPane = <T extends object>({
           {filteredItems.map((item, index) => (
             <div
               key={index}
+              data-testid={`tool-row-${index}`}
               className="flex items-center py-2 px-4 rounded hover:bg-gray-50 dark:hover:bg-secondary cursor-pointer"
               onClick={() => setSelectedItem(item)}
             >
+              {/* [spring-ai-mcp-inspector PATCH] Tool row (#58): data-testid
+                  anchor (tool-row-<index>) for the Selenide row-selection
+                  test. */}
               {renderItem(item)}
             </div>
           ))}

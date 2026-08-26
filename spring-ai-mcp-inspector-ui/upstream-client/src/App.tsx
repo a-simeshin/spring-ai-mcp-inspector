@@ -1380,7 +1380,9 @@ const App = () => {
           on the right edge cannot enter the drag path or mutate the hidden
           sidebar width state. A max-height-only wrapper would resolve the
           Sidebar's internal h-full chain to auto and scroll the whole block
-          (header included) instead of its body column. */}
+          (header included) instead of its body column. data-testid
+          "config-pane" (#58) anchors the sidebar for Selenide geometry
+          assertions; no layout change. */}
       <div
         style={
           isCompactLayout
@@ -1393,6 +1395,7 @@ const App = () => {
               }
         }
         className="bg-card border-border flex flex-col relative w-full lg:w-auto lg:border-r border-b lg:border-b-0 h-[50vh] lg:h-auto overflow-y-auto lg:overflow-y-visible"
+        data-testid="config-pane"
       >
         <Sidebar
           connectionStatus={connectionStatus}
