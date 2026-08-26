@@ -123,6 +123,12 @@ public final class ProxySession {
 	private final AtomicBoolean closed = new AtomicBoolean(false);
 
 	/**
+	 * Set by {@link #failUpstream(Throwable)}. Lets tests and the controller observe that
+	 * the upstream transport has terminally failed without inspecting the sink.
+	 */
+	private final AtomicBoolean upstreamTerminated = new AtomicBoolean(false);
+
+	/**
 	 * Fired by {@link #close()}. Lock-free, hence never lost — see
 	 * {@link #closeSignal()}.
 	 */
@@ -178,6 +184,45 @@ public final class ProxySession {
 
 	public boolean isClosed() {
 		return this.closed.get();
+	}
+
+	/**
+	 * Returns {@code true} once the upstream transport has signalled terminal failure
+	 * (its {@code connect()} Mono errored, an inbound frame errored, or the
+	 * {@link McpProxy} pump called {@link #failUpstream(Throwable)}).
+	 * @return {@code true} if the upstream transport has terminated
+	 */
+	public boolean isUpstreamTerminated() {
+		return this.upstreamTerminated.get();
+	}
+
+	/**
+	 * Propagates an upstream-transport terminal failure to the browser side. Idempotent —
+	 * only the first call fails the {@link #targetToBrowser} sink; subsequent calls are
+	 * no-ops. After this call {@link #isUpstreamTerminated()} returns {@code true}.
+	 *
+	 * <p>
+	 * Failing the {@code targetToBrowser} sink makes both the long-lived SSE backchannel
+	 * subscriber and every per-request POST awaiter fail fast instead of blocking to the
+	 * streamable-request timeout.
+	 * @param error the terminal error from the upstream transport (may be {@code null},
+	 * in which case the sink is completed rather than errored)
+	 */
+	public void failUpstream(final Throwable error) {
+		if (!this.upstreamTerminated.compareAndSet(false, true)) {
+			return;
+		}
+		try {
+			if (error != null) {
+				this.targetToBrowser.tryEmitError(error);
+			}
+			else {
+				this.targetToBrowser.tryEmitComplete();
+			}
+		}
+		catch (final Exception ignored) {
+			// tryEmitError / tryEmitComplete never throw; defensive only
+		}
 	}
 
 	/**

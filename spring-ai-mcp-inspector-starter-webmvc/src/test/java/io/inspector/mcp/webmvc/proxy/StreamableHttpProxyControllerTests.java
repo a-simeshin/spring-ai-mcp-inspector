@@ -137,9 +137,9 @@ class StreamableHttpProxyControllerTests {
 
 		@Test
 		@Story("New session")
-		@Severity(SeverityLevel.NORMAL)
-		@Description("postMcp() returns 502 BAD_GATEWAY when the upstream transport cannot be built")
-		void postMcp_whenUpstreamConnectFails_returns502() throws Exception {
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() returns a structured 502 MCP_CONNECT_FAILED payload when the upstream transport cannot be built")
+		void postMcp_whenUpstreamConnectFails_returnsStructured502() throws Exception {
 			// given
 			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
 				.willThrow(new RuntimeException("connect failed"));
@@ -150,8 +150,61 @@ class StreamableHttpProxyControllerTests {
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
 					"http://target/mcp", body);
 
+			// then — non-2xx with the machine-readable error contract; stack details
+			// stay out of the body
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(response.getBody())
+				.path("error");
+			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.path("reason").asText()).isEqualTo("unknown");
+			assertThat(error.path("message").asText()).isNotBlank();
+			assertThat(error.path("retryable").asBoolean()).isTrue();
+		}
+
+		@Test
+		@Story("New session")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() reports connection_refused when building the transport throws a ConnectException")
+		void postMcp_whenUpstreamRefusesConnection_returnsStructured502ConnectionRefused() throws Exception {
+			// given
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willThrow(new RuntimeException(new java.net.ConnectException("Connection refused")));
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
+
+			// when
+			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", body);
+
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(response.getBody())
+				.path("error");
+			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.path("reason").asText()).isEqualTo("connection_refused");
+			assertThat(error.path("retryable").asBoolean()).isTrue();
+		}
+
+		@Test
+		@Story("New session")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() reports dns when building the transport throws an UnknownHostException")
+		void postMcp_whenUpstreamHostUnknown_returnsStructured502Dns() throws Exception {
+			// given
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willThrow(new RuntimeException(new java.net.UnknownHostException("no-such-host")));
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
+
+			// when
+			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(response.getBody())
+				.path("error");
+			assertThat(error.path("reason").asText()).isEqualTo("dns");
 		}
 
 		@Test
@@ -255,7 +308,7 @@ class StreamableHttpProxyControllerTests {
 		@Test
 		@Story("Existing session")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("postMcp() request returns 504 GATEWAY_TIMEOUT when no matching response arrives in time")
+		@Description("postMcp() request returns a structured 504 MCP_CONNECT_FAILED payload when no matching response arrives in time")
 		void postMcp_existingSessionRequest_timesOutReturns504() throws Exception {
 			// given — no response ever emitted on the sink
 			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
@@ -267,8 +320,13 @@ class StreamableHttpProxyControllerTests {
 			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp("s1", null,
 					body);
 
-			// then
+			// then — the timeout is surfaced as a machine-readable reason=timeout
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
+				.path("error");
+			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.path("reason").asText()).isEqualTo("timeout");
+			assertThat(error.path("retryable").asBoolean()).isTrue();
 		}
 
 		@Test
@@ -471,7 +529,7 @@ class StreamableHttpProxyControllerTests {
 		@Test
 		@Story("New session")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("postMcp() new-session request that times out tears down the orphaned session and returns 504")
+		@Description("postMcp() new-session request that times out tears down the orphaned session and returns a structured 504")
 		void postMcp_newSessionRequestTimesOut_closesSessionAndReturns504() throws Exception {
 			// given — a short request timeout so the await fails fast, and a transport
 			// that
@@ -494,6 +552,43 @@ class StreamableHttpProxyControllerTests {
 
 			// then
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
+				.path("error");
+			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.path("reason").asText()).isEqualTo("timeout");
+			assertThat(error.path("retryable").asBoolean()).isTrue();
+			verify(StreamableHttpProxyControllerTests.this.registry).removeAndClose(any(String.class));
+		}
+
+		@Test
+		@Story("New session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() new-session request whose upstream dies with ConnectException fails fast with a structured 502 connection_refused")
+		void postMcp_newSessionUpstreamRefused_failsFastWithStructured502() throws Exception {
+			// given — the session opens, but the upstream transport errors immediately
+			// (emulated connect refusal on the first send), releasing the awaiter
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitError(new java.net.ConnectException("Connection refused"));
+				return Mono.empty();
+			});
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", body);
+
+			// then — the refusal is classified, not masked as a timeout
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
+				.path("error");
+			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.path("reason").asText()).isEqualTo("connection_refused");
+			assertThat(error.path("retryable").asBoolean()).isTrue();
 			verify(StreamableHttpProxyControllerTests.this.registry).removeAndClose(any(String.class));
 		}
 
