@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 
 import io.modelcontextprotocol.client.McpSyncClient;
+import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -34,6 +35,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.web.server.WebServer;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.boot.web.server.context.WebServerInitializedEvent;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
@@ -54,6 +58,9 @@ import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.dto.RootDto;
 import io.inspector.mcp.core.dto.RootsDto;
+import io.inspector.mcp.core.introspect.model.IntrospectionReport;
+import io.inspector.mcp.core.introspect.model.SchemaWarning;
+import io.inspector.mcp.core.introspect.model.WarningCode;
 import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
@@ -1579,6 +1586,67 @@ class InspectorHandlerTests {
 	}
 
 	@Nested
+	@DisplayName("introspection()")
+	class Introspection {
+
+		@Test
+		@Story("Introspection endpoint")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("introspection() reports every registered tool/resource with a non-null source and a warnings list")
+		void webfluxIntrospection_returnsContract() {
+			// given
+			final AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(
+					IntrospectionToolConfig.class);
+			InspectorHandlerTests.this.handler.setApplicationContext(context);
+
+			// when
+			final ServerResponse response = InspectorHandlerTests.this.handler
+				.introspection(toServerRequest(MockServerHttpRequest.get("/mcp-inspector/api/introspection").build()))
+				.block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final IntrospectionReport report = (IntrospectionReport) ((org.springframework.web.reactive.function.server.EntityResponse<?>) response)
+				.entity();
+			assertThat(report.tools()).singleElement().satisfies((tool) -> {
+				assertThat(tool.name()).isEqualTo("introspectionTool");
+				assertThat(tool.inputSchema()).isNotNull();
+				assertThat(tool.source()).isNotNull();
+				assertThat(tool.source().registered()).isTrue();
+			});
+			assertThat(report.resources()).isEmpty();
+			assertThat(report.warnings()).isEmpty();
+		}
+
+		@Test
+		@Story("Empty context")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a context without MCP elements yields NO_MCP_ELEMENTS and empty lists, never an error")
+		void webfluxEmptyContext_noMcpElements() {
+			// given
+			final AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
+			context.refresh();
+			InspectorHandlerTests.this.handler.setApplicationContext(context);
+
+			// when
+			final ServerResponse response = InspectorHandlerTests.this.handler
+				.introspection(toServerRequest(MockServerHttpRequest.get("/mcp-inspector/api/introspection").build()))
+				.block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final IntrospectionReport report = (IntrospectionReport) ((org.springframework.web.reactive.function.server.EntityResponse<?>) response)
+				.entity();
+			assertThat(report.tools()).isEmpty();
+			assertThat(report.resources()).isEmpty();
+			assertThat(report.warnings()).extracting(SchemaWarning::code).contains(WarningCode.NO_MCP_ELEMENTS);
+		}
+
+	}
+
+	@Nested
 	@DisplayName("dispatch / openSession / applyRoots / render edge branches")
 	class EdgeBranches {
 
@@ -1752,6 +1820,24 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			assertThat(response.headers().getContentType()).isEqualTo(MediaType.TEXT_HTML);
+		}
+
+	}
+
+	@Configuration
+	static class IntrospectionToolConfig {
+
+		@Bean
+		List<McpServerFeatures.SyncToolSpecification> toolSpecs() {
+			final Map<String, Object> inputSchema = Map.of("type", "object", "properties",
+					Map.of("message", Map.of("type", "string")));
+			final McpSchema.Tool tool = McpSchema.Tool.builder("introspectionTool", inputSchema)
+				.description("Introspection test tool")
+				.build();
+			return List.of(McpServerFeatures.SyncToolSpecification.builder()
+				.tool(tool)
+				.callHandler((exchange, request) -> McpSchema.CallToolResult.builder(List.of()).build())
+				.build());
 		}
 
 	}
