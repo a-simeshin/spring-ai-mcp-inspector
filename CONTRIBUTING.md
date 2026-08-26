@@ -89,6 +89,29 @@ targets a dev server this project doesn't ship. Do not wire it into CI;
 browser regression coverage for the inspector UI lives in the Selenide
 integration tests above.
 
+### Patching the vendored UI
+
+`spring-ai-mcp-inspector-ui/upstream-client` is a vendored copy of upstream
+`modelcontextprotocol/inspector`. Every local deviation from upstream carries
+two things:
+
+- a `[spring-ai-mcp-inspector PATCH]` marker on the touched region, so the next
+  version bump can find it in the diff;
+- a registry file `upstream-client/NOTICE.d/<what-the-patch-does>.txt`
+  describing what changed, why, and what covers it.
+
+One patch, one file. Nothing indexes them: `ls NOTICE.d/` is the index, and
+`NOTICE.txt` holds only the vendoring header. The registry used to be a
+numbered list inside `NOTICE.txt`, which put every parallel patch on the same
+lines: each pair of open PRs conflicted there, and resolving the conflict
+renumbered entries that code comments referenced by number, silently rotting
+those references. Reference a patch from code by its file name, never by a
+number.
+
+The `notice-registry` CI job enforces both halves: it fails a PR that touches
+`upstream-client/src` without touching `NOTICE.d/`, and one that adds a
+numbered entry back into `NOTICE.txt`.
+
 ### Code coverage — mandatory ≥ 80%
 
 Every production module must keep **unit-test coverage at 80% or higher**. The

@@ -1,0 +1,2 @@
+vite.config.ts — `base: '/mcp-inspector/'` so the SPA is mountable
+under our Spring Boot starter's path.

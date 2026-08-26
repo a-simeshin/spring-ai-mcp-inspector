@@ -1,0 +1,14 @@
+src/utils/configUtils.ts#getInitialSseUrl + index.html (bootstrap
+seed) — default the MCP target URL to the relative same-origin
+`/mcp` instead of the upstream absolute `http://localhost:3001/sse`,
+and strip an injected same-origin absolute back to a relative path.
+The proxy branch in `useConnection.ts` only puts this value into
+`searchParams.append("url", ...)` (never `new URL(sseUrl)`), so a
+relative `/mcp` is accepted and the default `?url=` carries no
+absolute `http://localhost`. This keeps the request clear of
+reverse-proxy WAF SSRF rules (OWASP CRS 934110/931100), which drop
+`?url=http://localhost...` before it reaches the app. The backend
+resolves the relative path to the loopback MCP endpoint server-side
+(`io.inspector.mcp.core.proxy.ProxyTargetResolver`), mirroring how
+springdoc-openapi serves the spec same-origin instead of pointing
+Swagger UI at an absolute `?url=`.

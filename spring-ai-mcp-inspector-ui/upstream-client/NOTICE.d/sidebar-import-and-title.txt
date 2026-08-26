@@ -1,0 +1,9 @@
+src/components/Sidebar.tsx — import path fix
+(`../../../package.json` → `../../package.json`) so the build runs
+from this vendored layout. Also: render the app-title heading from a
+single template literal (`` {`MCP Inspector v${version}`} ``) instead of
+two adjacent JSX children (`MCP Inspector v{version}`). React produces
+one text node per child, so the upstream JSX rendered two sibling text
+nodes inside the `<h1>` and Selenide's `byText("MCP Inspector
+v0.21.2")` (xpath `text()[…] = "…"`) could not match — see
+`BootstrapRegressionE2ETest`.
