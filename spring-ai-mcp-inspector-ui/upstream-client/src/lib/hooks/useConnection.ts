@@ -870,8 +870,14 @@ export function useConnection({
         // [spring-ai-mcp-inspector PATCH] Surface connection failures in the
         // UI instead of throwing into an unhandled rejection: the sidebar
         // renders a role=alert with the failure reason and a Retry button.
+        // The status stays "error": the sidebar paints its dot and label off
+        // connectionStatus alone, so reporting "disconnected" here would show
+        // an unreachable server as idle, which is the symptom issue #56 is
+        // about. Before this patch the rethrow reached the outer catch, which
+        // set the same "error" status; only the toast is dropped, since the
+        // alert now carries the reason in place.
         setConnectionError(connectionFailureFromError(error));
-        setConnectionStatus("disconnected");
+        setConnectionStatus("error");
         return;
       }
       setServerCapabilities(capabilities ?? null);
