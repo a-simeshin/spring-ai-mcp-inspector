@@ -148,13 +148,17 @@ final class ResponsiveTestHelpers {
 
 	/**
 	 * True when the given pane's bounding box lies fully inside the inner viewport:
-	 * left/top >= 0 and right/bottom <= {@code window.innerWidth/innerHeight}.
+	 * left/top >= 0 and right/bottom <= {@code window.innerWidth/innerHeight}. A 1px
+	 * tolerance absorbs subpixel layout rounding — {@code getBoundingClientRect()}
+	 * returns fractional coordinates (e.g. a pane top of 485.5), so a pane aligned flush
+	 * to the viewport edge can measure -0.5px after {@code scrollIntoView}; anything
+	 * beyond 1px is a real clip or overflow.
 	 */
 	static boolean paneInsideViewport(final String testid) {
 		Object result = Selenide.executeJavaScript("const el = document.querySelector('[data-testid=\\'" + testid
 				+ "\\']');" + "if (!el) { return 'pane-not-found'; }" + "const r = el.getBoundingClientRect();"
-				+ "return r.left >= 0 && r.top >= 0 && r.right <= window.innerWidth"
-				+ "&& r.bottom <= window.innerHeight;");
+				+ "return r.left >= -1 && r.top >= -1 && r.right <= window.innerWidth + 1"
+				+ "&& r.bottom <= window.innerHeight + 1;");
 		if ("pane-not-found".equals(result)) {
 			Assertions.fail("pane not found for viewport probe: " + testid);
 		}
@@ -219,6 +223,21 @@ final class ResponsiveTestHelpers {
 			Assertions.fail("pane not found for rect probe: " + testid);
 		}
 		return (String) result;
+	}
+
+	/**
+	 * Scrolls the given pane into view, top-aligned
+	 * ({@code element.scrollIntoView(true)}), so its full bounding box can be measured
+	 * inside the viewport — the companion of {@link #paneInsideViewport(String)} for
+	 * panes below the fold of a scrollable page. A missing element fails with a readable
+	 * assertion instead of a silent {@code null}.
+	 */
+	static void scrollPaneIntoView(final String testid) {
+		Object result = Selenide.executeJavaScript("const el = document.querySelector('[data-testid=\\'" + testid
+				+ "\\']');" + "if (!el) { return 'pane-not-found'; }" + "el.scrollIntoView(true); return 'ok';");
+		if (!"ok".equals(result)) {
+			Assertions.fail("pane not found for scroll probe: " + testid);
+		}
 	}
 
 }
