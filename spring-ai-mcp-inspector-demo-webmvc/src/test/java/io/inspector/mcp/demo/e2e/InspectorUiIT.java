@@ -58,6 +58,8 @@ import org.springframework.context.ConfigurableApplicationContext;
 
 import io.inspector.mcp.demo.DemoApplication;
 
+import static com.codeborne.selenide.Condition.attributeMatching;
+import static com.codeborne.selenide.Condition.exactText;
 import static com.codeborne.selenide.Condition.text;
 import static com.codeborne.selenide.Condition.visible;
 import static com.codeborne.selenide.Selectors.byText;
@@ -94,9 +96,10 @@ import static com.codeborne.selenide.Selenide.open;
  * <li>{@link TabsAvailability} — verifies the rendered tab list against expected.</li>
  * <li>{@link ResponsiveTabBar} — CI regression for the <640px wrap patch (375px /
  * sm-boundary / 1024px control).</li>
- * <li>{@link ResponsiveHistoryLayout} — CI regression for the <1024px compact layout
- * patch (History pane never overlaps tab content; elementFromPoint at 780x437, disjoint
- * panes at 768/1023, desktop control at 1024px).</li>
+ * <li>{@link ResponsiveHistoryLayout}: CI regression for the <1024px compact layout patch
+ * (History pane never overlaps tab content; elementFromPoint at 780x437 with both drag
+ * handles absent and the History/Notifications columns scrolling under real overflow,
+ * disjoint panes at 768/1023, desktop control at 1024px).</li>
  * </ul>
  *
  * <p>
@@ -120,6 +123,14 @@ class InspectorUiIT {
 			return protocol;
 		}
 	}
+
+	/**
+	 * Every demo tool advertised by {@code tools/list} (22 entries).
+	 */
+	private static final String[] ALL_DEMO_TOOLS = { "echo", "sum", "currentTime", "addNumbers", "concatenate",
+			"lookupUser", "chooseColor", "toggleFlag", "optionalGreeting", "errorTool", "largeOutput",
+			"structuredOutput", "multiContent", "slowEcho", "deepJson", "blobAttachment", "askLlm", "askUser",
+			"deployService", "findFiles", "authorizeViaUrl", "listMyRoots" };
 
 	/**
 	 * Connect matrix actually exposed by the upstream UI: only the three transport
@@ -244,9 +255,27 @@ class InspectorUiIT {
 		if (binaryPath == null) {
 			return null;
 		}
+		// First try Puppeteer-cache-style path (e.g., "linux-151.0.7922.137/...")
 		java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?:mac_arm|mac|linux|win64|win32)-(\\d+)\\.")
 			.matcher(binaryPath);
-		return m.find() ? m.group(1) : null;
+		if (m.find()) {
+			return m.group(1);
+		}
+		// Fallback: run the binary with --version and parse output (e.g., "Chromium
+		// 151.0.7922.137")
+		try {
+			Process proc = new ProcessBuilder(binaryPath, "--version").redirectErrorStream(true).start();
+			String output = new String(proc.getInputStream().readAllBytes()).trim();
+			proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+			java.util.regex.Matcher v = java.util.regex.Pattern.compile("(\\d+)\\.").matcher(output);
+			if (v.find()) {
+				return v.group(1);
+			}
+		}
+		catch (Exception ignored) {
+			// fall through to null
+		}
+		return null;
 	}
 
 	private static int compareVersionDirs(Path a, Path b) {
@@ -365,12 +394,17 @@ class InspectorUiIT {
 	}
 
 	/**
-	 * Selects a row from the active ListPane by its visible name. Waits for the row to
-	 * exist before clicking — {@code findBy(text(...))} doesn't have a built-in retry, so
-	 * we expand the query into wait-then-click.
+	 * Selects a row from the active ListPane by its exact visible name. The name lives in
+	 * a {@code <span class="truncate">} inside the clickable row (see ListPane row
+	 * markup), and {@code findBy(text(...))} matches substrings — so asking for "echo"
+	 * resolved to the "slowEcho" row whenever it rendered first. Match the name span with
+	 * {@code exactText} instead; the click bubbles up to the row.
 	 */
 	private static void selectRow(String name) {
-		activePanel().$$(".cursor-pointer").findBy(text(name)).shouldBe(visible, Duration.ofSeconds(10)).click();
+		activePanel().$$(".cursor-pointer .truncate")
+			.findBy(exactText(name))
+			.shouldBe(visible, Duration.ofSeconds(10))
+			.click();
 	}
 
 	/**
@@ -680,18 +714,99 @@ class InspectorUiIT {
 		@Test
 		@Story("Tool list")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("After listing tools, every one of the 16 demo tools is present in the tool list.")
-		@DisplayName("toolsListShowsAll16Tools — every demo tool appears in the list")
-		void toolsList_afterListTools_showsAll16Tools() {
+		@Description("After listing tools, every one of the 22 demo tools is present in the tool list.")
+		@DisplayName("toolsListShowsAll22Tools — every demo tool appears in the list")
+		void toolsList_afterListTools_showsAll22Tools() {
 			// given
-			String[] expected = { "echo", "sum", "currentTime", "addNumbers", "concatenate", "lookupUser",
-					"chooseColor", "toggleFlag", "optionalGreeting", "errorTool", "largeOutput", "structuredOutput",
-					"multiContent", "slowEcho", "deepJson", "blobAttachment" };
+			String[] expected = ALL_DEMO_TOOLS;
 
 			// when & then
 			for (String name : expected) {
 				activePanel().$(byText(name)).shouldBe(visible);
 			}
+		}
+
+		@Test
+		@Story("Tool annotations")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("After Connect + List Tools the hint chips render honestly: explicitly annotated "
+				+ "echo shows plain Read-only/Destructive chips, and every chip that claims destructive=true "
+				+ "is either disclosed as a spec default ('(default)' + 'Spec default, not declared by server' "
+				+ "tooltip) or is the known spring-ai synthesis gap on the annotation-less slowEcho.")
+		@DisplayName("connectListToolsHonestChips — explicit vs spec-default hint chips and no silent declared destructive")
+		void connectListToolsHonestChips_explicitAndSpecDefaultChips_noDeclaredDestructive() {
+
+			// --- echo: server-declared annotations render as plain chips -------------
+			selectRow("echo");
+			SelenideElement badges = activePanel().$(".gap-1.mt-2").shouldBe(visible, Duration.ofSeconds(10));
+			// Read-only chip is active (✓) with no (default) marker — annotations are
+			// explicit.
+			badges.$(byText("Read-only")).shouldHave(text("✓ Read-only"));
+			badges.$(byText("Read-only")).shouldNotHave(text("(default)"));
+			// Destructive chip is NOT shown as declared true — value is false (✗), plain
+			// chip.
+			badges.$(byText("Destructive")).shouldHave(text("✗ Destructive"));
+			badges.$(byText("Destructive")).shouldNotHave(text("(default)"));
+			// The whole badge row never claims destructive=true for an annotated tool.
+			badges.shouldNotHave(text("✓ Destructive"));
+
+			// --- slowEcho: the spec-default vs synthesis fork ------------------------
+			// slowEcho deliberately ships WITHOUT @McpTool(annotations...) so the UI
+			// could mark its Read-only/Destructive chips as MCP spec defaults. Until
+			// spring-ai stops synthesizing a full annotations object for such tools
+			// (issue mirror below), the wire carries readOnlyHint=false /
+			// destructiveHint=true as if the server had declared them, so the chip
+			// renders plain "✓ Destructive". Both branches below assert real DOM
+			// facts; the test self-upgrades once the framework stops inventing
+			// declarations.
+			selectRow("slowEcho");
+			SelenideElement defaultBadges = activePanel().$(".gap-1.mt-2").shouldBe(visible, Duration.ofSeconds(10));
+			// Read-only: spec-default false renders as ✗ either way; when the chip
+			// carries the '(default)' marker its tooltip must disclose that the value
+			// comes from the spec, not the server (title embeds newlines → DOTALL).
+			SelenideElement defaultReadOnly = defaultBadges.$(byText("Read-only")).shouldBe(visible);
+			defaultReadOnly.shouldHave(text("✗ Read-only"));
+			if (defaultReadOnly.getText().contains("(default)")) {
+				defaultReadOnly.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
+			}
+			// Destructive: same honesty contract on the spec-default true (✓).
+			SelenideElement defaultDestructive = defaultBadges.$(byText("Destructive")).shouldBe(visible);
+			defaultDestructive.shouldHave(text("✓ Destructive"));
+			if (defaultDestructive.getText().contains("(default)")) {
+				defaultDestructive
+					.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
+			}
+
+			// --- sweep: every destructive=true claim is disclosed or accounted for ---
+			for (String name : ALL_DEMO_TOOLS) {
+				selectRow(name);
+				SelenideElement rowBadges = activePanel().$(".gap-1.mt-2").shouldBe(visible, Duration.ofSeconds(10));
+				SelenideElement destructive = rowBadges.$(byText("Destructive")).shouldBe(visible);
+				String chipText = destructive.getText();
+				if (chipText.contains("(default)")) {
+					// Spec-default path: allowed to claim true, but the tooltip must
+					// disclose that the value was not declared by the server.
+					destructive.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
+				}
+				else if (chipText.contains("✓")) {
+					// Declared destructive=true is only tolerable on the annotation-less
+					// slowEcho, and only while spring-ai synthesizes annotations for it;
+					// any other tool hitting this branch means a demo tool really
+					// declares destructive=true — that is a regression.
+					Assertions.assertEquals("slowEcho", name,
+							"Tool renders a server-declared destructive=true chip; only the "
+									+ "annotation-less slowEcho may do so while spring-ai synthesizes "
+									+ "its annotations");
+				}
+				else {
+					// Declared path: the only honest value is destructive=false.
+					destructive.shouldHave(exactText("✗ Destructive"));
+				}
+			}
+
+			// Leave no tool selected so subsequent tests start with a clean list view.
+			// Click the Tools tab label to deselect the current tool.
+			activePanel().$(byText("Tools")).click();
 		}
 
 		@Test
@@ -705,19 +820,31 @@ class InspectorUiIT {
 			SelenideElement searchInput = activePanel().$("input[name=search]");
 
 			// when
+			// React's controlled input filters on every change event; Selenide's
+			// setValue dispatches the input event, so no Enter keypress is needed (and
+			// sending one would blur the field and collapse the search box on empty).
 			searchInput.shouldBe(visible).setValue("sum");
 
 			// then
-			// Only rows whose name/description matches "sum" remain (e.g., sum, possibly
-			// addNumbers).
-			activePanel().$(byText("sum")).shouldBe(visible);
-			activePanel().$(byText("echo")).shouldNotBe(visible);
+			// Wait for the filter to apply: "sum" row visible, "echo" hidden. Scope
+			// both assertions to the list rows: the right-hand detail panel keeps
+			// showing whatever tool a previous test left selected, so a panel-wide
+			// byText("echo") would match its <h3> header even when the list is
+			// correctly filtered.
+			activePanel().$$(".cursor-pointer .truncate")
+				.findBy(exactText("sum"))
+				.shouldBe(visible, Duration.ofSeconds(10));
+			activePanel().$$(".cursor-pointer .truncate")
+				.findBy(exactText("echo"))
+				.shouldNotBe(visible, Duration.ofSeconds(10));
 
 			// Select-all + Backspace dispatches actual input events so React's controlled
 			// input state updates and the filter is cleared (plain setValue("") doesn't).
 			clearAllSearchInputs();
-			// After clearing, echo is back.
-			activePanel().$(byText("echo")).shouldBe(visible, Duration.ofSeconds(5));
+			// After clearing, echo is back in the list.
+			activePanel().$$(".cursor-pointer .truncate")
+				.findBy(exactText("echo"))
+				.shouldBe(visible, Duration.ofSeconds(5));
 		}
 
 		@Test
@@ -1847,7 +1974,7 @@ class InspectorUiIT {
 			// then
 			// Refresh Apps trigger must be visible — proves the list pane rendered.
 			activePanel().$(byText("Refresh Apps")).shouldBe(visible, Duration.ofSeconds(10));
-			// Demo registers 16 tools but none with _meta.ui.resourceUri, so the right
+			// Demo registers 22 tools but none with _meta.ui.resourceUri, so the right
 			// pane shows the "No MCP Apps available..." copy. We match a stable substring
 			// to insulate the assertion from upstream wording tweaks like the trailing
 			// "_meta.ui.resourceUri" code span.
@@ -2817,7 +2944,7 @@ class InspectorUiIT {
 
 	// =====================================================================
 	// X. Responsive tab bar — CI regression for the <sm wrap patch
-	// (upstream-client/src/App.tsx TabsList, NOTICE.txt entry 8). The shared
+	// (upstream-client/src/App.tsx TabsList, NOTICE.d/tab-bar-wrap.txt). The shared
 	// suite browser is fixed at 1366x900 (setupBrowser), so each scenario
 	// resizes the live headless window to its target viewport and restores it
 	// afterwards.
@@ -2971,7 +3098,7 @@ class InspectorUiIT {
 	// =====================================================================
 	// Y. Responsive history layout — CI regression for the <lg compact
 	// layout patch (upstream-client/src/App.tsx root container + bottom
-	// History pane, NOTICE.txt entries 8/9). The shared suite browser is
+	// History pane, NOTICE.d/compact-layout.txt). The shared suite browser is
 	// fixed at 1366x900 (setupBrowser), so each scenario resizes the live
 	// headless window to its target viewport and restores it afterwards.
 	//
@@ -2990,18 +3117,6 @@ class InspectorUiIT {
 	@DisplayName("Responsive history layout (compact <1024px / desktop control)")
 	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 	class ResponsiveHistoryLayout {
-
-		/** All 11 tab trigger values of the inspector bar (UPSTREAM_DOM_MAP §3). */
-		private static final List<String> ALL_TAB_VALUES = List.of("resources", "prompts", "tools", "tasks", "apps",
-				"ping", "sampling", "elicitations", "roots", "auth", "metadata");
-
-		/**
-		 * The 10 always-enabled triggers. {@code tasks} is rendered disabled by design —
-		 * the demo does not advertise the tasks capability (see #63) — so it is only
-		 * presence-checked, never clicked.
-		 */
-		private static final List<String> ENABLED_TAB_VALUES = List.of("resources", "prompts", "tools", "apps", "ping",
-				"sampling", "elicitations", "roots", "auth", "metadata");
 
 		@BeforeAll
 		void bootAndConnect() {
@@ -3045,11 +3160,15 @@ class InspectorUiIT {
 		}
 
 		/**
-		 * True when the document has no horizontal overflow (scrollWidth <= clientWidth).
+		 * True when the document has no horizontal overflow (scrollWidth <=
+		 * document.documentElement.clientWidth). Compared against the document's own
+		 * client width rather than window.innerWidth, because innerWidth includes the
+		 * vertical scrollbar and would let up to a scrollbar-width (~15px) of horizontal
+		 * overflow slip through as a blind window.
 		 */
 		private static boolean noHorizontalDocumentOverflow() {
-			return Boolean.TRUE.equals(
-					Selenide.executeJavaScript("return document.documentElement.scrollWidth <= window.innerWidth;"));
+			return Boolean.TRUE.equals(Selenide.executeJavaScript(
+					"return document.documentElement.scrollWidth <= document.documentElement.clientWidth;"));
 		}
 
 		/**
@@ -3057,20 +3176,29 @@ class InspectorUiIT {
 		 * {@code targetWidth} x {@code targetHeight}. ChromeDriver sets the window's
 		 * OUTER rectangle and headless Chromium derives the viewport from a virtual
 		 * screen, so a plain resize can leave {@code window.innerHeight} far short of the
-		 * requested value (observed locally: 294px for a 437px window) — the scenario
+		 * requested value (observed locally: 294px for a 437px window), so the scenario
 		 * would then silently run at an unintended viewport. The constant outer/inner
 		 * delta of the environment is measured once, the resize is requested at target +
 		 * delta and verified against a stabilized read; the delta is corrected in a
 		 * bounded loop, so every scenario in this group really executes at its documented
-		 * viewport on any driver/environment.
+		 * viewport on any driver/environment. The window size request is guarded to stay
+		 * positive, and the post-resize read waits for the resize to actually land (two
+		 * stale equal reads are not treated as stable).
 		 */
 		private static void setViewportExactly(int targetWidth, int targetHeight) {
-			java.util.List<Number> inner = stableInnerViewport();
-			int deltaWidth = outerExtent("Width") - inner.get(0).intValue();
-			int deltaHeight = outerExtent("Height") - inner.get(1).intValue();
+			java.util.List<Number> before = readInnerViewport();
+			int deltaWidth = outerExtent("Width") - before.get(0).intValue();
+			int deltaHeight = outerExtent("Height") - before.get(1).intValue();
 			for (int attempt = 0; attempt < 4; attempt++) {
-				ResponsiveTabBar.setViewport(targetWidth + deltaWidth, targetHeight + deltaHeight);
-				inner = stableInnerViewport();
+				int requestWidth = targetWidth + deltaWidth;
+				int requestHeight = targetHeight + deltaHeight;
+				if (requestWidth <= 0 || requestHeight <= 0) {
+					Assertions.fail("invalid window size request " + requestWidth + "x" + requestHeight
+							+ " (outer/inner delta " + deltaWidth + "x" + deltaHeight + "), cannot converge on "
+							+ targetWidth + "x" + targetHeight);
+				}
+				ResponsiveTabBar.setViewport(requestWidth, requestHeight);
+				java.util.List<Number> inner = innerViewportAfterResize(before);
 				int innerWidth = inner.get(0).intValue();
 				int innerHeight = inner.get(1).intValue();
 				if (innerWidth == targetWidth && innerHeight == targetHeight) {
@@ -3078,29 +3206,42 @@ class InspectorUiIT {
 				}
 				deltaWidth += targetWidth - innerWidth;
 				deltaHeight += targetHeight - innerHeight;
+				before = inner;
 			}
 			Assertions.fail("browser window never reached the " + targetWidth + "x" + targetHeight
 					+ " inner viewport after compensating resizes");
 		}
 
 		/**
-		 * Reads the inner viewport twice and waits until two consecutive reads agree,
-		 * because WebDriver resizes land asynchronously — an immediate read can still
-		 * observe the previous window size.
+		 * Reads the inner viewport, waits until it changes away from {@code before} (the
+		 * WebDriver resize lands asynchronously, so two consecutive pre-resize reads must
+		 * not be mistaken for a stable state), then waits until two consecutive reads
+		 * agree and returns that value.
 		 */
-		private static java.util.List<Number> stableInnerViewport() {
+		private static java.util.List<Number> innerViewportAfterResize(java.util.List<Number> before) {
+			java.util.List<Number> current = readInnerViewport();
+			for (int read = 0; read < 20 && sameViewport(current, before); read++) {
+				Selenide.sleep(100);
+				current = readInnerViewport();
+			}
 			java.util.List<Number> previous = null;
 			for (int read = 0; read < 20; read++) {
-				java.util.List<Number> current = Selenide
-					.executeJavaScript("return [window.innerWidth, window.innerHeight];");
-				if (previous != null && previous.get(0).equals(current.get(0))
-						&& previous.get(1).equals(current.get(1))) {
-					return current;
+				java.util.List<Number> next = readInnerViewport();
+				if (previous != null && sameViewport(previous, next)) {
+					return next;
 				}
-				previous = current;
+				previous = next;
 				Selenide.sleep(100);
 			}
-			return previous;
+			return current;
+		}
+
+		private static boolean sameViewport(java.util.List<Number> a, java.util.List<Number> b) {
+			return a.get(0).intValue() == b.get(0).intValue() && a.get(1).intValue() == b.get(1).intValue();
+		}
+
+		private static java.util.List<Number> readInnerViewport() {
+			return Selenide.executeJavaScript("return [window.innerWidth, window.innerHeight];");
 		}
 
 		private static int outerExtent(String dimension) {
@@ -3109,22 +3250,63 @@ class InspectorUiIT {
 
 		/**
 		 * Bounding boxes of the active tab panel and the History column must not
-		 * intersect. The History column is anchored via the same stable selector as
-		 * {@link #historyColumn()}.
+		 * intersect. The History column is anchored via the same selector as
+		 * {@link #historyColumn()}, so a future class rename cannot silently detach the
+		 * overlap probe from the stable anchor.
 		 */
 		private static String panesOverlapJs() {
 			return "const panel = document.querySelector('[role=tabpanel][data-state=active]').getBoundingClientRect();"
-					+ "const history = document.querySelector('.flex-1.overflow-y-auto.p-4.border-r');"
+					+ "const history = document.querySelector(arguments[0]);"
 					+ "if (!history) { return 'history-not-found'; }" + "const h = history.getBoundingClientRect();"
 					+ "return !(h.left < panel.right && h.right > panel.left && h.top < panel.bottom"
 					+ "&& h.bottom > panel.top);";
 		}
 
+		/**
+		 * True when the active tab panel and the History column have disjoint bounding
+		 * boxes. A missing History column fails with a readable assertion instead of a
+		 * ClassCastException, and the returned value is always a Boolean.
+		 */
+		private static boolean panesOverlap() {
+			Object result = Selenide.executeJavaScript(panesOverlapJs(), historyColumn().getSearchCriteria());
+			if ("history-not-found".equals(result)) {
+				Assertions.fail("History column not found via " + historyColumn().getSearchCriteria());
+			}
+			return Boolean.TRUE.equals(result);
+		}
+
+		/**
+		 * True when the given inner column is an independently scrolling container under
+		 * real overflow: its scrollHeight exceeds its clientHeight and assigning
+		 * scrollTop actually moves it. The element is the same one used by the
+		 * History/Notifications column helpers, so a future class rename cannot silently
+		 * detach the probe from the stable anchor.
+		 */
+		private static boolean columnScrollsWithOverflow(SelenideElement column) {
+			Object result = Selenide.executeJavaScript(
+					"const col = arguments[0];" + "if (!col) { return 'column-not-found'; }" + "col.scrollTop = 999;"
+							+ "return col.scrollHeight > col.clientHeight && col.scrollTop > 0;",
+					column);
+			if ("column-not-found".equals(result)) {
+				Assertions.fail("column not found: " + column.getSearchCriteria());
+			}
+			return Boolean.TRUE.equals(result);
+		}
+
+		/**
+		 * Right-hand "Server Notifications" column of the bottom pane, the sibling of
+		 * {@link #historyColumn()}. The History column carries the unique
+		 * {@code border-r}; the notifications side is anchored by its header text.
+		 */
+		private static SelenideElement notificationsColumn() {
+			return $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications"));
+		}
+
 		@Test
 		@Story("Responsive history layout")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("At the issue #60 repro viewport (780x437) the List Tools button in the Tools tab is clickable by real coordinates: elementFromPoint at its bounding-box centre returns the button itself, not an overlaying History pane node.")
-		@DisplayName("listToolsClickableAt780x437 — elementFromPoint hits the button")
+		@Description("At the issue #60 repro viewport (780x437) the List Tools button in the Tools tab is clickable by real coordinates: elementFromPoint at its bounding-box centre returns the button itself, not an overlaying History pane node. The compact mode must not mount the desktop-only drag handles, and both the History and Server Notifications columns must scroll independently under real overflow.")
+		@DisplayName("listToolsClickableAt780x437: elementFromPoint hits the button, no drag handles, both columns scroll")
 		void listTools_at780x437_elementFromPointReturnsButton() {
 			// given
 			setViewportExactly(780, 437);
@@ -3133,31 +3315,67 @@ class InspectorUiIT {
 			// then
 			Assertions.assertTrue(clickableAtCenter(listTools),
 					"elementFromPoint at the List Tools centre must return the button itself at 780x437");
+
+			// and: the compact mode must not mount the desktop-only drag
+			// handles, so a pointer press on the old handle strip cannot enter
+			// the sidebar drag path or the pane resize path.
+			$("[data-testid=sidebar-drag-handle]").shouldNot(Condition.exist, Duration.ofSeconds(5));
+			$("[data-testid=pane-drag-handle]").shouldNot(Condition.exist, Duration.ofSeconds(5));
+
+			// and: real requests overflow the definite-height compact pane, and
+			// the History column itself scrolls (scrollTop moves), instead of
+			// only the outer wrapper scrolling. The Ping tab's button stays
+			// enabled across calls (the Tools List button disables after the
+			// first listing), so 12 pings reliably overflow the 40vh pane.
+			clickTab("ping");
+			SelenideElement pingServer = activePanel().$(byText("Ping Server"));
+			for (int i = 0; i < 12; i++) {
+				pingServer.click();
+			}
+			Assertions.assertTrue(columnScrollsWithOverflow(historyColumn()),
+					"the History column must scroll independently under real overflow at 780x437");
+
+			// and: the Server Notifications column must scroll independently too.
+			// The demo advertises the logging capability and the client subscribes
+			// at connect (defaultLoggingLevel=debug), so each largeOutput call
+			// emits a real notifications/message that overflows the 40vh pane.
+			clickTab("tools");
+			SelenideElement listToolsBtn = activePanel().$(byText("List Tools"));
+			if (listToolsBtn.exists() && listToolsBtn.isEnabled()) {
+				listToolsBtn.click();
+			}
+			selectRow("largeOutput");
+			SelenideElement sizeKb = $("#sizeKb");
+			if (sizeKb.exists()) {
+				sizeKb.setValue("1");
+			}
+			for (int i = 0; i < 12; i++) {
+				activePanel().$(byText("Run Tool")).click();
+				activePanel().$(byText("Run Tool")).shouldBe(visible, Duration.ofSeconds(60));
+			}
+			Assertions.assertTrue(columnScrollsWithOverflow(notificationsColumn()),
+					"the Server Notifications column must scroll independently under real overflow at 780x437");
 		}
 
 		@Test
 		@Story("Responsive history layout")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("At 768x800 and 1023x768 (the widest viewport below the inclusive lg breakpoint) the History column and the active tab panel have disjoint bounding boxes and the document does not overflow horizontally (scrollWidth <= innerWidth).")
-		@DisplayName("panesDisjointAndNoHScrollAt768And1023 — stacked, never overlapping")
+		@Description("At 768x800 and 1023x768 (the widest viewport below the inclusive lg breakpoint, at its contracted height) the History column and the active tab panel have disjoint bounding boxes and the document does not overflow horizontally (scrollWidth <= document.documentElement.clientWidth).")
+		@DisplayName("panesDisjointAndNoHScrollAt768And1023: stacked, never overlapping")
 		void historyColumn_at768And1023_disjointFromTabPanelNoHorizontalScroll() {
 			// given
 			setViewportExactly(768, 800);
 
 			// when & then
 			listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
-			Boolean disjoint = Selenide.executeJavaScript(panesOverlapJs());
-			Assertions.assertEquals(Boolean.TRUE, disjoint,
-					"tab content and the History pane must not overlap at 768px");
+			Assertions.assertTrue(panesOverlap(), "tab content and the History pane must not overlap at 768px");
 			Assertions.assertTrue(noHorizontalDocumentOverflow(),
 					"document.documentElement must not overflow horizontally at 768px");
 
-			// and — the widest compact viewport, 1px below lg, at its contracted height.
+			// and: the widest compact viewport, 1px below lg, at its contracted height.
 			setViewportExactly(1023, 768);
 			listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
-			disjoint = Selenide.executeJavaScript(panesOverlapJs());
-			Assertions.assertEquals(Boolean.TRUE, disjoint,
-					"tab content and the History pane must not overlap at 1023px");
+			Assertions.assertTrue(panesOverlap(), "tab content and the History pane must not overlap at 1023px");
 			Assertions.assertTrue(noHorizontalDocumentOverflow(),
 					"document.documentElement must not overflow horizontally at 1023px");
 		}
@@ -3166,13 +3384,13 @@ class InspectorUiIT {
 		@Story("Responsive history layout")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Desktop control at exactly 1024px (inclusive lg breakpoint): the side-by-side layout keeps its resizable History pane with a drag handle and the sidebar resize handle, i.e. the compact patch causes no desktop regression.")
-		@DisplayName("desktopPaneResizableAt1024 — drag handles present")
+		@DisplayName("desktopPaneResizableAt1024: drag handles present")
 		void desktopLayout_at1024_resizableHistoryPaneAndSidebarHandlesPresent() {
 			// given
 			setViewportExactly(1024, 800);
 			listToolsButton().shouldBe(visible, Duration.ofSeconds(10));
 
-			// then — both desktop-only drag handles are mounted and visible.
+			// then: both desktop-only drag handles are mounted and visible.
 			$("[data-testid=sidebar-drag-handle]").shouldBe(visible, Duration.ofSeconds(5));
 			$("[data-testid=pane-drag-handle]").shouldBe(visible, Duration.ofSeconds(5));
 			Assertions.assertTrue(noHorizontalDocumentOverflow(),
@@ -3182,23 +3400,23 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive history layout")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("375x667 regression of the <640px tab-bar wrap fix (PR #69): the TabsList still wraps (computed flex-wrap: wrap), all 11 triggers are present and every one of the 10 enabled tabs is clickable by real input, and the document does not overflow horizontally after the compact history-layout patch.")
-		@DisplayName("tabBarRegressionAt375 — mobile wrap intact, all tabs clickable")
+		@Description("375px regression of the <640px tab-bar wrap fix (PR #69): the TabsList still wraps, all 11 triggers are present, every one of the 10 enabled tabs is clicked by real input, and the document does not overflow horizontally after the compact history-layout patch.")
+		@DisplayName("tabBarRegressionAt375: mobile wrap intact, all tabs clickable")
 		void tabBar_at375_wrapIntactAfterCompactPatch() {
 			// given
 			setViewportExactly(375, 667);
 
-			// then — computed flex-wrap stays "wrap" and all 11 triggers are in the DOM.
+			// then
 			Assertions.assertEquals("wrap", ResponsiveTabBar.tabsListFlexWrap(),
 					"TabsList must still wrap below the sm breakpoint");
-			for (String value : ALL_TAB_VALUES) {
+			for (String value : ResponsiveTabBar.ALL_TAB_VALUES) {
 				Assertions.assertTrue($("[role=tab][id$='-trigger-" + value + "']").exists(),
 						"tab trigger '" + value + "' must be present in the DOM at 375px");
 			}
 
-			// and — every enabled tab is actually clickable at this viewport (the
-			// disabled tasks trigger is only presence-checked, see #63).
-			for (String value : ENABLED_TAB_VALUES) {
+			// and: every enabled tab is actually clickable by real input at this
+			// viewport (the disabled tasks trigger is only presence-checked, see #63).
+			for (String value : ResponsiveTabBar.ENABLED_TAB_VALUES) {
 				clickTab(value);
 			}
 			Assertions.assertTrue(noHorizontalDocumentOverflow(),

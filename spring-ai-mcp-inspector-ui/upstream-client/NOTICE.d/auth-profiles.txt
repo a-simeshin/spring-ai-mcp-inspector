@@ -1,0 +1,33 @@
+src/components/AuthProfiles.tsx (new) + src/lib/auth-profiles.ts (new)
++ src/lib/connectionAuthErrors.ts + src/lib/hooks/useConnection.ts +
+src/components/Sidebar.tsx + src/components/OAuthCallback.tsx +
+src/App.tsx — named auth profiles for debugging protected MCP
+servers (issue #54, plan v15 D1/D2/D3/D7/D9B/D10). Upstream keeps
+bearer token / OAuth secrets in localStorage and has no profile
+concept; the backend proxy now owns credentials server-side, so the
+UI adds: (a) a profile editor/selector for the four profile kinds
+(OAuth2 client-credentials + authorization-code, Bearer, API-key
+header/query, Custom-headers), each with a required unique name;
+(b) an owner-scoped named-profile list/rename/delete via
+GET/PUT/DELETE `/mcp-inspector/api/auth-profile/{profileId}` (path
+variable); (c) Spring-config prefill selection via
+GET /auth-profile/prefill (summaries, no secrets) + POST
+/auth-profile with `{name,type}` reference; (d) an auth-code
+two-phase flow (D9B): pending profile create with browser-generated
+PKCE S256 challenge → redirect to the IdP with the SERVER-issued
+state → POST /auth-profile/{profileId}/exchange with
+{code, codeVerifier, state} (transient flow record kept in
+sessionStorage, never localStorage); (e) D10 legacy secret
+migration — the six old localStorage keys (lastBearerToken,
+lastHeaderName, lastCustomHeaders, lastOauthClientId, lastOauthScope,
+lastOauthClientSecret) are consumed into React state and removed on
+first mount, and their persistence effects are deleted so nothing
+secret-bearing is ever written back; (f) D3 structured error
+rendering — the proxy's ProxyErrorDto (SSE named `error` event /
+streamable 401/403 body) is parsed and shown with exact
+code/reason/guidance/url, and the active profile is handed off to
+the proxy as `?profileId=` (server-owned, HttpOnly-signed owner
+session cookie — transparent to the UI). Covered by jest unit tests
+(AuthProfiles.test.tsx, auth-profiles.test.ts,
+connectionAuthErrors.test.ts) in
+spring-ai-mcp-inspector-ui/upstream-client.

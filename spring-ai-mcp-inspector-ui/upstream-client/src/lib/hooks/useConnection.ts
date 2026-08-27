@@ -51,6 +51,12 @@ import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/lib/hooks/useToast";
 import { ConnectionStatus, CLIENT_IDENTITY } from "../constants";
 import { isConnectionAuthError } from "../connectionAuthErrors";
+import {
+  ConnectFailedError,
+  connectionFailureFromError,
+  parseConnectFailureResponse,
+  type ConnectFailure,
+} from "../connectErrors";
 import { Notification } from "../notificationTypes";
 import {
   auth,
@@ -135,6 +141,9 @@ export function useConnection({
 }: UseConnectionOptions) {
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
+  const [connectionError, setConnectionError] = useState<ConnectFailure | null>(
+    null,
+  );
   const { toast } = useToast();
   const [serverCapabilities, setServerCapabilities] =
     useState<ServerCapabilities | null>(null);
@@ -153,12 +162,11 @@ export function useConnection({
   const [serverImplementation, setServerImplementation] =
     useState<Implementation | null>(null);
 
-  // [spring-ai-mcp-inspector PATCH] D3 structured error surfaced by the proxy
-  // (SSE named `error` event / streamable 401/403 body). Rendered by the
-  // Sidebar error banner with the exact code/reason/guidance/url.
-  const [connectionError, setConnectionError] = useState<ProxyErrorDto | null>(
-    null,
-  );
+  // [spring-ai-mcp-inspector PATCH] D3 structured authorization error surfaced
+  // by the proxy (SSE named `error` event / streamable 401/403 body). Named
+  // authError, not connectionError: that one carries the transport failure from
+  // issue #56, and a server that answered 401 is a server that was reached.
+  const [authError, setAuthError] = useState<ProxyErrorDto | null>(null);
 
   type ReceiverTaskRecord = {
     task: Task;
@@ -478,7 +486,7 @@ export function useConnection({
       if (currentEvent === "error" && currentData.length > 0) {
         const dto = parseProxyErrorDto(currentData.join("\n"));
         if (dto) {
-          setConnectionError(dto);
+          setAuthError(dto);
         }
       }
       currentEvent = "";
@@ -548,15 +556,17 @@ export function useConnection({
       return response.text().then((text) => {
         const dto = parseProxyErrorDto(text);
         if (dto) {
-          setConnectionError(dto);
+          setAuthError(dto);
         }
         return new Response(text, response);
       });
     });
 
   const connect = async (_e?: unknown, retryCount: number = 0) => {
-    // [spring-ai-mcp-inspector PATCH] Reset the D3 error banner on every attempt.
+    // [spring-ai-mcp-inspector PATCH] Both failure banners reset on every attempt:
+    // the transport one (issue #56) and the authorization one (issue #54).
     setConnectionError(null);
+    setAuthError(null);
     const clientCapabilities = {
       capabilities: {
         sampling: {},
@@ -828,13 +838,29 @@ export function useConnection({
             mcpProxyServerUrl.searchParams.append("url", sseUrl);
             transportOptions = {
               authProvider: serverAuthProvider,
-              // [spring-ai-mcp-inspector PATCH] Parse the D3 DTO from a 401/403
-              // response body (issue #54).
-              fetch: (url, init) =>
-                streamableFetchWithDtoParse(url, {
+              // [spring-ai-mcp-inspector PATCH] One wrapper, two contracts, in this
+              // order. streamableFetchWithDtoParse reads the proxy's structured
+              // authorization DTO out of a 401/403 from a LIVE server (issue #54)
+              // and records it without throwing. What survives that and is still
+              // not ok may carry the MCP_CONNECT_FAILED contract (issue #56),
+              // which means the server was never reached; it throws, because the
+              // SDK would otherwise collapse the body into an opaque status error.
+              fetch: async (
+                url: string | URL | globalThis.Request,
+                init?: RequestInit,
+              ) => {
+                const response = await streamableFetchWithDtoParse(url, {
                   ...init,
                   headers: { ...headers, ...proxyHeaders },
-                }),
+                });
+                if (!response.ok) {
+                  const failure = await parseConnectFailureResponse(response);
+                  if (failure) {
+                    throw new ConnectFailedError(failure);
+                  }
+                }
+                return response;
+              },
               eventSourceInit: {
                 fetch: (
                   url: string | URL | globalThis.Request,
@@ -956,7 +982,18 @@ export function useConnection({
 
           return;
         }
-        throw error;
+        // [spring-ai-mcp-inspector PATCH] Surface connection failures in the
+        // UI instead of throwing into an unhandled rejection: the sidebar
+        // renders a role=alert with the failure reason and a Retry button.
+        // The status stays "error": the sidebar paints its dot and label off
+        // connectionStatus alone, so reporting "disconnected" here would show
+        // an unreachable server as idle, which is the symptom issue #56 is
+        // about. Before this patch the rethrow reached the outer catch, which
+        // set the same "error" status; only the toast is dropped, since the
+        // alert now carries the reason in place.
+        setConnectionError(connectionFailureFromError(error));
+        setConnectionStatus("error");
+        return;
       }
       setServerCapabilities(capabilities ?? null);
       setCompletionsSupported(capabilities?.completions !== undefined);
@@ -1334,8 +1371,10 @@ export function useConnection({
 
   return {
     connectionStatus,
-    // [spring-ai-mcp-inspector PATCH] D3 structured error DTO (issue #54).
+    // [spring-ai-mcp-inspector PATCH] Transport failure (issue #56); the
+    // authorization DTO travels separately as authError (issue #54).
     connectionError,
+    authError,
     serverCapabilities,
     serverImplementation,
     mcpClient,

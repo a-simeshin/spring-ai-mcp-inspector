@@ -65,6 +65,15 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- Test-only: @McpTool/@McpResource annotation classes for the introspection
+             fixtures. Main code detects them by FQCN string via MergedAnnotations and
+             imports no spring-ai classes (R1). -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-mcp-annotations</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- Test-only: ProxySessionRegistryShutdownOrderingTests pins its probe phase to
              Boot's own WebServerGracefulShutdownLifecycle.SMART_LIFECYCLE_PHASE rather
              than to a copied 2147482623. Boot 4 split that class out of the spring-boot

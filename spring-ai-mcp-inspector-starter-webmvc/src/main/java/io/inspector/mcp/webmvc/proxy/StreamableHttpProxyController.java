@@ -57,6 +57,8 @@ import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyConnectFailure;
+import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
 import io.inspector.mcp.core.proxy.ProxyErrorMapper;
 import io.inspector.mcp.core.proxy.ProxySession;
@@ -96,6 +98,12 @@ import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
 public class StreamableHttpProxyController {
 
 	private static final Logger LOG = LoggerFactory.getLogger(StreamableHttpProxyController.class);
+
+	/**
+	 * Error code of the structured connect-failure payload (see
+	 * {@link #connectFailureResponse}).
+	 */
+	private static final String ERROR_CODE_MCP_CONNECT_FAILED = "MCP_CONNECT_FAILED";
 
 	/** Replay buffer size for the {@code targetToBrowser} sink (per session). */
 	private static final int REPLAY_BUFFER = 256;
@@ -255,10 +263,17 @@ public class StreamableHttpProxyController {
 		// it
 		// to the loopback MCP endpoint server-side (see ProxyTargetResolver). Only an
 		// explicit absolute url targets a non-loopback server.
-		final ProxySession session = openSession(url, profileId);
+		final ProxySession session;
+		try {
+			session = openSession(url, profileId);
+		}
+		catch (final ProxyConnectFailureException ex) {
+			return connectFailureResponse(ex.failure());
+		}
 		if (session == null) {
 			// D8: a foreign/unknown profileId is a structured 400; any other bring-up
-			// failure stays the legacy 502.
+			// failure stays the legacy 502. Transport failures never reach here: they
+			// leave openSession as ProxyConnectFailureException, caught above.
 			if (profileId != null && !profileId.isBlank() && !isOwnedProfile(profileId)) {
 				return ResponseEntity.badRequest()
 					.body(new ProxyErrorDto(400, "bad_request", "Invalid or missing auth profile or session reference.",
@@ -273,6 +288,23 @@ public class StreamableHttpProxyController {
 		final String ownerId = resolveOwner();
 		return ownerId != null && this.authProfileStore != null
 				&& this.authProfileStore.resolve(ownerId, profileId).isPresent();
+	}
+
+	/**
+	 * Maps a classified connect failure onto a non-2xx response: 504 Gateway Timeout for
+	 * {@link ProxyConnectFailure.Reason#TIMEOUT}, 502 Bad Gateway for every other reason.
+	 * The body carries a machine-readable {@code error} payload; stack traces and
+	 * internal details stay server-side in the log.
+	 * @param failure the classified connect failure (never {@code null})
+	 * @return the HTTP response entity
+	 */
+	private static ResponseEntity<Object> connectFailureResponse(final ProxyConnectFailure failure) {
+		final HttpStatus status = (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT) ? HttpStatus.GATEWAY_TIMEOUT
+				: HttpStatus.BAD_GATEWAY;
+		return ResponseEntity.status(status)
+			.contentType(MediaType.APPLICATION_JSON)
+			.body(Map.of("error", Map.of("code", ERROR_CODE_MCP_CONNECT_FAILED, "reason", failure.reason().wire(),
+					"message", failure.message(), "retryable", Boolean.TRUE)));
 	}
 
 	/**
@@ -378,30 +410,37 @@ public class StreamableHttpProxyController {
 			return builder.body(response);
 		}
 		catch (final RuntimeException ex) {
-			LOG.warn("proxy[{}] await response failed: {}", session.sessionId(), ex.toString());
-			// D3: a mappable transport failure (401/403 on the initial handshake or a
-			// later call) becomes the structured DTO; anything else stays the legacy 504.
+			// D3: an authorization failure from a LIVE server (401/403 on the handshake
+			// or on a later call) becomes the structured DTO. It is checked first: the
+			// connect-failure classifier only recognises transport causes and would
+			// label this one "unknown", dropping the status the server actually sent.
 			final ProxyErrorDto dto = ProxyErrorMapper.map(ex, TransportKind.STREAMABLE);
 			if (dto != null) {
+				LOG.warn("proxy[{}] await response failed (auth {}): {}", session.sessionId(), dto.status(),
+						ex.toString());
+				if (includeSessionHeader) {
+					this.registry.removeAndClose(session.sessionId());
+				}
 				return ResponseEntity.status(dto.status()).body(dto);
 			}
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
+			LOG.warn("proxy[{}] await response failed ({}): {}", session.sessionId(), failure.reason().wire(),
+					ex.toString());
 			// A failed first POST (the initialize) never returned a session id to the
 			// client, so the session is orphaned — tear it down instead of leaking it.
 			if (includeSessionHeader) {
 				this.registry.removeAndClose(session.sessionId());
 			}
-			return ResponseEntity.status(HttpStatus.GATEWAY_TIMEOUT)
-				.body(Map.of("error", "upstream did not respond within " + requestTimeout.toSeconds() + "s"));
+			return connectFailureResponse(failure);
 		}
 	}
 
 	/**
 	 * Allocates the {@link ProxySession} and kicks off the {@link McpProxy} pumps.
-	 * Returns {@code null} on transport-construction failure.
 	 * @param url the streamable-HTTP target URL
 	 * @param profileId the owner-scoped auth profile id, or {@code null}
-	 * @return a live {@link ProxySession}, or {@code null} if the transport could not be
-	 * created or the profile handoff failed
+	 * @return a live {@link ProxySession}, or {@code null} if the profile handoff failed
+	 * @throws ProxyConnectFailureException if the transport could not be created
 	 */
 	private ProxySession openSession(final String url, final String profileId) {
 		final String sessionId = UUID.randomUUID().toString();
@@ -432,8 +471,9 @@ public class StreamableHttpProxyController {
 					: openStreamableWithInboundHeaders(resolved);
 		}
 		catch (final Exception ex) {
-			LOG.warn("proxy[{}] upstream connect failed: {}", sessionId, ex.toString());
-			return null;
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
+			LOG.warn("proxy[{}] upstream connect failed ({}): {}", sessionId, failure.reason().wire(), ex.toString());
+			throw new ProxyConnectFailureException(failure, ex);
 		}
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(REPLAY_BUFFER);

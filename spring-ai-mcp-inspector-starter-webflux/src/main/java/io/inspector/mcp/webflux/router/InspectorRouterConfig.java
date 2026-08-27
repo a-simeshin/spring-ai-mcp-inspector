@@ -91,6 +91,7 @@ public class InspectorRouterConfig {
 			// auth filter — it has to deliver the auth token to the SPA.
 			.andRoute(GET(basePath + "/config"), handler::serveConfig)
 			.andRoute(GET(apiPath + "/config"), handler::config)
+			.andRoute(GET(apiPath + "/introspection"), handler::introspection)
 			.andRoute(POST(apiPath + "/connect"), handler::connect)
 			.andRoute(POST(apiPath + "/jsonrpc"), handler::jsonRpc)
 			.andRoute(POST(apiPath + "/jsonrpc/respond"), handler::respond)

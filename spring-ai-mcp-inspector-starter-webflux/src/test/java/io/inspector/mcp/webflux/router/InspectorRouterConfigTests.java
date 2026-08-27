@@ -66,6 +66,7 @@ class InspectorRouterConfigTests {
 		this.handler = mock(InspectorHandler.class);
 		this.proxy = mock(ProxyHandler.class);
 		given(this.handler.config(any())).willReturn(ServerResponse.ok().build());
+		given(this.handler.introspection(any())).willReturn(ServerResponse.ok().build());
 		given(this.handler.index(any())).willReturn(ServerResponse.ok().build());
 		given(this.handler.connect(any())).willReturn(ServerResponse.ok().build());
 		given(this.proxy.health(any())).willReturn(ServerResponse.ok().build());
@@ -110,6 +111,22 @@ class InspectorRouterConfigTests {
 
 			// when
 			final boolean matched = matches(router, request(HttpMethod.GET, "/mcp-inspector/api/config"));
+
+			// then
+			assertThat(matched).isTrue();
+		}
+
+		@Test
+		@Story("Routing predicates")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("inspectorRouter routes GET ${path}/api/introspection to the introspection handler at the default prefix")
+		void introspectionRoute_matchesConfiguredPath() {
+			// given
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config
+				.inspectorRouter(InspectorRouterConfigTests.this.handler, properties("/mcp-inspector"));
+
+			// when
+			final boolean matched = matches(router, request(HttpMethod.GET, "/mcp-inspector/api/introspection"));
 
 			// then
 			assertThat(matched).isTrue();
