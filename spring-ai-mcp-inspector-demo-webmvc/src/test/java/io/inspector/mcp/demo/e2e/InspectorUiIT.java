@@ -3450,11 +3450,15 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tools layout")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("At the 375x667 mobile viewport the config sidebar and the Tools list/detail panes have pairwise disjoint bounding boxes (getBoundingClientRect), each pane is at most 375px wide, and the document has no horizontal overflow (scrollWidth <= clientWidth). The stacked mobile layout is taller than the 667px screen, so the panes below the fold are reached by vertical document scroll; the inside-viewport contract (left/top >= 0, right/bottom <= viewport) is asserted per pane AFTER bringing it into view (element.scrollIntoView) — every pane must fit the 375x667 viewport entirely, in the empty state and after the full tool list renders, and its rect is printed on failure.")
-		@DisplayName("configPane_listPane_detailPane_disjoint_375x667 — mobile geometry")
+		@Description("At the 375x667 mobile viewport the config sidebar and the Tools list/detail panes have pairwise disjoint bounding boxes (getBoundingClientRect), each pane is at most 375px wide, and the document has no horizontal overflow (scrollWidth <= clientWidth). Every pane rectangle lies fully inside the viewport (left/top >= 0, right/bottom <= viewport) at the accepted scrollY=0 state — in the empty state and after listing tools and selecting the sum row — and its rect is printed on failure. Below the sm breakpoint the panes are height-bounded with internal scrolling (see the PATCH markers), so the stacked layout fits the first 667px viewport instead of growing past the fold.")
+		@DisplayName("configPane_listPane_detailPane_disjoint_375x667 — mobile geometry at scrollY=0")
 		void configPane_listPane_detailPane_disjoint_375x667() {
-			// given
+			// given: the exact inner mobile viewport, measured at the top of the
+			// document — the accepted contract state.
 			ResponsiveTestHelpers.setViewportExactly(375, 667);
+			ResponsiveTestHelpers.scrollToTop();
+			Assertions.assertEquals(0, ResponsiveTestHelpers.scrollY(),
+					"mobile geometry must be asserted at scrollY=0, was " + ResponsiveTestHelpers.scrollY());
 
 			// then: the document does not overflow horizontally.
 			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
@@ -3478,37 +3482,47 @@ class InspectorUiIT {
 			Assertions.assertTrue(ResponsiveTestHelpers.paneWidth("config-pane") <= 375,
 					"config-pane must be at most 375px wide, was " + ResponsiveTestHelpers.paneWidth("config-pane"));
 
-			// and: every pane lies fully inside the 375x667 viewport once brought into
-			// view. The panes below the fold are reached by vertical document scroll; a
-			// pane that cannot fit the viewport entirely (clipped by an ancestor or
-			// taller than the screen) fails here with its rect printed.
-			for (final String pane : new String[] { "config-pane", "tools-list-pane", "tools-detail-pane" }) {
-				ResponsiveTestHelpers.scrollPaneIntoView(pane);
-				System.err.println("[configPane_listPane_detailPane_disjoint_375x667] " + pane
-						+ " rect after scrollIntoView: " + ResponsiveTestHelpers.paneRect(pane));
-				Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport(pane),
-						pane + " must lie fully inside the 375x667 viewport when brought into view, rect: "
-								+ ResponsiveTestHelpers.paneRect(pane));
-			}
+			// and: every pane lies fully inside the 375x667 viewport at scrollY=0,
+			// in the empty state. A pane clipped by an ancestor or extending past
+			// the fold fails here with its rect printed — no scroll-into-view is
+			// involved, the document is at the top.
+			assertPanesInsideViewportAtScrollTop("empty state");
 
-			// when: the tools are listed — the list pane grows to its full height, the
-			// worst case for the inside-viewport contract.
+			// when: the tools are listed and the sum row is selected — the pane
+			// content grows, the worst case for the inside-viewport contract.
 			SelenideElement listTools = activePanel().$(byText("List Tools"));
 			if (listTools.exists() && listTools.isEnabled()) {
 				listTools.click();
 			}
 			activePanel().$$(".cursor-pointer")
 				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
+			selectRow("sum");
+			$("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofSeconds(10));
 
-			// then: with the full tool list rendered the panes still fit the viewport
-			// entirely when brought into view.
-			for (final String pane : new String[] { "tools-list-pane", "tools-detail-pane" }) {
-				ResponsiveTestHelpers.scrollPaneIntoView(pane);
-				System.err.println("[configPane_listPane_detailPane_disjoint_375x667] " + pane
-						+ " rect after scrollIntoView (tools listed): " + ResponsiveTestHelpers.paneRect(pane));
-				Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport(pane), pane
-						+ " must lie fully inside the 375x667 viewport when brought into view after listing tools, rect: "
-						+ ResponsiveTestHelpers.paneRect(pane));
+			// then: with the full tool list and the selected tool's form rendered
+			// the panes still lie fully inside the viewport at scrollY=0.
+			ResponsiveTestHelpers.scrollToTop();
+			Assertions.assertEquals(0, ResponsiveTestHelpers.scrollY(),
+					"listed geometry must be asserted at scrollY=0, was " + ResponsiveTestHelpers.scrollY());
+			assertPanesInsideViewportAtScrollTop("listed + selected state");
+			Assertions.assertFalse(ResponsiveTestHelpers.panesOverlap("config-pane", "tools-list-pane"),
+					"config-pane and tools-list-pane must not overlap after listing at 375x667");
+			Assertions.assertFalse(ResponsiveTestHelpers.panesOverlap("tools-list-pane", "tools-detail-pane"),
+					"tools-list-pane and tools-detail-pane must not overlap after listing at 375x667");
+		}
+
+		/**
+		 * Asserts that all three panes lie fully inside the 375x667 viewport while the
+		 * document is scrolled to the top, printing each rect as evidence.
+		 */
+		private void assertPanesInsideViewportAtScrollTop(final String state) {
+			for (final String pane : new String[] { "config-pane", "tools-list-pane", "tools-detail-pane" }) {
+				System.err.println(
+						"[configPane_listPane_detailPane_disjoint_375x667] " + pane + " rect (" + state + ", scrollY="
+								+ ResponsiveTestHelpers.scrollY() + "): " + ResponsiveTestHelpers.paneRect(pane));
+				Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport(pane),
+						pane + " must lie fully inside the 375x667 viewport at scrollY=0 (" + state + "), rect: "
+								+ ResponsiveTestHelpers.paneRect(pane));
 			}
 		}
 
@@ -3599,7 +3613,9 @@ class InspectorUiIT {
 	// (asserted, not just computed), then performs a real click and asserts
 	// the observable state. Tools scenarios use the fresh setup
 	// startApp(new Combo("sse")) → openAndConnect() → clickTab("tools") →
-	// setViewport(375, 667); the Connect scenario stays on the pre-connect
+	// setViewportExactly(375, 667) (the exact inner mobile viewport, not the
+	// outer-window setter — the critical-path geometry must really run at the
+	// named 375x667); the Connect scenario stays on the pre-connect
 	// page.
 	// =====================================================================
 
@@ -3645,7 +3661,7 @@ class InspectorUiIT {
 			// given
 			startApp(new Combo("sse"));
 			open("/mcp-inspector/index.html");
-			ResponsiveTestHelpers.setViewport(375, 667);
+			ResponsiveTestHelpers.setViewportExactly(375, 667);
 			SelenideElement connect = sidebar().$(byText("Connect")).shouldBe(visible, Duration.ofSeconds(15));
 
 			// then: the config pane is rendered in the mobile layout and nothing
@@ -3673,7 +3689,7 @@ class InspectorUiIT {
 			startApp(new Combo("sse"));
 			openAndConnect();
 			clickTab("tools");
-			ResponsiveTestHelpers.setViewport(375, 667);
+			ResponsiveTestHelpers.setViewportExactly(375, 667);
 			$("[data-testid=tools-list-pane]").shouldBe(visible, Duration.ofSeconds(10));
 			SelenideElement listTools = activePanel().$(byText("List Tools")).shouldBe(visible, Duration.ofSeconds(10));
 
@@ -3694,7 +3710,7 @@ class InspectorUiIT {
 			startApp(new Combo("sse"));
 			openAndConnect();
 			clickTab("tools");
-			ResponsiveTestHelpers.setViewport(375, 667);
+			ResponsiveTestHelpers.setViewportExactly(375, 667);
 			SelenideElement listTools = activePanel().$(byText("List Tools")).shouldBe(visible, Duration.ofSeconds(10));
 
 			// when: a real click on List Tools loads the rows...
@@ -3728,7 +3744,7 @@ class InspectorUiIT {
 			startApp(new Combo("sse"));
 			openAndConnect();
 			clickTab("tools");
-			ResponsiveTestHelpers.setViewport(375, 667);
+			ResponsiveTestHelpers.setViewportExactly(375, 667);
 			$("[data-testid=tools-list-pane]").shouldBe(visible, Duration.ofSeconds(10));
 			SelenideElement listTools = activePanel().$(byText("List Tools"));
 			if (listTools.exists() && listTools.isEnabled()) {
@@ -3766,7 +3782,7 @@ class InspectorUiIT {
 			startApp(new Combo("sse"));
 			openAndConnect();
 			clickTab("tools");
-			ResponsiveTestHelpers.setViewport(375, 667);
+			ResponsiveTestHelpers.setViewportExactly(375, 667);
 			SelenideElement listTools = activePanel().$(byText("List Tools"));
 			if (listTools.exists() && listTools.isEnabled()) {
 				listTools.click();

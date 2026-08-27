@@ -226,18 +226,22 @@ final class ResponsiveTestHelpers {
 	}
 
 	/**
-	 * Scrolls the given pane into view, top-aligned
-	 * ({@code element.scrollIntoView(true)}), so its full bounding box can be measured
-	 * inside the viewport — the companion of {@link #paneInsideViewport(String)} for
-	 * panes below the fold of a scrollable page. A missing element fails with a readable
-	 * assertion instead of a silent {@code null}.
+	 * Scrolls the document to the very top ({@code window.scrollTo(0, 0)}) so geometry
+	 * probes run at the accepted {@code scrollY=0} state of the mobile contract — the
+	 * panes must fit the viewport at the top of the document, not after any element was
+	 * scrolled into view.
 	 */
-	static void scrollPaneIntoView(final String testid) {
-		Object result = Selenide.executeJavaScript("const el = document.querySelector('[data-testid=\\'" + testid
-				+ "\\']');" + "if (!el) { return 'pane-not-found'; }" + "el.scrollIntoView(true); return 'ok';");
-		if (!"ok".equals(result)) {
-			Assertions.fail("pane not found for scroll probe: " + testid);
-		}
+	static void scrollToTop() {
+		Selenide.executeJavaScript("window.scrollTo(0, 0);");
+	}
+
+	/**
+	 * Current vertical document scroll offset in CSS px ({@code window.scrollY}). Pair
+	 * with {@link #scrollToTop()} to assert that a geometry probe really ran at the
+	 * contract's {@code scrollY=0} state.
+	 */
+	static int scrollY() {
+		return ((Number) Selenide.executeJavaScript("return window.scrollY;")).intValue();
 	}
 
 }
