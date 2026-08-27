@@ -173,6 +173,22 @@ class AuthProfileStoreTests {
 			assertThat(AuthProfileStoreTests.this.store.resolvePending(OWNER_A, pendingId)).contains(pending);
 		}
 
+		@Test
+		@Story("Owner scoping")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("resolvePending() returns empty for null inputs and unknown profile ids")
+		void resolvePending_nullOrUnknown_returnsEmpty() {
+			// given
+			final OAuth2Profile pending = new OAuth2Profile("pc", OAuth2GrantMode.AUTHORIZATION_CODE, "https://t/token",
+					"cid", null, null, "https://t/auth", "https://app/cb", "ch", "S256");
+			final String pendingId = AuthProfileStoreTests.this.store.register(OWNER_A, pending);
+
+			// when/then
+			assertThat(AuthProfileStoreTests.this.store.resolvePending(null, pendingId)).isEmpty();
+			assertThat(AuthProfileStoreTests.this.store.resolvePending(OWNER_A, null)).isEmpty();
+			assertThat(AuthProfileStoreTests.this.store.resolvePending(OWNER_A, "unknown-id")).isEmpty();
+		}
+
 	}
 
 	@Nested
@@ -232,6 +248,22 @@ class AuthProfileStoreTests {
 			assertThat(AuthProfileStoreTests.this.store.bind(OWNER_A, profileId, "s-1")).isTrue();
 			assertThat(AuthProfileStoreTests.this.store.markActive(OWNER_A, profileId)).isFalse();
 			assertThat(AuthProfileStoreTests.this.store.markActive(OWNER_B, profileId)).isFalse();
+		}
+
+		@Test
+		@Story("Binding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("markActive() returns false for null inputs and unknown ids")
+		void markActive_nullOrUnknown_returnsFalse() {
+			// given
+			final OAuth2Profile pending = new OAuth2Profile("pc", OAuth2GrantMode.AUTHORIZATION_CODE, "https://t/token",
+					"cid", null, null, "https://t/auth", "https://app/cb", "ch", "S256");
+			final String pendingId = AuthProfileStoreTests.this.store.register(OWNER_A, pending);
+
+			// when/then
+			assertThat(AuthProfileStoreTests.this.store.markActive(null, pendingId)).isFalse();
+			assertThat(AuthProfileStoreTests.this.store.markActive(OWNER_A, null)).isFalse();
+			assertThat(AuthProfileStoreTests.this.store.markActive(OWNER_A, "unknown")).isFalse();
 		}
 
 	}
@@ -354,6 +386,21 @@ class AuthProfileStoreTests {
 			assertThat(AuthProfileStoreTests.this.store.bind(OWNER_A, profileId, "s-1")).isFalse();
 		}
 
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("update() returns false for null inputs and unknown ids — never throws")
+		void update_nullOrUnknown_returnsFalse() {
+			// given
+			final String profileId = AuthProfileStoreTests.this.store.register(OWNER_A, bearer("prod", "tok"));
+
+			// when/then
+			assertThat(AuthProfileStoreTests.this.store.update(null, profileId, bearer("prod", "tok-2"))).isFalse();
+			assertThat(AuthProfileStoreTests.this.store.update(OWNER_A, null, bearer("prod", "tok-2"))).isFalse();
+			assertThat(AuthProfileStoreTests.this.store.update(OWNER_A, profileId, null)).isFalse();
+			assertThat(AuthProfileStoreTests.this.store.update(OWNER_A, "unknown", bearer("prod", "tok-2"))).isFalse();
+		}
+
 	}
 
 	@Nested
@@ -418,6 +465,20 @@ class AuthProfileStoreTests {
 			verify(evictor).evict(profileId);
 			assertThat(AuthProfileStoreTests.this.store.clear(profileId)).isFalse();
 			assertThat(AuthProfileStoreTests.this.store.clear(null)).isFalse();
+		}
+
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("delete() returns false for null inputs and unknown ids")
+		void delete_nullOrUnknown_returnsFalse() {
+			// given
+			final String profileId = AuthProfileStoreTests.this.store.register(OWNER_A, bearer("prod", "tok"));
+
+			// when/then
+			assertThat(AuthProfileStoreTests.this.store.delete(null, profileId)).isFalse();
+			assertThat(AuthProfileStoreTests.this.store.delete(OWNER_A, null)).isFalse();
+			assertThat(AuthProfileStoreTests.this.store.delete(OWNER_A, "unknown")).isFalse();
 		}
 
 	}

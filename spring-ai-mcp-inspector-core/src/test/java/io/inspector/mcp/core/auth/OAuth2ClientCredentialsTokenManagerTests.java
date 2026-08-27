@@ -19,10 +19,14 @@ package io.inspector.mcp.core.auth;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -48,6 +52,9 @@ import io.inspector.mcp.core.proxy.ProxyUpstreamException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.mock;
 
 /**
  * Unit tests for {@link OAuth2ClientCredentialsTokenManager} (D9/D9A) against an
@@ -75,9 +82,13 @@ class OAuth2ClientCredentialsTokenManagerTests {
 	}
 
 	private OAuth2Profile ccProfile(final String secret) {
+		return ccProfile(secret, "mcp.read mcp.write");
+	}
+
+	private OAuth2Profile ccProfile(final String secret, final String scopes) {
 		return new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS,
-				OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.url(), "client-1", secret,
-				"mcp.read mcp.write", null, null, null, null);
+				OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.url(), "client-1", secret, scopes, null, null,
+				null, null);
 	}
 
 	@Nested
@@ -161,6 +172,183 @@ class OAuth2ClientCredentialsTokenManagerTests {
 			assertThatThrownBy(
 					() -> OAuth2ClientCredentialsTokenManagerTests.this.manager.acquire("pid-1", ccProfile(" ")))
 				.isInstanceOf(IllegalArgumentException.class);
+		}
+
+		@Test
+		@Story("Initial exchange")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("the no-arg constructor builds a fully working manager with real defaults")
+		void defaultConstructor_works() {
+			// given
+			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.respond(200,
+					"{\"access_token\":\"tok-1\",\"expires_in\":3600}");
+			final OAuth2ClientCredentialsTokenManager defaultManager = new OAuth2ClientCredentialsTokenManager();
+
+			// when
+			final OAuth2ClientCredentialsTokenManager.TokenHandle handle = defaultManager.acquire("pid-1",
+					ccProfile("secret-1"));
+
+			// then
+			assertThat(handle.accessToken()).isEqualTo("tok-1");
+			assertThat(defaultManager.credentialCount()).isEqualTo(1);
+		}
+
+		@Test
+		@Story("Initial exchange")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("the two-arg constructor falls back to real defaults when both arguments are null")
+		void constructor_nullArguments_fallBackToDefaults() {
+			// given
+			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.respond(200,
+					"{\"access_token\":\"tok-1\",\"expires_in\":3600}");
+			final OAuth2ClientCredentialsTokenManager defaultManager = new OAuth2ClientCredentialsTokenManager(null,
+					null);
+
+			// when
+			final OAuth2ClientCredentialsTokenManager.TokenHandle handle = defaultManager.acquire("pid-1",
+					ccProfile("secret-1"));
+
+			// then
+			assertThat(handle.accessToken()).isEqualTo("tok-1");
+		}
+
+		@Test
+		@Story("Initial exchange")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("acquire() omits the scope form field for null and blank scopes")
+		void acquire_blankScopes_omitsScopeField() {
+			// given
+			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.respond(200,
+					"{\"access_token\":\"tok-1\",\"expires_in\":3600}");
+
+			// when
+			OAuth2ClientCredentialsTokenManagerTests.this.manager.acquire("pid-1", ccProfile("secret-1", null));
+			OAuth2ClientCredentialsTokenManagerTests.this.manager.acquire("pid-2", ccProfile("secret-2", " "));
+
+			// then
+			final List<String> bodies = OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.requestBodies();
+			assertThat(bodies.get(0)).doesNotContain("scope=");
+			assertThat(bodies.get(1)).doesNotContain("scope=");
+		}
+
+		@Test
+		@Story("Failure")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("acquire() treats an informational 1xx token response as a failed exchange")
+		void acquire_1xxResponse_throws() throws Exception {
+			// given — a stubbed client returning an informational status
+			final java.net.http.HttpClient client = mock(java.net.http.HttpClient.class);
+			final HttpResponse<String> response = mock(HttpResponse.class);
+			given(response.statusCode()).willReturn(199);
+			given(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class))).willReturn(response);
+			final OAuth2ClientCredentialsTokenManager stubbed = new OAuth2ClientCredentialsTokenManager(client, null);
+
+			// when/then
+			assertThatThrownBy(() -> stubbed.acquire("pid-1", ccProfile("secret-1")))
+				.isInstanceOf(ProxyUpstreamException.class)
+				.satisfies((ex) -> assertThat(((ProxyUpstreamException) ex).getStatus()).isEqualTo(199));
+		}
+
+		@Test
+		@Story("Failure")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("acquire() fails closed when the token response carries a blank access_token")
+		void acquire_blankAccessToken_throws() {
+			// given
+			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.respond(200,
+					"{\"access_token\":\"\",\"expires_in\":3600}");
+
+			// when/then
+			assertThatThrownBy(
+					() -> OAuth2ClientCredentialsTokenManagerTests.this.manager.acquire("pid-1", ccProfile("secret-1")))
+				.isInstanceOf(ProxyUpstreamException.class)
+				.satisfies((ex) -> assertThat(((ProxyUpstreamException) ex).getStatus()).isEqualTo(502));
+		}
+
+		@Test
+		@Story("Initial exchange")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("acquire() defaults the token lifetime to 5 minutes when the response omits expires_in")
+		void acquire_withoutExpiresIn_defaultsTokenTtl() {
+			// given
+			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.respond(200, "{\"access_token\":\"tok-1\"}");
+
+			// when
+			final OAuth2ClientCredentialsTokenManager.TokenHandle handle = OAuth2ClientCredentialsTokenManagerTests.this.manager
+				.acquire("pid-1", ccProfile("secret-1"));
+
+			// then
+			assertThat(handle.expiresAt()).isBetween(Instant.now().plusSeconds(290), Instant.now().plusSeconds(310));
+		}
+
+		@Test
+		@Story("Initial exchange")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("acquire() defaults the token lifetime when expires_in is zero or negative")
+		void acquire_nonPositiveExpiresIn_defaultsTokenTtl() {
+			// given
+			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.respond(200,
+					"{\"access_token\":\"tok-1\",\"expires_in\":0}");
+
+			// when
+			final OAuth2ClientCredentialsTokenManager.TokenHandle handle = OAuth2ClientCredentialsTokenManagerTests.this.manager
+				.acquire("pid-1", ccProfile("secret-1"));
+
+			// then
+			assertThat(handle.expiresAt()).isBetween(Instant.now().plusSeconds(290), Instant.now().plusSeconds(310));
+		}
+
+		@Test
+		@Story("Failure")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("acquire() wraps a malformed JSON response as ProxyUpstreamException 502")
+		void acquire_malformedJson_throws() {
+			// given
+			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.respond(200, "this is not json");
+
+			// when/then
+			assertThatThrownBy(
+					() -> OAuth2ClientCredentialsTokenManagerTests.this.manager.acquire("pid-1", ccProfile("secret-1")))
+				.isInstanceOf(ProxyUpstreamException.class)
+				.satisfies((ex) -> assertThat(((ProxyUpstreamException) ex).getStatus()).isEqualTo(502));
+		}
+
+		@Test
+		@Story("Failure")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("acquire() wraps a connection failure as ProxyUpstreamException 502")
+		void acquire_connectionRefused_throws() {
+			// given — the token endpoint is already down
+			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.stop();
+
+			// when/then
+			assertThatThrownBy(
+					() -> OAuth2ClientCredentialsTokenManagerTests.this.manager.acquire("pid-1", ccProfile("secret-1")))
+				.isInstanceOf(ProxyUpstreamException.class)
+				.satisfies((ex) -> assertThat(((ProxyUpstreamException) ex).getStatus()).isEqualTo(502));
+		}
+
+		@Test
+		@Story("Failure")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("an interrupted thread surfaces as ProxyUpstreamException and the interrupt flag is restored")
+		void acquire_interruptedThread_throwsAndRestoresFlag() {
+			// given
+			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.respond(200,
+					"{\"access_token\":\"tok-1\",\"expires_in\":3600}");
+
+			// when — simulate a client thread being interrupted mid-request
+			Thread.currentThread().interrupt();
+			try {
+				assertThatThrownBy(() -> OAuth2ClientCredentialsTokenManagerTests.this.manager.acquire("pid-1",
+						ccProfile("secret-1")))
+					.isInstanceOf(ProxyUpstreamException.class)
+					.satisfies((ex) -> assertThat(((ProxyUpstreamException) ex).getStatus()).isEqualTo(502));
+			}
+			finally {
+				// the manager restored the interrupt flag for the caller
+				assertThat(Thread.interrupted()).isTrue();
+			}
 		}
 
 	}
@@ -306,6 +494,61 @@ class OAuth2ClientCredentialsTokenManagerTests {
 				.isInstanceOf(IllegalStateException.class);
 		}
 
+		@Test
+		@Story("Refresh on expiry")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("an update evicts the cached token — the next non-forced lookup re-exchanges from stored credentials")
+		void getAccessToken_afterUpdateWithEmptyCache_reExchanges() {
+			// given
+			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.respond(200,
+					"{\"access_token\":\"tok-1\",\"expires_in\":3600}");
+			OAuth2ClientCredentialsTokenManagerTests.this.manager.acquire("pid-1", ccProfile("secret-old"));
+			OAuth2ClientCredentialsTokenManagerTests.this.manager.update("pid-1", ccProfile("secret-new"));
+
+			// when — the cache was evicted by update(); a non-forced lookup must still
+			// re-exchange
+			final OAuth2ClientCredentialsTokenManager.TokenHandle handle = OAuth2ClientCredentialsTokenManagerTests.this.manager
+				.getAccessToken("pid-1", false);
+
+			// then
+			assertThat(OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.requestCount()).isEqualTo(2);
+			final String body = OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.requestBodies().get(1);
+			assertThat(body).contains("client_secret=secret-new");
+			assertThat(handle.accessToken()).isEqualTo("tok-1");
+		}
+
+		@Test
+		@Story("Refresh on expiry")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a cached entry with a null expiry is treated as expired and re-exchanged")
+		void getAccessToken_nullExpiryCachedEntry_reExchanges() throws Exception {
+			// given
+			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.respond(200,
+					"{\"access_token\":\"tok-1\",\"expires_in\":3600}");
+			OAuth2ClientCredentialsTokenManagerTests.this.manager.acquire("pid-1", ccProfile("secret-1"));
+			// plant a cache entry whose expiry is unknown (null) — must be treated as
+			// expired
+			final java.lang.reflect.Field cacheField = OAuth2ClientCredentialsTokenManager.class
+				.getDeclaredField("tokenCache");
+			cacheField.setAccessible(true);
+			final ConcurrentMap<String, Object> cache = (ConcurrentMap<String, Object>) cacheField
+				.get(OAuth2ClientCredentialsTokenManagerTests.this.manager);
+			final Class<?> tokenEntry = Class
+				.forName("io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager$TokenEntry");
+			final java.lang.reflect.Constructor<?> ctor = tokenEntry.getDeclaredConstructor(String.class,
+					Instant.class);
+			ctor.setAccessible(true);
+			cache.put("pid-1", ctor.newInstance("stale-token", null));
+
+			// when
+			final OAuth2ClientCredentialsTokenManager.TokenHandle handle = OAuth2ClientCredentialsTokenManagerTests.this.manager
+				.getAccessToken("pid-1", false);
+
+			// then
+			assertThat(OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.requestCount()).isEqualTo(2);
+			assertThat(handle.accessToken()).isEqualTo("tok-1");
+		}
+
 	}
 
 	@Nested
@@ -355,6 +598,24 @@ class OAuth2ClientCredentialsTokenManagerTests {
 			final String body = OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.requestBodies().get(1);
 			assertThat(body).contains("client_secret=secret-new");
 			assertThat(body).doesNotContain("secret-old");
+		}
+
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("update() rejects non-CLIENT_CREDENTIALS profiles and blank client secrets")
+		void update_invalidProfile_throws() {
+			// given
+			final OAuth2Profile authCode = new OAuth2Profile("ac", OAuth2GrantMode.AUTHORIZATION_CODE,
+					OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.url(), "client-1", null, null,
+					"https://t/auth", "https://app/cb", "ch", "S256");
+
+			// when/then
+			assertThatThrownBy(() -> OAuth2ClientCredentialsTokenManagerTests.this.manager.update("pid-1", authCode))
+				.isInstanceOf(IllegalArgumentException.class);
+			assertThatThrownBy(
+					() -> OAuth2ClientCredentialsTokenManagerTests.this.manager.update("pid-1", ccProfile(" ")))
+				.isInstanceOf(IllegalArgumentException.class);
 		}
 
 	}
