@@ -309,7 +309,10 @@ const ToolsTab = ({
           (#58): upstream hard-codes two columns, which overlap at a 375px
           viewport. Stack into one column below the `sm` (640px) breakpoint,
           keep two columns at and above it. data-testid anchors the grid for
-          deterministic Selenide geometry assertions. */}
+          deterministic Selenide geometry assertions. The two panes are
+          height-bounded below `sm` (see the pane comments) so the accepted
+          mobile contract — every pane rect inside the 375x667 viewport at
+          scrollY=0 — holds after listing tools and selecting a row. */}
       <div
         className="grid grid-cols-1 sm:grid-cols-2 gap-4"
         data-testid="tools-list-detail-grid"
@@ -343,9 +346,15 @@ const ToolsTab = ({
         />
 
         {/* [spring-ai-mcp-inspector PATCH] Tool detail pane (#58): data-testid
-            anchor for Selenide geometry assertions on the responsive grid. */}
+            anchor for Selenide geometry assertions on the responsive grid.
+            Below `sm` the pane is height-bounded with internal scrolling
+            (max-h-[17vh]): at a 375x667 phone the accepted mobile contract
+            (plan v10) requires the list and detail rects to fit the viewport
+            at scrollY=0 after listing tools and selecting a row, so the panes
+            cannot grow to their natural content height below the folded
+            config sidebar + wrapped tab bar. */}
         <div
-          className="bg-card border border-border rounded-lg shadow"
+          className="bg-card border border-border rounded-lg shadow max-h-[17vh] overflow-y-auto sm:max-h-none sm:overflow-y-visible"
           data-testid="tools-detail-pane"
         >
           <div className="p-4 border-b border-gray-200 dark:border-border">
