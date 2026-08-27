@@ -384,6 +384,74 @@ class ProxyErrorMapperTests {
 				.isNull();
 		}
 
+		@Test
+		@Story("Unknown failures")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("2xx statuses carry no DTO on either transport — legacy fallback")
+		void map_2xxStatus_returnsNull() {
+			// when/then
+			assertThat(ProxyErrorMapper.map(new RuntimeException("Sending message failed with a non-OK HTTP code: 200"),
+					TransportKind.SSE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("Sending message failed with a non-OK HTTP code: 299"),
+					TransportKind.STREAMABLE))
+				.isNull();
+		}
+
+		@Test
+		@Story("Handshake")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("an authorization exception without response info falls back to message parsing")
+		void extractStatus_authzWithoutResponseInfo_parsesMessage() {
+			// given
+			final Throwable error = new McpHttpClientTransportAuthorizationException("unauthorized: HTTP 401",
+					new HttpRequestSnapshot(URI.create("https://target/mcp"), "POST",
+							HttpHeaders.of(java.util.Map.of(), (a, b) -> true)),
+					null);
+
+			// when
+			final java.util.Optional<Integer> status = ProxyErrorMapper.extractStatus(error);
+
+			// then
+			assertThat(status).contains(401);
+		}
+
+		@Test
+		@Story("Handshake")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("an authorization exception with a zero response status falls back to message parsing")
+		void extractStatus_authzZeroStatus_parsesMessage() {
+			// given
+			final HttpResponse.ResponseInfo responseInfo = mock(HttpResponse.ResponseInfo.class);
+			given(responseInfo.statusCode()).willReturn(0);
+			final Throwable error = new McpHttpClientTransportAuthorizationException("unauthorized: HTTP 401",
+					new HttpRequestSnapshot(URI.create("https://target/mcp"), "POST",
+							HttpHeaders.of(java.util.Map.of(), (a, b) -> true)),
+					responseInfo);
+
+			// when
+			final java.util.Optional<Integer> status = ProxyErrorMapper.extractStatus(error);
+
+			// then
+			assertThat(status).contains(401);
+		}
+
+		@Test
+		@Story("Unknown failures")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a throwable with a null message is skipped — the cause chain is still walked")
+		void extractStatus_nullMessage_walksCauseChain() {
+			// given
+			final Throwable error = new RuntimeException(null,
+					new RuntimeException("Failed to send message: [403 Forbidden]"));
+
+			// when
+			final java.util.Optional<Integer> status = ProxyErrorMapper.extractStatus(error);
+
+			// then
+			assertThat(status).contains(403);
+		}
+
 	}
 
 }

@@ -19,6 +19,8 @@ package io.inspector.mcp.core.auth;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
@@ -48,6 +50,9 @@ import io.inspector.mcp.core.proxy.ProxyUpstreamException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.mock;
 
 /**
  * Unit tests for {@link OAuth2AuthCodeTokenExchanger} — server-issued state, PKCE and the
@@ -303,6 +308,147 @@ class OAuth2AuthCodeTokenExchangerTests {
 				.isInstanceOf(IllegalArgumentException.class);
 		}
 
+		@Test
+		@Story("Upstream failure")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("exchange() treats an informational 1xx token response as a failed exchange")
+		void exchange_1xxStatus_throwsProxyUpstream() throws Exception {
+			// given — a stubbed client returning an informational status
+			final java.net.http.HttpClient client = mock(java.net.http.HttpClient.class);
+			final HttpResponse<String> response = mock(HttpResponse.class);
+			given(response.statusCode()).willReturn(199);
+			given(client.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class))).willReturn(response);
+			final OAuth2AuthCodeTokenExchanger stubbed = new OAuth2AuthCodeTokenExchanger(client, null);
+			final String codeVerifier = "verifier-1234567890-abcdef";
+
+			// when/then
+			assertThatThrownBy(() -> stubbed.exchange(pendingProfile(s256(codeVerifier)), "auth-code-42", codeVerifier))
+				.isInstanceOf(ProxyUpstreamException.class)
+				.satisfies((ex) -> assertThat(((ProxyUpstreamException) ex).getStatus()).isEqualTo(199));
+		}
+
+		@Test
+		@Story("Upstream failure")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("exchange() fails closed on a 2xx response without access_token")
+		void exchange_missingAccessToken_throwsProxyUpstream() {
+			// given
+			final String codeVerifier = "verifier-1234567890-abcdef";
+			OAuth2AuthCodeTokenExchangerTests.this.tokenServer.respond("{\"expires_in\":3600}");
+
+			// when/then
+			assertThatThrownBy(() -> OAuth2AuthCodeTokenExchangerTests.this.exchanger
+				.exchange(pendingProfile(s256(codeVerifier)), "auth-code-42", codeVerifier))
+				.isInstanceOf(ProxyUpstreamException.class)
+				.satisfies((ex) -> assertThat(((ProxyUpstreamException) ex).getStatus()).isEqualTo(502));
+		}
+
+		@Test
+		@Story("Upstream failure")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("exchange() fails closed on a blank access_token")
+		void exchange_blankAccessToken_throwsProxyUpstream() {
+			// given
+			final String codeVerifier = "verifier-1234567890-abcdef";
+			OAuth2AuthCodeTokenExchangerTests.this.tokenServer.respond("{\"access_token\":\"\",\"expires_in\":3600}");
+
+			// when/then
+			assertThatThrownBy(() -> OAuth2AuthCodeTokenExchangerTests.this.exchanger
+				.exchange(pendingProfile(s256(codeVerifier)), "auth-code-42", codeVerifier))
+				.isInstanceOf(ProxyUpstreamException.class)
+				.satisfies((ex) -> assertThat(((ProxyUpstreamException) ex).getStatus()).isEqualTo(502));
+		}
+
+		@Test
+		@Story("Happy path")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("exchange() defaults the token lifetime to 5 minutes when expires_in is omitted")
+		void exchange_withoutExpiresIn_defaultsTokenTtl() {
+			// given
+			final String codeVerifier = "verifier-1234567890-abcdef";
+			OAuth2AuthCodeTokenExchangerTests.this.tokenServer.respond("{\"access_token\":\"at-1\"}");
+
+			// when
+			final OAuth2AuthCodeTokenExchanger.TokenHandle handle = OAuth2AuthCodeTokenExchangerTests.this.exchanger
+				.exchange(pendingProfile(s256(codeVerifier)), "auth-code-42", codeVerifier);
+
+			// then
+			assertThat(handle.expiresAt()).isBetween(Instant.now().plusSeconds(290), Instant.now().plusSeconds(310));
+		}
+
+		@Test
+		@Story("Happy path")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("exchange() defaults the token lifetime when expires_in is zero or negative")
+		void exchange_nonPositiveExpiresIn_defaultsTokenTtl() {
+			// given
+			final String codeVerifier = "verifier-1234567890-abcdef";
+			OAuth2AuthCodeTokenExchangerTests.this.tokenServer.respond("{\"access_token\":\"at-1\",\"expires_in\":0}");
+
+			// when
+			final OAuth2AuthCodeTokenExchanger.TokenHandle handle = OAuth2AuthCodeTokenExchangerTests.this.exchanger
+				.exchange(pendingProfile(s256(codeVerifier)), "auth-code-42", codeVerifier);
+
+			// then
+			assertThat(handle.expiresAt()).isBetween(Instant.now().plusSeconds(290), Instant.now().plusSeconds(310));
+		}
+
+		@Test
+		@Story("Upstream failure")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("exchange() wraps a malformed JSON response as ProxyUpstreamException 502")
+		void exchange_malformedJson_throwsProxyUpstream() {
+			// given
+			final String codeVerifier = "verifier-1234567890-abcdef";
+			OAuth2AuthCodeTokenExchangerTests.this.tokenServer.respond("this is not json");
+
+			// when/then
+			assertThatThrownBy(() -> OAuth2AuthCodeTokenExchangerTests.this.exchanger
+				.exchange(pendingProfile(s256(codeVerifier)), "auth-code-42", codeVerifier))
+				.isInstanceOf(ProxyUpstreamException.class)
+				.satisfies((ex) -> assertThat(((ProxyUpstreamException) ex).getStatus()).isEqualTo(502));
+		}
+
+		@Test
+		@Story("Upstream failure")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("exchange() wraps a connection failure as ProxyUpstreamException 502")
+		void exchange_connectionRefused_throwsProxyUpstream() {
+			// given — the token endpoint is already down
+			OAuth2AuthCodeTokenExchangerTests.this.tokenServer.stop();
+			final String codeVerifier = "verifier-1234567890-abcdef";
+
+			// when/then
+			assertThatThrownBy(() -> OAuth2AuthCodeTokenExchangerTests.this.exchanger
+				.exchange(pendingProfile(s256(codeVerifier)), "auth-code-42", codeVerifier))
+				.isInstanceOf(ProxyUpstreamException.class)
+				.satisfies((ex) -> assertThat(((ProxyUpstreamException) ex).getStatus()).isEqualTo(502));
+		}
+
+		@Test
+		@Story("Upstream failure")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("an interrupted thread surfaces as ProxyUpstreamException and the interrupt flag is restored")
+		void exchange_interruptedThread_throwsProxyUpstream() {
+			// given
+			final String codeVerifier = "verifier-1234567890-abcdef";
+			OAuth2AuthCodeTokenExchangerTests.this.tokenServer
+				.respond("{\"access_token\":\"at-1\",\"expires_in\":3600}");
+
+			// when — simulate an interrupted client thread
+			Thread.currentThread().interrupt();
+			try {
+				assertThatThrownBy(() -> OAuth2AuthCodeTokenExchangerTests.this.exchanger
+					.exchange(pendingProfile(s256(codeVerifier)), "auth-code-42", codeVerifier))
+					.isInstanceOf(ProxyUpstreamException.class)
+					.satisfies((ex) -> assertThat(((ProxyUpstreamException) ex).getStatus()).isEqualTo(502));
+			}
+			finally {
+				// the exchanger restored the interrupt flag for the caller
+				assertThat(Thread.interrupted()).isTrue();
+			}
+		}
+
 	}
 
 	@Nested
@@ -345,6 +491,52 @@ class OAuth2AuthCodeTokenExchangerTests {
 
 			// then
 			assertThat(OAuth2AuthCodeTokenExchangerTests.this.exchanger.stateCount()).isZero();
+		}
+
+		@Test
+		@Story("Backend token store")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("the no-arg constructor builds a fully working exchanger with real defaults")
+		void defaultConstructor_works() {
+			// given
+			final OAuth2AuthCodeTokenExchanger defaultExchanger = new OAuth2AuthCodeTokenExchanger();
+
+			// when
+			final String state = defaultExchanger.mintState("owner-a", "pid-1");
+			defaultExchanger.storeTokens("pid-1",
+					new OAuth2AuthCodeTokenExchanger.TokenHandle("at-1", "rt-1", Instant.now().plusSeconds(60)));
+
+			// then
+			assertThat(state).isNotBlank();
+			assertThat(defaultExchanger.accessToken("pid-1")).contains("at-1");
+		}
+
+		@Test
+		@Story("Backend token store")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("the two-arg constructor falls back to real defaults when both arguments are null")
+		void constructor_nullArguments_fallBackToDefaults() {
+			// given
+			final OAuth2AuthCodeTokenExchanger defaultExchanger = new OAuth2AuthCodeTokenExchanger(null, null);
+
+			// when
+			final String state = defaultExchanger.mintState("owner-a", "pid-1");
+
+			// then
+			assertThat(state).isNotBlank();
+		}
+
+		@Test
+		@Story("Backend token store")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("accessToken() returns empty when the stored handle carries no access token")
+		void accessToken_nullAccessToken_returnsEmpty() {
+			// given
+			OAuth2AuthCodeTokenExchangerTests.this.exchanger.storeTokens("pid-1",
+					new OAuth2AuthCodeTokenExchanger.TokenHandle(null, "rt-1", Instant.now().plusSeconds(60)));
+
+			// when/then
+			assertThat(OAuth2AuthCodeTokenExchangerTests.this.exchanger.accessToken("pid-1")).isEmpty();
 		}
 
 	}
