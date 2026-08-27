@@ -3450,17 +3450,13 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tools layout")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("At the 375x667 mobile viewport the config sidebar and the Tools list/detail panes have pairwise disjoint bounding boxes (getBoundingClientRect), the config pane lies fully inside the viewport, each pane is at most 375px wide, and the document has no horizontal overflow (scrollWidth <= clientWidth). The list/detail panes sit below the fold on the 667px-high screen and are reachable by vertical scroll — the geometry contract here is disjointness and column width, not first-screen visibility.")
+		@Description("At the 375x667 mobile viewport the config sidebar and the Tools list/detail panes have pairwise disjoint bounding boxes (getBoundingClientRect), each pane is at most 375px wide, and the document has no horizontal overflow (scrollWidth <= clientWidth). The stacked mobile layout is taller than the 667px screen, so the panes below the fold are reached by vertical document scroll; the inside-viewport contract (left/top >= 0, right/bottom <= viewport) is asserted per pane AFTER bringing it into view (element.scrollIntoView) — every pane must fit the 375x667 viewport entirely, in the empty state and after the full tool list renders, and its rect is printed on failure.")
 		@DisplayName("configPane_listPane_detailPane_disjoint_375x667 — mobile geometry")
 		void configPane_listPane_detailPane_disjoint_375x667() {
 			// given
 			ResponsiveTestHelpers.setViewportExactly(375, 667);
 
-			// then: the config pane is fully inside the 375x667 viewport and the
-			// document does not overflow horizontally.
-			Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("config-pane"),
-					"config-pane must lie inside the 375x667 viewport, rect: "
-							+ ResponsiveTestHelpers.paneRect("config-pane"));
+			// then: the document does not overflow horizontally.
 			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
 					"document.documentElement must not overflow horizontally at 375px");
 
@@ -3481,6 +3477,39 @@ class InspectorUiIT {
 							+ ResponsiveTestHelpers.paneWidth("tools-detail-pane"));
 			Assertions.assertTrue(ResponsiveTestHelpers.paneWidth("config-pane") <= 375,
 					"config-pane must be at most 375px wide, was " + ResponsiveTestHelpers.paneWidth("config-pane"));
+
+			// and: every pane lies fully inside the 375x667 viewport once brought into
+			// view. The panes below the fold are reached by vertical document scroll; a
+			// pane that cannot fit the viewport entirely (clipped by an ancestor or
+			// taller than the screen) fails here with its rect printed.
+			for (final String pane : new String[] { "config-pane", "tools-list-pane", "tools-detail-pane" }) {
+				ResponsiveTestHelpers.scrollPaneIntoView(pane);
+				System.err.println("[configPane_listPane_detailPane_disjoint_375x667] " + pane
+						+ " rect after scrollIntoView: " + ResponsiveTestHelpers.paneRect(pane));
+				Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport(pane),
+						pane + " must lie fully inside the 375x667 viewport when brought into view, rect: "
+								+ ResponsiveTestHelpers.paneRect(pane));
+			}
+
+			// when: the tools are listed — the list pane grows to its full height, the
+			// worst case for the inside-viewport contract.
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$(".cursor-pointer")
+				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
+
+			// then: with the full tool list rendered the panes still fit the viewport
+			// entirely when brought into view.
+			for (final String pane : new String[] { "tools-list-pane", "tools-detail-pane" }) {
+				ResponsiveTestHelpers.scrollPaneIntoView(pane);
+				System.err.println("[configPane_listPane_detailPane_disjoint_375x667] " + pane
+						+ " rect after scrollIntoView (tools listed): " + ResponsiveTestHelpers.paneRect(pane));
+				Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport(pane), pane
+						+ " must lie fully inside the 375x667 viewport when brought into view after listing tools, rect: "
+						+ ResponsiveTestHelpers.paneRect(pane));
+			}
 		}
 
 		@Test
@@ -3730,7 +3759,7 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tools critical path")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("At the 375x667 mobile viewport the Run Tool button of the stacked detail pane is clickable for the sum tool: elementFromPoint at its centre returns the button itself, and running 7 + 8 through the DynamicJsonForm inputs (id=a / id=b) produces the deterministic result text \"15\".")
+		@Description("At the 375x667 mobile viewport the Run Tool button of the stacked detail pane is clickable for the sum tool: elementFromPoint at its centre returns the button itself, and running 7 + 8 through the DynamicJsonForm inputs (id=a / id=b) produces the deterministic result text \"15\" with the result block reporting the success marker \"Tool Result: Success\".")
 		@DisplayName("runTool_sum_7_8_returns15 — Run Tool clickable at 375x667, sum 7+8 -> 15")
 		void runTool_sum_7_8_returns15() {
 			// given
@@ -3759,9 +3788,11 @@ class InspectorUiIT {
 			$("#b").shouldBe(visible).setValue("8");
 			runTool.click();
 
-			// then: the deterministic sum result appears in the active panel.
+			// then: the deterministic sum result appears in the active panel, and the
+			// result block reports a successful execution — an error or failed
+			// invocation must not satisfy the acceptance contract.
 			activePanel().shouldHave(text("15"), Duration.ofSeconds(15));
-			activePanel().shouldHave(text("15"));
+			activePanel().$$("h4").findBy(text("Tool Result:")).shouldHave(text("Success"), Duration.ofSeconds(15));
 		}
 
 	}
