@@ -128,6 +128,13 @@ public class AuthProfileController {
 							"Verify the token URL, client id and client secret, then re-register.", null));
 			}
 		}
+		if (profile instanceof OAuth2Profile oauth2 && oauth2.grantMode() == OAuth2GrantMode.AUTHORIZATION_CODE) {
+			// D9B phase 1: server-issued one-time state for the browser authorization
+			// flow; the same state is verified at the exchange step.
+			final String state = this.exchanger.mintState(ownerId, profileId);
+			return ResponseEntity
+				.ok(AuthProfileRegistrationResponse.pending(profileId, state, oauth2.authorizationUrl()));
+		}
 		return ResponseEntity.ok(AuthProfileRegistrationResponse.of(profileId));
 	}
 
