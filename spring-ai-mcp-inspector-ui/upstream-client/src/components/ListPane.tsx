@@ -57,11 +57,17 @@ const ListPane = <T extends object>({
 
   return (
     <div
-      className="bg-card border border-border rounded-lg shadow"
+      className="bg-card border border-border rounded-lg shadow max-h-[24vh] overflow-y-auto sm:max-h-none sm:overflow-y-visible"
       data-testid="tools-list-pane"
     >
       {/* [spring-ai-mcp-inspector PATCH] Tools list pane (#58): data-testid
-          anchor for Selenide geometry assertions on the responsive grid. */}
+          anchor for Selenide geometry assertions on the responsive grid.
+          Below `sm` the pane is height-bounded with internal scrolling
+          (max-h-[24vh]): at a 375x667 phone the accepted mobile contract
+          (plan v10) requires the list and detail rects to fit the viewport
+          at scrollY=0 after listing tools, so a 22-row tool list cannot grow
+          to its natural height below the folded config sidebar + wrapped tab
+          bar; the row area scrolls inside the bounded pane instead. */}
       <div className="p-4 border-b border-gray-200 dark:border-border">
         <div className="flex items-center justify-between gap-4">
           <h3 className="font-semibold dark:text-white flex-shrink-0">

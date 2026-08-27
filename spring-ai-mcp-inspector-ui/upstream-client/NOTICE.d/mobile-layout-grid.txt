@@ -16,3 +16,13 @@ testids) delivered with this change set and by the Selenide
 ResponsiveLayout / ResponsiveToolsCriticalPath groups in InspectorUiIT
 (geometry at 375x667, 639/640 grid flip, clickability of the six
 canonical controls).
+
+Viewport contract part (same patch): the accepted mobile contract
+(issue #58, plan v10) requires the config/list/detail pane rectangles
+to fit the 375x667 viewport at scrollY=0 after listing tools and
+selecting a row. Below `sm` the sidebar cap drops from 50vh to 30vh
+(App.tsx, `h-[30vh] sm:h-[50vh] lg:h-auto`) and the two Tools panes are
+height-bounded with internal scrolling (`max-h-[24vh]` list,
+`max-h-[17vh]` detail, both `sm:max-h-none sm:overflow-y-visible`) so
+the stacked panes fit the first viewport instead of growing past the
+fold; at and above `sm` the upstream natural heights are untouched.
