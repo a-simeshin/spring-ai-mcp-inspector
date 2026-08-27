@@ -371,12 +371,17 @@ class InspectorUiIT {
 	}
 
 	/**
-	 * Selects a row from the active ListPane by its visible name. Waits for the row to
-	 * exist before clicking — {@code findBy(text(...))} doesn't have a built-in retry, so
-	 * we expand the query into wait-then-click.
+	 * Selects a row from the active ListPane by its exact visible name. The name lives in
+	 * a {@code <span class="truncate">} inside the clickable row (see ListPane row
+	 * markup), and {@code findBy(text(...))} matches substrings — so asking for "echo"
+	 * resolved to the "slowEcho" row whenever it rendered first. Match the name span with
+	 * {@code exactText} instead; the click bubbles up to the row.
 	 */
 	private static void selectRow(String name) {
-		activePanel().$$(".cursor-pointer").findBy(text(name)).shouldBe(visible, Duration.ofSeconds(10)).click();
+		activePanel().$$(".cursor-pointer .truncate")
+			.findBy(exactText(name))
+			.shouldBe(visible, Duration.ofSeconds(10))
+			.click();
 	}
 
 	/**
@@ -792,19 +797,31 @@ class InspectorUiIT {
 			SelenideElement searchInput = activePanel().$("input[name=search]");
 
 			// when
+			// React's controlled input filters on every change event; Selenide's
+			// setValue dispatches the input event, so no Enter keypress is needed (and
+			// sending one would blur the field and collapse the search box on empty).
 			searchInput.shouldBe(visible).setValue("sum");
 
 			// then
-			// Only rows whose name/description matches "sum" remain (e.g., sum, possibly
-			// addNumbers).
-			activePanel().$(byText("sum")).shouldBe(visible);
-			activePanel().$(byText("echo")).shouldNotBe(visible);
+			// Wait for the filter to apply: "sum" row visible, "echo" hidden. Scope
+			// both assertions to the list rows: the right-hand detail panel keeps
+			// showing whatever tool a previous test left selected, so a panel-wide
+			// byText("echo") would match its <h3> header even when the list is
+			// correctly filtered.
+			activePanel().$$(".cursor-pointer .truncate")
+				.findBy(exactText("sum"))
+				.shouldBe(visible, Duration.ofSeconds(10));
+			activePanel().$$(".cursor-pointer .truncate")
+				.findBy(exactText("echo"))
+				.shouldNotBe(visible, Duration.ofSeconds(10));
 
 			// Select-all + Backspace dispatches actual input events so React's controlled
 			// input state updates and the filter is cleared (plain setValue("") doesn't).
 			clearAllSearchInputs();
-			// After clearing, echo is back.
-			activePanel().$(byText("echo")).shouldBe(visible, Duration.ofSeconds(5));
+			// After clearing, echo is back in the list.
+			activePanel().$$(".cursor-pointer .truncate")
+				.findBy(exactText("echo"))
+				.shouldBe(visible, Duration.ofSeconds(5));
 		}
 
 		@Test
