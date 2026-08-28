@@ -348,6 +348,28 @@ class AuthProfileHandlerTests {
 				.isNotFound();
 		}
 
+		@Test
+		@Story("Update")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("update() of a CLIENT_CREDENTIALS profile refreshes the token manager after storing the new credentials")
+		void update_clientCredentials_refreshesTokenManager() {
+			// given
+			given(AuthProfileHandlerTests.this.store.update(eq(OWNER_A), eq("pid-cc"), any(AuthProfile.class)))
+				.willReturn(true);
+
+			// when/then
+			withOwner(AuthProfileHandlerTests.this.client.put()
+				.uri(API_BASE + "/pid-cc")
+				.contentType(MediaType.APPLICATION_JSON)
+				.bodyValue(
+						"{\"profile\": {\"name\": \"cc\", \"type\": \"OAUTH2\", \"grantMode\": \"CLIENT_CREDENTIALS\", "
+								+ "\"tokenUrl\": \"https://t/token\", \"clientId\": \"cid\", \"clientSecret\": \"new-sec\"}}"))
+				.exchange()
+				.expectStatus()
+				.isNoContent();
+			verify(AuthProfileHandlerTests.this.tokenManager).update(eq("pid-cc"), any(OAuth2Profile.class));
+		}
+
 	}
 
 	@Nested
