@@ -85,7 +85,7 @@ class AuthProfileStoreTests {
 
 			// when/then
 			assertThatThrownBy(() -> AuthProfileStoreTests.this.store.register(OWNER_A, bearer("dup", "tok-2")))
-				.isInstanceOf(IllegalStateException.class)
+				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("already exists");
 		}
 
