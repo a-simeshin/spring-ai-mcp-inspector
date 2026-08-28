@@ -169,6 +169,28 @@ class AuthProfileHandlerTests {
 		}
 
 		@Test
+		@Story("Name uniqueness")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("register() maps a duplicate-name store rejection to 400 (client error, not a server fault)")
+		void register_duplicateName_returns400() {
+			// given — the store rejects a duplicate name within the owner
+			given(AuthProfileHandlerTests.this.store.register(eq(OWNER_A), any(AuthProfile.class)))
+				.willThrow(new IllegalArgumentException("a profile named 'prod' already exists for this session"));
+
+			// when/then
+			withOwner(AuthProfileHandlerTests.this.client.post()
+				.uri(API_BASE)
+				.contentType(MediaType.APPLICATION_JSON)
+				.bodyValue("{\"profile\": {\"name\": \"prod\", \"type\": \"BEARER\", \"token\": \"tok-1\"}}"))
+				.exchange()
+				.expectStatus()
+				.isBadRequest()
+				.expectBody()
+				.jsonPath("$.error")
+				.isEqualTo("a profile named 'prod' already exists for this session");
+		}
+
+		@Test
 		@Story("Client-credentials")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("register() of a CLIENT_CREDENTIALS profile runs the initial token exchange after registration")
@@ -346,6 +368,28 @@ class AuthProfileHandlerTests {
 				.exchange()
 				.expectStatus()
 				.isNotFound();
+		}
+
+		@Test
+		@Story("Name uniqueness")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("update() mapping a rename onto an existing name returns 400 (client error, never a silent overwrite)")
+		void update_duplicateName_returns400() {
+			// given — the store rejects renaming onto an existing profile name
+			given(AuthProfileHandlerTests.this.store.update(eq(OWNER_A), eq("pid-1"), any(AuthProfile.class)))
+				.willThrow(new IllegalArgumentException("a profile named 'prod' already exists for this session"));
+
+			// when/then
+			withOwner(AuthProfileHandlerTests.this.client.put()
+				.uri(API_BASE + "/pid-1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.bodyValue("{\"profile\": {\"name\": \"prod\", \"type\": \"BEARER\", \"token\": \"tok-2\"}}"))
+				.exchange()
+				.expectStatus()
+				.isBadRequest()
+				.expectBody()
+				.jsonPath("$.error")
+				.isEqualTo("a profile named 'prod' already exists for this session");
 		}
 
 		@Test

@@ -1504,6 +1504,63 @@ describe("useConnection", () => {
         "sse",
       );
     });
+
+    test("appends the activeProfileId to the first proxy connect URL", async () => {
+      // given — a named auth profile is active
+      const profileProps = {
+        ...defaultProps,
+        activeProfileId: "pid-active",
+      };
+
+      const { result } = renderHook(() => useConnection(profileProps));
+
+      // when — the first connect happens
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      // then — the very first proxy URL carries the active profileId
+      expect(mockSSETransport.url?.searchParams.get("profileId")).toBe(
+        "pid-active",
+      );
+    });
+
+    test("D9B callback wire: profileIdOverride wins over the stale activeProfileId on the first connect", async () => {
+      // given — the hook still holds a stale/previous active id, and the OAuth2
+      // callback has just returned a brand-new profileId before the state
+      // re-rendered
+      const profileProps = {
+        ...defaultProps,
+        activeProfileId: "pid-stale",
+      };
+
+      const { result } = renderHook(() => useConnection(profileProps));
+
+      // when — the very first connect is issued with the freshly returned
+      // profileId override
+      await act(async () => {
+        await result.current.connect(undefined, 0, "pid-new");
+      });
+
+      // then — the first proxy URL carries the newly returned profileId, NOT
+      // the stale active id
+      expect(mockSSETransport.url?.searchParams.get("profileId")).toBe(
+        "pid-new",
+      );
+      expect(mockSSETransport.url?.searchParams.get("profileId")).not.toBe(
+        "pid-stale",
+      );
+    });
+
+    test("no profileId is appended when neither activeProfileId nor an override is present", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(mockSSETransport.url?.searchParams.get("profileId")).toBeNull();
+    });
   });
 
   describe("OAuth Error Handling with Scope Discovery", () => {
