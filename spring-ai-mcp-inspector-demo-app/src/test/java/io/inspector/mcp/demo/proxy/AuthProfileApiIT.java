@@ -270,6 +270,72 @@ class AuthProfileApiIT {
 	}
 
 	/**
+	 * Name uniqueness (D1/AC1): a duplicate register or a rename onto an existing profile
+	 * name is a client error surfaced as 400, and the owner's listing is left unchanged —
+	 * the store rejects before mutating, so no duplicate and no overwrite ever persists.
+	 */
+	@Nested
+	@DisplayName("Name uniqueness")
+	class NameUniqueness {
+
+		@Test
+		@DisplayName("duplicate register and duplicate-name update return 400 and leave the listing unchanged")
+		@Story("Profile uniqueness")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("After registering 'prod' and 'other', a duplicate register of 'prod' and a PUT rename of "
+				+ "'other' onto 'prod' both answer 400, and the GET list still shows exactly the two original "
+				+ "profiles — the store rejected both mutations without persisting anything")
+		void duplicateRegisterAndRename_return400_listingUnchanged() throws Exception {
+			// given — two distinct profiles on the real store, scoped to one owner
+			app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
+			final String apiBase = apiBase();
+			final Session prod = register(apiBase, """
+					{"profile":{"name":"prod","type":"BEARER","token":"prod-tok"}}""");
+			final HttpResponse<String> otherReg = send(apiBase + "/auth-profile", "POST", """
+					{"profile":{"name":"other","type":"BEARER","token":"other-tok"}}""", AUTH_TOKEN, null,
+					prod.cookie());
+			assertThat(otherReg.statusCode())
+				.as("second registration on %s, body=%s", ProxyAppHarness.stack(), otherReg.body())
+				.isEqualTo(200);
+			final String otherId = MAPPER.readTree(otherReg.body()).path("profileId").asText();
+
+			// when — a duplicate register of an existing name
+			final HttpResponse<String> duplicate = send(apiBase + "/auth-profile", "POST", """
+					{"profile":{"name":"prod","type":"BEARER","token":"dup-tok"}}""", AUTH_TOKEN, null, prod.cookie());
+
+			// then — 400 (client error) and the list is unchanged
+			assertThat(duplicate.statusCode())
+				.as("duplicate register status on %s, body=%s", ProxyAppHarness.stack(), duplicate.body())
+				.isEqualTo(400);
+			assertListedExactly(apiBase, prod.cookie(), "prod", "other");
+
+			// when — a rename of 'other' onto the existing 'prod' name
+			final HttpResponse<String> rename = send(apiBase + "/auth-profile/" + otherId, "PUT", """
+					{"profile":{"name":"prod","type":"BEARER","token":"other-tok"}}""", AUTH_TOKEN, null,
+					prod.cookie());
+
+			// then — 400 and the list is still exactly the two originals, untouched
+			assertThat(rename.statusCode())
+				.as("duplicate-name update status on %s, body=%s", ProxyAppHarness.stack(), rename.body())
+				.isEqualTo(400);
+			assertListedExactly(apiBase, prod.cookie(), "prod", "other");
+		}
+
+		/** Asserts the GET list contains exactly the given profile names (any order). */
+		private static void assertListedExactly(final String apiBase, final String cookie, final String... names)
+				throws Exception {
+			final JsonNode list = MAPPER
+				.readTree(send(apiBase + "/auth-profile", "GET", null, AUTH_TOKEN, null, cookie).body());
+			final List<String> listedNames = new ArrayList<>();
+			for (final JsonNode entry : list) {
+				listedNames.add(entry.path("name").asText());
+			}
+			assertThat(listedNames).as("listing on %s", ProxyAppHarness.stack()).containsExactlyInAnyOrder(names);
+		}
+
+	}
+
+	/**
 	 * Prefill happy path (D7): a Spring-config profile is listed by {@code GET /prefill}
 	 * (secret-free), registered by {@code POST {name,type}}, and the proxied request
 	 * bound to the resulting profile carries its {@code Authorization} header to the
