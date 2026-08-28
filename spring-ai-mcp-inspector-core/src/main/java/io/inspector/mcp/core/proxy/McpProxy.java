@@ -130,7 +130,7 @@ public final class McpProxy {
 		// takeUntilOther: close() may fail to complete the sink if another thread owns
 		// it at that instant, so the pump is unsubscribed off the session's lock-free
 		// close signal instead of trusting the sink's terminal event to arrive.
-		session.browserToTarget().asFlux().takeUntilOther(session.closeSignal()).flatMap((frame) -> {
+		session.browserToTarget().asFlux().takeUntilOther(session.closeSignal()).concatMap((frame) -> {
 			final JSONRPCMessage typed = toTyped(frame);
 			if (typed == null) {
 				return Mono.empty();
@@ -172,7 +172,19 @@ public final class McpProxy {
 			// (evicting the stored credentials) before the one-retry could refresh and
 			// re-send. The retry path fails the session itself when the retried call
 			// fails.
-			if (!isRetryableAuthError(err, session)) {
+			if (isRetryableAuthError(err, session)) {
+				return;
+			}
+			// D3: a protocol reply from a LIVE server must not tear the session. The
+			// SDK's streamable transport re-surfaces a reconnect-backchannel failure
+			// (e.g. the SSE GET after markInitialized answering "Unrecognized server
+			// error when connecting to SSE stream, status code: 400" when the session
+			// id raced) through this handler; that is SDK dirt, not the death of the
+			// appstream — the request/response POST path is still alive and must keep
+			// relaying. Same classification as the browser->target pump: only genuine
+			// transport-level failures (refused / dns / timeout) justify tearing the
+			// session down.
+			if (ProxyConnectFailure.classify(err).reason() != ProxyConnectFailure.Reason.UNKNOWN) {
 				session.failUpstream(err);
 			}
 		});
