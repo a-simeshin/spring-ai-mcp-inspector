@@ -387,8 +387,12 @@ public class SseProxyController {
 		this.mcpProxy.start(session).subscribe((ignored) -> {
 		}, (err) -> {
 			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
-			this.registry.removeAndClose(sessionId);
+			// D3: the structured error event must land BEFORE the session teardown —
+			// removeAndClose fires the close signal, which completes the emitter, and
+			// a completed emitter can no longer send the error frame (same ordering
+			// rule the webflux handler documents).
 			completeWithMappedError(emitter, err, TransportKind.SSE, targetUri(transportType, url));
+			this.registry.removeAndClose(sessionId);
 		});
 
 		return emitter;
