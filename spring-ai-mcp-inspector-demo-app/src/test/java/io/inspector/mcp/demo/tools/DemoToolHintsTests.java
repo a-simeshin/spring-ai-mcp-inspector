@@ -40,8 +40,11 @@ import org.springframework.ai.mcp.annotation.McpTool.McpAnnotations;
  * blobAttachment, findFiles, listMyRoots</li>
  * <li>4 tools declared with {@code readOnlyHint=false, destructiveHint=false}: askLlm,
  * askUser, deployService, authorizeViaUrl</li>
- * <li>1 tool ({@code slowEcho}) deliberately WITHOUT explicit annotations — receives the
- * spec defaults (readOnlyHint=false, destructiveHint=true per MCP spec).</li>
+ * <li>1 tool ({@code slowEcho}) deliberately NOT an {@code @McpTool} method: it is
+ * registered as a manual {@link org.springframework.ai.tool.ToolCallback} bean (see
+ * {@link SlowEchoToolConfiguration}) so that {@code tools/list} omits the
+ * {@code annotations} object entirely — the honest spec-default signal
+ * (readOnlyHint=false, destructiveHint=true per MCP spec).</li>
  * </ul>
  */
 class DemoToolHintsTests {
@@ -76,14 +79,8 @@ class DemoToolHintsTests {
 	};
 
 	/**
-	 * MCP spec defaults for readOnlyHint/destructiveHint when no annotations are
-	 * declared.
+	 * Names of the three provider classes that hold @McpTool methods.
 	 */
-	private static final boolean SPEC_DEFAULT_READ_ONLY = false;
-
-	private static final boolean SPEC_DEFAULT_DESTRUCTIVE = true;
-
-	/** Names of the three provider classes that hold @McpTool methods. */
 	private static final List<Class<?>> PROVIDER_CLASSES = List.of(DemoToolsProvider.class,
 			DemoAdvancedToolsProvider.class, DemoInteractiveToolsProvider.class);
 
@@ -106,27 +103,20 @@ class DemoToolHintsTests {
 		// when + then: verify every method
 		Assertions.assertThat(annotatedMethods).as("At least one @McpTool method should be found").isNotEmpty();
 
+		// slowEcho must NOT be among them — it is a manual ToolCallback
+		List<String> annotatedNames = annotatedMethods.stream()
+			.map(m -> m.getAnnotation(McpTool.class).name())
+			.collect(Collectors.toList());
+		Assertions.assertThat(annotatedNames)
+			.as("slowEcho must not be an @McpTool method (manual ToolCallback)")
+			.doesNotContain("slowEcho");
+
 		for (Method method : annotatedMethods) {
 			McpTool mcptool = method.getAnnotation(McpTool.class);
 			String toolName = mcptool.name();
 			McpAnnotations annotations = mcptool.annotations();
 
-			// slowEcho is the special case: it has NO explicit annotations element,
-			// so it gets the spec defaults via the annotation's default value
-			if ("slowEcho".equals(toolName)) {
-				Assertions.assertThat(annotations)
-					.as("slowEcho annotations element is present (default value) but must carry spec defaults")
-					.isNotNull();
-				Assertions.assertThat(annotations.readOnlyHint())
-					.as("slowEcho: readOnlyHint must be spec default (%s)", SPEC_DEFAULT_READ_ONLY)
-					.isEqualTo(SPEC_DEFAULT_READ_ONLY);
-				Assertions.assertThat(annotations.destructiveHint())
-					.as("slowEcho: destructiveHint must be spec default (%s)", SPEC_DEFAULT_DESTRUCTIVE)
-					.isEqualTo(SPEC_DEFAULT_DESTRUCTIVE);
-				continue;
-			}
-
-			// All other 21 tools MUST have explicit annotations present
+			// All 21 annotated tools MUST have explicit annotations present
 			Assertions.assertThat(annotations)
 				.as("Tool '%s' must declare explicit @McpTool annotations", toolName)
 				.isNotNull();
@@ -148,57 +138,42 @@ class DemoToolHintsTests {
 		}
 
 		// Ensure no expected tool is missing from the scanned set
-		List<String> scannedNames = annotatedMethods.stream()
-			.map(m -> m.getAnnotation(McpTool.class).name())
-			.collect(Collectors.toList());
-
 		for (String expectedName : EXPECTED_ANNOTATIONS.keySet()) {
-			Assertions.assertThat(scannedNames)
+			Assertions.assertThat(annotatedNames)
 				.as("Expected tool '%s' not found among @McpTool methods", expectedName)
 				.contains(expectedName);
 		}
 	}
 
 	/**
-	 * Verifies that {@code slowEcho} tool is emitted with SPEC DEFAULT annotations (no
-	 * explicit annotations element in @McpTool declaration).
+	 * Verifies that {@code slowEcho} is registered as a manual {@code ToolCallback} whose
+	 * {@code ToolDefinition} carries no annotations — the wire entry therefore omits the
+	 * {@code annotations} object, which is the honest signal that its hints are MCP spec
+	 * defaults, not server declarations.
 	 *
 	 * <p>
-	 * This is the control tool demonstrating the MCP spec-default behaviour: when
-	 * {@code annotations} is absent, the annotation processor falls back to
-	 * {@code readOnlyHint=false, destructiveHint=true} per the MCP specification. The
-	 * Java annotation default value provides exactly these defaults.
+	 * The {@code @McpTool} route is deliberately avoided: the Spring AI annotation
+	 * scanner synthesizes a fully populated spec-default annotations object for
+	 * annotation-less methods, which would be indistinguishable from a server declaration
+	 * on the wire.
 	 */
 	@Test
-	void slowEchoEmittedWithSpecDefaults() {
+	void slowEchoRegisteredAsManualToolCallbackWithoutAnnotations() {
 		// given
-		Method slowEchoMethod = Arrays.stream(DemoAdvancedToolsProvider.class.getDeclaredMethods())
-			.filter(m -> m.isAnnotationPresent(McpTool.class))
-			.filter(m -> "slowEcho".equals(m.getAnnotation(McpTool.class).name()))
-			.findFirst()
-			.orElseThrow(() -> new AssertionError("slowEcho method not found on DemoAdvancedToolsProvider"));
+		SlowEchoToolConfiguration configuration = new SlowEchoToolConfiguration();
 
 		// when
-		McpTool mcptool = slowEchoMethod.getAnnotation(McpTool.class);
-		McpAnnotations annotations = mcptool.annotations();
+		org.springframework.ai.tool.ToolCallback callback = configuration.slowEcho();
+		org.springframework.ai.tool.definition.ToolDefinition definition = callback.getToolDefinition();
 
 		// then
-		Assertions.assertThat(mcptool.name()).isEqualTo("slowEcho");
-		Assertions.assertThat(annotations)
-			.as("slowEcho annotations element is present (default value) — this is expected")
-			.isNotNull();
-		Assertions.assertThat(annotations.readOnlyHint())
-			.as("slowEcho readOnlyHint must be spec default (false)")
-			.isEqualTo(SPEC_DEFAULT_READ_ONLY);
-		Assertions.assertThat(annotations.destructiveHint())
-			.as("slowEcho destructiveHint must be spec default (true)")
-			.isEqualTo(SPEC_DEFAULT_DESTRUCTIVE);
-		Assertions.assertThat(annotations.idempotentHint())
-			.as("slowEcho idempotentHint must be spec default (false)")
-			.isEqualTo(false);
-		Assertions.assertThat(annotations.openWorldHint())
-			.as("slowEcho openWorldHint must be spec default (true)")
-			.isEqualTo(true);
+		Assertions.assertThat(definition.name()).isEqualTo("slowEcho");
+		Assertions.assertThat(definition.description()).isEqualTo("Echo text after a ~2 second delay");
+		Assertions.assertThat(definition.inputSchema())
+			.as("slowEcho inputSchema must declare the text property")
+			.contains("text");
+		// ToolDefinition has no annotations concept — the converter builds the wire Tool
+		// without annotations, so the field is omitted on the wire.
 	}
 
 }
