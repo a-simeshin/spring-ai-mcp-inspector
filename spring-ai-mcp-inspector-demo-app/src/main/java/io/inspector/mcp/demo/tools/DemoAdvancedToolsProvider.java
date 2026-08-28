@@ -72,7 +72,8 @@ public class DemoAdvancedToolsProvider {
 	/**
 	 * Plain numeric widget — exercises the {@code number} input in DynamicJsonForm.
 	 */
-	@McpTool(name = "addNumbers", description = "Add two floating-point numbers")
+	@McpTool(name = "addNumbers", description = "Add two floating-point numbers",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public double addNumbers(@McpToolParam(description = "first addend", required = true) double x,
 			@McpToolParam(description = "second addend", required = true) double y) {
 		return x + y;
@@ -81,7 +82,8 @@ public class DemoAdvancedToolsProvider {
 	/**
 	 * Array widget + string widget — exercises DynamicJsonForm's array editor.
 	 */
-	@McpTool(name = "concatenate", description = "Join string parts with a separator")
+	@McpTool(name = "concatenate", description = "Join string parts with a separator",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public String concatenate(@McpToolParam(description = "string parts to join", required = true) List<String> parts,
 			@McpToolParam(description = "separator between parts", required = true) String separator) {
 		if (parts == null || parts.isEmpty()) {
@@ -93,7 +95,8 @@ public class DemoAdvancedToolsProvider {
 	/**
 	 * Single object parameter — exercises nested JSON object widget rendering.
 	 */
-	@McpTool(name = "lookupUser", description = "Lookup a user by structured profile object")
+	@McpTool(name = "lookupUser", description = "Lookup a user by structured profile object",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public String lookupUser(
 			@McpToolParam(description = "User profile (name, email, age)", required = true) UserProfile user) {
 		return "User: " + user.name() + " <" + user.email() + "> (age " + user.age() + ")";
@@ -111,7 +114,8 @@ public class DemoAdvancedToolsProvider {
 	 * auto-converted to a JSON-schema {@code "enum"} array by the schema generator
 	 * shipped with mcp-annotations 0.9.0 (see {@code SpringAiSchemaModule}).
 	 */
-	@McpTool(name = "chooseColor", description = "Pick a color from a fixed palette")
+	@McpTool(name = "chooseColor", description = "Pick a color from a fixed palette",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public String chooseColor(
 			@McpToolParam(description = "Color choice (red, green, blue)", required = true) Color color) {
 		return "You chose " + color.name().toLowerCase();
@@ -127,7 +131,8 @@ public class DemoAdvancedToolsProvider {
 	/**
 	 * Boolean widget — exercises the checkbox kind in DynamicJsonForm.
 	 */
-	@McpTool(name = "toggleFlag", description = "Echo a boolean flag")
+	@McpTool(name = "toggleFlag", description = "Echo a boolean flag",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public String toggleFlag(@McpToolParam(description = "flag value", required = true) boolean enabled) {
 		return enabled ? "flag is ON" : "flag is OFF";
 	}
@@ -136,7 +141,8 @@ public class DemoAdvancedToolsProvider {
 	 * Optional-parameter widget — UI must render the {@code suffix} field as not-required
 	 * (no asterisk).
 	 */
-	@McpTool(name = "optionalGreeting", description = "Greet a user with an optional suffix")
+	@McpTool(name = "optionalGreeting", description = "Greet a user with an optional suffix",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public String optionalGreeting(@McpToolParam(description = "name to greet", required = true) String name,
 			@McpToolParam(description = "optional suffix (e.g. '!!!')", required = false) String suffix) {
 		return "Hello, " + name + (suffix == null || suffix.isEmpty() ? "" : suffix);
@@ -145,7 +151,8 @@ public class DemoAdvancedToolsProvider {
 	/**
 	 * Always throws — exercises the error-path rendering in ToolResults panel.
 	 */
-	@McpTool(name = "errorTool", description = "Always throws — exercises the ToolResults error rendering")
+	@McpTool(name = "errorTool", description = "Always throws — exercises the ToolResults error rendering",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public String errorTool() {
 		throw new RuntimeException("intentional demo failure");
 	}
@@ -160,7 +167,8 @@ public class DemoAdvancedToolsProvider {
 	 * @param sizeKb requested size in KiB (default 1024 = 1 MiB, capped at
 	 * {@value #LARGE_OUTPUT_MAX_KB})
 	 */
-	@McpTool(name = "largeOutput", description = "Return a large text payload of ~sizeKb KiB")
+	@McpTool(name = "largeOutput", description = "Return a large text payload of ~sizeKb KiB",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public String largeOutput(McpSyncServerExchange exchange,
 			@McpToolParam(description = "payload size in KiB (default 1024)", required = false) Integer sizeKb) {
 		int kb = sizeKb == null ? 1024 : Math.max(1, Math.min(sizeKb, LARGE_OUTPUT_MAX_KB));
@@ -196,7 +204,8 @@ public class DemoAdvancedToolsProvider {
 	 * Returns both a structuredContent map and a TextContent — exercises the Structured /
 	 * Text toggle in the ToolResults panel.
 	 */
-	@McpTool(name = "structuredOutput", description = "Return both structuredContent and a text representation")
+	@McpTool(name = "structuredOutput", description = "Return both structuredContent and a text representation",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public CallToolResult structuredOutput() {
 		Map<String, Object> data = new LinkedHashMap<>();
 		data.put("status", "ok");
@@ -212,7 +221,8 @@ public class DemoAdvancedToolsProvider {
 	 * Mixed content (text + image + embedded resource) — exercises ResourceLinkView,
 	 * IconDisplay, and multi-content rendering.
 	 */
-	@McpTool(name = "multiContent", description = "Return text + a small PNG image + an embedded resource")
+	@McpTool(name = "multiContent", description = "Return text + a small PNG image + an embedded resource",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public CallToolResult multiContent() {
 		// ImageContent(Annotations annotations, String data, String mimeType)
 		// Use the 3-arg constructor with `null` annotations to keep it simple.
@@ -240,25 +250,21 @@ public class DemoAdvancedToolsProvider {
 	}
 
 	/**
-	 * Slow tool — exercises the "long-running" / spinner UI state.
+	 * The {@code slowEcho} tool intentionally lives OUTSIDE this class: it is registered
+	 * as a manual {@link org.springframework.ai.tool.ToolCallback} bean (see
+	 * {@code SlowEchoToolConfiguration}) without tool annotations, so that
+	 * {@code tools/list} emits no {@code annotations} object for it — demonstrating the
+	 * client-side spec-default path (readOnlyHint=false, destructiveHint=true per the MCP
+	 * spec). An {@code @McpTool} declaration here would make the annotation scanner
+	 * synthesize a full default annotations object instead.
 	 */
-	@McpTool(name = "slowEcho", description = "Echo text after a ~2 second delay")
-	public String slowEcho(@McpToolParam(description = "text to echo (slowly)", required = true) String text) {
-		try {
-			Thread.sleep(2000L);
-		}
-		catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			throw new RuntimeException("slowEcho interrupted", e);
-		}
-		return text;
-	}
 
 	/**
 	 * Build a structurally nested map of {@code depth} levels — exercises the recursive
 	 * JsonView renderer. Depth is capped at {@value #DEEP_JSON_MAX_DEPTH}.
 	 */
-	@McpTool(name = "deepJson", description = "Return a JSON object nested N levels deep (cap 50)")
+	@McpTool(name = "deepJson", description = "Return a JSON object nested N levels deep (cap 50)",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public Map<String, Object> deepJson(
 			@McpToolParam(description = "nesting depth (1..50)", required = true) int depth) {
 		int d = Math.max(1, Math.min(depth, DEEP_JSON_MAX_DEPTH));
@@ -278,7 +284,8 @@ public class DemoAdvancedToolsProvider {
 	 * tool (not a resource) so we can vary the payload at call time without adding
 	 * more @McpResource methods.
 	 */
-	@McpTool(name = "blobAttachment", description = "Return an embedded binary (PNG) resource alongside text")
+	@McpTool(name = "blobAttachment", description = "Return an embedded binary (PNG) resource alongside text",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public CallToolResult blobAttachment() {
 		EmbeddedResource embedded = new EmbeddedResource((Annotations) null,
 				new BlobResourceContents("demo://logo.png", "image/png", TINY_PNG_BASE64));

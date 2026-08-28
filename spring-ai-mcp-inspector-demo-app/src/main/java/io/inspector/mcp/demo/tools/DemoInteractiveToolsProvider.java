@@ -57,6 +57,13 @@ import org.springframework.stereotype.Component;
  * </ul>
  *
  * <p>
+ * Hint declarations: {@code askLlm}, {@code askUser}, and {@code deployService} initiate
+ * actions through the connected client (sampling / elicitation round-trips) and are
+ * therefore declared read-only=false, destructive=false; {@code findFiles} and
+ * {@code listMyRoots} only observe client-advertised roots and are declared
+ * read-only=true, destructive=false.
+ *
+ * <p>
  * If the connected client does not advertise the required capability (sampling /
  * elicitation / roots), each tool returns a helpful error string rather than throwing —
  * the goal is for the inspector UI to render a clear <em>"client does not support X"</em>
@@ -77,7 +84,8 @@ public class DemoInteractiveToolsProvider {
 	 * @param question the prompt to forward to the client's LLM
 	 * @return text content of the LLM's response, or an error/guidance string
 	 */
-	@McpTool(name = "askLlm", description = "Ask the connected client's LLM a question via MCP sampling/createMessage")
+	@McpTool(name = "askLlm", description = "Ask the connected client's LLM a question via MCP sampling/createMessage",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = false))
 	public String askLlm(McpSyncServerExchange exchange,
 			@McpToolParam(description = "the question to forward to the LLM", required = true) String question) {
 		if (exchange == null) {
@@ -117,7 +125,8 @@ public class DemoInteractiveToolsProvider {
 	 * @return the user's answer, an action label (decline/cancel), or a guidance string
 	 */
 	@McpTool(name = "askUser",
-			description = "Ask the connected client's user a free-form question via MCP elicitation/create")
+			description = "Ask the connected client's user a free-form question via MCP elicitation/create",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = false))
 	public String askUser(McpSyncServerExchange exchange,
 			@McpToolParam(description = "the question to render in the elicitation form",
 					required = true) String question) {
@@ -169,7 +178,8 @@ public class DemoInteractiveToolsProvider {
 	 * @return a summary of the choices the user made, or an action/error string
 	 */
 	@McpTool(name = "deployService",
-			description = "Confirm deploy parameters via elicitation form (environment, dryRun, replicas, notes)")
+			description = "Confirm deploy parameters via elicitation form (environment, dryRun, replicas, notes)",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = false))
 	public String deployService(McpSyncServerExchange exchange,
 			@McpToolParam(description = "name of the service to deploy", required = true) String serviceName) {
 		if (exchange == null) {
@@ -256,7 +266,8 @@ public class DemoInteractiveToolsProvider {
 	 * @param glob a glob expression like {@code **&#47;*.java} or {@code pom.xml}
 	 * @return matching paths (one per line) or a guidance string
 	 */
-	@McpTool(name = "findFiles", description = "Search files matching a glob, scoped to client-advertised roots")
+	@McpTool(name = "findFiles", description = "Search files matching a glob, scoped to client-advertised roots",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public String findFiles(McpSyncServerExchange exchange,
 			@McpToolParam(description = "glob pattern, e.g. **/*.java or pom.xml", required = true) String glob) {
 		if (exchange == null) {
@@ -355,7 +366,8 @@ public class DemoInteractiveToolsProvider {
 		return out.toString();
 	}
 
-	@McpTool(name = "listMyRoots", description = "List the roots advertised by the connected client (roots/list)")
+	@McpTool(name = "listMyRoots", description = "List the roots advertised by the connected client (roots/list)",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public String listMyRoots(McpSyncServerExchange exchange) {
 		if (exchange == null) {
 			return "listMyRoots: no server exchange available";
