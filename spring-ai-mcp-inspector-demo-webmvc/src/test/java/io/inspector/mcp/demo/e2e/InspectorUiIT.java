@@ -3425,6 +3425,127 @@ class InspectorUiIT {
 
 	}
 
+	// =====================================================================
+	// X. OAuth2 client-credentials (real UI against a stub token server).
+	// Scenario 1 (D9A happy path): the proxy refreshes the CC token once
+	// on a 401 and the UI reaches Connected. Scenario 2 (D3): a second
+	// 401 surfaces the exact structured error banner.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("OAuth2 client-credentials (real UI → proxy → stub token server)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class OAuth2ClientCredentials {
+
+		/** D3 exact literals ({@code ProxyErrorMapper}). */
+		private static final String REASON_401 = "The MCP server rejected the request as unauthenticated.";
+
+		private static final String GUIDANCE_401 = "Verify the token/API key. OAuth2 profiles refresh and retry once automatically.";
+
+		@AfterEach
+		void tearDown() {
+			stopApp();
+		}
+
+		@Test
+		@Story("OAuth2 client-credentials 401 refresh + retry (D9A)")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Drives the real UI: create + select a CLIENT_CREDENTIALS profile, connect to an SSE stub whose first message POST answers 401 — the proxy refreshes the token once and the retried initialize succeeds, so the sidebar reaches Connected and the token server saw exactly two client_credentials exchanges (never a refresh_token grant).")
+		@DisplayName("ccProfile_401_refresh_retry_connected — one refresh + retry reaches Connected")
+		void ccProfile_401_refresh_retry_connected() throws Exception {
+			// given — a registered CC profile and an SSE upstream that rejects
+			// the first message POST.
+			try (final E2eTokenServer tokenServer = new E2eTokenServer();
+					final E2eSseMcpStub stub = new E2eSseMcpStub()) {
+				stub.rejectPosts(1);
+
+				// when — the user saves the profile and connects to the stub.
+				bootAndCreateProfile(tokenServer);
+				connectTo(stub);
+
+				// then — the retried round-trip reached Connected.
+				$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+
+				// and — exactly one refresh: a fresh client_credentials exchange,
+				// never a refresh_token grant, and the upstream saw the original
+				// token then the refreshed one.
+				Assertions.assertEquals(2, tokenServer.requestCount(), "token exchanges");
+				Assertions.assertFalse(tokenServer.anyRequestWithField("refresh_token"), "no refresh_token grant");
+				Assertions.assertEquals(
+						List.of("Bearer " + E2eTokenServer.tokenValue(1), "Bearer " + E2eTokenServer.tokenValue(2)),
+						stub.authorizations().subList(0, 2), "Authorization per upstream message POST");
+			}
+		}
+
+		@Test
+		@Story("OAuth2 client-credentials second 401 → D3 error banner")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Same setup, but the SSE upstream answers 401 forever: after one refresh + retry the second 401 surfaces the exact D3 unauthorized DTO (status/code/reason/guidance) in the explicit connection-error banner, and the token server saw exactly two exchanges (no retry loop).")
+		@DisplayName("ccProfile_second401_showsExplicitErrorBanner — second 401 renders the D3 banner")
+		void ccProfile_second401_showsExplicitErrorBanner() throws Exception {
+			// given — an SSE upstream that always rejects.
+			try (final E2eTokenServer tokenServer = new E2eTokenServer();
+					final E2eSseMcpStub stub = new E2eSseMcpStub()) {
+				stub.rejectPosts(Integer.MAX_VALUE);
+
+				// when — the user connects.
+				bootAndCreateProfile(tokenServer);
+				connectTo(stub);
+
+				// then — the explicit error banner renders the exact D3 contract.
+				$("[data-testid=connection-error-dto]").shouldBe(visible, Duration.ofSeconds(30))
+					.shouldHave(text("401 unauthorized"))
+					.shouldHave(text(REASON_401))
+					.shouldHave(text(GUIDANCE_401));
+
+				// and — exactly one refresh (registration + the single 401
+				// refresh), no retry loop, and the upstream saw two 401 POSTs.
+				Assertions.assertEquals(2, tokenServer.requestCount(), "token exchanges");
+				Assertions.assertFalse(tokenServer.anyRequestWithField("refresh_token"), "no refresh_token grant");
+				Assertions.assertEquals(
+						List.of("Bearer " + E2eTokenServer.tokenValue(1), "Bearer " + E2eTokenServer.tokenValue(2)),
+						stub.authorizations(), "Authorization per upstream message POST");
+			}
+		}
+
+		/**
+		 * Boots the app, opens the page, forces SSE transport and creates + selects a
+		 * {@code CLIENT_CREDENTIALS} profile via the real editor.
+		 */
+		private void bootAndCreateProfile(final E2eTokenServer tokenServer) {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+
+			// The auth-profile editor must render before we touch it.
+			$("[data-testid=auth-profile-type]").shouldBe(visible, Duration.ofSeconds(15));
+
+			// Force SSE — the proxy branch whose SSE error event drives the D3
+			// banner (the demo config already defaults to SSE, but be explicit).
+			$("#transport-type-select").shouldBe(visible).click();
+			$$("[role=option]").findBy(text("SSE")).shouldBe(visible).click();
+
+			// Create the CLIENT_CREDENTIALS profile (registration performs the
+			// initial token exchange server-side; the profile auto-selects on save).
+			$("[data-testid=auth-profile-type]").shouldBe(visible).selectOptionByValue("OAUTH2");
+			$("[data-testid=auth-profile-grant-mode]").shouldBe(visible).selectOptionByValue("CLIENT_CREDENTIALS");
+			setReactInputValue("[data-testid=auth-profile-name]", "e2e-cc");
+			setReactInputValue("[data-testid=auth-profile-token-url]", tokenServer.tokenUrl());
+			setReactInputValue("[data-testid=auth-profile-client-id]", "e2e-cid");
+			setReactInputValue("[data-testid=auth-profile-client-secret]", "e2e-secret");
+			$("[data-testid=auth-profile-save]").shouldBe(visible).click();
+
+			// The saved row appears in the list (auto-selected active profile).
+			$("[data-testid=auth-profiles-list]").shouldBe(visible, Duration.ofSeconds(15)).shouldHave(text("e2e-cc"));
+		}
+
+		/** Points the server-URL input at the SSE stub and clicks Connect. */
+		private void connectTo(final E2eSseMcpStub stub) {
+			setReactInputValue("#sse-url-input", stub.sseUrl());
+			connectButton().shouldBe(visible).click();
+		}
+
+	}
+
 	/** Keep imports we may need in future paths warning-free. */
 	@SuppressWarnings("unused")
 	private static Class<?> keepImports() {
