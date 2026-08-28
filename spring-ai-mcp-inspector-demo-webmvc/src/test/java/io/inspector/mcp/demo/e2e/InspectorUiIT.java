@@ -45,7 +45,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.openqa.selenium.Dimension;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
 import org.openqa.selenium.logging.LogEntries;
@@ -2986,19 +2985,12 @@ class InspectorUiIT {
 
 		@BeforeEach
 		void resetToDesktopViewport() {
-			setViewport(1366, 900);
+			ResponsiveTestHelpers.setViewport(1366, 900);
 		}
 
 		@AfterEach
 		void restoreToDesktopViewport() {
-			setViewport(1366, 900);
-		}
-
-		private static void setViewport(int width, int height) {
-			com.codeborne.selenide.WebDriverRunner.getWebDriver()
-				.manage()
-				.window()
-				.setSize(new Dimension(width, height));
+			ResponsiveTestHelpers.setViewport(1366, 900);
 		}
 
 		/**
@@ -3025,14 +3017,6 @@ class InspectorUiIT {
 				.doubleValue();
 		}
 
-		/**
-		 * True when the document has no horizontal overflow (scrollWidth <= clientWidth).
-		 */
-		private static boolean noHorizontalDocumentOverflow() {
-			return Boolean.TRUE.equals(Selenide.executeJavaScript(
-					"return document.documentElement.scrollWidth <= document.documentElement.clientWidth;"));
-		}
-
 		@Test
 		@Story("Responsive tab bar")
 		@Severity(SeverityLevel.NORMAL)
@@ -3040,7 +3024,7 @@ class InspectorUiIT {
 		@DisplayName("tabsAt375pxWrapKeepAllTriggersNoHScroll — mobile wrap")
 		void tabs_at375px_wrapKeepAllTriggersAndNoHorizontalOverflow() {
 			// given
-			setViewport(375, 667);
+			ResponsiveTestHelpers.setViewport(375, 667);
 
 			// then
 			Assertions.assertEquals("wrap", tabsListFlexWrap(), "TabsList must wrap below the sm breakpoint");
@@ -3048,7 +3032,7 @@ class InspectorUiIT {
 				Assertions.assertTrue($("[role=tab][id$='-trigger-" + value + "']").exists(),
 						"tab trigger '" + value + "' must be present in the DOM at 375px");
 			}
-			Assertions.assertTrue(noHorizontalDocumentOverflow(),
+			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
 					"document.documentElement must not overflow horizontally at 375px");
 		}
 
@@ -3059,7 +3043,7 @@ class InspectorUiIT {
 		@DisplayName("tabsAt639pxWrapAllReachableClickableNoHScroll — sm boundary, wrap side")
 		void tabs_at639px_wrapAllTriggersReachableClickableNoHorizontalOverflow() {
 			// given
-			setViewport(639, 800);
+			ResponsiveTestHelpers.setViewport(639, 800);
 
 			// then
 			Assertions.assertEquals("wrap", tabsListFlexWrap(),
@@ -3072,7 +3056,7 @@ class InspectorUiIT {
 			}
 			Assertions.assertTrue($("[role=tab][id$='-trigger-tasks']").exists(),
 					"disabled tasks trigger must be present at the sm boundary (#63)");
-			Assertions.assertTrue(noHorizontalDocumentOverflow(),
+			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
 					"document.documentElement must not overflow horizontally at 639px");
 		}
 
@@ -3084,7 +3068,7 @@ class InspectorUiIT {
 		void tabs_at1024px_controlSingleRowNoWrap() {
 			// when & then — the exact sm flip point plus a wider desktop viewport
 			for (int width : new int[] { 640, 1024 }) {
-				setViewport(width, 800);
+				ResponsiveTestHelpers.setViewport(width, 800);
 				Assertions.assertEquals("nowrap", tabsListFlexWrap(),
 						"TabsList must be a single row at " + width + "px (sm:flex-nowrap restores upstream geometry)");
 				double height = tabsListHeight();
@@ -3131,12 +3115,12 @@ class InspectorUiIT {
 
 		@BeforeEach
 		void resetToDesktopViewport() {
-			ResponsiveTabBar.setViewport(1366, 900);
+			ResponsiveTestHelpers.setViewport(1366, 900);
 		}
 
 		@AfterEach
 		void restoreToDesktopViewport() {
-			ResponsiveTabBar.setViewport(1366, 900);
+			ResponsiveTestHelpers.setViewport(1366, 900);
 		}
 
 		/**
@@ -3197,7 +3181,7 @@ class InspectorUiIT {
 							+ " (outer/inner delta " + deltaWidth + "x" + deltaHeight + "), cannot converge on "
 							+ targetWidth + "x" + targetHeight);
 				}
-				ResponsiveTabBar.setViewport(requestWidth, requestHeight);
+				ResponsiveTestHelpers.setViewport(requestWidth, requestHeight);
 				java.util.List<Number> inner = innerViewportAfterResize(before);
 				int innerWidth = inner.get(0).intValue();
 				int innerHeight = inner.get(1).intValue();
@@ -3429,6 +3413,404 @@ class InspectorUiIT {
 	@SuppressWarnings("unused")
 	private static Class<?> keepImports() {
 		return CompletableFuture.class;
+	}
+
+	// =====================================================================
+	// Responsive tools layout — mobile geometry of the config sidebar and the
+	// Tools list/detail grid (issue #58). Every scenario runs a fresh setup:
+	// startApp(new Combo("sse")) → openAndConnect() → clickTab("tools") →
+	// setViewport(...). The pane anchors are the [spring-ai-mcp-inspector
+	// PATCH] data-testid hooks (config-pane / tools-list-pane /
+	// tools-detail-pane / tools-list-detail-grid).
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Responsive tools layout (375 / sm / lg / desktop geometry)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class ResponsiveLayout {
+
+		/** Each scenario boots a fresh app — clean up after every method. */
+		@AfterEach
+		void restoreToDesktopViewport() {
+			ResponsiveTestHelpers.setViewport(1366, 900);
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@BeforeEach
+		void bootAndOpenToolsTab() {
+			startApp(new Combo("sse"));
+			openAndConnect();
+			clickTab("tools");
+		}
+
+		@Test
+		@Story("Responsive tools layout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("At the 375x667 mobile viewport the config sidebar and the Tools list/detail panes have pairwise disjoint bounding boxes (getBoundingClientRect), each pane is at most 375px wide, and the document has no horizontal overflow (scrollWidth <= clientWidth). Every pane rectangle lies fully inside the viewport (left/top >= 0, right/bottom <= viewport) at the accepted scrollY=0 state — in the empty state and after listing tools and selecting the sum row — and its rect is printed on failure. Below the sm breakpoint the panes are height-bounded with internal scrolling (see the PATCH markers), so the stacked layout fits the first 667px viewport instead of growing past the fold.")
+		@DisplayName("configPane_listPane_detailPane_disjoint_375x667 — mobile geometry at scrollY=0")
+		void configPane_listPane_detailPane_disjoint_375x667() {
+			// given: the exact inner mobile viewport, measured at the top of the
+			// document — the accepted contract state.
+			ResponsiveTestHelpers.setViewportExactly(375, 667);
+			ResponsiveTestHelpers.scrollToTop();
+			Assertions.assertEquals(0, ResponsiveTestHelpers.scrollY(),
+					"mobile geometry must be asserted at scrollY=0, was " + ResponsiveTestHelpers.scrollY());
+
+			// then: the document does not overflow horizontally.
+			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 375px");
+
+			// and: no two panes overlap (stacked mobile layout).
+			Assertions.assertFalse(ResponsiveTestHelpers.panesOverlap("config-pane", "tools-list-pane"),
+					"config-pane and tools-list-pane must not overlap at 375x667");
+			Assertions.assertFalse(ResponsiveTestHelpers.panesOverlap("config-pane", "tools-detail-pane"),
+					"config-pane and tools-detail-pane must not overlap at 375x667");
+			Assertions.assertFalse(ResponsiveTestHelpers.panesOverlap("tools-list-pane", "tools-detail-pane"),
+					"tools-list-pane and tools-detail-pane must not overlap at 375x667");
+
+			// and: every pane fits the 375px viewport width.
+			Assertions.assertTrue(ResponsiveTestHelpers.paneWidth("tools-list-pane") <= 375,
+					"tools-list-pane must be at most 375px wide, was "
+							+ ResponsiveTestHelpers.paneWidth("tools-list-pane"));
+			Assertions.assertTrue(ResponsiveTestHelpers.paneWidth("tools-detail-pane") <= 375,
+					"tools-detail-pane must be at most 375px wide, was "
+							+ ResponsiveTestHelpers.paneWidth("tools-detail-pane"));
+			Assertions.assertTrue(ResponsiveTestHelpers.paneWidth("config-pane") <= 375,
+					"config-pane must be at most 375px wide, was " + ResponsiveTestHelpers.paneWidth("config-pane"));
+
+			// and: every pane lies fully inside the 375x667 viewport at scrollY=0,
+			// in the empty state. A pane clipped by an ancestor or extending past
+			// the fold fails here with its rect printed — no scroll-into-view is
+			// involved, the document is at the top.
+			assertPanesInsideViewportAtScrollTop("empty state");
+
+			// when: the tools are listed and the sum row is selected — the pane
+			// content grows, the worst case for the inside-viewport contract.
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$(".cursor-pointer")
+				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
+			selectRow("sum");
+			$("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofSeconds(10));
+
+			// then: with the full tool list and the selected tool's form rendered
+			// the panes still lie fully inside the viewport at scrollY=0.
+			ResponsiveTestHelpers.scrollToTop();
+			Assertions.assertEquals(0, ResponsiveTestHelpers.scrollY(),
+					"listed geometry must be asserted at scrollY=0, was " + ResponsiveTestHelpers.scrollY());
+			assertPanesInsideViewportAtScrollTop("listed + selected state");
+			Assertions.assertFalse(ResponsiveTestHelpers.panesOverlap("config-pane", "tools-list-pane"),
+					"config-pane and tools-list-pane must not overlap after listing at 375x667");
+			Assertions.assertFalse(ResponsiveTestHelpers.panesOverlap("tools-list-pane", "tools-detail-pane"),
+					"tools-list-pane and tools-detail-pane must not overlap after listing at 375x667");
+		}
+
+		/**
+		 * Asserts that all three panes lie fully inside the 375x667 viewport while the
+		 * document is scrolled to the top, printing each rect as evidence.
+		 */
+		private void assertPanesInsideViewportAtScrollTop(final String state) {
+			for (final String pane : new String[] { "config-pane", "tools-list-pane", "tools-detail-pane" }) {
+				System.err.println(
+						"[configPane_listPane_detailPane_disjoint_375x667] " + pane + " rect (" + state + ", scrollY="
+								+ ResponsiveTestHelpers.scrollY() + "): " + ResponsiveTestHelpers.paneRect(pane));
+				Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport(pane),
+						pane + " must lie fully inside the 375x667 viewport at scrollY=0 (" + state + "), rect: "
+								+ ResponsiveTestHelpers.paneRect(pane));
+			}
+		}
+
+		@Test
+		@Story("Responsive tools layout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("The Tools list/detail grid flips from one column (grid-cols-1) to two (sm:grid-cols-2) exactly at the inclusive Tailwind sm breakpoint: 1 column at 639px, 2 columns at 640px.")
+		@DisplayName("sm_639x800_and_640x800_gridFlip — grid-cols-1 -> sm:grid-cols-2")
+		void sm_639x800_and_640x800_gridFlip() {
+			// given: just below the sm breakpoint
+			ResponsiveTestHelpers.setViewportExactly(639, 800);
+
+			// then: the tools-list-detail-grid is still a single column.
+			Assertions.assertEquals(1, ResponsiveTestHelpers.columnCount(),
+					"tools-list-detail-grid must be a single column at 639px (grid-cols-1)");
+
+			// when: at exactly 640px (Tailwind sm, min-width: 640px)
+			ResponsiveTestHelpers.setViewportExactly(640, 800);
+
+			// then: the grid flips to two columns (sm:grid-cols-2).
+			Assertions.assertEquals(2, ResponsiveTestHelpers.columnCount(),
+					"tools-list-detail-grid must flip to two columns at 640px (sm:grid-cols-2)");
+		}
+
+		@Test
+		@Story("Responsive tools layout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("At the inclusive lg breakpoint (1024px, min-width) the root container engages the desktop side-by-side layout without regression: at 1023px and at 1024px every pane stays inside the viewport, no two panes overlap, and the document does not overflow horizontally.")
+		@DisplayName("lg_1023x800_and_1024x800_rootBoundary — root stays inside the viewport")
+		void lg_1023x800_and_1024x800_rootBoundary() {
+			// given: the widest viewport below lg, then exactly lg
+			for (int width : new int[] { 1023, 1024 }) {
+				ResponsiveTestHelpers.setViewportExactly(width, 800);
+
+				// then: all three panes remain fully inside the viewport...
+				Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("config-pane"),
+						"config-pane must lie inside the " + width + "px viewport");
+				Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("tools-list-pane"),
+						"tools-list-pane must lie inside the " + width + "px viewport");
+				Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("tools-detail-pane"),
+						"tools-detail-pane must lie inside the " + width + "px viewport");
+
+				// ...no two panes overlap...
+				Assertions.assertFalse(ResponsiveTestHelpers.panesOverlap("config-pane", "tools-list-pane"),
+						"config-pane and tools-list-pane must not overlap at " + width + "px");
+				Assertions.assertFalse(ResponsiveTestHelpers.panesOverlap("tools-list-pane", "tools-detail-pane"),
+						"tools-list-pane and tools-detail-pane must not overlap at " + width + "px");
+
+				// ...and the root container does not overflow horizontally.
+				Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+						"document.documentElement must not overflow horizontally at " + width + "px");
+			}
+		}
+
+		@Test
+		@Story("Responsive tools layout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Desktop regression control at 1280x800: the config sidebar and the Tools list/detail grid keep the desktop side-by-side geometry — every pane inside the viewport, no overlaps, two grid columns, no horizontal document overflow.")
+		@DisplayName("desktop_1280x800_noRegression — desktop geometry intact")
+		void desktop_1280x800_noRegression() {
+			// given
+			ResponsiveTestHelpers.setViewportExactly(1280, 800);
+
+			// then: desktop side-by-side geometry is intact.
+			Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("config-pane"),
+					"config-pane must lie inside the 1280x800 viewport");
+			Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("tools-list-pane"),
+					"tools-list-pane must lie inside the 1280x800 viewport");
+			Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("tools-detail-pane"),
+					"tools-detail-pane must lie inside the 1280x800 viewport");
+			Assertions.assertFalse(ResponsiveTestHelpers.panesOverlap("config-pane", "tools-list-pane"),
+					"config-pane and tools-list-pane must not overlap at 1280x800");
+			Assertions.assertFalse(ResponsiveTestHelpers.panesOverlap("tools-list-pane", "tools-detail-pane"),
+					"tools-list-pane and tools-detail-pane must not overlap at 1280x800");
+			Assertions.assertEquals(2, ResponsiveTestHelpers.columnCount(),
+					"tools-list-detail-grid must keep two columns on the desktop");
+			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 1280px");
+		}
+
+	}
+
+	// =====================================================================
+	// Responsive tools critical path — 375x667 clickability of the six
+	// canonical List Tools controls (issue #58). The config/list/detail panes
+	// stack vertically below sm; every scenario proves with elementFromPoint
+	// at the control's bounding-box centre that nothing overlays it
+	// (asserted, not just computed), then performs a real click and asserts
+	// the observable state. Tools scenarios use the fresh setup
+	// startApp(new Combo("sse")) → openAndConnect() → clickTab("tools") →
+	// setViewportExactly(375, 667) (the exact inner mobile viewport, not the
+	// outer-window setter — the critical-path geometry must really run at the
+	// named 375x667); the Connect scenario stays on the pre-connect
+	// page.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Responsive tools critical path (375x667 clickability)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class ResponsiveToolsCriticalPath {
+
+		/** Each scenario boots a fresh app — clean up after every method. */
+		@AfterEach
+		void tearDown() {
+			stopApp();
+		}
+
+		/**
+		 * True when {@code document.elementFromPoint} at the element's bounding-box
+		 * centre returns the element itself or a descendant — i.e. nothing overlays the
+		 * element's centre at the current scroll position.
+		 */
+		private static boolean elementAtCenter(final SelenideElement element) {
+			return Boolean.TRUE
+				.equals(Selenide.executeJavaScript("const el = arguments[0];" + "const r = el.getBoundingClientRect();"
+						+ "const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);"
+						+ "return !!(hit && (hit === el || el.contains(hit)));", element));
+		}
+
+		/**
+		 * Scrolls the given element into view (its top aligned with the viewport) so an
+		 * {@code elementFromPoint} probe at its bounding-box centre really samples the
+		 * current viewport — Selenide's {@code shouldBe(visible)} only checks the
+		 * rendered state, not the scroll position.
+		 */
+		private static void scrollIntoView(final SelenideElement element) {
+			Selenide.executeJavaScript("arguments[0].scrollIntoView();", element);
+		}
+
+		@Test
+		@Story("Responsive tools critical path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At the 375x667 mobile viewport the pre-connect Connect button inside the stacked config pane is clickable: elementFromPoint at its bounding-box centre returns the button itself (no overlaying subtree intercepts pointer events) and a real click transitions the sidebar into the connected branch — the [data-testid=connect-button] Restart/Reconnect control mounts.")
+		@DisplayName("connect_clickable_at375x667 — Connect reachable and clickable at 375x667")
+		void connect_clickable_at375x667() {
+			// given
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+			ResponsiveTestHelpers.setViewportExactly(375, 667);
+			SelenideElement connect = sidebar().$(byText("Connect")).shouldBe(visible, Duration.ofSeconds(15));
+
+			// then: the config pane is rendered in the mobile layout and nothing
+			// overlays the Connect button — elementFromPoint at its centre returns
+			// the button itself.
+			$("[data-testid=config-pane]").shouldBe(visible, Duration.ofSeconds(10));
+			scrollIntoView(connect);
+			Assertions.assertTrue(elementAtCenter(connect),
+					"elementFromPoint at the Connect centre must return the button itself at 375x667");
+
+			// when: a real click on the Connect button
+			connect.click();
+
+			// then: the connected branch mounts the Restart/Reconnect control.
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+		}
+
+		@Test
+		@Story("Responsive tools critical path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At the 375x667 mobile viewport the List Tools button inside the stacked Tools list pane is clickable: after scrolling it into view, elementFromPoint at its centre returns the button itself — the exact condition the #58 report lacked (an overlaying subtree intercepted pointer events).")
+		@DisplayName("listTools_clickable_at375x667_elementFromPointReturnsButton — List Tools not intercepted at 375x667")
+		void listTools_clickable_at375x667_elementFromPointReturnsButton() {
+			// given
+			startApp(new Combo("sse"));
+			openAndConnect();
+			clickTab("tools");
+			ResponsiveTestHelpers.setViewportExactly(375, 667);
+			$("[data-testid=tools-list-pane]").shouldBe(visible, Duration.ofSeconds(10));
+			SelenideElement listTools = activePanel().$(byText("List Tools")).shouldBe(visible, Duration.ofSeconds(10));
+
+			// then: elementFromPoint at the List Tools centre returns the button
+			// itself.
+			scrollIntoView(listTools);
+			Assertions.assertTrue(elementAtCenter(listTools),
+					"elementFromPoint at the List Tools centre must return the button itself at 375x667");
+		}
+
+		@Test
+		@Story("Responsive tools critical path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At the 375x667 mobile viewport a real click on List Tools loads the tool rows into the stacked list pane, and a real click on the first row (tool-row-0) selects it — the detail pane then renders the Run Tool button.")
+		@DisplayName("listTools_realClick_listsToolsAndSelectsRow — real click lists tools and selects the first row")
+		void listTools_realClick_listsToolsAndSelectsRow() {
+			// given
+			startApp(new Combo("sse"));
+			openAndConnect();
+			clickTab("tools");
+			ResponsiveTestHelpers.setViewportExactly(375, 667);
+			SelenideElement listTools = activePanel().$(byText("List Tools")).shouldBe(visible, Duration.ofSeconds(10));
+
+			// when: a real click on List Tools loads the rows...
+			scrollIntoView(listTools);
+			Assertions.assertTrue(elementAtCenter(listTools),
+					"elementFromPoint at the List Tools centre must return the button itself at 375x667");
+			listTools.click();
+			activePanel().$$(".cursor-pointer")
+				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
+
+			// ...and a real click on the first row selects it.
+			SelenideElement firstRow = $("[data-testid=tool-row-0]").shouldBe(visible, Duration.ofSeconds(10));
+			scrollIntoView(firstRow);
+			Assertions.assertTrue(ResponsiveTestHelpers.elementAtCenter("tool-row-0"),
+					"elementFromPoint at the first row centre must return the row itself at 375x667");
+			firstRow.click();
+
+			// then: the detail pane renders the Run Tool button for the selected
+			// tool.
+			$("[data-testid=tools-detail-pane]").shouldBe(visible, Duration.ofSeconds(10));
+			$("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofSeconds(10));
+		}
+
+		@Test
+		@Story("Responsive tools critical path")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("At the 375x667 mobile viewport the search controls of the stacked Tools list pane are reachable: the search button and the expanded search input are not intercepted (elementFromPoint at their centres returns the control), and typing a query filters the visible rows.")
+		@DisplayName("search_reachable_at375x667 — search button and input reachable, filter works")
+		void search_reachable_at375x667() {
+			// given
+			startApp(new Combo("sse"));
+			openAndConnect();
+			clickTab("tools");
+			ResponsiveTestHelpers.setViewportExactly(375, 667);
+			$("[data-testid=tools-list-pane]").shouldBe(visible, Duration.ofSeconds(10));
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$(".cursor-pointer")
+				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
+
+			// then: the search button is not intercepted at 375px...
+			SelenideElement searchButton = $("[data-testid=search-button]").shouldBe(visible, Duration.ofSeconds(10));
+			scrollIntoView(searchButton);
+			Assertions.assertTrue(ResponsiveTestHelpers.elementAtCenter("search-button"),
+					"elementFromPoint at the search-button centre must return the button itself at 375x667");
+
+			// when: a real click expands the search input, and a query is typed...
+			searchButton.click();
+			SelenideElement searchInput = $("[data-testid=search-input]").shouldBe(visible, Duration.ofSeconds(10));
+			scrollIntoView(searchInput);
+			Assertions.assertTrue(ResponsiveTestHelpers.elementAtCenter("search-input"),
+					"elementFromPoint at the search-input centre must return the input itself at 375x667");
+			searchInput.setValue("sum");
+
+			// then: only the matching rows remain visible.
+			activePanel().$(byText("sum")).shouldBe(visible);
+			activePanel().$(byText("echo")).shouldNotBe(visible);
+		}
+
+		@Test
+		@Story("Responsive tools critical path")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At the 375x667 mobile viewport the Run Tool button of the stacked detail pane is clickable for the sum tool: elementFromPoint at its centre returns the button itself, and running 7 + 8 through the DynamicJsonForm inputs (id=a / id=b) produces the deterministic result text \"15\" with the result block reporting the success marker \"Tool Result: Success\".")
+		@DisplayName("runTool_sum_7_8_returns15 — Run Tool clickable at 375x667, sum 7+8 -> 15")
+		void runTool_sum_7_8_returns15() {
+			// given
+			startApp(new Combo("sse"));
+			openAndConnect();
+			clickTab("tools");
+			ResponsiveTestHelpers.setViewportExactly(375, 667);
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$(".cursor-pointer")
+				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
+			selectRow("sum");
+			$("[data-testid=tools-detail-pane]").shouldBe(visible, Duration.ofSeconds(10));
+			SelenideElement runTool = $("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofSeconds(10));
+
+			// then: the Run Tool button is not intercepted at 375px.
+			scrollIntoView(runTool);
+			Assertions.assertTrue(ResponsiveTestHelpers.elementAtCenter("run-tool-button"),
+					"elementFromPoint at the Run Tool centre must return the button itself at 375x667");
+
+			// when: 7 + 8 through the DynamicJsonForm inputs (id=a / id=b), then a
+			// real click on Run Tool
+			$("#a").shouldBe(visible).setValue("7");
+			$("#b").shouldBe(visible).setValue("8");
+			runTool.click();
+
+			// then: the deterministic sum result appears in the active panel, and the
+			// result block reports a successful execution — an error or failed
+			// invocation must not satisfy the acceptance contract.
+			activePanel().shouldHave(text("15"), Duration.ofSeconds(15));
+			activePanel().$$("h4").findBy(text("Tool Result:")).shouldHave(text("Success"), Duration.ofSeconds(15));
+		}
+
 	}
 
 }
