@@ -172,6 +172,23 @@ class AuthProfileControllerTests {
 		}
 
 		@Test
+		@Story("Name uniqueness")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("register() maps a duplicate-name store rejection to 400 (client error, not a server fault)")
+		void register_duplicateName_returns400() throws Exception {
+			// given — the store rejects a duplicate name within the owner
+			given(AuthProfileControllerTests.this.store.register(eq(OWNER_A), any(AuthProfile.class)))
+				.willThrow(new IllegalArgumentException("a profile named 'prod' already exists for this session"));
+
+			// when/then
+			AuthProfileControllerTests.this.mockMvc
+				.perform(withOwner(post(API_BASE)).contentType(MediaType.APPLICATION_JSON)
+					.content("{\"profile\": {\"name\": \"prod\", \"type\": \"BEARER\", \"token\": \"tok-1\"}}"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.error").value("a profile named 'prod' already exists for this session"));
+		}
+
+		@Test
 		@Story("Client-credentials")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("register() of a CLIENT_CREDENTIALS profile runs the initial token exchange after registration")
@@ -315,6 +332,23 @@ class AuthProfileControllerTests {
 				.perform(withOwner(put(API_BASE + "/foreign")).contentType(MediaType.APPLICATION_JSON)
 					.content("{\"profile\": {\"name\": \"prod\", \"type\": \"BEARER\", \"token\": \"tok-2\"}}"))
 				.andExpect(status().isNotFound());
+		}
+
+		@Test
+		@Story("Name uniqueness")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("update() mapping a rename onto an existing name returns 400 (client error, never a silent overwrite)")
+		void update_duplicateName_returns400() throws Exception {
+			// given — the store rejects renaming onto an existing profile name
+			given(AuthProfileControllerTests.this.store.update(eq(OWNER_A), eq("pid-1"), any(AuthProfile.class)))
+				.willThrow(new IllegalArgumentException("a profile named 'prod' already exists for this session"));
+
+			// when/then
+			AuthProfileControllerTests.this.mockMvc
+				.perform(withOwner(put(API_BASE + "/pid-1")).contentType(MediaType.APPLICATION_JSON)
+					.content("{\"profile\": {\"name\": \"prod\", \"type\": \"BEARER\", \"token\": \"tok-2\"}}"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.error").value("a profile named 'prod' already exists for this session"));
 		}
 
 	}

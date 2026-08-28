@@ -29,5 +29,6 @@ code/reason/guidance/url, and the active profile is handed off to
 the proxy as `?profileId=` (server-owned, HttpOnly-signed owner
 session cookie — transparent to the UI). Covered by jest unit tests
 (AuthProfiles.test.tsx, auth-profiles.test.ts,
-connectionAuthErrors.test.ts) in
+connectionAuthErrors.test.ts, and the profileId-override D9B cases in
+useConnection.test.tsx) in
 spring-ai-mcp-inspector-ui/upstream-client.

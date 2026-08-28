@@ -104,6 +104,69 @@ class AuthProfileRegistrationRequestTests {
 		@Test
 		@Story("Validation")
 		@Severity(SeverityLevel.CRITICAL)
+		@Description("an inline API-key profile missing keyName is rejected")
+		void validate_inlineApiKeyMissingKeyName_throws() {
+			assertThatThrownBy(() -> inline(new ApiKeyProfile("k", " ", "val", ApiKeyPlacement.HEADER)).validate())
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("profile.keyName");
+		}
+
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("an inline API-key profile missing keyValue is rejected")
+		void validate_inlineApiKeyMissingKeyValue_throws() {
+			assertThatThrownBy(() -> inline(new ApiKeyProfile("k", "X-Key", " ", ApiKeyPlacement.HEADER)).validate())
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("profile.keyValue");
+		}
+
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("an inline API-key profile with a null placement is rejected")
+		void validate_inlineApiKeyNullPlacement_throws() {
+			assertThatThrownBy(() -> inline(new ApiKeyProfile("k", "X-Key", "val", null)).validate())
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("profile.placement");
+		}
+
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("an inline OAuth2 AUTHORIZATION_CODE profile with a non-S256 challenge method is rejected")
+		void validate_inlineOAuth2NonS256_throws() {
+			final OAuth2Profile profile = new OAuth2Profile("ac", OAuth2GrantMode.AUTHORIZATION_CODE, "https://t/token",
+					"cid", null, null, "https://t/auth", "https://app/cb", "ch", "plain");
+			assertThatThrownBy(() -> inline(profile).validate()).isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("profile.codeChallengeMethod must be exactly S256");
+		}
+
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("an inline OAuth2 profile with an unsupported grant mode is rejected")
+		void validate_inlineOAuth2InvalidGrantMode_throws() {
+			final OAuth2Profile profile = new OAuth2Profile("ac", null, "https://t/token", "cid", null, null, null,
+					null, null, null);
+			assertThatThrownBy(() -> inline(profile).validate()).isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("profile.grantMode must be CLIENT_CREDENTIALS or AUTHORIZATION_CODE");
+		}
+
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("an inline CLIENT_CREDENTIALS OAuth2 profile with a blank clientSecret is rejected")
+		void validate_inlineOAuth2MissingClientSecret_throws() {
+			final OAuth2Profile profile = new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS, "https://t/token",
+					"cid", " ", null, null, null, null, null);
+			assertThatThrownBy(() -> inline(profile).validate()).isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("profile.clientSecret");
+		}
+
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.CRITICAL)
 		@Description("an inline profile without a name is rejected")
 		void validate_inlineProfileBlankName_throws() {
 			assertThatThrownBy(() -> inline(new BearerProfile("  ", "tok")).validate())
@@ -149,6 +212,18 @@ class AuthProfileRegistrationRequestTests {
 					() -> pending("ac", "https://t/token", "cid", "https://t/auth", "https://app/cb", "ch", null)
 						.validate())
 				.hasMessageContaining("codeChallengeMethod");
+		}
+
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a pending auth-code request with a non-S256 challenge method is rejected")
+		void validate_pendingNonS256_throws() {
+			assertThatThrownBy(
+					() -> pending("ac", "https://t/token", "cid", "https://t/auth", "https://app/cb", "ch", "plain")
+						.validate())
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("codeChallengeMethod must be exactly S256");
 		}
 
 		@Test

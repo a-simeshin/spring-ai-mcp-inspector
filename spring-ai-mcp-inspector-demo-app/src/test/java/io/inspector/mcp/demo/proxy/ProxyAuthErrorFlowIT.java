@@ -78,8 +78,14 @@ class ProxyAuthErrorFlowIT {
 	/** Proxy auth header ({@code ProxyAuthFilter}). */
 	private static final String PROXY_AUTH_HEADER = "X-MCP-Proxy-Auth";
 
+	/** Inspector API auth header ({@code InspectorAuthFilter}). */
+	private static final String INSPECTOR_AUTH_HEADER = "X-MCP-Inspector-Auth";
+
 	/** Streamable session id header ({@code ProxyConstants}). */
 	private static final String MCP_SESSION_ID_HEADER = "mcp-session-id";
+
+	/** Signed session-owner cookie name ({@code OwnerTokenCodec}). */
+	private static final String OWNER_COOKIE = "MCP_INSPECTOR_SESSION";
 
 	private static final JsonMapper MAPPER = new JsonMapper();
 
@@ -180,19 +186,20 @@ class ProxyAuthErrorFlowIT {
 
 	/** Asserts the exact D3 DTO on an HTTP response body. */
 	private static void assertDto(final HttpResponse<String> response, final int status, final String code,
-			final String reason, final String guidance) throws Exception {
+			final String reason, final String guidance, final String url) throws Exception {
 		assertThat(response.statusCode()).as("DTO HTTP status on %s, body=%s", ProxyAppHarness.stack(), response.body())
 			.isEqualTo(status);
-		assertDto(MAPPER.readTree(response.body()), status, code, reason, guidance);
+		assertDto(MAPPER.readTree(response.body()), status, code, reason, guidance, url);
 	}
 
 	/** Asserts the exact D3 DTO fields on a parsed JSON node. */
 	private static void assertDto(final JsonNode dto, final int status, final String code, final String reason,
-			final String guidance) {
+			final String guidance, final String url) {
 		assertThat(dto.path("status").asInt()).as("DTO status on %s", ProxyAppHarness.stack()).isEqualTo(status);
 		assertThat(dto.path("code").asText()).as("DTO code on %s", ProxyAppHarness.stack()).isEqualTo(code);
 		assertThat(dto.path("reason").asText()).as("DTO reason on %s", ProxyAppHarness.stack()).isEqualTo(reason);
 		assertThat(dto.path("guidance").asText()).as("DTO guidance on %s", ProxyAppHarness.stack()).isEqualTo(guidance);
+		assertThat(dto.path("url").asText()).as("DTO url on %s", ProxyAppHarness.stack()).isEqualTo(url);
 	}
 
 	/** Asserts the D3 code for the given upstream status. */
@@ -252,6 +259,81 @@ class ProxyAuthErrorFlowIT {
 			});
 	}
 
+	/**
+	 * Sends an HTTP request against the running demo app.
+	 * @param url the target URL
+	 * @param method the HTTP method
+	 * @param body the request body, or {@code null}
+	 * @param inspectorAuth the {@code X-MCP-Inspector-Auth} header value, or {@code null}
+	 * @param proxyAuth the {@code X-MCP-Proxy-Auth} header value, or {@code null}
+	 * @param cookie the owner cookie value, or {@code null}
+	 * @param sessionId the {@code mcp-session-id} header value, or {@code null}
+	 * @return the HTTP response
+	 */
+	private static HttpResponse<String> send(final String url, final String method, final String body,
+			final String inspectorAuth, final String proxyAuth, final String cookie, final String sessionId)
+			throws Exception {
+		final HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
+			.timeout(BUDGET)
+			.header("Content-Type", "application/json")
+			.header("Accept", "application/json, text/event-stream");
+		if (inspectorAuth != null) {
+			builder.header(INSPECTOR_AUTH_HEADER, inspectorAuth);
+		}
+		if (proxyAuth != null) {
+			builder.header(PROXY_AUTH_HEADER, proxyAuth);
+		}
+		if (cookie != null) {
+			builder.header("Cookie", OWNER_COOKIE + "=" + cookie);
+		}
+		if (sessionId != null) {
+			builder.header(MCP_SESSION_ID_HEADER, sessionId);
+		}
+		final HttpRequest request = switch (method) {
+			case "GET" -> builder.GET().build();
+			case "DELETE" -> builder.DELETE().build();
+			case "PUT" -> builder.PUT(HttpRequest.BodyPublishers.ofString(body)).build();
+			default -> builder.POST(HttpRequest.BodyPublishers.ofString(body)).build();
+		};
+		return HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+	}
+
+	/**
+	 * Registers an inline bearer profile and returns the profile id plus the minted owner
+	 * cookie.
+	 */
+	private static String[] register(final String apiBase, final String body) throws Exception {
+		final HttpResponse<String> response = send(apiBase + "/auth-profile", "POST", body, AUTH_TOKEN, null, null,
+				null);
+		assertThat(response.statusCode())
+			.as("registration status on %s, body=%s", ProxyAppHarness.stack(), response.body())
+			.isEqualTo(200);
+		final String profileId = MAPPER.readTree(response.body()).path("profileId").asText();
+		final String cookie = ownerCookie(response);
+		return new String[] { profileId, cookie };
+	}
+
+	/**
+	 * Extracts the signed owner cookie value from a {@code Set-Cookie} response header.
+	 */
+	private static String ownerCookie(final HttpResponse<?> response) {
+		final String setCookie = response.headers().firstValue("Set-Cookie").orElse(null);
+		assertThat(setCookie).as("Set-Cookie owner cookie on %s", ProxyAppHarness.stack()).isNotNull();
+		final String prefix = OWNER_COOKIE + "=";
+		final int start = setCookie.indexOf(prefix);
+		assertThat(start).as("owner cookie named %s on %s", OWNER_COOKIE, ProxyAppHarness.stack()).isNotNegative();
+		final int end = setCookie.indexOf(';', start + prefix.length());
+		if (end > 0) {
+			return setCookie.substring(start + prefix.length(), end);
+		}
+		return setCookie.substring(start + prefix.length());
+	}
+
+	/** Composes the inspector API base (auth-profile endpoints). */
+	private String apiBase() {
+		return "http://127.0.0.1:" + ProxyAppHarness.port(this.app) + "/mcp-inspector/api";
+	}
+
 	@Nested
 	@DisplayName("Streamable transport (POST /mcp-inspector-api/mcp)")
 	class Streamable {
@@ -275,7 +357,7 @@ class ProxyAuthErrorFlowIT {
 				final HttpResponse<String> failed = postInitialize(base, stub.mcpUrl());
 
 				// then — the exact D3 DTO with the upstream status
-				assertDto(failed, status, codeFor(status), reasonFor(status), guidanceFor(status));
+				assertDto(failed, status, codeFor(status), reasonFor(status), guidanceFor(status), stub.mcpUrl());
 
 				// and — a failed handshake never issues a session id
 				assertThat(failed.headers().firstValue(MCP_SESSION_ID_HEADER))
@@ -350,7 +432,65 @@ class ProxyAuthErrorFlowIT {
 						toolsListFrame());
 
 				// then — the exact D3 DTO
-				assertDto(failed, status, codeFor(status), reasonFor(status), guidanceFor(status));
+				assertDto(failed, status, codeFor(status), reasonFor(status), guidanceFor(status), stub.mcpUrl());
+			}
+		}
+
+		@ParameterizedTest(name = "upstream {0}")
+		@ValueSource(ints = { 401, 403 })
+		@DisplayName("profile-bound handshake 401/403 cleans up the session and its profile")
+		@Story("Streamable handshake errors with profile")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A profile-bound streamable initialize answered 401/403 returns the exact D3 DTO and the failed "
+				+ "session is torn down by the error handler (removeAndClose -> clearBySession): the owner's profile "
+				+ "and its binding are gone from the store, and a later connect with the same profile id is rejected "
+				+ "as unknown — no orphan registry entry, no retained profile")
+		void handshake_withProfile_whenUpstreamAnswersAuthError_cleansUpSessionAndProfile(final int status)
+				throws Exception {
+			// given
+			ProxyAuthErrorFlowIT.this.app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
+			final String base = proxyBase();
+			final String apiBase = apiBase();
+			final String[] reg = register(apiBase,
+					"{\"profile\":{\"name\":\"error-flow\",\"type\":\"BEARER\",\"token\":\"cleanup-tok\"}}");
+			final String profileId = reg[0];
+			final String cookie = reg[1];
+			assertThat(MAPPER
+				.readTree(send(apiBase + "/auth-profile", "GET", null, AUTH_TOKEN, null, cookie, null).body()))
+				.as("profile listed before handshake on %s", ProxyAppHarness.stack())
+				.isNotEmpty();
+			try (final ScriptedMcpStub stub = new ScriptedMcpStub()) {
+				stub.postStatus(status);
+
+				// when — the first POST is the initialize handshake with the profile
+				final HttpResponse<String> failed = send(
+						base + "/mcp?url=" + URLEncoder.encode(stub.mcpUrl(), StandardCharsets.UTF_8) + "&profileId="
+								+ profileId,
+						"POST", MAPPER.writeValueAsString(initializeFrame()), null, "Bearer " + AUTH_TOKEN, cookie,
+						null);
+
+				// then — the exact D3 DTO with the upstream status
+				assertDto(failed, status, codeFor(status), reasonFor(status), guidanceFor(status), stub.mcpUrl());
+
+				// and — the owner's profile AND binding are gone: the error handler
+				// removed the orphan session and cleared the bound profile from the
+				// store (no leak, no retained profile)
+				assertThat(MAPPER
+					.readTree(send(apiBase + "/auth-profile", "GET", null, AUTH_TOKEN, null, cookie, null).body()))
+					.as("profile after failed handshake on %s", ProxyAppHarness.stack())
+					.isEmpty();
+
+				// and — a later connect with the same profile id is rejected as
+				// unknown (400), proving the profile is not retained
+				stub.postStatus(200);
+				final HttpResponse<String> rejected = send(
+						base + "/mcp?url=" + URLEncoder.encode(stub.mcpUrl(), StandardCharsets.UTF_8) + "&profileId="
+								+ profileId,
+						"POST", MAPPER.writeValueAsString(initializeFrame()), null, "Bearer " + AUTH_TOKEN, cookie,
+						null);
+				assertThat(rejected.statusCode())
+					.as("later connect with cleared profile on %s, body=%s", ProxyAppHarness.stack(), rejected.body())
+					.isEqualTo(400);
 			}
 		}
 
@@ -383,10 +523,7 @@ class ProxyAuthErrorFlowIT {
 				final String sessionId = stream.sessionId();
 				final SseFrame errorFrame = stream.awaitFrame("error");
 				assertDto(MAPPER.readTree(errorFrame.data()), status, codeFor(status), reasonFor(status),
-						guidanceFor(status));
-				assertThat(MAPPER.readTree(errorFrame.data()).path("url").asText())
-					.as("redacted url on %s", ProxyAppHarness.stack())
-					.isEqualTo(stub.sseUrl());
+						guidanceFor(status), stub.sseUrl());
 
 				// and — the stream ends normally, no messages were relayed
 				stream.awaitEnd();
@@ -417,10 +554,8 @@ class ProxyAuthErrorFlowIT {
 				// when & then — the error event carries the redirect DTO
 				final String sessionId = stream.sessionId();
 				final SseFrame errorFrame = stream.awaitFrame("error");
-				assertDto(MAPPER.readTree(errorFrame.data()), 302, codeFor(302), reasonFor(302), guidanceFor(302));
-				assertThat(MAPPER.readTree(errorFrame.data()).path("url").asText())
-					.as("redacted url on %s", ProxyAppHarness.stack())
-					.isEqualTo(stub.sseUrl());
+				assertDto(MAPPER.readTree(errorFrame.data()), 302, codeFor(302), reasonFor(302), guidanceFor(302),
+						stub.sseUrl());
 
 				// and — the stream ends normally and the session is deleted
 				stream.awaitEnd();
@@ -464,7 +599,7 @@ class ProxyAuthErrorFlowIT {
 					.toList();
 				if (!errors.isEmpty()) {
 					assertDto(MAPPER.readTree(errors.get(0).data()), status, codeFor(status), reasonFor(status),
-							guidanceFor(status));
+							guidanceFor(status), stub.sseUrl());
 				}
 
 				// and — the failed session is deleted (no partial connect state)
