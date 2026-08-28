@@ -81,6 +81,7 @@ public record AuthProfileRegistrationRequest(AuthProfile profile, String name, A
 	public void validate() {
 		if (this.profile != null) {
 			Assert.hasText(this.profile.name(), "profile.name must not be blank");
+			validateInline(this.profile);
 			return;
 		}
 		if (isAuthCodePending()) {
@@ -91,6 +92,7 @@ public record AuthProfileRegistrationRequest(AuthProfile profile, String name, A
 			Assert.hasText(this.redirectUri, "redirectUri must not be blank");
 			Assert.hasText(this.codeChallenge, "codeChallenge must not be blank");
 			Assert.hasText(this.codeChallengeMethod, "codeChallengeMethod must not be blank");
+			Assert.isTrue("S256".equals(this.codeChallengeMethod), "codeChallengeMethod must be exactly S256");
 			return;
 		}
 		if (isPrefillReference()) {
@@ -100,6 +102,49 @@ public record AuthProfileRegistrationRequest(AuthProfile profile, String name, A
 		throw new IllegalArgumentException(
 				"auth-profile registration must carry an inline profile, a prefill {name,type} reference, "
 						+ "or an auth-code PENDING profile");
+	}
+
+	/**
+	 * Validates the subtype-specific secret fields of an inline profile: every field the
+	 * concrete {@link AuthProfile} kind requires must be present and non-blank, and an
+	 * authorization-code OAuth2 profile must use exactly {@code S256} PKCE.
+	 * @param profile the inline profile
+	 */
+	private static void validateInline(final AuthProfile profile) {
+		if (profile instanceof BearerProfile bearer) {
+			Assert.hasText(bearer.token(), "profile.token must not be blank");
+		}
+		else if (profile instanceof ApiKeyProfile apiKey) {
+			Assert.hasText(apiKey.keyName(), "profile.keyName must not be blank");
+			Assert.hasText(apiKey.keyValue(), "profile.keyValue must not be blank");
+			Assert.notNull(apiKey.placement(), "profile.placement must not be null");
+		}
+		else if (profile instanceof OAuth2Profile oauth2) {
+			Assert.hasText(oauth2.tokenUrl(), "profile.tokenUrl must not be blank");
+			Assert.hasText(oauth2.clientId(), "profile.clientId must not be blank");
+			if (oauth2.grantMode() == OAuth2GrantMode.CLIENT_CREDENTIALS) {
+				Assert.hasText(oauth2.clientSecret(), "profile.clientSecret must not be blank");
+			}
+			else if (oauth2.grantMode() == OAuth2GrantMode.AUTHORIZATION_CODE) {
+				Assert.hasText(oauth2.authorizationUrl(), "profile.authorizationUrl must not be blank");
+				Assert.hasText(oauth2.redirectUri(), "profile.redirectUri must not be blank");
+				Assert.hasText(oauth2.codeChallenge(), "profile.codeChallenge must not be blank");
+				Assert.hasText(oauth2.codeChallengeMethod(), "profile.codeChallengeMethod must not be blank");
+				Assert.isTrue("S256".equals(oauth2.codeChallengeMethod()),
+						"profile.codeChallengeMethod must be exactly S256");
+			}
+			else {
+				throw new IllegalArgumentException(
+						"profile.grantMode must be CLIENT_CREDENTIALS or AUTHORIZATION_CODE");
+			}
+		}
+		else if (profile instanceof CustomHeadersProfile custom) {
+			Assert.notEmpty(custom.headers(), "profile.headers must not be empty");
+			custom.headers().forEach((header) -> {
+				Assert.hasText(header.name(), "profile.headers[].name must not be blank");
+				Assert.hasText(header.value(), "profile.headers[].value must not be blank");
+			});
+		}
 	}
 
 	/**

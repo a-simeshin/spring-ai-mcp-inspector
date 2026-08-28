@@ -726,8 +726,9 @@ public class ProxyHandler {
 		final AtomicReference<String> authorizationRef = new AtomicReference<>(
 				(headers != null) ? headers.authorization() : null);
 		final McpClientTransport target;
+		final URI resolved;
 		try {
-			final URI resolved = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
+			resolved = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
 			target = (headers != null)
 					? this.transportFactory.openStreamableWithAuth(resolved, headers, authorizationRef)
 					: openStreamableWithInboundHeaders(resolved, authorization, customHeaders);
@@ -745,6 +746,9 @@ public class ProxyHandler {
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
 		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser,
 				authorizationRef);
+		// D5: remember the resolved upstream target so streamable error DTOs can attach
+		// the redacted url (scheme://host[:port]/path, query/fragment stripped).
+		session.targetUri(resolved);
 		if (profileId != null && !profileId.isBlank()) {
 			// One-time bind: rejected reuse / foreign ids fail the handoff (D4/D8).
 			if (!this.authProfileStore.bind(ownerId, profileId, sessionId)) {
@@ -840,7 +844,15 @@ public class ProxyHandler {
 			// later call) becomes the structured DTO; anything else stays the legacy 504.
 			final ProxyErrorDto dto = ProxyErrorMapper.map(ex, TransportKind.STREAMABLE);
 			if (dto != null) {
-				return ServerResponse.status(dto.status()).bodyValue(dto);
+				// D3: a failed first streamable POST (the initialize) never returned a
+				// session id to the client, so the registered/bound session is orphaned —
+				// tear it down instead of leaking it. The D5-redacted upstream url is
+				// attached so the browser sees scheme/host/path without any secret.
+				if (includeSessionHeader) {
+					this.registry.removeAndClose(session.sessionId());
+				}
+				return ServerResponse.status(dto.status())
+					.bodyValue(dto.withUrl(ProxyErrorDto.redactUrl(session.targetUri())));
 			}
 			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
 			LOG.warn("proxy[{}] await response failed ({}): {}", session.sessionId(), failure.reason().wire(),
