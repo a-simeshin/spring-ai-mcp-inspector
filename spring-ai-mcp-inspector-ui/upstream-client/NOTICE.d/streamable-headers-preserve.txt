@@ -1,0 +1,15 @@
+spring-ai-mcp-inspector-ui/upstream-client/src/lib/hooks/useConnection.ts
+— the proxied streamable/SSE/stdio fetch wrappers merge SDK headers
+instead of overwriting them (issue #54). The SDK hands the proxied
+streamable fetch an init whose `headers` is a real Headers instance
+(content-type: application/json, accept, session/protocol); the
+previous `{ ...headers, ...proxyHeaders }` clobbered it and the server
+replied 415 Unsupported Media Type on every streamable connect through
+the proxy. Adds a module-level `mergeRequestHeaders` that normalizes
+each HeadersInit source (Headers instance, tuple array, or plain
+record) into a plain object and merges in order, so the SDK headers
+survive and the inspector's auth + proxy headers win on name collision.
+Covered by jest unit test
+(useConnection.test.tsx "preserves SDK Headers instance through the
+streamable fetch wrapper") in
+spring-ai-mcp-inspector-ui/upstream-client.

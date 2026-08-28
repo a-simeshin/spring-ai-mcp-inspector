@@ -1221,6 +1221,69 @@ describe("useConnection", () => {
         mockStreamableHTTPTransport.options?.requestInit?.headers,
       ).toHaveProperty("X-MCP-Proxy-Auth", "Bearer test-proxy-token");
     });
+
+    test("preserves SDK Headers instance through the streamable fetch wrapper", async () => {
+      const propsWithStreamableHttp = {
+        ...defaultProps,
+        connectionType: "proxy" as const,
+        transportType: "streamable-http" as const,
+        config: {
+          ...DEFAULT_INSPECTOR_CONFIG,
+          MCP_PROXY_AUTH_TOKEN: {
+            ...DEFAULT_INSPECTOR_CONFIG.MCP_PROXY_AUTH_TOKEN,
+            value: "test-proxy-token",
+          },
+        },
+      };
+
+      const { result } = renderHook(() =>
+        useConnection(propsWithStreamableHttp),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const streamableFetch = mockStreamableHTTPTransport.options
+        ?.fetch as
+        | ((
+            url: string | URL | globalThis.Request,
+            init?: RequestInit,
+          ) => Promise<Response>)
+        | undefined;
+      expect(streamableFetch).toBeDefined();
+
+      // The SDK hands the proxied streamable fetch an init whose headers is a
+      // real Headers instance (content-type, accept, session/protocol). A plain
+      // `{...init.headers}` spread silently drops every entry; the wrapper must
+      // normalize it and keep the SDK headers while merging our auth + proxy
+      // headers in.
+      (global.fetch as jest.Mock).mockClear();
+      const sdkHeaders = new Headers({
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-session-id": "abc",
+      });
+
+      const testUrl = "http://test.com/mcp";
+      await streamableFetch?.(testUrl, {
+        method: "POST",
+        headers: sdkHeaders,
+        body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list" }),
+      });
+
+      const sent = (global.fetch as jest.Mock).mock.calls.at(-1)?.[1].headers;
+      expect(sent).toHaveProperty("content-type", "application/json");
+      expect(sent).toHaveProperty(
+        "accept",
+        "application/json, text/event-stream",
+      );
+      expect(sent).toHaveProperty("mcp-session-id", "abc");
+      expect(sent).toHaveProperty(
+        "X-MCP-Proxy-Auth",
+        "Bearer test-proxy-token",
+      );
+    });
   });
 
   describe("Custom Headers", () => {

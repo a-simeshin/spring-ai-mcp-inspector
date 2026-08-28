@@ -119,6 +119,38 @@ interface UseConnectionOptions {
   metadata?: Record<string, string>;
 }
 
+/**
+ * [spring-ai-mcp-inspector PATCH] Merge HeadersInit sources into a plain
+ * record, later sources overriding earlier keys on name collision (issue #54).
+ * The SDK hands the proxied streamable/SSE fetch a real `Headers` instance
+ * (content-type: application/json, accept, session/protocol headers); spreading
+ * it as `{...init.headers}` silently yields an empty object, so a naive merge
+ * would drop every SDK header. Normalizing each source first keeps the SDK
+ * headers and lets our auth + proxy headers win on collision.
+ */
+const mergeRequestHeaders = (
+  ...sources: Array<HeadersInit | undefined>
+): Record<string, string> => {
+  const merged: Record<string, string> = {};
+  for (const source of sources) {
+    if (!source) {
+      continue;
+    }
+    if (typeof Headers !== "undefined" && source instanceof Headers) {
+      source.forEach((value, key) => {
+        merged[key] = value;
+      });
+    } else if (Array.isArray(source)) {
+      for (const [key, value] of source) {
+        merged[key] = value;
+      }
+    } else {
+      Object.assign(merged, source);
+    }
+  }
+  return merged;
+};
+
 export function useConnection({
   transportType,
   command,
@@ -793,7 +825,11 @@ export function useConnection({
                 ) =>
                   fetch(url, {
                     ...init,
-                    headers: { ...headers, ...proxyHeaders },
+                    headers: mergeRequestHeaders(
+                      init?.headers,
+                      headers,
+                      proxyHeaders,
+                    ),
                   }),
               },
               requestInit: {
@@ -823,7 +859,11 @@ export function useConnection({
                 fetch: (url, init) =>
                   sseFetchWithErrorObservation(url, {
                     ...init,
-                    headers: { ...headers, ...proxyHeaders },
+                    headers: mergeRequestHeaders(
+                      init?.headers,
+                      headers,
+                      proxyHeaders,
+                    ),
                   }),
               },
               requestInit: {
@@ -851,7 +891,11 @@ export function useConnection({
               ) => {
                 const response = await streamableFetchWithDtoParse(url, {
                   ...init,
-                  headers: { ...headers, ...proxyHeaders },
+                  headers: mergeRequestHeaders(
+                    init?.headers,
+                    headers,
+                    proxyHeaders,
+                  ),
                 });
                 if (!response.ok) {
                   const failure = await parseConnectFailureResponse(response);
@@ -868,7 +912,11 @@ export function useConnection({
                 ) =>
                   fetch(url, {
                     ...init,
-                    headers: { ...headers, ...proxyHeaders },
+                    headers: mergeRequestHeaders(
+                      init?.headers,
+                      headers,
+                      proxyHeaders,
+                    ),
                   }),
               },
               requestInit: {
