@@ -1336,8 +1336,11 @@ const App = () => {
         <OAuthCallback
           onConnect={onOAuthConnect}
           onProfileAuthorized={(profileId) => {
+            // D9B: pass the freshly authorized profileId into the very first connect
+            // so it is applied even before the activeProfileId state update re-renders
+            // the hook closure.
             setActiveProfileId(profileId);
-            void connectMcpServer();
+            void connectMcpServer(undefined, 0, profileId);
           }}
         />
       </Suspense>

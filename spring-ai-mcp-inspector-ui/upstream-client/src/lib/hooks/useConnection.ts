@@ -594,7 +594,11 @@ export function useConnection({
       });
     });
 
-  const connect = async (_e?: unknown, retryCount: number = 0) => {
+  const connect = async (
+    _e?: unknown,
+    retryCount: number = 0,
+    profileIdOverride?: string | null,
+  ) => {
     // [spring-ai-mcp-inspector PATCH] Both failure banners reset on every attempt:
     // the transport one (issue #56) and the authorization one (issue #54).
     setConnectionError(null);
@@ -934,9 +938,16 @@ export function useConnection({
         }
         serverUrl = mcpProxyServerUrl as URL;
         // [spring-ai-mcp-inspector PATCH] Active named auth profile (issue #54,
-        // D2): the proxy applies the owner-scoped profile server-side.
-        if (activeProfileId) {
-          serverUrl.searchParams.append("profileId", activeProfileId);
+        // D2): the proxy applies the owner-scoped profile server-side. The
+        // profileIdOverride lets a freshly authorized OAuth2 callback connect
+        // with the just-returned profileId on the very first attempt, before the
+        // state update has re-rendered the hook (issue #54, D9B).
+        const effectiveProfileId =
+          profileIdOverride !== undefined
+            ? profileIdOverride
+            : activeProfileId;
+        if (effectiveProfileId) {
+          serverUrl.searchParams.append("profileId", effectiveProfileId);
         }
         serverUrl.searchParams.append("transportType", transportType);
       }

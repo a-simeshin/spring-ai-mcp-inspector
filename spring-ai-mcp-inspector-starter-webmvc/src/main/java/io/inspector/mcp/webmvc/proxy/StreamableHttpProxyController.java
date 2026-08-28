@@ -421,7 +421,8 @@ public class StreamableHttpProxyController {
 				if (includeSessionHeader) {
 					this.registry.removeAndClose(session.sessionId());
 				}
-				return ResponseEntity.status(dto.status()).body(dto);
+				return ResponseEntity.status(dto.status())
+					.body(dto.withUrl(ProxyErrorDto.redactUrl(session.targetUri())));
 			}
 			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
 			LOG.warn("proxy[{}] await response failed ({}): {}", session.sessionId(), failure.reason().wire(),
@@ -464,8 +465,9 @@ public class StreamableHttpProxyController {
 		final AtomicReference<String> authorizationRef = new AtomicReference<>(
 				(headers != null) ? headers.authorization() : null);
 		final McpClientTransport target;
+		final URI resolved;
 		try {
-			final URI resolved = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
+			resolved = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
 			target = (headers != null)
 					? this.transportFactory.openStreamableWithAuth(resolved, headers, authorizationRef)
 					: openStreamableWithInboundHeaders(resolved);
@@ -479,6 +481,9 @@ public class StreamableHttpProxyController {
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(REPLAY_BUFFER);
 		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser,
 				authorizationRef);
+		// D5: remember the resolved upstream target so streamable error DTOs can attach
+		// the redacted url (scheme://host[:port]/path, query/fragment stripped).
+		session.targetUri(resolved);
 		if (profileId != null && !profileId.isBlank()) {
 			// One-time bind: rejected reuse / foreign ids fail the handoff (D4/D8).
 			if (!this.authProfileStore.bind(ownerId, profileId, sessionId)) {

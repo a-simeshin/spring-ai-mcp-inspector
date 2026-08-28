@@ -87,8 +87,13 @@ public class AuthProfileStore {
 		Assert.notNull(profile, "profile must not be null");
 		Assert.hasText(profile.name(), "profile.name must not be blank");
 		synchronized (this) {
-			Assert.state(findByName(ownerId, profile.name()).isEmpty(),
-					"a profile named '" + profile.name() + "' already exists for this session");
+			// IllegalArgumentException (not Assert.state / IllegalStateException) so the
+			// caller's 400 handler catches it: a duplicate name is a client error, not a
+			// server fault, and must never surface as a 500.
+			if (findByName(ownerId, profile.name()).isPresent()) {
+				throw new IllegalArgumentException(
+						"a profile named '" + profile.name() + "' already exists for this session");
+			}
 			final String profileId = UUID.randomUUID().toString();
 			final ProfileState state = isPendingAuthCode(profile) ? ProfileState.PENDING : ProfileState.REGISTERED;
 			this.entries.put(profileId,
@@ -269,6 +274,14 @@ public class AuthProfileStore {
 			}
 			if (entry.state() == ProfileState.BOUND) {
 				return false;
+			}
+			// Renaming onto an existing profile name is a client error, surfaced as
+			// IllegalArgumentException (the caller's 400 handler) — never silently
+			// allowing two profiles with the same name.
+			final Optional<Entry> nameOwner = findByName(ownerId, profile.name());
+			if (nameOwner.isPresent() && !nameOwner.get().profileId().equals(profileId)) {
+				throw new IllegalArgumentException(
+						"a profile named '" + profile.name() + "' already exists for this session");
 			}
 			final ProfileState nextState = isPendingAuthCode(profile) ? ProfileState.PENDING : ProfileState.REGISTERED;
 			this.entries.put(profileId, entry.withProfile(profile).withState(nextState));

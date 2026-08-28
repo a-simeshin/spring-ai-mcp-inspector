@@ -16,6 +16,7 @@
 
 package io.inspector.mcp.core.proxy;
 
+import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
@@ -117,6 +118,9 @@ public final class ProxySession {
 
 	/** Optional MCP session id captured from the upstream transport's response. */
 	private volatile String upstreamSessionId;
+
+	/** Upstream target URI resolved at open time, for D5-redacted error DTO urls. */
+	private volatile URI targetUri;
 
 	/**
 	 * Owning browser-session id of the bound auth profile; {@code null} when the session
@@ -246,6 +250,14 @@ public final class ProxySession {
 
 	public void upstreamSessionId(final String value) {
 		this.upstreamSessionId = value;
+	}
+
+	public URI targetUri() {
+		return this.targetUri;
+	}
+
+	public void targetUri(final URI value) {
+		this.targetUri = value;
 	}
 
 	public Instant lastActivity() {
