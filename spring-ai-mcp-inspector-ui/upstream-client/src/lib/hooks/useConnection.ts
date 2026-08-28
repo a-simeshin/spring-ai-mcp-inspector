@@ -120,6 +120,38 @@ interface UseConnectionOptions {
   metadata?: Record<string, string>;
 }
 
+/**
+ * [spring-ai-mcp-inspector PATCH] Merge HeadersInit sources into a plain
+ * record, later sources overriding earlier keys on name collision (issue #54).
+ * The SDK hands the proxied streamable/SSE fetch a real `Headers` instance
+ * (content-type: application/json, accept, session/protocol headers); spreading
+ * it as `{...init.headers}` silently yields an empty object, so a naive merge
+ * would drop every SDK header. Normalizing each source first keeps the SDK
+ * headers and lets our auth + proxy headers win on collision.
+ */
+const mergeRequestHeaders = (
+  ...sources: Array<HeadersInit | undefined>
+): Record<string, string> => {
+  const merged: Record<string, string> = {};
+  for (const source of sources) {
+    if (!source) {
+      continue;
+    }
+    if (typeof Headers !== "undefined" && source instanceof Headers) {
+      source.forEach((value, key) => {
+        merged[key] = value;
+      });
+    } else if (Array.isArray(source)) {
+      for (const [key, value] of source) {
+        merged[key] = value;
+      }
+    } else {
+      Object.assign(merged, source);
+    }
+  }
+  return merged;
+};
+
 export function useConnection({
   transportType,
   command,
@@ -803,7 +835,11 @@ export function useConnection({
                 ) =>
                   fetch(url, {
                     ...init,
-                    headers: { ...headers, ...proxyHeaders },
+                    headers: mergeRequestHeaders(
+                      init?.headers,
+                      headers,
+                      proxyHeaders,
+                    ),
                   }),
               },
               requestInit: {
@@ -833,7 +869,11 @@ export function useConnection({
                 fetch: (url, init) =>
                   sseFetchWithErrorObservation(url, {
                     ...init,
-                    headers: { ...headers, ...proxyHeaders },
+                    headers: mergeRequestHeaders(
+                      init?.headers,
+                      headers,
+                      proxyHeaders,
+                    ),
                   }),
               },
               requestInit: {
@@ -848,13 +888,33 @@ export function useConnection({
             mcpProxyServerUrl.searchParams.append("url", sseUrl);
             transportOptions = {
               authProvider: serverAuthProvider,
-    // [spring-ai-mcp-inspector PATCH] Parse the D3 DTO from a 401/403
-    // response body (issue #54).
-    fetch: (url, init) =>
-     streamableFetchWithDtoParse(url, {
-      ...init,
-      headers: { ...headers, ...proxyHeaders },
-     }),
+              // [spring-ai-mcp-inspector PATCH] One wrapper, two contracts, in this
+              // order. streamableFetchWithDtoParse reads the proxy's structured
+              // authorization DTO out of a 401/403 from a LIVE server (issue #54)
+              // and records it without throwing. What survives that and is still
+              // not ok may carry the MCP_CONNECT_FAILED contract (issue #56),
+              // which means the server was never reached; it throws, because the
+              // SDK would otherwise collapse the body into an opaque status error.
+              fetch: async (
+                url: string | URL | globalThis.Request,
+                init?: RequestInit,
+              ) => {
+                const response = await streamableFetchWithDtoParse(url, {
+                  ...init,
+                  headers: mergeRequestHeaders(
+                    init?.headers,
+                    headers,
+                    proxyHeaders,
+                  ),
+                });
+                if (!response.ok) {
+                  const failure = await parseConnectFailureResponse(response);
+                  if (failure) {
+                    throw new ConnectFailedError(failure);
+                  }
+                }
+                return response;
+              },
               eventSourceInit: {
                 fetch: (
                   url: string | URL | globalThis.Request,
@@ -862,7 +922,11 @@ export function useConnection({
                 ) =>
                   fetch(url, {
                     ...init,
-                    headers: { ...headers, ...proxyHeaders },
+                    headers: mergeRequestHeaders(
+                      init?.headers,
+                      headers,
+                      proxyHeaders,
+                    ),
                   }),
               },
               requestInit: {
