@@ -153,11 +153,29 @@ public final class McpProxy {
 				return Mono.empty();
 			}
 			recordOutbound(session, typed, frame);
-			return sendWithOneRetry(session, typed);
-			})
-			.onErrorContinue((err, obj) -> LOG.warn("proxy[{}] browser->target stream error: {}", session.sessionId(),
-					err.toString()))
-			.subscribe();
+			// Per-frame onErrorResume (NOT onErrorContinue) keeps the relay alive
+			// without Reactor's context-scoped error-continue key. The SDK's internal
+			// chains re-apply the subscriber context via contextWrite, so a plain
+			// onErrorContinue here made their flatMaps route 401/403 errors into this
+			// handler instead of sendWithOneRetry's onErrorResume: the D9 one-retry
+			// never fired and the per-request POST awaiter hung until the
+			// streamable-request timeout. The SDK also re-surfaces protocol-level
+			// replies from a LIVE server (e.g. a 404 "session not found") through this
+			// same pump, so only transport-level failures (refused / dns / timeout)
+			// justify tearing the session down — anything unrecognized is logged and
+			// the relay keeps forwarding. failUpstream is idempotent, so the first
+			// terminal signal wins (sendWithOneRetry already failed the session for
+			// non-retryable errors before re-throwing).
+			return sendWithOneRetry(session, typed).onErrorResume((err) -> {
+				final ProxyConnectFailure failure = ProxyConnectFailure.classify(err);
+				LOG.warn("proxy[{}] browser->target stream error ({}): {}", session.sessionId(),
+						failure.reason().wire(), err.toString());
+				if (failure.reason() != ProxyConnectFailure.Reason.UNKNOWN) {
+					session.failUpstream(err);
+				}
+				return Mono.empty();
+			});
+		}).subscribe();
 
 		// When the session closes, drop its pending request correlations so abandoned
 		// calls leave no residue in the recorder.
@@ -171,7 +189,16 @@ public final class McpProxy {
 		// streamable-request timeout.
 		session.targetTransport().setExceptionHandler((err) -> {
 			LOG.warn("proxy[{}] upstream transport error: {}", session.sessionId(), String.valueOf(err));
-			session.failUpstream(err);
+			// D9: a retryable 401 (client-credentials session) must NOT fail the
+			// session here. The SDK invokes this handler BEFORE the sendMessage error
+			// reaches sendWithOneRetry's onErrorResume, so failing the session first
+			// would release the awaiter with the first 401 and tear the session down
+			// (evicting the stored credentials) before the one-retry could refresh and
+			// re-send. The retry path fails the session itself when the retried call
+			// fails.
+			if (!isRetryableAuthError(err, session)) {
+				session.failUpstream(err);
+			}
 		});
 
 		// Target → browser: the connect handler is called once per inbound frame.

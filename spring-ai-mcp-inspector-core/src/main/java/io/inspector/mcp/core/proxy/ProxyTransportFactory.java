@@ -18,7 +18,9 @@ package io.inspector.mcp.core.proxy;
 
 import java.net.URI;
 import java.net.URLEncoder;
+import java.net.http.HttpRequest;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -91,14 +93,37 @@ public class ProxyTransportFactory {
 		return thread;
 	});
 
+	/** Fallback per-request SSE timeout when no explicit value is supplied. */
+	private static final Duration DEFAULT_SSE_REQUEST_TIMEOUT = Duration.ofSeconds(10);
+
 	private final JsonMapper objectMapper;
 
+	/**
+	 * Per-request wall-clock budget for SSE transport calls. Applied via the transport
+	 * builder's default {@code HttpRequest.Builder} so both the handshake {@code GET} and
+	 * every message {@code POST} fail with {@code HttpTimeoutException} when the upstream
+	 * accepts the connection but never answers — the SDK itself has no such timeout.
+	 * Defaults to 10s ({@code McpInspectorProperties.Timeouts#sseRequest}).
+	 */
+	private final Duration sseRequestTimeout;
+
 	public ProxyTransportFactory() {
-		this(new JsonMapper());
+		this(new JsonMapper(), DEFAULT_SSE_REQUEST_TIMEOUT);
 	}
 
 	public ProxyTransportFactory(final JsonMapper objectMapper) {
+		this(objectMapper, DEFAULT_SSE_REQUEST_TIMEOUT);
+	}
+
+	/**
+	 * Creates a factory whose SSE transports apply {@code sseRequestTimeout} to every
+	 * outbound call.
+	 * @param objectMapper the JSON mapper backing the transports (may be {@code null})
+	 * @param sseRequestTimeout the per-request SSE timeout (never {@code null})
+	 */
+	public ProxyTransportFactory(final JsonMapper objectMapper, final Duration sseRequestTimeout) {
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
+		this.sseRequestTimeout = (sseRequestTimeout != null) ? sseRequestTimeout : DEFAULT_SSE_REQUEST_TIMEOUT;
 	}
 
 	/**
@@ -141,6 +166,7 @@ public class ProxyTransportFactory {
 		final HttpClientSseClientTransport.Builder builder = HttpClientSseClientTransport.builder(baseUri)
 			.sseEndpoint(ssePath)
 			.messageEndpointValidator(noopValidator())
+			.requestBuilder(HttpRequest.newBuilder().timeout(this.sseRequestTimeout))
 			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR));
 		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(authorization, customHeaders);
 		if (customizer != null) {
@@ -176,6 +202,7 @@ public class ProxyTransportFactory {
 		final HttpClientSseClientTransport.Builder builder = HttpClientSseClientTransport.builder(baseUri)
 			.sseEndpoint(appendQuery(ssePath, headers.queryParams()))
 			.messageEndpointValidator(noopValidator())
+			.requestBuilder(HttpRequest.newBuilder().timeout(this.sseRequestTimeout))
 			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR));
 		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(headers, authorizationRef);
 		if (customizer != null) {
