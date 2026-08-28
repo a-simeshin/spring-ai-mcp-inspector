@@ -52,6 +52,7 @@ import io.inspector.mcp.core.transport.TransportType;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /** Unit tests for {@link ProxyTransportFactory}. */
 @Epic("MCP Inspector Core")
@@ -76,7 +77,8 @@ class ProxyTransportFactoryTests {
 			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri);
 
 			// then
-			assertThat(transport).isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -91,7 +93,8 @@ class ProxyTransportFactoryTests {
 			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri);
 
 			// then
-			assertThat(transport).isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -119,7 +122,8 @@ class ProxyTransportFactoryTests {
 					"Bearer tok-123", null);
 
 			// then
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -136,7 +140,8 @@ class ProxyTransportFactoryTests {
 					Map.of("X-Tenant", "acme"));
 
 			// then
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -153,7 +158,8 @@ class ProxyTransportFactoryTests {
 					"Bearer tok-abc", Map.of("X-Tenant", "acme"));
 
 			// then
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -170,7 +176,8 @@ class ProxyTransportFactoryTests {
 					Map.of());
 
 			// then
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -186,7 +193,8 @@ class ProxyTransportFactoryTests {
 			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
 					Map.of("host", "evil.example.com"));
 
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -204,7 +212,8 @@ class ProxyTransportFactoryTests {
 			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
 					customHeaders);
 
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 	}
@@ -503,7 +512,8 @@ class ProxyTransportFactoryTests {
 					headers, null);
 
 			// then
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -520,7 +530,8 @@ class ProxyTransportFactoryTests {
 					AuthHeaders.none(), null);
 
 			// then
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -537,7 +548,8 @@ class ProxyTransportFactoryTests {
 					headers, null);
 
 			// then
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -555,7 +567,8 @@ class ProxyTransportFactoryTests {
 					headers, authorizationRef);
 
 			// then
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -572,7 +585,8 @@ class ProxyTransportFactoryTests {
 					headers, null);
 
 			// then
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -594,7 +608,8 @@ class ProxyTransportFactoryTests {
 			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSseWithAuth(sseUri,
 					headers, null);
 
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 	}
@@ -837,6 +852,83 @@ class ProxyTransportFactoryTests {
 
 		private void connectAndClose(final McpClientTransport transport) {
 			transport.connect((inbound) -> inbound).block(Duration.ofSeconds(5));
+			transport.closeGracefully().block(Duration.ofSeconds(5));
+		}
+
+	}
+
+	@Nested
+	@DisplayName("SSE handshake preflight status check")
+	class SsePreflight {
+
+		private HttpServer server;
+
+		@BeforeEach
+		void setUp() throws IOException {
+			this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+			this.server.setExecutor(null);
+			this.server.start();
+		}
+
+		@AfterEach
+		void tearDown() {
+			this.server.stop(0);
+		}
+
+		@Test
+		@Story("Preflight 401")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("An SSE handshake whose upstream answers 401 with a body that carries no SSE event (the "
+				+ "silent-hang case: the SDK would otherwise parse it as an empty SSE stream and never complete "
+				+ "connect()) surfaces a status-bearing transport error instead")
+		void sseConnect_whenUpstreamAnswers401WithNoSseBody_errorsWithStatus() {
+			// given — a 401 whose body produces no SSE event (bare JSON error body)
+			this.server.createContext("/sse", (exchange) -> {
+				final byte[] body = "{\"error\":\"unauthorized\"}".getBytes(StandardCharsets.UTF_8);
+				exchange.sendResponseHeaders(401, body.length);
+				try (OutputStream out = exchange.getResponseBody()) {
+					out.write(body);
+				}
+			});
+			final URI sseUri = URI.create("http://127.0.0.1:" + this.server.getAddress().getPort() + "/sse");
+
+			// when — the preflight-wrapped transport connects
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri);
+
+			// then — the connect errors (does not hang), carrying the 401 for the D3
+			// mapper
+			final Throwable error = catchThrowable(
+					() -> transport.connect((inbound) -> inbound).block(Duration.ofSeconds(5)));
+			assertThat(error).isNotNull().hasMessageContaining("401");
+			assertThat(ProxyErrorMapper.extractStatus(error)).contains(401);
+		}
+
+		@Test
+		@Story("Preflight 200")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A healthy SSE handshake (2xx, endpoint event) still connects through the preflight wrapper — "
+				+ "the status check never blocks a successful connect")
+		void sseConnect_whenUpstreamAnswers200_stillConnects() {
+			// given — a healthy SSE handshake answering the endpoint event and closing
+			this.server.createContext("/sse", (exchange) -> {
+				exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+				final String body = "event: endpoint\ndata: http://127.0.0.1:" + this.server.getAddress().getPort()
+						+ "/messages\n\n";
+				final byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+				exchange.sendResponseHeaders(200, bytes.length);
+				try (OutputStream out = exchange.getResponseBody()) {
+					out.write(bytes);
+				}
+			});
+			final URI sseUri = URI.create("http://127.0.0.1:" + this.server.getAddress().getPort() + "/sse");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri);
+
+			// then — connect completes (no hang)
+			final Throwable error = catchThrowable(
+					() -> transport.connect((inbound) -> inbound).block(Duration.ofSeconds(5)));
+			assertThat(error).as("healthy connect must not error").isNull();
 			transport.closeGracefully().block(Duration.ofSeconds(5));
 		}
 

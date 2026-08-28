@@ -18,6 +18,7 @@ package io.inspector.mcp.core.proxy;
 
 import java.net.URI;
 import java.net.URLEncoder;
+import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -163,16 +164,34 @@ public class ProxyTransportFactory {
 		final String baseUri = stripPath(sseUri);
 		final String ssePath = (sseUri.getRawPath() == null || sseUri.getRawPath().isBlank()) ? "/sse"
 				: sseUri.getRawPath();
+		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(authorization, customHeaders);
+		return buildSse(baseUri, ssePath, customizer);
+	}
+
+	/**
+	 * Builds the SSE transport for a resolved base URI, endpoint path and request
+	 * customizer, wrapping it in a handshake preflight check (see
+	 * {@link SsePreflightTransport}).
+	 * @param baseUri the {@code scheme://host[:port]} transport base
+	 * @param ssePath the SSE endpoint path (with any query parameters)
+	 * @param customizer the request customizer applying forwarded headers, or
+	 * {@code null}
+	 * @return the preflight-wrapped SSE {@link McpClientTransport}
+	 */
+	private McpClientTransport buildSse(final String baseUri, final String ssePath,
+			final McpSyncHttpClientRequestCustomizer customizer) {
 		final HttpClientSseClientTransport.Builder builder = HttpClientSseClientTransport.builder(baseUri)
 			.sseEndpoint(ssePath)
 			.messageEndpointValidator(noopValidator())
 			.requestBuilder(HttpRequest.newBuilder().timeout(this.sseRequestTimeout))
 			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR));
-		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(authorization, customHeaders);
 		if (customizer != null) {
 			builder.httpRequestCustomizer(customizer);
 		}
-		return builder.build();
+		final HttpRequest.Builder requestTemplate = HttpRequest.newBuilder().timeout(this.sseRequestTimeout);
+		final HttpClient preflightClient = HttpClient.newBuilder().executor(SHARED_HTTP_EXECUTOR).build();
+		final URI target = URI.create(baseUri).resolve(ssePath);
+		return new SsePreflightTransport(builder.build(), target, requestTemplate, customizer, preflightClient);
 	}
 
 	/**
@@ -199,16 +218,8 @@ public class ProxyTransportFactory {
 		final String baseUri = stripPath(sseUri);
 		final String ssePath = (sseUri.getRawPath() == null || sseUri.getRawPath().isBlank()) ? "/sse"
 				: sseUri.getRawPath();
-		final HttpClientSseClientTransport.Builder builder = HttpClientSseClientTransport.builder(baseUri)
-			.sseEndpoint(appendQuery(ssePath, headers.queryParams()))
-			.messageEndpointValidator(noopValidator())
-			.requestBuilder(HttpRequest.newBuilder().timeout(this.sseRequestTimeout))
-			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR));
 		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(headers, authorizationRef);
-		if (customizer != null) {
-			builder.httpRequestCustomizer(customizer);
-		}
-		return builder.build();
+		return buildSse(baseUri, appendQuery(ssePath, headers.queryParams()), customizer);
 	}
 
 	/**
