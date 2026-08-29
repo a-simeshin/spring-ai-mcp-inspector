@@ -87,7 +87,7 @@ public class McpInspectorProperties {
 	@NestedConfigurationProperty
 	private Shutdown shutdown = new Shutdown();
 
-/** Timeline event capture configuration. */
+	/** Timeline event capture configuration. */
 	@NestedConfigurationProperty
 	private Timeline timeline = new Timeline();
 
@@ -440,4 +440,4 @@ public class McpInspectorProperties {
 
 	}
 
-	}
+}

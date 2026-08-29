@@ -106,8 +106,8 @@ public final class McpTrafficRecorder {
 			final UUID correlationId = UUID.randomUUID();
 			try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, correlationId.toString())) {
 				final TimelineEvent event = new TimelineEvent(UUID.randomUUID(), correlationId, Instant.now(),
-						TimelineEventType.MCP_JSONRPC_NOTIFICATION, sessionId, null, notification.method(),
-						rawFrame, null, null, null, null, null, null, null);
+						TimelineEventType.MCP_JSONRPC_NOTIFICATION, sessionId, null, notification.method(), rawFrame,
+						null, null, null, null, null, null, null);
 				this.timelineService.append(event);
 			}
 		}
@@ -142,8 +142,8 @@ public final class McpTrafficRecorder {
 			final UUID effectiveCorrelationId = (correlationId != null) ? correlationId : UUID.randomUUID();
 			try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, effectiveCorrelationId.toString())) {
 				final TimelineEvent event = new TimelineEvent(UUID.randomUUID(), effectiveCorrelationId, Instant.now(),
-						TimelineEventType.MCP_JSONRPC_RESPONSE, sessionId, String.valueOf(id), null, null,
-						rawFrame, null, null, null, null, null, null);
+						TimelineEventType.MCP_JSONRPC_RESPONSE, sessionId, String.valueOf(id), null, null, rawFrame,
+						null, null, null, null, null, null);
 				this.timelineService.append(event);
 			}
 		}
@@ -151,8 +151,8 @@ public final class McpTrafficRecorder {
 			final UUID correlationId = UUID.randomUUID();
 			try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, correlationId.toString())) {
 				final TimelineEvent event = new TimelineEvent(UUID.randomUUID(), correlationId, Instant.now(),
-						TimelineEventType.MCP_JSONRPC_NOTIFICATION, sessionId, null, notification.method(),
-						rawFrame, null, null, null, null, null, null, null);
+						TimelineEventType.MCP_JSONRPC_NOTIFICATION, sessionId, null, notification.method(), rawFrame,
+						null, null, null, null, null, null, null);
 				this.timelineService.append(event);
 			}
 		}
@@ -170,8 +170,8 @@ public final class McpTrafficRecorder {
 		final UUID correlationId = UUID.randomUUID();
 		try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, correlationId.toString())) {
 			final TimelineEvent event = new TimelineEvent(UUID.randomUUID(), correlationId, Instant.now(),
-					TimelineEventType.MCP_STREAM_EVENT, sessionId, null, null, null, null, null, null, null, null,
-					null, null);
+					TimelineEventType.MCP_STREAM_EVENT, sessionId, null, null, null, null, null, null, null, null, null,
+					null);
 			this.timelineService.append(event);
 		}
 	}

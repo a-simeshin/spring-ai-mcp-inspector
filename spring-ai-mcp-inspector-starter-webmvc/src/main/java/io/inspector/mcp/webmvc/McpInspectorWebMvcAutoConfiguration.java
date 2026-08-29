@@ -54,6 +54,7 @@ import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.webmvc.controller.InspectorConfigController;
 import io.inspector.mcp.webmvc.controller.InspectorIndexController;
 import io.inspector.mcp.webmvc.controller.InspectorRestController;
+import io.inspector.mcp.webmvc.controller.TimelineController;
 import io.inspector.mcp.webmvc.filter.InspectorAuthFilter;
 import io.inspector.mcp.webmvc.proxy.ProxyAuthFilter;
 import io.inspector.mcp.webmvc.proxy.ProxyConfigController;
@@ -89,7 +90,7 @@ import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
 @EnableScheduling
 @Import({ InspectorRestController.class, InspectorIndexController.class, InspectorConfigController.class,
 		SseProxyController.class, StreamableHttpProxyController.class, ProxyConfigController.class,
-		ProxyHealthController.class, ProxyFetchController.class })
+		ProxyHealthController.class, ProxyFetchController.class, TimelineController.class })
 public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	private final McpInspectorProperties properties;

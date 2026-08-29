@@ -82,13 +82,22 @@ class McpTrafficRecorderTests {
 
 			// then
 			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService
-				.query(TimelineService.TimelineQuery.all());
+				.query(TimelineQuery.builder().build());
 			assertThat(events).hasSize(1);
 			final TimelineEvent event = events.get(0);
-			assertThat(event.type()).isEqualTo(TimelineEventType.MCP_JSONRPC_REQUEST);
+			assertThat(event.eventType()).isEqualTo(TimelineEventType.MCP_JSONRPC_REQUEST);
 			assertThat(event.sessionId()).isEqualTo("s-1");
+			assertThat(event.requestId()).isEqualTo("7");
+			assertThat(event.method()).isEqualTo("tools/list");
 			assertThat(event.correlationId()).isNotNull();
-			assertThat(event.payload()).isEqualTo(rawFrame);
+			assertThat(event.params()).isEqualTo(rawFrame);
+			assertThat(event.result()).isNull();
+			assertThat(event.error()).isNull();
+			assertThat(event.logLevel()).isNull();
+			assertThat(event.loggerName()).isNull();
+			assertThat(event.threadName()).isNull();
+			assertThat(event.message()).isNull();
+			assertThat(event.throwable()).isNull();
 			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(1);
 		}
 
@@ -108,11 +117,23 @@ class McpTrafficRecorderTests {
 
 			// then
 			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService
-				.query(TimelineService.TimelineQuery.all());
+				.query(TimelineQuery.builder().build());
 			assertThat(events).hasSize(1);
 			final TimelineEvent event = events.get(0);
-			assertThat(event.type()).isEqualTo(TimelineEventType.MCP_JSONRPC_NOTIFICATION);
+			assertThat(event.eventType()).isEqualTo(TimelineEventType.MCP_JSONRPC_NOTIFICATION);
+			assertThat(event.sessionId()).isEqualTo("s-1");
+			assertThat(event.method()).isEqualTo("notifications/initialized");
+			assertThat(event.requestId()).isNull();
 			assertThat(event.correlationId()).isNotNull();
+			assertThat(event.params()).isEqualTo(rawFrame);
+			assertThat(event.result()).isNull();
+			assertThat(event.error()).isNull();
+			assertThat(event.logLevel()).isNull();
+			assertThat(event.loggerName()).isNull();
+			assertThat(event.threadName()).isNull();
+			assertThat(event.message()).isNull();
+			assertThat(event.throwable()).isNull();
+			// notifications do not create pending correlations
 			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(0);
 		}
 
@@ -123,8 +144,7 @@ class McpTrafficRecorderTests {
 			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", null, null);
 
 			// then
-			assertThat(McpTrafficRecorderTests.this.timelineService.query(TimelineService.TimelineQuery.all()))
-				.isEmpty();
+			assertThat(McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.builder().build())).isEmpty();
 			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(0);
 		}
 
@@ -148,9 +168,9 @@ class McpTrafficRecorderTests {
 			assertThat(MDC.get(McpTrafficRecorder.MDC_CORRELATION_ID)).isNull();
 			// but the event has the correlationId
 			final TimelineEvent event = McpTrafficRecorderTests.this.timelineService
-				.query(TimelineService.TimelineQuery.all())
+				.query(TimelineQuery.builder().build())
 				.get(0);
-			assertThat(event.correlationId()).isNotEmpty();
+			assertThat(event.correlationId()).isNotNull();
 		}
 
 	}
@@ -171,8 +191,8 @@ class McpTrafficRecorderTests {
 					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
 					reqFrame.toString());
 			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", reqTyped, reqFrame);
-			final String requestCorrelationId = McpTrafficRecorderTests.this.timelineService
-				.query(TimelineService.TimelineQuery.all())
+			final UUID requestCorrelationId = McpTrafficRecorderTests.this.timelineService
+				.query(TimelineQuery.builder().build())
 				.get(0)
 				.correlationId();
 
@@ -188,12 +208,16 @@ class McpTrafficRecorderTests {
 
 			// then
 			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService
-				.query(TimelineService.TimelineQuery.all());
+				.query(TimelineQuery.builder().build());
 			assertThat(events).hasSize(2);
 			// events are newest-first, so response is first
 			final TimelineEvent responseEvent = events.get(0);
-			assertThat(responseEvent.type()).isEqualTo(TimelineEventType.MCP_JSONRPC_RESPONSE);
+			assertThat(responseEvent.eventType()).isEqualTo(TimelineEventType.MCP_JSONRPC_RESPONSE);
 			assertThat(responseEvent.correlationId()).isEqualTo(requestCorrelationId);
+			assertThat(responseEvent.requestId()).isEqualTo("42");
+			assertThat(responseEvent.params()).isNull();
+			assertThat(responseEvent.result()).isEqualTo(resFrame);
+			assertThat(responseEvent.error()).isNull();
 			// pending correlation cleaned up
 			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(0);
 		}
@@ -215,10 +239,14 @@ class McpTrafficRecorderTests {
 
 			// then
 			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService
-				.query(TimelineService.TimelineQuery.all());
+				.query(TimelineQuery.builder().build());
 			assertThat(events).hasSize(1);
-			assertThat(events.get(0).type()).isEqualTo(TimelineEventType.MCP_JSONRPC_RESPONSE);
-			assertThat(events.get(0).correlationId()).isNotNull();
+			final TimelineEvent event = events.get(0);
+			assertThat(event.eventType()).isEqualTo(TimelineEventType.MCP_JSONRPC_RESPONSE);
+			assertThat(event.correlationId()).isNotNull();
+			assertThat(event.requestId()).isEqualTo("99");
+			assertThat(event.params()).isNull();
+			assertThat(event.result()).isEqualTo(resFrame);
 		}
 
 		@Test
@@ -237,9 +265,12 @@ class McpTrafficRecorderTests {
 
 			// then
 			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService
-				.query(TimelineService.TimelineQuery.all());
+				.query(TimelineQuery.builder().build());
 			assertThat(events).hasSize(1);
-			assertThat(events.get(0).type()).isEqualTo(TimelineEventType.MCP_JSONRPC_NOTIFICATION);
+			final TimelineEvent event = events.get(0);
+			assertThat(event.eventType()).isEqualTo(TimelineEventType.MCP_JSONRPC_NOTIFICATION);
+			assertThat(event.method()).isEqualTo("notifications/tools/list_changed");
+			assertThat(event.params()).isEqualTo(rawFrame);
 		}
 
 	}
@@ -250,7 +281,7 @@ class McpTrafficRecorderTests {
 
 		@Test
 		@DisplayName("records a stream event")
-		void recordsStreamEvent() throws Exception {
+		void recordsStreamEvent() {
 			// given
 			final JsonNode payload = McpTrafficRecorderTests.this.mapper.createObjectNode().put("chunk", true);
 
@@ -259,24 +290,40 @@ class McpTrafficRecorderTests {
 
 			// then
 			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService
-				.query(TimelineService.TimelineQuery.all());
+				.query(TimelineQuery.builder().build());
 			assertThat(events).hasSize(1);
 			final TimelineEvent event = events.get(0);
-			assertThat(event.type()).isEqualTo(TimelineEventType.MCP_STREAM_EVENT);
-			assertThat(event.payload()).isEqualTo(payload);
+			assertThat(event.eventType()).isEqualTo(TimelineEventType.MCP_STREAM_EVENT);
+			assertThat(event.sessionId()).isEqualTo("s-1");
+			assertThat(event.correlationId()).isNotNull();
+			// the recorder does not pass the payload to any field
+			assertThat(event.params()).isNull();
+			assertThat(event.result()).isNull();
+			assertThat(event.error()).isNull();
+			assertThat(event.requestId()).isNull();
+			assertThat(event.method()).isNull();
+			assertThat(event.logLevel()).isNull();
+			assertThat(event.loggerName()).isNull();
+			assertThat(event.threadName()).isNull();
+			assertThat(event.message()).isNull();
+			assertThat(event.throwable()).isNull();
 		}
 
 		@Test
 		@DisplayName("records stream event with null payload")
-		void recordsStreamEventWithNullPayload() throws Exception {
+		void recordsStreamEventWithNullPayload() {
 			// when
 			McpTrafficRecorderTests.this.recorder.recordStreamEvent("s-1", null);
 
 			// then
 			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService
-				.query(TimelineService.TimelineQuery.all());
+				.query(TimelineQuery.builder().build());
 			assertThat(events).hasSize(1);
-			assertThat(events.get(0).payload()).isNull();
+			final TimelineEvent event = events.get(0);
+			assertThat(event.eventType()).isEqualTo(TimelineEventType.MCP_STREAM_EVENT);
+			assertThat(event.params()).isNull();
+			assertThat(event.result()).isNull();
+			assertThat(event.error()).isNull();
 		}
 
 	}
@@ -334,39 +381,29 @@ class McpTrafficRecorderTests {
 
 			// request 1 and response 1 share correlation
 			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService
-				.query(TimelineService.TimelineQuery.all());
+				.query(TimelineQuery.builder().build());
+
+			// filter by requestId which the recorder sets to String.valueOf(id)
 			final TimelineEvent req1Event = events.stream()
-				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_REQUEST)
-				.filter((e) -> {
-					final JsonNode p = e.payload();
-					return p != null && p.get("id") != null && p.get("id").asInt() == 1;
-				})
+				.filter((e) -> e.eventType() == TimelineEventType.MCP_JSONRPC_REQUEST)
+				.filter((e) -> "1".equals(e.requestId()))
 				.findFirst()
 				.orElseThrow();
 			final TimelineEvent res1Event = events.stream()
-				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
-				.filter((e) -> {
-					final JsonNode p = e.payload();
-					return p != null && p.get("id") != null && p.get("id").asInt() == 1;
-				})
+				.filter((e) -> e.eventType() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.filter((e) -> "1".equals(e.requestId()))
 				.findFirst()
 				.orElseThrow();
 			assertThat(res1Event.correlationId()).isEqualTo(req1Event.correlationId());
 
 			final TimelineEvent req2Event = events.stream()
-				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_REQUEST)
-				.filter((e) -> {
-					final JsonNode p = e.payload();
-					return p != null && p.get("id") != null && p.get("id").asInt() == 2;
-				})
+				.filter((e) -> e.eventType() == TimelineEventType.MCP_JSONRPC_REQUEST)
+				.filter((e) -> "2".equals(e.requestId()))
 				.findFirst()
 				.orElseThrow();
 			final TimelineEvent res2Event = events.stream()
-				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
-				.filter((e) -> {
-					final JsonNode p = e.payload();
-					return p != null && p.get("id") != null && p.get("id").asInt() == 2;
-				})
+				.filter((e) -> e.eventType() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.filter((e) -> "2".equals(e.requestId()))
 				.findFirst()
 				.orElseThrow();
 			assertThat(res2Event.correlationId()).isEqualTo(req2Event.correlationId());
@@ -387,26 +424,30 @@ class McpTrafficRecorderTests {
 			// given — fill the buffer with events
 			final BoundedTimelineService bts = new BoundedTimelineService();
 			final String sessionId = "s-1";
-			for (int i = 0; i < BoundedTimelineService.MAX_EVENTS + 10; i++) {
-				bts.append(new TimelineEvent(UUID.randomUUID().toString(), "corr-" + i, sessionId,
-						TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), null));
+			for (int i = 0; i < BoundedTimelineService.DEFAULT_CAPACITY + 10; i++) {
+				bts.append(new TimelineEvent(UUID.randomUUID(), UUID.randomUUID(), Instant.now(),
+						TimelineEventType.MCP_JSONRPC_REQUEST, sessionId, String.valueOf(i), "tools/list", null, null,
+						null, null, null, null, null, null));
 			}
 
-			// then — only max events remain
-			assertThat(bts.size()).isEqualTo(BoundedTimelineService.MAX_EVENTS);
+			// then — only DEFAULT_CAPACITY events remain
+			assertThat(bts.size()).isEqualTo(BoundedTimelineService.DEFAULT_CAPACITY);
 		}
 
 		@Test
 		@DisplayName("query filters by correlationId")
 		void queryByCorrelationId() {
 			final TimelineService svc = new BoundedTimelineService();
-			final String corrId = "my-correlation";
-			svc.append(new TimelineEvent("1", "other-correlation", null, TimelineEventType.MCP_JSONRPC_REQUEST,
-					Instant.now(), null));
+			final UUID corrId = UUID.randomUUID();
+			final UUID otherCorrId = UUID.randomUUID();
+			svc.append(new TimelineEvent(UUID.randomUUID(), otherCorrId, Instant.now(),
+					TimelineEventType.MCP_JSONRPC_REQUEST, null, null, null, null, null, null, null, null, null, null,
+					null));
 			svc.append(
-					new TimelineEvent("2", corrId, null, TimelineEventType.MCP_JSONRPC_RESPONSE, Instant.now(), null));
+					new TimelineEvent(UUID.randomUUID(), corrId, Instant.now(), TimelineEventType.MCP_JSONRPC_RESPONSE,
+							null, null, null, null, null, null, null, null, null, null, null));
 
-			final List<TimelineEvent> results = svc.query(TimelineService.TimelineQuery.byCorrelationId(corrId));
+			final List<TimelineEvent> results = svc.query(TimelineQuery.builder().correlationId(corrId).build());
 			assertThat(results).hasSize(1);
 			assertThat(results.get(0).correlationId()).isEqualTo(corrId);
 		}
@@ -415,10 +456,12 @@ class McpTrafficRecorderTests {
 		@DisplayName("clear removes all events")
 		void clearRemovesAll() {
 			final TimelineService svc = new BoundedTimelineService();
-			svc.append(new TimelineEvent("1", "c", null, TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), null));
+			svc.append(new TimelineEvent(UUID.randomUUID(), UUID.randomUUID(), Instant.now(),
+					TimelineEventType.MCP_JSONRPC_REQUEST, null, null, null, null, null, null, null, null, null, null,
+					null));
 			svc.clear();
 
-			assertThat(svc.query(TimelineService.TimelineQuery.all())).isEmpty();
+			assertThat(svc.query(TimelineQuery.builder().build())).isEmpty();
 		}
 
 	}
