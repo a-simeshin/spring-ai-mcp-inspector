@@ -1,8 +1,9 @@
-import type { JsonValue, JsonSchemaType, JsonObject } from "./jsonUtils";
+import type { JsonValue, InspectorFormSchema, JsonObject } from "./jsonUtils";
 import Ajv from "ajv";
 import type { ValidateFunction } from "ajv";
-import type { Tool, JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
-import { isJSONRPCRequest } from "@modelcontextprotocol/sdk/types.js";
+import type { Tool, JSONRPCMessage } from "@modelcontextprotocol/client";
+import { isJSONRPCRequest } from "@modelcontextprotocol/client";
+import { normalizeNullableUnion } from "@inspector/core/json/nullableUnion.js";
 
 const ajv = new Ajv();
 
@@ -87,9 +88,9 @@ export function hasOutputSchema(toolName: string): boolean {
  * @returns A default value matching the schema type
  */
 export function generateDefaultValue(
-  schema: JsonSchemaType,
+  schema: InspectorFormSchema,
   propertyName?: string,
-  parentSchema?: JsonSchemaType,
+  parentSchema?: InspectorFormSchema,
 ): JsonValue {
   if ("default" in schema && schema.default !== undefined) {
     return schema.default;
@@ -121,7 +122,8 @@ export function generateDefaultValue(
       // Include required properties OR optional properties that declare a default
       Object.entries(schema.properties).forEach(([key, prop]) => {
         const hasExplicitDefault =
-          "default" in prop && (prop as JsonSchemaType).default !== undefined;
+          "default" in prop &&
+          (prop as InspectorFormSchema).default !== undefined;
         if (isPropertyRequired(key, schema) || hasExplicitDefault) {
           const value = generateDefaultValue(prop, key, schema);
           if (value !== undefined) {
@@ -150,7 +152,7 @@ export function generateDefaultValue(
  */
 export function isPropertyRequired(
   propertyName: string,
-  schema: JsonSchemaType,
+  schema: InspectorFormSchema,
 ): boolean {
   return schema.required?.includes(propertyName) ?? false;
 }
@@ -159,46 +161,20 @@ export function isPropertyRequired(
  * Resolves $ref references in JSON schema
  * @param schema The schema that may contain $ref
  * @param rootSchema The root schema to resolve references against
- * @param visitedRefs Optional set of visited $ref paths to detect circular references
  * @returns The resolved schema without $ref
  */
 export function resolveRef(
-  schema: JsonSchemaType,
-  rootSchema: JsonSchemaType,
-  visitedRefs: Set<string> = new Set(),
-): JsonSchemaType {
-  if (!schema) return schema;
-
+  schema: InspectorFormSchema,
+  rootSchema: InspectorFormSchema,
+): InspectorFormSchema {
   if (!("$ref" in schema) || !schema.$ref) {
-    // Recursively resolve $ref in anyOf (and other nested structures)
-    if (schema.anyOf && Array.isArray(schema.anyOf)) {
-      const resolvedAnyOf = schema.anyOf.map((item) => {
-        if (typeof item === "object" && item !== null) {
-          return resolveRef(item, rootSchema, visitedRefs);
-        }
-        return item;
-      });
-      return {
-        ...schema,
-        anyOf: resolvedAnyOf,
-      };
-    }
     return schema;
   }
 
   const ref = schema.$ref;
 
-  // Handle all #/ formats (#/properties/, #/$defs/, etc.)
+  // Handle simple #/properties/name references
   if (ref.startsWith("#/")) {
-    // Check for circular reference
-    if (visitedRefs.has(ref)) {
-      console.warn(`Circular reference detected: ${ref}`);
-      return schema;
-    }
-
-    // Add current ref to visited set
-    visitedRefs.add(ref);
-
     const path = ref.substring(2).split("/");
     let current: unknown = rootSchema;
 
@@ -212,93 +188,16 @@ export function resolveRef(
         current = (current as Record<string, unknown>)[segment];
       } else {
         // If reference cannot be resolved, return the original schema
-        visitedRefs.delete(ref); // Clean up on failure
         console.warn(`Could not resolve $ref: ${ref}`);
         return schema;
       }
     }
 
-    const resolved = current as JsonSchemaType;
-
-    // Recursively resolve nested structures (anyOf, oneOf, items, properties)
-    return resolveRef(resolved, rootSchema, visitedRefs);
+    return current as InspectorFormSchema;
   }
 
   // For other types of references, return the original schema
   console.warn(`Unsupported $ref format: ${ref}`);
-  return schema;
-}
-
-/**
- * Normalizes union types (like string|null from FastMCP) to simple types for form rendering
- * @param schema The JSON schema to normalize
- * @returns A normalized schema or the original schema
- */
-export function normalizeUnionType(schema: JsonSchemaType): JsonSchemaType {
-  // Handle anyOf with exactly 2 items (type and null) - unified handling
-  // Preserves enum and other properties automatically
-  if (
-    schema.anyOf &&
-    schema.anyOf.length === 2 &&
-    schema.anyOf.some((t) => (t as JsonSchemaType).type === "null")
-  ) {
-    const nonNullItem = schema.anyOf.find((t) => {
-      const item = t as JsonSchemaType;
-      return item?.type !== "null";
-    }) as JsonSchemaType;
-
-    // Only process if non-null item has type or enum
-    if (nonNullItem?.type || nonNullItem?.enum) {
-      return {
-        ...schema,
-        ...nonNullItem,
-        type: nonNullItem?.type || (nonNullItem?.enum ? "string" : undefined),
-        nullable: true,
-        anyOf: undefined,
-      };
-    }
-  }
-
-  // Handle array type with exactly string and null
-  if (
-    Array.isArray(schema.type) &&
-    schema.type.length === 2 &&
-    schema.type.includes("string") &&
-    schema.type.includes("null")
-  ) {
-    return { ...schema, type: "string", nullable: true };
-  }
-
-  // Handle array type with exactly boolean and null
-  if (
-    Array.isArray(schema.type) &&
-    schema.type.length === 2 &&
-    schema.type.includes("boolean") &&
-    schema.type.includes("null")
-  ) {
-    return { ...schema, type: "boolean", nullable: true };
-  }
-
-  // Handle array type with exactly number and null
-  if (
-    Array.isArray(schema.type) &&
-    schema.type.length === 2 &&
-    schema.type.includes("number") &&
-    schema.type.includes("null")
-  ) {
-    return { ...schema, type: "number", nullable: true };
-  }
-
-  // Handle array type with exactly integer and null
-  if (
-    Array.isArray(schema.type) &&
-    schema.type.length === 2 &&
-    schema.type.includes("integer") &&
-    schema.type.includes("null")
-  ) {
-    return { ...schema, type: "integer", nullable: true };
-  }
-
   return schema;
 }
 
@@ -324,7 +223,7 @@ export function resolveRefsInMessage(message: JSONRPCMessage): JSONRPCMessage {
     return message;
   }
 
-  const requestedSchema = message.params.requestedSchema as JsonSchemaType;
+  const requestedSchema = message.params.requestedSchema as InspectorFormSchema;
 
   if (!requestedSchema?.properties) {
     return message;
@@ -340,7 +239,7 @@ export function resolveRefsInMessage(message: JSONRPCMessage): JSONRPCMessage {
           Object.entries(requestedSchema.properties).map(
             ([key, propSchema]) => {
               const resolved = resolveRef(propSchema, requestedSchema);
-              const normalized = normalizeUnionType(resolved);
+              const normalized = normalizeNullableUnion(resolved);
               return [key, normalized];
             },
           ),

@@ -1,3 +1,0 @@
-package.json overrides — npm overrides for 7 transitive dependency security
-advisories (GHSA advisories, all within current major). postcss bumped as
-direct devDependency. Vite 7.x untouched (no open advisories on 7.x).

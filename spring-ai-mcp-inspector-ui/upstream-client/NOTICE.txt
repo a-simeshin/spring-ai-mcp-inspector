@@ -1,8 +1,14 @@
 This directory contains a vendored copy of modelcontextprotocol/inspector
-client (Apache License 2.0).
+web client (Apache License 2.0 / MIT).
 Source: https://github.com/modelcontextprotocol/inspector
-Vendored version: 0.22.0
-Date: 2026-05-28
+Vendored version: 2.3.0
+Release date: 2026-08-19
+Provenance: Tag 2.3.0 (commit 86d5f58ec8c369839b8237455ad8b1c17b15a984)
+  of https://github.com/modelcontextprotocol/inspector.
+  Cloned via `git clone --depth 1 --branch 2.3.0`
+
+Directory: clients/web/ + core/ (shared runtime)
+License: MIT (root package.json), Apache 2.0 (core/ and clients/web/)
 
 Local patches against upstream
 ==============================
@@ -11,7 +17,5 @@ One file per patch in NOTICE.d/, named after what the patch does.
 Add a patch by adding a file there. Nothing lists them: `ls NOTICE.d/`
 is the index, so two patches landing at once never touch the same line.
 
-The registry used to live here as a numbered list. Every parallel patch
-collided on it, and resolving that collision renumbered entries that
-code comments referenced by number. Reference a patch from code by its
-file name, never by a number, and never add an index back to this file.
+The registry used to be a numbered list; avoid re-introducing numbers.
+Reference a patch from code by its file name, never by a number.

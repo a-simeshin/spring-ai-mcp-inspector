@@ -1,2 +1,3 @@
 vite.config.ts — `base: '/mcp-inspector/'` so the SPA is mountable
-under our Spring Boot starter's path.
+under our Spring Boot starter's path. Upstream v2 defaults to `/`.
+This patch was migrated from v0.22.0's equivalent patch.

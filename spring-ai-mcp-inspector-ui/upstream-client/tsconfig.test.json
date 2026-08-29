@@ -1,0 +1,46 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.test.tsbuildinfo",
+    "types": [
+      "vite/client",
+      "@testing-library/jest-dom",
+      "node"
+    ],
+    "paths": {
+      "@inspector/core/*": [
+        "./core/*"
+      ],
+      "react": [
+        "./node_modules/@types/react"
+      ],
+      "react-dom": [
+        "./node_modules/@types/react-dom"
+      ],
+      "react/jsx-runtime": [
+        "./node_modules/@types/react/jsx-runtime"
+      ],
+      "vitest": [
+        "./node_modules/vitest"
+      ],
+      "react-syntax-highlighter/dist/esm/prism-light": [
+        "./src/types/react-syntax-highlighter-prism-light"
+      ],
+      "react-syntax-highlighter/dist/esm/styles/prism/tomorrow": [
+        "./src/types/react-syntax-highlighter-style"
+      ],
+      "react-syntax-highlighter/dist/esm/languages/prism/*": [
+        "./src/types/react-syntax-highlighter-grammar"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/test/**/*.ts",
+    "src/test/**/*.tsx",
+    "core/**/__tests__/**/*.ts",
+    "core/**/__tests__/**/*.tsx"
+  ],
+  "exclude": []
+}

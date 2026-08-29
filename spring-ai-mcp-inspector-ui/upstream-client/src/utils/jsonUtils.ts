@@ -1,3 +1,8 @@
+import {
+  admitsNull,
+  normalizeNullableUnion,
+} from "@inspector/core/json/nullableUnion.js";
+
 export type JsonValue =
   | string
   | number
@@ -13,7 +18,7 @@ export type JsonSchemaConst = {
   description?: string;
 };
 
-export type JsonSchemaType = {
+export type InspectorFormSchema = {
   type?:
     | "string"
     | "number"
@@ -35,8 +40,8 @@ export type JsonSchemaType = {
   description?: string;
   required?: string[];
   default?: JsonValue;
-  properties?: Record<string, JsonSchemaType>;
-  items?: JsonSchemaType;
+  properties?: Record<string, InspectorFormSchema>;
+  items?: InspectorFormSchema;
   // Array validation constraints
   minItems?: number;
   maxItems?: number;
@@ -51,12 +56,34 @@ export type JsonSchemaType = {
   // Non-standard legacy support: titles for enum values
   enumNames?: string[];
   const?: JsonValue;
-  oneOf?: (JsonSchemaType | JsonSchemaConst)[];
-  anyOf?: (JsonSchemaType | JsonSchemaConst)[];
+  oneOf?: (InspectorFormSchema | JsonSchemaConst)[];
+  anyOf?: (InspectorFormSchema | JsonSchemaConst)[];
   $ref?: string;
 };
 
 export type JsonObject = { [key: string]: JsonValue };
+
+/**
+ * Narrow an MCP protocol schema (SDK `JsonSchemaType` — e.g. `Tool["inputSchema"]`
+ * / `outputSchema`, an elicitation `requestedSchema`) to the {@link
+ * InspectorFormSchema} subset the {@link SchemaForm} renderer understands.
+ *
+ * Under SDK v2 the protocol schema type (from `json-schema-typed`, exported as
+ * `JsonSchemaType` from `@modelcontextprotocol/client`) is structurally distinct
+ * from Inspector's form schema — same JSON on the wire, incompatible TS types.
+ * Rather than cast at every call site, callers pass the SDK schema through here.
+ * Returns `null` when there is no renderable object shape (missing schema, or a
+ * non-object schema the form can't build fields from); callers handle `null`.
+ */
+export function toFormSchema(schema: unknown): InspectorFormSchema | null {
+  if (schema == null || typeof schema !== "object" || Array.isArray(schema)) {
+    return null;
+  }
+  // Structural narrow: the SDK schema's fields are a superset of what the form
+  // reads (`type`, `properties`, `required`, `items`, …); the values the form
+  // never dereferences don't affect rendering.
+  return schema as InspectorFormSchema;
+}
 
 export type DataType =
   | "string"
@@ -79,6 +106,71 @@ export function getDataType(value: JsonValue): DataType {
   if (Array.isArray(value)) return "array";
   if (value === null) return "null";
   return typeof value;
+}
+
+/**
+ * Collect a schema's default field values into a values object. A schema form
+ * displays defaults but only writes a field into its `values` once the user
+ * edits it, so an untouched default would otherwise be absent from a
+ * submission. Seeding form state with this keeps default-only fields in the
+ * submitted result (parity with v1). Recurses into nested object schemas and
+ * omits fields that have no default.
+ */
+export function collectSchemaDefaults(
+  schema: InspectorFormSchema,
+): Record<string, unknown> {
+  const properties = schema.properties ?? {};
+  const result: Record<string, unknown> = {};
+  for (const [fieldName, rawSchema] of Object.entries(properties)) {
+    // Collapse a nullable union first, for the same reason `SchemaForm` does:
+    // a nested object's `properties` live on the union's surviving branch, so
+    // without this the form would *display* a hoisted default that never
+    // reached the seeded values — the field would submit empty (#1928).
+    const fieldSchema = normalizeNullableUnion(rawSchema);
+    if (fieldSchema.default !== undefined) {
+      result[fieldName] = fieldSchema.default;
+    } else if (fieldSchema.type === "object" && fieldSchema.properties) {
+      const nested = collectSchemaDefaults(fieldSchema);
+      if (Object.keys(nested).length > 0) {
+        result[fieldName] = nested;
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Whether any of the schema's required top-level fields is missing a value in
+ * `values` (absent, null, or empty string). Used to gate a form's submit
+ * action until required fields are supplied.
+ *
+ * `null` counts as missing only for a field that does not admit it. JSON
+ * Schema's `required` constrains *presence*, not content, so a required field
+ * whose schema is a nullable union is satisfied by an explicit `null` — and
+ * since #1928 the user can produce exactly that by clearing a nullable enum.
+ * Treating it as missing would leave the form's submit permanently disabled on
+ * a value the schema calls valid.
+ *
+ * The test is `admitsNull`, **not** whether the renderer's collapse recognized
+ * the field. Those differ: the collapse only handles a two-member union, so a
+ * three-member `anyOf: [string, number, null]` renders through the JSON
+ * fallback — where a user can still type `null` — while plainly admitting it.
+ * Gating on the collapse would reject a value the schema accepts.
+ */
+export function hasMissingRequiredFields(
+  schema: InspectorFormSchema,
+  values: Record<string, unknown>,
+): boolean {
+  const required = schema.required ?? [];
+  const properties = schema.properties ?? {};
+  return required.some((field) => {
+    const value = values[field];
+    if (value === null) {
+      const fieldSchema = properties[field];
+      return fieldSchema === undefined ? true : !admitsNull(fieldSchema);
+    }
+    return value === undefined || value === "";
+  });
 }
 
 /**

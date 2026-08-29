@@ -1,30 +1,86 @@
+/// <reference types="vitest/config" />
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
-import path from "path";
-import { defineConfig } from "vite";
 
-// https://vitejs.dev/config/
-export default defineConfig({
-  // Base public path — every emitted asset URL is prefixed with this. The Spring
-  // backend mounts the bundle under /mcp-inspector/, so we have to match.
-  // This literal is duplicated in Java as BootstrapHtmlRenderer.BUNDLE_ASSET_BASE,
-  // which rewrites it at serve time when the app runs under a context path, a
-  // WebFlux base path, or a custom spring.ai.mcp.inspector.path. Keep both in sync.
-  base: "/mcp-inspector/",
-  plugins: [react()],
-  server: {
-    host: true,
-  },
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
+// https://vite.dev/config/
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createBrowserExternalizedBuiltinGate } from "./server/browser-externalized-builtin-gate";
+
+const dirname =
+  typeof __dirname !== "undefined"
+    ? __dirname
+    : path.dirname(fileURLToPath(import.meta.url));
+
+const sharedAliases = {
+  "@inspector/core": path.resolve(dirname, "core"),
+};
+
+const sharedDedupe = [
+  "react",
+  "react-dom",
+  "@modelcontextprotocol/client",
+  "@modelcontextprotocol/core",
+];
+
+const nodeModulesAliases = [];
+
+// Fail `vite build` when a Node built-in lands in the browser bundle (#1769).
+function browserExternalizedBuiltinGate(): Plugin {
+  const gate = createBrowserExternalizedBuiltinGate();
+  return {
+    name: "inspector:fail-on-browser-externalized-builtin",
+    apply: "build",
+    applyToEnvironment: (environment) => environment.name === "client",
+    enforce: "pre",
+    buildStart() {
+      gate.reset();
     },
-  },
-  build: {
-    minify: false,
-    rollupOptions: {
-      output: {
-        manualChunks: undefined,
+    onLog(_level, log) {
+      gate.recordLog(log.message);
+    },
+    buildEnd(error) {
+      if (!error) gate.assertClean();
+    },
+  };
+}
+
+export default defineConfig(() => {
+  return {
+    base: "/mcp-inspector/",
+    plugins: [
+      react(),
+      browserExternalizedBuiltinGate(),
+    ],
+    resolve: {
+      alias: [
+        ...Object.entries(sharedAliases).map(([find, replacement]) => ({
+          find,
+          replacement,
+        })),
+        ...nodeModulesAliases,
+      ],
+      dedupe: sharedDedupe,
+    },
+    build: {
+      outDir: "dist",
+      emptyOutDir: true,
+      rolldownOptions: {
+        external: ["@modelcontextprotocol/ext-apps/app-bridge", "pino/browser.js"],
       },
     },
-  },
+    test: {
+      name: "unit",
+      environment: "happy-dom",
+      environmentOptions: {
+        happyDOM: {
+          settings: { navigation: { disableChildFrameNavigation: true } },
+        },
+      },
+      include: ["src/**/*.test.{ts,tsx}"],
+      exclude: ["src/test/integration/**"],
+      setupFiles: [path.join(dirname, "src/test/setup.ts")],
+      sequence: { hooks: "stack" },
+    },
+  };
 });

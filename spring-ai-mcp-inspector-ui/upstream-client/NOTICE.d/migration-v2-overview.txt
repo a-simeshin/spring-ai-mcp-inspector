@@ -1,0 +1,16 @@
+Migration from v0.22.0 to v2.3.0 (upstream rewrite).
+Previous NOTICE.d/ entries from v0.22.0:
+- absolute-server-url.txt — v2 core/auth/ may handle this; needs verification
+- bootstrap-storage-seed.txt — v2 uses catalog model; needs rewrite
+- compact-layout.txt — v2 uses Mantine responsive Grid; needs rewrite
+- connect-401-banner.txt — merged into connect-error-alert in v2; verify v2 handling
+- connect-error-alert.txt — v2 connection model differs; needs rewrite
+- initial-sse-url.txt — v2 uses catalog config; likely obsolete
+- mobile-layout-grid.txt — v2 Mantine Grid; needs rewrite
+- read-resource-stale-pane.txt — issue #1266; verify if fixed in v2
+- sidebar-import-and-title.txt — v2 layout differs; needs rewrite
+- tab-bar-wrap.txt — v2 Mantine Tabs may wrap natively; verify
+- tasks-tab-tooltip.txt — v2 Tasks tab may differ; verify
+- tool-hint-chips.txt — Mantine Badge exists; port render logic
+
+Each needs re-assessment and reimplantation for the v2 codebase.
