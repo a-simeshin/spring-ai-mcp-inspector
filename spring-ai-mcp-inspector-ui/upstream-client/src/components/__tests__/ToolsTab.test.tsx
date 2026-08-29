@@ -1204,7 +1204,7 @@ describe("ToolsTab", () => {
     });
   });
 
-  describe("Responsive layout", () => {
+describe("Responsive layout", () => {
     // [spring-ai-mcp-inspector PATCH] Responsive Tools list/detail grid
     // (#58): upstream hard-codes two columns, which overlap at a 375px
     // viewport. The local fix stacks the grid into one column below the
@@ -1220,6 +1220,77 @@ describe("ToolsTab", () => {
       expect(screen.getByTestId("tools-list-pane")).toBeInTheDocument();
       expect(screen.getByTestId("tools-detail-pane")).toBeInTheDocument();
       expect(screen.getByTestId("run-tool-button")).toBeInTheDocument();
+    });
+  });
+
+  describe("Annotation Badges - Default Marker", () => {
+    // Tool without annotations object — should show "(default)" marker on Read-only/Destructive
+    const toolWithoutAnnotations: Tool = {
+      name: "toolWithoutAnnotations",
+      description: "Tool without annotations",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          text: { type: "string" as const },
+        },
+      },
+      // No annotations field
+    };
+
+    // Tool with explicit annotations — should NOT show "(default)" marker
+    const toolWithAnnotations: Tool = {
+      name: "toolWithAnnotations",
+      description: "Tool with explicit annotations",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          text: { type: "string" as const },
+        },
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    };
+
+    it("defaultMarkerWhenAbsent: tool without annotations shows (default) marker on both chips and tooltip", () => {
+      renderToolsTab({
+        tools: [toolWithoutAnnotations],
+        selectedTool: toolWithoutAnnotations,
+      });
+
+      // Read-only chip should have (default) marker and muted style
+      const readOnlyBadge = screen.getByText(/Read-only/);
+      expect(readOnlyBadge).toBeInTheDocument();
+      expect(readOnlyBadge.textContent).toContain("(default)");
+      expect(readOnlyBadge).toHaveAttribute("title", expect.stringContaining("Spec default, not declared by server"));
+
+      // Destructive chip should have (default) marker and muted style
+      const destructiveBadge = screen.getByText(/Destructive/);
+      expect(destructiveBadge).toBeInTheDocument();
+      expect(destructiveBadge.textContent).toContain("(default)");
+      expect(destructiveBadge).toHaveAttribute("title", expect.stringContaining("Spec default, not declared by server"));
+    });
+
+    it("noDefaultMarkerWhenDeclared: tool with explicit annotations shows no (default) marker", () => {
+      renderToolsTab({
+        tools: [toolWithAnnotations],
+        selectedTool: toolWithAnnotations,
+      });
+
+      // Read-only chip should NOT have (default) marker
+      const readOnlyBadge = screen.getByText(/Read-only/);
+      expect(readOnlyBadge).toBeInTheDocument();
+      expect(readOnlyBadge.textContent).not.toContain("(default)");
+      expect(readOnlyBadge).toHaveAttribute("title", expect.stringContaining("explicitly set"));
+
+      // Destructive chip should NOT have (default) marker
+      const destructiveBadge = screen.getByText(/Destructive/);
+      expect(destructiveBadge).toBeInTheDocument();
+      expect(destructiveBadge.textContent).not.toContain("(default)");
+      expect(destructiveBadge).toHaveAttribute("title", expect.stringContaining("explicitly set"));
     });
   });
 });

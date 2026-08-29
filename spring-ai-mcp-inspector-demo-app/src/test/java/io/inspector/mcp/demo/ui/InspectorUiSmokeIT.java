@@ -157,7 +157,24 @@ class InspectorUiSmokeIT {
 		}
 		java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?:mac_arm|mac|linux|win64|win32)-(\\d+)\\.")
 			.matcher(binaryPath);
-		return m.find() ? m.group(1) : null;
+		if (m.find()) {
+			return m.group(1);
+		}
+		// Fallback: run the binary with --version and parse output (e.g., "Chromium
+		// 151.0.7922.137")
+		try {
+			Process proc = new ProcessBuilder(binaryPath, "--version").redirectErrorStream(true).start();
+			String output = new String(proc.getInputStream().readAllBytes()).trim();
+			proc.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+			java.util.regex.Matcher v = java.util.regex.Pattern.compile("(\\d+)\\.").matcher(output);
+			if (v.find()) {
+				return v.group(1);
+			}
+		}
+		catch (Exception ignored) {
+			// fall through to null
+		}
+		return null;
 	}
 
 	/**
