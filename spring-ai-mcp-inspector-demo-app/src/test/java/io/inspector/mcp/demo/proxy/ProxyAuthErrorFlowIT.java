@@ -440,13 +440,14 @@ class ProxyAuthErrorFlowIT {
 
 		@ParameterizedTest(name = "upstream {0}")
 		@ValueSource(ints = { 401, 403 })
-		@DisplayName("profile-bound handshake 401/403 cleans up the session and its profile")
-		@Story("Streamable handshake errors with profile")
+		@DisplayName("profile-bound 401/403 on a live session removes the registry session and clears its profile")
+		@Story("Streamable auth errors with profile")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("A profile-bound streamable initialize answered 401/403 returns the exact D3 DTO and the failed "
-				+ "session is torn down by the error handler (removeAndClose -> clearBySession): the owner's profile "
-				+ "and its binding are gone from the store, and a later connect with the same profile id is rejected "
-				+ "as unknown — no orphan registry entry, no retained profile")
+		@Description("A profile-bound streamable session whose call is answered 401/403 returns the exact D3 DTO and "
+				+ "the session is torn down by the error handler (removeAndClose -> clearBySession): awaitSessionGone "
+				+ "proves the orphan registry entry is gone, the owner's profile and its binding are gone from the store, "
+				+ "and a later connect with the same profile id is rejected as unknown — no orphan registry entry, no "
+				+ "retained profile")
 		void handshake_withProfile_whenUpstreamAnswersAuthError_cleansUpSessionAndProfile(final int status)
 				throws Exception {
 			// given
@@ -462,37 +463,40 @@ class ProxyAuthErrorFlowIT {
 				.as("profile listed before handshake on %s", ProxyAppHarness.stack())
 				.isNotEmpty();
 			try (final ScriptedMcpStub stub = new ScriptedMcpStub()) {
-				stub.postStatus(status);
-
-				// when — the first POST is the initialize handshake with the profile
-				final HttpResponse<String> failed = send(
+				// a healthy handshake with the profile establishes the session and its
+				// binding
+				final HttpResponse<String> handshake = send(
 						base + "/mcp?url=" + URLEncoder.encode(stub.mcpUrl(), StandardCharsets.UTF_8) + "&profileId="
 								+ profileId,
 						"POST", MAPPER.writeValueAsString(initializeFrame()), null, "Bearer " + AUTH_TOKEN, cookie,
 						null);
+				assertThat(handshake.statusCode())
+					.as("healthy profile-bound handshake on %s, body=%s", ProxyAppHarness.stack(), handshake.body())
+					.isEqualTo(200);
+				final String sessionId = requireSessionId(handshake);
+
+				// when — the upstream starts rejecting the session's calls
+				stub.postStatus(status);
+				final HttpResponse<String> failed = send(
+						base + "/mcp?url=" + URLEncoder.encode(stub.mcpUrl(), StandardCharsets.UTF_8) + "&profileId="
+								+ profileId,
+						"POST", MAPPER.writeValueAsString(toolsListFrame()), null, "Bearer " + AUTH_TOKEN, cookie,
+						sessionId);
 
 				// then — the exact D3 DTO with the upstream status
 				assertDto(failed, status, codeFor(status), reasonFor(status), guidanceFor(status),
 						stub.redactedMcpUrl());
 
-				// and — the owner's profile AND binding are gone: the error handler
-				// removed the orphan session and cleared the bound profile from the
+				// and — the orphan registry session is gone: POST /message for the
+				// failed session answers 404 (awaitSessionGone polls until removal).
+				awaitSessionGone(base, sessionId);
+
+				// and — the owner's profile AND binding are gone: removeAndClose ->
+				// closeSession -> clearBySession removed the bound profile from the
 				// store (no leak, no retained profile).
-				//
-				// This IS the orphan-registry-session cleanup proof (D4/D9A): the
-				// streamable relay's error path (ProxyHandler.relayAndAwait) calls
-				// registry.removeAndClose(sessionId), which both removes the session
-				// from the registry map AND routes through closeSession ->
-				// store.clearBySession(sessionId). The profile binding is only ever
-				// cleared by that closeSession call, so the profile disappearing from
-				// the owner's list below is the observable effect of removeAndClose
-				// having executed — i.e. the orphan session is no longer in the
-				// registry. The later 400 (unknown profile) re-asserts the same from
-				// the proxy side: a fresh initialize with the same profileId cannot
-				// find a bound session.
 				assertThat(MAPPER
 					.readTree(send(apiBase + "/auth-profile", "GET", null, AUTH_TOKEN, null, cookie, null).body()))
-					.as("profile after failed handshake on %s", ProxyAppHarness.stack())
+					.as("profile after failed call on %s", ProxyAppHarness.stack())
 					.isEmpty();
 
 				// and — a later connect with the same profile id is rejected as
