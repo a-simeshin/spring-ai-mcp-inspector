@@ -24,6 +24,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.classic.spi.LoggerContextVO;
+import ch.qos.logback.classic.spi.StackTraceElementProxy;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -75,6 +76,53 @@ class TimelineAppenderTests {
 	void nullEventIsNoOp() {
 		this.appender.append(null);
 		assertThat(this.timelineService.size()).isZero();
+	}
+
+	@Test
+	void appendWithNullMdcPropertyMap() {
+		final ILoggingEvent event = mock(ILoggingEvent.class);
+		given(event.getLoggerName()).willReturn("test.Logger");
+		given(event.getLevel()).willReturn(Level.WARN);
+		given(event.getFormattedMessage()).willReturn("null mdc map");
+		given(event.getThreadName()).willReturn("test-thread");
+		given(event.getThrowableProxy()).willReturn(null);
+		given(event.getMDCPropertyMap()).willReturn(null);
+		given(event.getTimeStamp()).willReturn(System.currentTimeMillis());
+		this.appender.append(event);
+		final List<TimelineEvent> events = this.timelineService.query(TimelineQuery.builder().build());
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).correlationId()).isNull();
+	}
+
+	@Test
+	void appendWithInvalidCorrelationId() {
+		final ILoggingEvent event = mock(ILoggingEvent.class);
+		given(event.getLoggerName()).willReturn("test.Logger");
+		given(event.getLevel()).willReturn(Level.INFO);
+		given(event.getFormattedMessage()).willReturn("invalid uuid");
+		given(event.getThreadName()).willReturn("test-thread");
+		given(event.getThrowableProxy()).willReturn(null);
+		given(event.getMDCPropertyMap()).willReturn(Map.of(TimelineAppender.MDC_CORRELATION_ID, "not-a-uuid"));
+		given(event.getTimeStamp()).willReturn(System.currentTimeMillis());
+		this.appender.append(event);
+		final List<TimelineEvent> events = this.timelineService.query(TimelineQuery.builder().build());
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).correlationId()).isNull();
+	}
+
+	@Test
+	void appendWithThrowable() {
+		final IThrowableProxy throwableProxy = mock(IThrowableProxy.class);
+		given(throwableProxy.getClassName()).willReturn("java.lang.RuntimeException");
+		given(throwableProxy.getMessage()).willReturn("test error");
+		given(throwableProxy.getStackTraceElementProxyArray()).willReturn(new StackTraceElementProxy[0]);
+		given(throwableProxy.getCause()).willReturn(null);
+		final ILoggingEvent event = createLogEvent("test.Logger", Level.ERROR, "with throwable", throwableProxy,
+				Map.of());
+		this.appender.append(event);
+		final List<TimelineEvent> events = this.timelineService.query(TimelineQuery.builder().build());
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).throwable()).isNotNull();
 	}
 
 	static ILoggingEvent createLogEvent(final String loggerName, final Level level, final String message,
