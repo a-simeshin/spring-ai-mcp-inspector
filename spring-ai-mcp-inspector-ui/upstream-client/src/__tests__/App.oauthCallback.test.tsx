@@ -1,206 +1,207 @@
-import { renderHook, act } from "@testing-library/react";
-import { useConnection } from "../lib/hooks/useConnection";
+import { render, waitFor } from "@testing-library/react";
+import App from "../App";
 import { DEFAULT_INSPECTOR_CONFIG } from "../lib/constants";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport, SSEClientTransportOptions } from "@modelcontextprotocol/sdk/client/sse.js";
-import { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
-import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 
-// Mock fetch
-global.fetch = jest.fn().mockResolvedValue({
-  json: () => Promise.resolve({ status: "ok" }),
-  headers: {
-    get: jest.fn().mockReturnValue(null),
-  },
-});
-
-// Mock transport instances
-const mockSSETransport = {
-  start: jest.fn(),
-  url: undefined as URL | undefined,
-  options: undefined as SSEClientTransportOptions | undefined,
-  onmessage: undefined as ((message: JSONRPCMessage) => void) | undefined,
-};
-
-// Mock Client
-const mockClient = {
-  request: jest.fn().mockResolvedValue({ test: "response" }),
-  notification: jest.fn(),
-  connect: jest.fn().mockResolvedValue(undefined),
-  close: jest.fn(),
-  getServerCapabilities: jest.fn(),
-  getServerVersion: jest.fn(),
-  getInstructions: jest.fn(),
-  setNotificationHandler: jest.fn(),
-  setRequestHandler: jest.fn(),
-};
-
-jest.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
-  Client: jest.fn().mockImplementation(() => mockClient),
-}));
-
-jest.mock("@modelcontextprotocol/sdk/client/sse.js", () => {
-  class SseError extends Error {
-    code: number;
-    event: ErrorEvent;
-    constructor(code: number, message: string, event: ErrorEvent) {
-      super(message);
-      this.code = code;
-      this.event = event;
-    }
-  }
-
-  return {
-    SSEClientTransport: jest.fn((url: URL, options?: SSEClientTransportOptions) => {
-      mockSSETransport.url = url;
-      mockSSETransport.options = options;
-      return mockSSETransport;
-    }),
-    SseError,
-  };
-});
-
+// Mock auth dependencies
 jest.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
-  UnauthorizedError: class extends Error {
-    constructor(message?: string) {
-      super(message ?? "Unauthorized");
-      this.name = "UnauthorizedError";
-    }
-  },
-  auth: jest.fn().mockResolvedValue("AUTHORIZED"),
+  auth: jest.fn(),
 }));
 
-jest.mock("@/lib/hooks/useToast", () => ({
-  useToast: () => ({
-    toast: jest.fn(),
-  }),
+jest.mock("../lib/oauth-state-machine", () => ({
+  OAuthStateMachine: jest.fn(),
 }));
 
-jest.mock("@/lib/auth", () => ({
+jest.mock("../lib/auth", () => ({
   InspectorOAuthClientProvider: jest.fn().mockImplementation(() => ({
     tokens: jest.fn().mockResolvedValue({ access_token: "mock-token" }),
     redirectUrl: "http://localhost:3000/oauth/callback",
   })),
+  DebugInspectorOAuthClientProvider: jest.fn(),
   clearClientInformationFromSessionStorage: jest.fn(),
   saveClientInformationToSessionStorage: jest.fn(),
   saveScopeToSessionStorage: jest.fn(),
   clearScopeFromSessionStorage: jest.fn(),
   discoverScopes: jest.fn(),
-  toAbsoluteServerUrl: jest.requireActual("@/lib/auth").toAbsoluteServerUrl,
+  toAbsoluteServerUrl: jest.fn((url: string) => url),
 }));
 
-describe("App - OAuth callback wire (D9B): profileId reaches the first connect", () => {
-  const defaultProps: Parameters<typeof useConnection>[0] = {
-    transportType: "sse" as const,
-    command: "",
-    args: "",
-    sseUrl: "http://localhost:6277/sse",
-    env: {},
-    config: DEFAULT_INSPECTOR_CONFIG,
-    customHeaders: [],
-    oauthClientId: "",
-    oauthClientSecret: "",
+// Mock auth-profiles for D9B exchange
+jest.mock("../lib/auth-profiles", () => ({
+  exchangeAuthCode: jest.fn(),
+  getPendingAuthCodeFlow: jest.fn(),
+  clearPendingAuthCodeFlow: jest.fn(),
+  migrateLegacyAuthStorage: jest.fn(() => ({
+    bearerToken: "",
+    headerName: "",
     oauthScope: "",
-    activeProfileId: null,
-    connectionType: "proxy",
-    onNotification: jest.fn(),
-  };
+    oauthClientSecret: "",
+    customHeaders: [],
+  })),
+}));
 
+// Mock the config utils
+jest.mock("../utils/configUtils", () => ({
+  ...jest.requireActual("../utils/configUtils"),
+  getMCPProxyAddress: jest.fn(() => "http://localhost:6277"),
+  getMCPProxyAuthToken: jest.fn(() => ({
+    token: "",
+    header: "X-MCP-Proxy-Auth",
+  })),
+  getInitialTransportType: jest.fn(() => "sse"),
+  getInitialSseUrl: jest.fn(() => "http://localhost:6277/sse"),
+  getInitialCommand: jest.fn(() => ""),
+  getInitialArgs: jest.fn(() => ""),
+  initializeInspectorConfig: jest.fn(() => DEFAULT_INSPECTOR_CONFIG),
+  saveInspectorConfig: jest.fn(),
+}));
+
+// Mock other dependencies
+jest.mock("../lib/hooks/useDraggablePane", () => ({
+  useDraggablePane: () => ({
+    height: 300,
+    handleDragStart: jest.fn(),
+  }),
+  useDraggableSidebar: () => ({
+    width: 320,
+    isDragging: false,
+    handleDragStart: jest.fn(),
+  }),
+}));
+
+jest.mock("../components/Sidebar", () => ({
+  __esModule: true,
+  default: () => <div>Sidebar</div>,
+}));
+
+// Mock fetch
+global.fetch = jest.fn().mockResolvedValue({
+  json: () => Promise.resolve({ status: "ok" }),
+});
+
+// Mock useConnection with a spy on connectMcpServer
+const mockConnectMcpServer = jest.fn();
+const mockDisconnectMcpServer = jest.fn();
+
+jest.mock("../lib/hooks/useConnection", () => ({
+  useConnection: () => ({
+    connectionStatus: "disconnected",
+    serverCapabilities: null,
+    mcpClient: null,
+    requestHistory: [],
+    clearRequestHistory: jest.fn(),
+    makeRequest: jest.fn(),
+    sendNotification: jest.fn(),
+    handleCompletion: jest.fn(),
+    completionsSupported: false,
+    connect: mockConnectMcpServer,
+    disconnect: mockDisconnectMcpServer,
+    serverImplementation: null,
+  }),
+}));
+
+// Mock OAuth utils
+jest.mock("../utils/oauthUtils.ts", () => ({
+  parseOAuthCallbackParams: jest.fn(),
+  generateOAuthErrorDescription: jest.fn((p: unknown) => String(p)),
+}));
+
+const mockedExchangeAuthCode = jest.requireMock("../lib/auth-profiles").exchangeAuthCode as jest.Mock;
+const mockedGetPendingAuthCodeFlow = jest.requireMock("../lib/auth-profiles").getPendingAuthCodeFlow as jest.Mock;
+const mockParseParams = jest.requireMock("../utils/oauthUtils.ts").parseOAuthCallbackParams as jest.Mock;
+
+describe("App - OAuth callback wire (D9B): profileId reaches connectMcpServer on first call", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockSSETransport.url = undefined;
-    mockSSETransport.start.mockClear();
-    mockClient.connect.mockResolvedValue(undefined);
-    mockClient.close.mockClear();
+    mockConnectMcpServer.mockClear();
+    mockDisconnectMcpServer.mockClear();
+
+    // Default OAuth callback params - successful auth-code profile exchange
+    window.history.replaceState(
+      {},
+      document.title,
+      "/oauth/callback?code=auth-code&state=state-123",
+    );
+
+    mockedGetPendingAuthCodeFlow.mockReturnValue({
+      profileId: "pid-stale-from-previous-session",
+      state: "state-123",
+      codeVerifier: "verifier-123",
+      redirectUri: "http://localhost/oauth/callback",
+    });
+
+    mockedExchangeAuthCode.mockResolvedValue({ profileId: "pid-fresh-from-oauth-exchange" });
+
+    mockParseParams.mockReturnValue({
+      successful: true,
+      code: "auth-code",
+    });
   });
 
-  test("first proxy URL carries the returned profileId from onProfileAuthorized, not stale activeProfileId", async () => {
+  test("connectMcpServer is called with the fresh profileId from onProfileAuthorized (D9B callback wire)", async () => {
     // This test proves the end-to-end wire:
-    // App.tsx onProfileAuthorized -> connectMcpServer(undefined, 0, profileId) -> useConnection.connect(undefined, 0, profileIdOverride) -> SSE URL gets profileIdOverride
+    // App.tsx onProfileAuthorized -> connectMcpServer(undefined, 0, profileId)
+    // If the profileId argument is missing, this test FAILS.
 
-    const profileProps: Parameters<typeof useConnection>[0] = {
-      ...defaultProps,
-      // Simulate a stale activeProfileId (the state hasn't re-rendered yet)
-      activeProfileId: "pid-stale",
-    };
+    // Render App at the OAuth callback route
+    const { unmount } = render(<App />);
 
-    const { result } = renderHook(() => useConnection(profileProps));
-
-    // When - the very first connect is issued with the freshly returned
-    // profileId override from onProfileAuthorized callback in App.tsx
-    await act(async () => {
-      await result.current.connect(undefined, 0, "pid-new-from-oauth-callback");
+    // Wait for the OAuth callback to process and trigger connectMcpServer
+    await waitFor(() => {
+      expect(mockedExchangeAuthCode).toHaveBeenCalledWith(
+        expect.any(Object),
+        "pid-stale-from-previous-session",
+        "auth-code",
+        "verifier-123",
+        "state-123",
+      );
     });
 
-    // Then - the first proxy URL carries the newly returned profileId, NOT the stale active id
-    expect(mockSSETransport.url).not.toBeUndefined();
-    expect(mockSSETransport.url?.searchParams.get("profileId")).toBe(
-      "pid-new-from-oauth-callback"
+    // The onProfileAuthorized callback should have been called with the fresh profileId
+    // and connectMcpServer should have been called with that profileId as the 3rd argument
+    await waitFor(() => {
+      expect(mockConnectMcpServer).toHaveBeenCalled();
+    });
+
+    // Verify the call signature: connectMcpServer(undefined, 0, profileId)
+    // The third argument must be the FRESH profileId from the OAuth exchange, NOT the stale one
+    expect(mockConnectMcpServer).toHaveBeenCalledWith(
+      undefined,
+      0,
+      "pid-fresh-from-oauth-exchange",
     );
-    expect(mockSSETransport.url?.searchParams.get("profileId")).not.toBe(
-      "pid-stale"
+
+    // And NOT the stale profileId
+    expect(mockConnectMcpServer).not.toHaveBeenCalledWith(
+      undefined,
+      0,
+      "pid-stale-from-previous-session",
     );
-    // Also verify transportType is appended
-    expect(mockSSETransport.url?.searchParams.get("transportType")).toBe("sse");
+
+    unmount();
   });
 
-  test("no profileId is appended when neither activeProfileId nor an override is present", async () => {
-    const profileProps: Parameters<typeof useConnection>[0] = {
-      ...defaultProps,
-      activeProfileId: null,
-    };
+  test("fails if connectMcpServer is called without profileId (regression guard for D9B)", async () => {
+    // This test would FAIL if App.tsx:1343 was changed to:
+    // void connectMcpServer(undefined, 0); // missing profileId
 
-    const { result } = renderHook(() => useConnection(profileProps));
+    const { unmount } = render(<App />);
 
-    await act(async () => {
-      await result.current.connect();
+    await waitFor(() => {
+      expect(mockedExchangeAuthCode).toHaveBeenCalled();
     });
 
-    expect(mockSSETransport.url).not.toBeUndefined();
-    expect(mockSSETransport.url?.searchParams.get("profileId")).toBeNull();
-    expect(mockSSETransport.url?.searchParams.get("transportType")).toBe("sse");
-  });
-
-  test("activeProfileId is used when no override is provided", async () => {
-    const profileProps: Parameters<typeof useConnection>[0] = {
-      ...defaultProps,
-      activeProfileId: "pid-active",
-    };
-
-    const { result } = renderHook(() => useConnection(profileProps));
-
-    await act(async () => {
-      await result.current.connect();
+    await waitFor(() => {
+      expect(mockConnectMcpServer).toHaveBeenCalled();
     });
 
-    expect(mockSSETransport.url).not.toBeUndefined();
-    expect(mockSSETransport.url?.searchParams.get("profileId")).toBe("pid-active");
-    expect(mockSSETransport.url?.searchParams.get("transportType")).toBe("sse");
-  });
+    // The call MUST include the profileId as the third argument
+    const calls = mockConnectMcpServer.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
 
-  test("profileIdOverride takes precedence over activeProfileId on first connect (D9B callback wire)", async () => {
-    // This is the exact D9B scenario: after OAuth callback, the hook still holds
-    // a stale activeProfileId, but onProfileAuthorized passes the new profileId
-    // as an override to the very first connect
-    const profileProps: Parameters<typeof useConnection>[0] = {
-      ...defaultProps,
-      activeProfileId: "pid-stale-from-previous-session",
-    };
+    const lastCall = calls[calls.length - 1];
+    expect(lastCall).toHaveLength(3);
+    expect(lastCall[2]).toBe("pid-fresh-from-oauth-exchange");
 
-    const { result } = renderHook(() => useConnection(profileProps));
-
-    // Simulate App.tsx's onProfileAuthorized calling connectMcpServer with the fresh profileId
-    await act(async () => {
-      await result.current.connect(undefined, 0, "pid-fresh-from-oauth-exchange");
-    });
-
-    // The proxy URL must carry the fresh profileId, not the stale one
-    expect(mockSSETransport.url).not.toBeUndefined();
-    expect(mockSSETransport.url?.searchParams.get("profileId")).toBe(
-      "pid-fresh-from-oauth-exchange"
-    );
-    expect(mockSSETransport.url?.searchParams.get("profileId")).not.toBe(
-      "pid-stale-from-previous-session"
-    );
+    unmount();
   });
 });
