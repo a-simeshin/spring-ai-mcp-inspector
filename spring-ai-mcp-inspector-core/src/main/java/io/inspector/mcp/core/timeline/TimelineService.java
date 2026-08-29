@@ -16,87 +16,35 @@
 
 package io.inspector.mcp.core.timeline;
 
-import java.time.Instant;
 import java.util.List;
 
 /**
- * Service that stores and retrieves {@link TimelineEvent timeline events}.
+ * Service that captures and retrieves {@link TimelineEvent timeline events}.
  *
  * <p>
- * Events are appended by the {@link McpTrafficRecorder} (for JSON-RPC traffic) and by a
- * log appender (for application logs). A downstream consumer — the inspector UI — queries
- * the timeline via {@link #query(TimelineQuery)}.
- *
- * <p>
- * All implementations must be thread-safe.
+ * Implementations are expected to be thread-safe and bounded (in-memory ring buffer with
+ * configurable capacity and TTL).
  *
  * @author Artem Simeshin
  */
 public interface TimelineService {
 
 	/**
-	 * Appends an event to the timeline.
+	 * Append an event to the timeline.
 	 * @param event the event to append (must not be {@code null})
 	 */
 	void append(TimelineEvent event);
 
 	/**
-	 * Queries the timeline with the given filter.
-	 * @param query the query parameters (must not be {@code null})
-	 * @return an immutable list of matching events, newest first (never {@code null})
+	 * Query events matching the given filter criteria.
+	 * @param query the filter criteria (must not be {@code null})
+	 * @return matching events, newest first, never {@code null}
 	 */
 	List<TimelineEvent> query(TimelineQuery query);
 
 	/**
-	 * Removes all events from the timeline.
+	 * Remove all events from the timeline.
 	 */
 	void clear();
-
-	/**
-	 * Query parameters for the timeline.
-	 *
-	 * @param correlationId optional correlation ID filter
-	 * @param sessionId optional session ID filter
-	 * @param type optional event type filter
-	 * @param since optional start time (inclusive)
-	 * @param until optional end time (exclusive)
-	 * @param limit maximum number of results (default 100, must be positive)
-	 */
-	record TimelineQuery(String correlationId, String sessionId, TimelineEventType type, Instant since, Instant until,
-			int limit) {
-
-		/**
-		 * Compact constructor with default limit.
-		 * @param correlationId optional correlation ID filter
-		 * @param sessionId optional session ID filter
-		 * @param type optional event type filter
-		 * @param since optional start time (inclusive)
-		 * @param until optional end time (exclusive)
-		 * @param limit the maximum number of results
-		 */
-		public TimelineQuery {
-			if (limit <= 0) {
-				limit = 100;
-			}
-		}
-
-		/**
-		 * Creates a query with no filters, returning up to 100 events.
-		 * @return a new query (never {@code null})
-		 */
-		public static TimelineQuery all() {
-			return new TimelineQuery(null, null, null, null, null, 100);
-		}
-
-		/**
-		 * Creates a query that filters by correlation ID.
-		 * @param correlationId the correlation ID to match
-		 * @return a new query with just the correlation filter
-		 */
-		public static TimelineQuery byCorrelationId(final String correlationId) {
-			return new TimelineQuery(correlationId, null, null, null, null, 100);
-		}
-
-	}
 
 }

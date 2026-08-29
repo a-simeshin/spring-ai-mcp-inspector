@@ -87,7 +87,7 @@ public class McpInspectorProperties {
 	@NestedConfigurationProperty
 	private Shutdown shutdown = new Shutdown();
 
-	/** Timeline configuration. */
+/** Timeline event capture configuration. */
 	@NestedConfigurationProperty
 	private Timeline timeline = new Timeline();
 
@@ -227,6 +227,127 @@ public class McpInspectorProperties {
 	}
 
 	/**
+	 * Timeline event capture configuration. Bound under
+	 * {@code spring.ai.mcp.inspector.timeline}.
+	 */
+	public static class Timeline {
+
+		/**
+		 * Whether the timeline feature is enabled overall. Defaults to {@code false}
+		 * (opt-in).
+		 */
+		private boolean enabled = false;
+
+		/**
+		 * Whether Logback appender bridge is enabled. Defaults to {@code true} when
+		 * {@link #enabled} is {@code true}.
+		 */
+		private boolean logsEnabled = true;
+
+		/**
+		 * Whether System.err/out capture is enabled. Defaults to {@code true} when
+		 * {@link #enabled} is {@code true}.
+		 */
+		private boolean stdioCaptureEnabled = true;
+
+		/**
+		 * Maximum number of timeline events to retain in the ring buffer. Default
+		 * {@code 1000}.
+		 */
+		private int capacity = 1000;
+
+		/**
+		 * Time-to-live for timeline events, in ISO-8601 duration format. Default
+		 * {@code 15m}.
+		 */
+		private java.time.Duration ttl = java.time.Duration.ofMinutes(15);
+
+		/**
+		 * Queue size for the async Logback appender. Default {@code 1024}.
+		 */
+		private int appenderQueueSize = 1024;
+
+		/**
+		 * Whether to discard events when the async appender queue is full ({@code true})
+		 * or block the calling thread ({@code false}). Default {@code true}.
+		 */
+		private boolean appenderDiscardingPolicy = true;
+
+		/**
+		 * Whether in-JVM MCP traffic recording is enabled. When {@code true}, every
+		 * JSON-RPC request, response, notification, and stream event is captured by the
+		 * {@code McpTrafficRecorder} and forwarded to the {@code TimelineService}.
+		 * Defaults to {@code false}.
+		 */
+		private boolean trafficEnabled;
+
+		public boolean isEnabled() {
+			return this.enabled;
+		}
+
+		public void setEnabled(final boolean enabled) {
+			this.enabled = enabled;
+		}
+
+		public boolean isLogsEnabled() {
+			return this.logsEnabled;
+		}
+
+		public void setLogsEnabled(final boolean logsEnabled) {
+			this.logsEnabled = logsEnabled;
+		}
+
+		public boolean isStdioCaptureEnabled() {
+			return this.stdioCaptureEnabled;
+		}
+
+		public void setStdioCaptureEnabled(final boolean stdioCaptureEnabled) {
+			this.stdioCaptureEnabled = stdioCaptureEnabled;
+		}
+
+		public int getCapacity() {
+			return this.capacity;
+		}
+
+		public void setCapacity(final int capacity) {
+			this.capacity = capacity;
+		}
+
+		public java.time.Duration getTtl() {
+			return this.ttl;
+		}
+
+		public void setTtl(final java.time.Duration ttl) {
+			this.ttl = ttl;
+		}
+
+		public int getAppenderQueueSize() {
+			return this.appenderQueueSize;
+		}
+
+		public void setAppenderQueueSize(final int appenderQueueSize) {
+			this.appenderQueueSize = appenderQueueSize;
+		}
+
+		public boolean isAppenderDiscardingPolicy() {
+			return this.appenderDiscardingPolicy;
+		}
+
+		public void setAppenderDiscardingPolicy(final boolean appenderDiscardingPolicy) {
+			this.appenderDiscardingPolicy = appenderDiscardingPolicy;
+		}
+
+		public boolean isTrafficEnabled() {
+			return this.trafficEnabled;
+		}
+
+		public void setTrafficEnabled(final boolean trafficEnabled) {
+			this.trafficEnabled = trafficEnabled;
+		}
+
+	}
+
+	/**
 	 * Tunable timeouts for the proxy backend. All values accept Spring's relaxed
 	 * {@link Duration} syntax — e.g. {@code 30s}, {@code 2m}, {@code 500ms} — and fall
 	 * back to upstream-compatible defaults when unset.
@@ -319,28 +440,4 @@ public class McpInspectorProperties {
 
 	}
 
-	/**
-	 * Timeline/event-recording configuration. Bound under
-	 * {@code spring.ai.mcp.inspector.timeline}.
-	 */
-	public static class Timeline {
-
-		/**
-		 * Whether in-JVM MCP traffic recording is enabled. When {@code true}, every
-		 * JSON-RPC request, response, notification, and stream event is captured by the
-		 * {@code McpTrafficRecorder} and forwarded to the {@code TimelineService}.
-		 * Defaults to {@code false}.
-		 */
-		private boolean trafficEnabled;
-
-		public boolean isTrafficEnabled() {
-			return this.trafficEnabled;
-		}
-
-		public void setTrafficEnabled(final boolean trafficEnabled) {
-			this.trafficEnabled = trafficEnabled;
-		}
-
 	}
-
-}

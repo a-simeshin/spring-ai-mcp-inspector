@@ -15,12 +15,7 @@
  */
 
 /**
- * Timeline event model, service and traffic recorder for the MCP inspector.
- *
- * <p>
- * Provides the {@link io.inspector.mcp.core.timeline.TimelineEvent} model,
- * {@link io.inspector.mcp.core.timeline.TimelineService} interface and bounded in-memory
- * implementation, plus a {@link io.inspector.mcp.core.timeline.McpTrafficRecorder} that
- * intercepts JSON-RPC traffic at the proxy boundary.
+ * Timeline event capturing: event model, service API, bounded ring-buffer store, Logback
+ * appender bridge and System.err/.out sink.
  */
 package io.inspector.mcp.core.timeline;

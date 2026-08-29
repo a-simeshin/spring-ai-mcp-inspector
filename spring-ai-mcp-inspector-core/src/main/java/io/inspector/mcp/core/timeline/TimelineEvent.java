@@ -17,37 +17,87 @@
 package io.inspector.mcp.core.timeline;
 
 import java.time.Instant;
-import java.util.Objects;
+import java.util.UUID;
 
 import tools.jackson.databind.JsonNode;
 
 /**
- * A single event on the inspector timeline.
+ * An immutable event recorded on the MCP inspector timeline.
  *
  * <p>
- * Recorded by the {@link McpTrafficRecorder} (or a log appender) and stored in the
- * {@link TimelineService} for retrieval by the UI.
+ * Every event carries a unique {@code id} and a {@code correlationId} that links it to
+ * the top-level JSON-RPC request that triggered it. Additional fields are populated
+ * according to {@link #eventType()}.
  *
- * @param id unique event identifier (never {@code null})
- * @param correlationId correlation identifier linking paired request/response or a group
- * of related events (never {@code null})
- * @param sessionId proxy session identifier (may be {@code null})
- * @param type event type discriminator (never {@code null})
- * @param timestamp instant when the event occurred (never {@code null})
- * @param payload JSON payload of the message (may be {@code null})
+ * @param id globally unique event identifier
+ * @param correlationId correlation id linking this event to the originating JSON-RPC
+ * request (set via MDC key {@code mcp.correlationId})
+ * @param timestamp instant when the event occurred
+ * @param eventType discriminator for the kind of event
+ * @param sessionId optional MCP session identifier
+ * @param requestId optional JSON-RPC request id
+ * @param method optional JSON-RPC method name
+ * @param params optional JSON-RPC params payload ({@code null} for {@code APP_LOG})
+ * @param result optional JSON-RPC result payload ({@code null} for {@code APP_LOG})
+ * @param error optional JSON-RPC error payload ({@code null} for {@code APP_LOG})
+ * @param logLevel log level name (only for {@link TimelineEventType#APP_LOG};
+ * {@code null} otherwise)
+ * @param loggerName logger name (only for {@code APP_LOG}; {@code null} otherwise)
+ * @param threadName thread name that produced the event ({@code null} for MCP events)
+ * @param message formatted log message (only for {@code APP_LOG}; {@code null} otherwise)
+ * @param throwable stack trace of the throwable, if any (only for {@code APP_LOG};
+ * {@code null} otherwise)
  * @author Artem Simeshin
  */
-public record TimelineEvent(String id, String correlationId, String sessionId, TimelineEventType type,
-		Instant timestamp, JsonNode payload) {
+public record TimelineEvent(
+
+		UUID id,
+
+		UUID correlationId,
+
+		Instant timestamp,
+
+		TimelineEventType eventType,
+
+		String sessionId,
+
+		String requestId,
+
+		String method,
+
+		JsonNode params,
+
+		JsonNode result,
+
+		JsonNode error,
+
+		String logLevel,
+
+		String loggerName,
+
+		String threadName,
+
+		String message,
+
+		String throwable
+
+) {
 
 	/**
-	 * Compact constructor with null-safety.
+	 * Creates a minimal {@code APP_LOG} event with the given correlation, log metadata
+	 * and message.
+	 * @param correlationId the correlation id from the MDC
+	 * @param logLevel the log level string
+	 * @param loggerName the logger name
+	 * @param threadName the current thread name
+	 * @param message the formatted log message
+	 * @param throwable optional stack trace, may be {@code null}
+	 * @return a new {@code APP_LOG} event
 	 */
-	public TimelineEvent {
-		Objects.requireNonNull(id, "id must not be null");
-		Objects.requireNonNull(correlationId, "correlationId must not be null");
-		Objects.requireNonNull(type, "type must not be null");
-		Objects.requireNonNull(timestamp, "timestamp must not be null");
+	public static TimelineEvent createLogEvent(final UUID correlationId, final String logLevel, final String loggerName,
+			final String threadName, final String message, final String throwable) {
+		return new TimelineEvent(UUID.randomUUID(), correlationId, Instant.now(), TimelineEventType.APP_LOG, null, null,
+				null, null, null, null, logLevel, loggerName, threadName, message, throwable);
 	}
 
 }
