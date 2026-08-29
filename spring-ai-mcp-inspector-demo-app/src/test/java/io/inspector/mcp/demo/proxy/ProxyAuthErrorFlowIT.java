@@ -357,7 +357,8 @@ class ProxyAuthErrorFlowIT {
 				final HttpResponse<String> failed = postInitialize(base, stub.mcpUrl());
 
 				// then — the exact D3 DTO with the upstream status
-				assertDto(failed, status, codeFor(status), reasonFor(status), guidanceFor(status), stub.mcpUrl());
+				assertDto(failed, status, codeFor(status), reasonFor(status), guidanceFor(status),
+						stub.redactedMcpUrl());
 
 				// and — a failed handshake never issues a session id
 				assertThat(failed.headers().firstValue(MCP_SESSION_ID_HEADER))
@@ -432,7 +433,8 @@ class ProxyAuthErrorFlowIT {
 						toolsListFrame());
 
 				// then — the exact D3 DTO
-				assertDto(failed, status, codeFor(status), reasonFor(status), guidanceFor(status), stub.mcpUrl());
+				assertDto(failed, status, codeFor(status), reasonFor(status), guidanceFor(status),
+						stub.redactedMcpUrl());
 			}
 		}
 
@@ -470,7 +472,8 @@ class ProxyAuthErrorFlowIT {
 						null);
 
 				// then — the exact D3 DTO with the upstream status
-				assertDto(failed, status, codeFor(status), reasonFor(status), guidanceFor(status), stub.mcpUrl());
+				assertDto(failed, status, codeFor(status), reasonFor(status), guidanceFor(status),
+						stub.redactedMcpUrl());
 
 				// and — the owner's profile AND binding are gone: the error handler
 				// removed the orphan session and cleared the bound profile from the
@@ -654,7 +657,21 @@ class ProxyAuthErrorFlowIT {
 			return "http://127.0.0.1:" + port() + "/sse";
 		}
 
+		/**
+		 * Streamable transport URL with a query/API-key parameter (D3/D5). The proxy's
+		 * {@code ProxyErrorDto.redactUrl} MUST strip the query, so the DTO's {@code url}
+		 * field equals {@link #redactedMcpUrl()} — not the full URL with the secret.
+		 */
 		String mcpUrl() {
+			return "http://127.0.0.1:" + port() + "/mcp?api-key=sk-proj-abc123def456";
+		}
+
+		/**
+		 * D5-redacted URL: {@code scheme://host[:port]/path} without query params or
+		 * fragment. The DTO's {@code url} field must equal this value, proving the
+		 * redaction stripped the query/secret.
+		 */
+		String redactedMcpUrl() {
 			return "http://127.0.0.1:" + port() + "/mcp";
 		}
 

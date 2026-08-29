@@ -162,6 +162,92 @@ class AuthProfileApiIT {
 		}
 
 		@Test
+		@DisplayName("invalid inline subtype fields return 400 and leave the listing unchanged")
+		@Story("Profile registration validation")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("POST /mcp-inspector/api/auth-profile with missing required subtype fields (BEARER "
+				+ "without token, API_KEY without keyName, OAUTH2 without tokenUrl, OAUTH2 without clientId) "
+				+ "answers 400 and does not persist anything — the GET list stays empty")
+		void invalidInlineSubtypeFields_return400_listingUnchanged() throws Exception {
+			// given — a valid profile establishes the owner cookie
+			app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
+			final String apiBase = apiBase();
+			final Session valid = register(apiBase,
+					"{\"profile\":{\"name\":\"valid\",\"type\":\"BEARER\",\"token\":\"tok\"}}");
+
+			// when — BEARER without token
+			final HttpResponse<String> noToken = send(apiBase + "/auth-profile", "POST", """
+					{"profile":{"name":"no-tok","type":"BEARER"}}""", AUTH_TOKEN, null, valid.cookie());
+
+			// then — 400 and the list still has only the valid profile
+			assertThat(noToken.statusCode())
+				.as("BEARER without token on %s, body=%s", ProxyAppHarness.stack(), noToken.body())
+				.isEqualTo(400);
+			assertListedExactly(apiBase, valid.cookie(), "valid");
+
+			// when — API_KEY without keyName
+			final HttpResponse<String> noKeyName = send(apiBase + "/auth-profile", "POST", """
+					{"profile":{"name":"no-key","type":"API_KEY","keyValue":"v","placement":"HEADER"}}""", AUTH_TOKEN,
+					null, valid.cookie());
+
+			// then — 400 and the list is unchanged
+			assertThat(noKeyName.statusCode())
+				.as("API_KEY without keyName on %s, body=%s", ProxyAppHarness.stack(), noKeyName.body())
+				.isEqualTo(400);
+			assertListedExactly(apiBase, valid.cookie(), "valid");
+
+			// when — OAUTH2 CC without tokenUrl
+			final HttpResponse<String> noTokenUrl = send(apiBase + "/auth-profile", "POST", """
+					{"profile":{"name":"no-tu","type":"OAUTH2","grantMode":"CLIENT_CREDENTIALS",
+					"clientId":"cid","clientSecret":"sec"}}""", AUTH_TOKEN, null, valid.cookie());
+
+			// then — 400 and the list is unchanged
+			assertThat(noTokenUrl.statusCode())
+				.as("OAUTH2 without tokenUrl on %s, body=%s", ProxyAppHarness.stack(), noTokenUrl.body())
+				.isEqualTo(400);
+			assertListedExactly(apiBase, valid.cookie(), "valid");
+
+			// when — OAUTH2 CC without clientId
+			final HttpResponse<String> noClientId = send(apiBase + "/auth-profile", "POST", """
+					{"profile":{"name":"no-ci","type":"OAUTH2","grantMode":"CLIENT_CREDENTIALS",
+					"tokenUrl":"http://127.0.0.1:1/token","clientSecret":"sec"}}""", AUTH_TOKEN, null, valid.cookie());
+
+			// then — 400 and the list is unchanged
+			assertThat(noClientId.statusCode())
+				.as("OAUTH2 without clientId on %s, body=%s", ProxyAppHarness.stack(), noClientId.body())
+				.isEqualTo(400);
+			assertListedExactly(apiBase, valid.cookie(), "valid");
+		}
+
+		@Test
+		@DisplayName("non-S256 PKCE challenge method returns 400 and leaves the listing unchanged")
+		@Story("Profile registration validation")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("POST /mcp-inspector/api/auth-profile with an OAuth2 authorization-code profile "
+				+ "using codeChallengeMethod=\"plain\" instead of \"S256\" answers 400 and does not persist "
+				+ "anything — the GET list stays empty")
+		void nonS256ChallengeMethod_returns400_listingUnchanged() throws Exception {
+			// given — a valid profile establishes the owner cookie
+			app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
+			final String apiBase = apiBase();
+			final Session valid = register(apiBase,
+					"{\"profile\":{\"name\":\"valid\",\"type\":\"BEARER\",\"token\":\"tok\"}}");
+
+			// when — authorization-code with non-S256 challenge method
+			final HttpResponse<String> plainChallenge = send(apiBase + "/auth-profile", "POST", """
+					{"profile":{"name":"plain-pkce","type":"OAUTH2","grantMode":"AUTHORIZATION_CODE",
+					"tokenUrl":"http://127.0.0.1:1/token","clientId":"cid",
+					"authorizationUrl":"http://127.0.0.1:1/auth","redirectUri":"http://127.0.0.1:1/cb",
+					"codeChallenge":"challenge","codeChallengeMethod":"plain"}}""", AUTH_TOKEN, null, valid.cookie());
+
+			// then — 400 and the list is unchanged
+			assertThat(plainChallenge.statusCode())
+				.as("non-S256 challenge on %s, body=%s", ProxyAppHarness.stack(), plainChallenge.body())
+				.isEqualTo(400);
+			assertListedExactly(apiBase, valid.cookie(), "valid");
+		}
+
+		@Test
 		@DisplayName("registration without a valid X-MCP-Inspector-Auth is rejected")
 		@Story("Inspector auth guard")
 		@Severity(SeverityLevel.CRITICAL)
@@ -321,18 +407,17 @@ class AuthProfileApiIT {
 			assertListedExactly(apiBase, prod.cookie(), "prod", "other");
 		}
 
-		/** Asserts the GET list contains exactly the given profile names (any order). */
-		private static void assertListedExactly(final String apiBase, final String cookie, final String... names)
-				throws Exception {
-			final JsonNode list = MAPPER
-				.readTree(send(apiBase + "/auth-profile", "GET", null, AUTH_TOKEN, null, cookie).body());
-			final List<String> listedNames = new ArrayList<>();
-			for (final JsonNode entry : list) {
-				listedNames.add(entry.path("name").asText());
-			}
-			assertThat(listedNames).as("listing on %s", ProxyAppHarness.stack()).containsExactlyInAnyOrder(names);
-		}
+	}
 
+	/** Asserts the GET list contains exactly the given profile names (any order). */
+	static void assertListedExactly(final String apiBase, final String cookie, final String... names) throws Exception {
+		final JsonNode list = MAPPER
+			.readTree(send(apiBase + "/auth-profile", "GET", null, AUTH_TOKEN, null, cookie).body());
+		final List<String> listedNames = new ArrayList<>();
+		for (final JsonNode entry : list) {
+			listedNames.add(entry.path("name").asText());
+		}
+		assertThat(listedNames).as("listing on %s", ProxyAppHarness.stack()).containsExactlyInAnyOrder(names);
 	}
 
 	/**

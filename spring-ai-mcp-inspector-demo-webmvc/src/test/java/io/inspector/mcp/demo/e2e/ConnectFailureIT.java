@@ -279,9 +279,14 @@ class ConnectFailureIT {
 		return sidebar().$(byText("Connect"));
 	}
 
-	/** The connect-failure alert mounted by the Sidebar (PR #70). */
+	/**
+	 * The connect-failure alert mounted by the Sidebar (PR #70). We scope by the
+	 * {@code [data-testid=retry-connect-button]} instead of {@code [role=alert]} because
+	 * the auth-profiles panel (issue #54) also renders a {@code role=alert} with "Profile
+	 * name is required" on initial mount, and the test must not confuse the two.
+	 */
 	private static SelenideElement alert() {
-		return $("[role=alert]");
+		return $("[data-testid=retry-connect-button]").parent();
 	}
 
 	/**
