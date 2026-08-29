@@ -27,6 +27,8 @@ import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.timeline.McpTrafficRecorder;
+
 /**
  * Wires a {@link ProxySession}'s two sinks to the target {@link McpClientTransport}.
  *
@@ -57,9 +59,25 @@ public final class McpProxy {
 
 	private final JacksonMcpJsonMapper mcpJsonMapper;
 
+	private final McpTrafficRecorder trafficRecorder;
+
+	/**
+	 * Creates a proxy with no traffic recording.
+	 * @param objectMapper the JSON mapper (may be {@code null} to use a default)
+	 */
 	public McpProxy(final JsonMapper objectMapper) {
+		this(objectMapper, null);
+	}
+
+	/**
+	 * Creates a proxy with an optional traffic recorder.
+	 * @param objectMapper the JSON mapper (may be {@code null} to use a default)
+	 * @param trafficRecorder the traffic recorder, or {@code null} to skip recording
+	 */
+	public McpProxy(final JsonMapper objectMapper, final McpTrafficRecorder trafficRecorder) {
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.mcpJsonMapper = new JacksonMcpJsonMapper(this.objectMapper);
+		this.trafficRecorder = trafficRecorder;
 	}
 
 	/**
@@ -86,6 +104,7 @@ public final class McpProxy {
 			if (typed == null) {
 				return Mono.empty();
 			}
+			recordOutbound(session, typed, frame);
 			return session.targetTransport().sendMessage(typed).doOnError((err) -> {
 				LOG.warn("proxy[{}] sendMessage failed: {}", session.sessionId(), err.toString());
 				// A failed send to a dead upstream must release any per-request awaiter
@@ -132,6 +151,7 @@ public final class McpProxy {
 		return session.targetTransport().connect((inbound) -> inbound.flatMap((message) -> {
 			final JsonNode body = toJsonNode(message);
 			if (body != null) {
+				recordInbound(session, message, body);
 				final Sinks.EmitResult er = session.targetToBrowser().tryEmitNext(body);
 				if (er.isFailure()) {
 					LOG.debug("proxy[{}] target->browser emit failure: {}", session.sessionId(), er.name());
@@ -140,6 +160,42 @@ public final class McpProxy {
 			}
 			return Mono.<JSONRPCMessage>empty();
 		}).doOnError((err) -> session.failUpstream(err))).doOnError((err) -> session.failUpstream(err));
+	}
+
+	/**
+	 * Records an outbound (browser → target) message via the traffic recorder, if
+	 * configured.
+	 * @param session the proxy session (must not be {@code null})
+	 * @param typed the typed JSON-RPC message (must not be {@code null})
+	 * @param frame the raw JSON frame (may be {@code null})
+	 */
+	private void recordOutbound(final ProxySession session, final JSONRPCMessage typed, final JsonNode frame) {
+		if (this.trafficRecorder != null) {
+			try {
+				this.trafficRecorder.recordOutbound(session.sessionId(), typed, frame);
+			}
+			catch (final Exception ex) {
+				LOG.warn("proxy[{}] traffic recorder outbound failed: {}", session.sessionId(), ex.toString());
+			}
+		}
+	}
+
+	/**
+	 * Records an inbound (target → browser) message via the traffic recorder, if
+	 * configured.
+	 * @param session the proxy session (must not be {@code null})
+	 * @param message the typed JSON-RPC message (must not be {@code null})
+	 * @param body the serialised JSON body (may be {@code null})
+	 */
+	private void recordInbound(final ProxySession session, final JSONRPCMessage message, final JsonNode body) {
+		if (this.trafficRecorder != null) {
+			try {
+				this.trafficRecorder.recordInbound(session.sessionId(), message, body);
+			}
+			catch (final Exception ex) {
+				LOG.warn("proxy[{}] traffic recorder inbound failed: {}", session.sessionId(), ex.toString());
+			}
+		}
 	}
 
 	/**
