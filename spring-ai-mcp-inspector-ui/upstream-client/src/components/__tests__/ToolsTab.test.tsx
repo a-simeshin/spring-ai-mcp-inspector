@@ -1204,6 +1204,25 @@ describe("ToolsTab", () => {
     });
   });
 
+describe("Responsive layout", () => {
+    // [spring-ai-mcp-inspector PATCH] Responsive Tools list/detail grid
+    // (#58): upstream hard-codes two columns, which overlap at a 375px
+    // viewport. The local fix stacks the grid into one column below the
+    // `sm` (640px) breakpoint and keeps two columns at and above it; the
+    // testid anchors let Selenide assert geometry deterministically.
+    it("should stack the tools list/detail grid below the sm breakpoint", () => {
+      renderToolsTab({ selectedTool: mockTools[0] });
+
+      const grid = screen.getByTestId("tools-list-detail-grid");
+      expect(grid).toHaveClass("grid-cols-1");
+      expect(grid).toHaveClass("sm:grid-cols-2");
+
+      expect(screen.getByTestId("tools-list-pane")).toBeInTheDocument();
+      expect(screen.getByTestId("tools-detail-pane")).toBeInTheDocument();
+      expect(screen.getByTestId("run-tool-button")).toBeInTheDocument();
+    });
+  });
+
   describe("Annotation Badges - Default Marker", () => {
     // Tool without annotations object — should show "(default)" marker on Read-only/Destructive
     const toolWithoutAnnotations: Tool = {
