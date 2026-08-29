@@ -87,6 +87,10 @@ public class McpInspectorProperties {
 	@NestedConfigurationProperty
 	private Shutdown shutdown = new Shutdown();
 
+	/** Timeline event capture configuration. */
+	@NestedConfigurationProperty
+	private Timeline timeline = new Timeline();
+
 	public boolean isEnabled() {
 		return this.enabled;
 	}
@@ -181,6 +185,14 @@ public class McpInspectorProperties {
 		this.shutdown = (shutdown != null) ? shutdown : new Shutdown();
 	}
 
+	public Timeline getTimeline() {
+		return this.timeline;
+	}
+
+	public void setTimeline(final Timeline timeline) {
+		this.timeline = (timeline != null) ? timeline : new Timeline();
+	}
+
 	/**
 	 * Context-shutdown behaviour. Bound under {@code spring.ai.mcp.inspector.shutdown}.
 	 */
@@ -210,6 +222,111 @@ public class McpInspectorProperties {
 
 		public void setCloseMcpServerTransports(final boolean closeMcpServerTransports) {
 			this.closeMcpServerTransports = closeMcpServerTransports;
+		}
+
+	}
+
+	/**
+	 * Timeline event capture configuration. Bound under
+	 * {@code spring.ai.mcp.inspector.timeline}.
+	 */
+	public static class Timeline {
+
+		/**
+		 * Whether the timeline feature is enabled overall. Defaults to {@code false}
+		 * (opt-in).
+		 */
+		private boolean enabled = false;
+
+		/**
+		 * Whether Logback appender bridge is enabled. Defaults to {@code true} when
+		 * {@link #enabled} is {@code true}.
+		 */
+		private boolean logsEnabled = true;
+
+		/**
+		 * Whether System.err/out capture is enabled. Defaults to {@code true} when
+		 * {@link #enabled} is {@code true}.
+		 */
+		private boolean stdioCaptureEnabled = true;
+
+		/**
+		 * Maximum number of timeline events to retain in the ring buffer. Default
+		 * {@code 1000}.
+		 */
+		private int capacity = 1000;
+
+		/**
+		 * Time-to-live for timeline events, in ISO-8601 duration format. Default
+		 * {@code 15m}.
+		 */
+		private java.time.Duration ttl = java.time.Duration.ofMinutes(15);
+
+		/**
+		 * Queue size for the async Logback appender. Default {@code 1024}.
+		 */
+		private int appenderQueueSize = 1024;
+
+		/**
+		 * Whether to discard events when the async appender queue is full ({@code true})
+		 * or block the calling thread ({@code false}). Default {@code true}.
+		 */
+		private boolean appenderDiscardingPolicy = true;
+
+		public boolean isEnabled() {
+			return this.enabled;
+		}
+
+		public void setEnabled(final boolean enabled) {
+			this.enabled = enabled;
+		}
+
+		public boolean isLogsEnabled() {
+			return this.logsEnabled;
+		}
+
+		public void setLogsEnabled(final boolean logsEnabled) {
+			this.logsEnabled = logsEnabled;
+		}
+
+		public boolean isStdioCaptureEnabled() {
+			return this.stdioCaptureEnabled;
+		}
+
+		public void setStdioCaptureEnabled(final boolean stdioCaptureEnabled) {
+			this.stdioCaptureEnabled = stdioCaptureEnabled;
+		}
+
+		public int getCapacity() {
+			return this.capacity;
+		}
+
+		public void setCapacity(final int capacity) {
+			this.capacity = capacity;
+		}
+
+		public java.time.Duration getTtl() {
+			return this.ttl;
+		}
+
+		public void setTtl(final java.time.Duration ttl) {
+			this.ttl = ttl;
+		}
+
+		public int getAppenderQueueSize() {
+			return this.appenderQueueSize;
+		}
+
+		public void setAppenderQueueSize(final int appenderQueueSize) {
+			this.appenderQueueSize = appenderQueueSize;
+		}
+
+		public boolean isAppenderDiscardingPolicy() {
+			return this.appenderDiscardingPolicy;
+		}
+
+		public void setAppenderDiscardingPolicy(final boolean appenderDiscardingPolicy) {
+			this.appenderDiscardingPolicy = appenderDiscardingPolicy;
 		}
 
 	}
