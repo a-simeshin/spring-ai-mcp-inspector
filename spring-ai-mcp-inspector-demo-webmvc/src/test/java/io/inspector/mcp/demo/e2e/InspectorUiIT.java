@@ -482,6 +482,35 @@ class InspectorUiIT {
 	}
 
 	/**
+	 * New connect helper for the auth profiles flow (issue #54). Opens the page, ensures
+	 * an auth profile is selected/created, then connects. Uses a simple BEARER token
+	 * profile (no OAuth flow) for tests that don't specifically exercise OAuth2
+	 * client-credentials.
+	 */
+	private static void openAndConnectWithProfile() {
+		open("/mcp-inspector/index.html");
+		// Auth profile panel must render first (issue #54).
+		$("[data-testid=auth-profiles-panel]").shouldBe(visible, Duration.ofSeconds(15));
+		// The auth-profile editor must render before we touch it (race condition).
+		$("[data-testid=auth-profile-type]").shouldBe(visible, Duration.ofSeconds(15));
+		// If no profiles exist, create a simple Bearer token profile.
+		// Check if the profiles list is empty (no auth-profile-row-* elements).
+		if ($$("[data-testid^=auth-profile-row-]").isEmpty()) {
+			// Type select defaults to BEARER.
+			setReactInputValue("[data-testid=auth-profile-name]", "e2e-default");
+			setReactInputValue("[data-testid=auth-profile-bearer-token]", "e2e-token");
+			$("[data-testid=auth-profile-save]").shouldBe(visible).click();
+			// Wait for the saved row to appear and be auto-selected.
+			$("[data-testid=auth-profiles-list]").shouldBe(visible, Duration.ofSeconds(15))
+				.shouldHave(text("e2e-default"));
+		}
+		// Now connect.
+		connectButton().shouldBe(visible, Duration.ofSeconds(15)).click();
+		// Restart/Reconnect button is only mounted when connectionStatus === "connected".
+		$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+	}
+
+	/**
 	 * Sets the value of a React-controlled {@code <input>} reliably by invoking the
 	 * native HTMLInputElement setter and then dispatching a synthetic {@code input} event
 	 * so React's onChange handler observes the new value. Selenide's stock
@@ -2352,7 +2381,7 @@ class InspectorUiIT {
 		@BeforeAll
 		void bootAndConnect() {
 			startApp(new Combo("sse"));
-			openAndConnect();
+			openAndConnectWithProfile();
 		}
 
 		@AfterAll
@@ -2457,7 +2486,7 @@ class InspectorUiIT {
 		@BeforeAll
 		void bootAndConnect() {
 			startApp(new Combo("sse"));
-			openAndConnect();
+			openAndConnectWithProfile();
 		}
 
 		@AfterAll
@@ -2543,7 +2572,7 @@ class InspectorUiIT {
 		@BeforeAll
 		void bootAndConnect() {
 			startApp(new Combo("sse"));
-			openAndConnect();
+			openAndConnectWithProfile();
 		}
 
 		@AfterAll
@@ -2645,7 +2674,7 @@ class InspectorUiIT {
 		@BeforeAll
 		void bootAndConnect() {
 			startApp(new Combo("sse"));
-			openAndConnect();
+			openAndConnectWithProfile();
 		}
 
 		@AfterAll
@@ -3516,6 +3545,8 @@ class InspectorUiIT {
 			startApp(new Combo("sse"));
 			open("/mcp-inspector/index.html");
 
+			// Auth profile panel must render first (issue #54).
+			$("[data-testid=auth-profiles-panel]").shouldBe(visible, Duration.ofSeconds(15));
 			// The auth-profile editor must render before we touch it.
 			$("[data-testid=auth-profile-type]").shouldBe(visible, Duration.ofSeconds(15));
 
