@@ -1200,7 +1200,7 @@ class InspectorUiIT {
 			// PASS after the implementation.
 			activePanel().$("img[src^='data:image/png;base64,']").shouldBe(visible, Duration.ofSeconds(15));
 			// The image should have a non-zero natural width (proving it rendered).
-			Integer naturalWidth = Selenide.executeJavaScript("return document.querySelector("
+			Long naturalWidth = Selenide.executeJavaScript("return document.querySelector("
 					+ "'[role=tabpanel][data-state=active] img[src^=\"data:image/png\"]')" + "?.naturalWidth || 0;");
 			Assertions.assertTrue(naturalWidth != null && naturalWidth > 0,
 					"Image should have non-zero natural width, got: " + naturalWidth);

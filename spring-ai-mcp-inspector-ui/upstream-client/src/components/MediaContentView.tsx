@@ -46,30 +46,69 @@ const MediaContentView = ({
 }: MediaContentViewProps) => {
   const hasBinary = typeof base64Data === "string" && base64Data.length > 0;
 
+  /** MIME type badge shown above content for all resource types. */
+  const mimeTypeBadge = mimeType ? (
+    <span className="inline-block bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs px-2 py-0.5 rounded mb-2 font-mono">
+      {mimeType}
+    </span>
+  ) : null;
+
   // Image content — render as <img>
   if (hasBinary && mimeType?.startsWith("image/")) {
+    const dataUri = `data:${mimeType};base64,${base64Data}`;
+    const downloadName = filename || "image";
     return (
       <div className={className}>
+        {mimeTypeBadge}
         <img
-          src={`data:${mimeType};base64,${base64Data}`}
+          src={dataUri}
           alt={alt || "Resource image"}
           className="max-w-full h-auto"
         />
+        <div className="mt-2">
+          <a
+            download={downloadName}
+            href={dataUri}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded text-sm font-medium
+                       bg-blue-600 text-white hover:bg-blue-700 transition-colors
+                       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500
+                       w-fit"
+          >
+            <DownloadIcon />
+            Download{filename ? ` ${filename}` : ""}
+          </a>
+        </div>
       </div>
     );
   }
 
   // Audio content — render as <audio controls>
   if (hasBinary && mimeType?.startsWith("audio/")) {
+    const dataUri = `data:${mimeType};base64,${base64Data}`;
+    const downloadName = filename || "audio";
     return (
       <div className={className}>
+        {mimeTypeBadge}
         <audio
           controls
-          src={`data:${mimeType};base64,${base64Data}`}
+          src={dataUri}
           className="w-full"
         >
           <p>Your browser does not support audio playback</p>
         </audio>
+        <div className="mt-2">
+          <a
+            download={downloadName}
+            href={dataUri}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded text-sm font-medium
+                       bg-blue-600 text-white hover:bg-blue-700 transition-colors
+                       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500
+                       w-fit"
+          >
+            <DownloadIcon />
+            Download{filename ? ` ${filename}` : ""}
+          </a>
+        </div>
       </div>
     );
   }
@@ -80,6 +119,9 @@ const MediaContentView = ({
     const downloadName = filename || "download";
     return (
       <div className={`flex flex-col gap-2 ${className || ""}`.trim()}>
+        {mimeTypeBadge && (
+          <span className="w-fit">{mimeTypeBadge}</span>
+        )}
         <a
           download={downloadName}
           href={href}
@@ -109,6 +151,7 @@ const MediaContentView = ({
   const displayData = text ?? "";
   return (
     <div className={className}>
+      {mimeTypeBadge}
       <JsonView data={displayData} />
     </div>
   );
