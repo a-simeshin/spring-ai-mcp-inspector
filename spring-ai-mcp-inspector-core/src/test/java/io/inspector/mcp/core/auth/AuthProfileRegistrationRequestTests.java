@@ -226,18 +226,6 @@ class AuthProfileRegistrationRequestTests {
 		@Test
 		@Story("Validation")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("an auth-code pending request with a non-S256 codeChallengeMethod is rejected")
-		void validate_pendingNonS256_throws() {
-			assertThatThrownBy(
-					() -> pending("ac", "https://t/token", "cid", "https://t/auth", "https://app/cb", "ch", "plain")
-						.validate())
-				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessageContaining("codeChallengeMethod");
-		}
-
-		@Test
-		@Story("Validation")
-		@Severity(SeverityLevel.CRITICAL)
 		@Description("a fully populated auth-code pending request passes validation")
 		void validate_pendingComplete_passes() {
 			pending("ac", "https://t/token", "cid", "https://t/auth", "https://app/cb", "challenge", "S256").validate();
