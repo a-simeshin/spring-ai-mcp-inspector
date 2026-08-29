@@ -401,6 +401,24 @@ class AuthProfileStoreTests {
 			assertThat(AuthProfileStoreTests.this.store.update(OWNER_A, "unknown", bearer("prod", "tok-2"))).isFalse();
 		}
 
+		@Test
+		@Story("Name uniqueness")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("update() renaming onto an existing profile name throws IllegalArgumentException (400), not a silent duplicate")
+		void update_duplicateName_throwsIllegalArgument() {
+			// given — two profiles for the same owner, then an update renames the second
+			// onto the first's name
+			final String a = AuthProfileStoreTests.this.store.register(OWNER_A, bearer("one", "tok-a"));
+			AuthProfileStoreTests.this.store.register(OWNER_A, bearer("two", "tok-b"));
+
+			// when/then — client error, never a silently duplicated name
+			assertThatThrownBy(() -> AuthProfileStoreTests.this.store.update(OWNER_A, a, bearer("two", "tok-c")))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("already exists");
+			// the offending update left the store untouched
+			assertThat(AuthProfileStoreTests.this.store.resolve(OWNER_A, a)).contains(bearer("one", "tok-a"));
+		}
+
 	}
 
 	@Nested

@@ -52,6 +52,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyErrorDto;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
@@ -1528,6 +1529,45 @@ class ProxyHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
 			assertThat(entityBody(response).get("error").toString()).contains("did not respond");
+			verify(ProxyHandlerTests.this.registry).removeAndClose(captured[0].sessionId());
+		}
+
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() new-session handshake failing with 401 returns the structured DTO with a redacted url and tears down the orphaned session")
+		void postMcp_newSessionAuthFailure_returnsRedacted401AndRemovesSession() {
+			// given — a new session whose upstream immediately fails the handshake with
+			// 401 (includeSessionHeader == true, so the session is registered/bound and
+			// must be removed on the failed initial handshake)
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitError(new RuntimeException("401 Unauthorized"));
+				return Mono.empty();
+			});
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp?api_key=SECRET")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then — structured 401 DTO with the D5-redacted url (scheme/host/path only,
+			// the api_key secret stripped from the query) and the never-returned session
+			// is removed (D3 cleanup).
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+			final ProxyErrorDto dto = (ProxyErrorDto) ((EntityResponse<Object>) response).entity();
+			assertThat(dto.code()).isEqualTo("unauthorized");
+			assertThat(dto.url()).isEqualTo("http://target/mcp");
 			verify(ProxyHandlerTests.this.registry).removeAndClose(captured[0].sessionId());
 		}
 

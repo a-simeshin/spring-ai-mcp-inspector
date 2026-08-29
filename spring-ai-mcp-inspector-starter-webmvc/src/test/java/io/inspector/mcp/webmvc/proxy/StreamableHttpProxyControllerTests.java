@@ -945,6 +945,11 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
 				.path("code");
 			assertThat(error.asText()).isEqualTo("unauthorized");
+			// D5: the redacted target url is attached — scheme/host/path present, the
+			// query (with its secret) absent.
+			final JsonNode url = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
+				.path("url");
+			assertThat(url.asText()).isEqualTo("http://target/mcp");
 			verify(StreamableHttpProxyControllerTests.this.registry).removeAndClose(any(String.class));
 		}
 

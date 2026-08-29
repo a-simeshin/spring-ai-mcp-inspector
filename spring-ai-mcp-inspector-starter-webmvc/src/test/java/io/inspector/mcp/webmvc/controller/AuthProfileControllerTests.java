@@ -172,6 +172,19 @@ class AuthProfileControllerTests {
 		}
 
 		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("register() with an inline profile missing its required secret field returns 400 and does not store")
+		void register_inlineProfileMissingSecret_returns400() throws Exception {
+			// when/then — a blank bearer token is rejected by validate() before the store
+			AuthProfileControllerTests.this.mockMvc
+				.perform(withOwner(post(API_BASE)).contentType(MediaType.APPLICATION_JSON)
+					.content("{\"profile\": {\"name\": \"prod\", \"type\": \"BEARER\", \"token\": \" \"}}"))
+				.andExpect(status().isBadRequest());
+			verify(AuthProfileControllerTests.this.store, never()).register(anyString(), any(AuthProfile.class));
+		}
+
+		@Test
 		@Story("Name uniqueness")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("register() maps a duplicate-name store rejection to 400 (client error, not a server fault)")
