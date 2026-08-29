@@ -1987,4 +1987,56 @@ describe("useConnection", () => {
       );
     });
   });
+
+  describe("Auth profile connect override (issue #54, D9B)", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockClient.connect.mockResolvedValue(undefined);
+    });
+
+    test("connect applies a freshly authorized profileId override to the streamable URL even before the hook re-renders", async () => {
+      const propsWithStreamableHttp = {
+        ...defaultProps,
+        transportType: "streamable-http" as const,
+        sseUrl: "http://localhost:8080",
+        activeProfileId: null as string | null,
+      };
+
+      const { result } = renderHook(() =>
+        useConnection(propsWithStreamableHttp),
+      );
+
+      await act(async () => {
+        // The OAuth2 callback fires this with the just-returned profileId, before
+        // the activeProfileId state update has re-rendered the hook (closure still
+        // carries null). The override must win so the first connect is authorized.
+        await result.current.connect(undefined, 0, "fresh-profile-id");
+      });
+
+      expect(
+        mockStreamableHTTPTransport.url?.searchParams.get("profileId"),
+      ).toBe("fresh-profile-id");
+    });
+
+    test("connect without an override falls back to the closure activeProfileId", async () => {
+      const propsWithStreamableHttp = {
+        ...defaultProps,
+        transportType: "streamable-http" as const,
+        sseUrl: "http://localhost:8080",
+        activeProfileId: "closure-profile-id",
+      };
+
+      const { result } = renderHook(() =>
+        useConnection(propsWithStreamableHttp),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(
+        mockStreamableHTTPTransport.url?.searchParams.get("profileId"),
+      ).toBe("closure-profile-id");
+    });
+  });
 });
