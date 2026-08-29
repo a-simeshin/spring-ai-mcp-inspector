@@ -1,4 +1,5 @@
 import JsonView from "./JsonView";
+import MediaContentView from "./MediaContentView";
 import ResourceLinkView from "./ResourceLinkView";
 import {
   CallToolResultSchema,
@@ -10,7 +11,7 @@ import { validateToolOutput, hasOutputSchema } from "@/utils/schemaUtils";
 interface ToolResultsProps {
   toolResult: CompatibilityCallToolResult | null;
   selectedTool: Tool | null;
-  resourceContent: Record<string, string>;
+  resourceContent: Record<string, unknown>;
   onReadResource?: (uri: string) => void;
   isPollingTask?: boolean;
 }
@@ -202,32 +203,33 @@ const ToolResults = ({
                   <JsonView data={item.text} isError={isError} />
                 )}
                 {item.type === "image" && (
-                  <img
-                    src={`data:${item.mimeType};base64,${item.data}`}
+                  <MediaContentView
+                    mimeType={item.mimeType}
+                    base64Data={item.data}
                     alt="Tool result image"
-                    className="max-w-full h-auto"
                   />
                 )}
-                {item.type === "resource" &&
-                  (item.resource?.mimeType?.startsWith("audio/") &&
-                  "blob" in item.resource ? (
-                    <audio
-                      controls
-                      src={`data:${item.resource.mimeType};base64,${item.resource.blob}`}
-                      className="w-full"
-                    >
-                      <p>Your browser does not support audio playback</p>
-                    </audio>
-                  ) : (
-                    <JsonView data={item.resource} />
-                  ))}
+                {item.type === "resource" && (() => {
+                  const res = item.resource as { uri?: string; mimeType?: string; blob?: string; text?: string } | undefined;
+                  if (!res) return null;
+                  const isBlob = "blob" in res;
+                  return (
+                    <MediaContentView
+                      mimeType={res.mimeType}
+                      base64Data={isBlob ? res.blob : undefined}
+                      text={!isBlob ? res.text : undefined}
+                      alt="Embedded resource"
+                      filename={res.uri?.split("/").pop()}
+                    />
+                  );
+                })()}
                 {item.type === "resource_link" && (
                   <ResourceLinkView
                     uri={item.uri}
                     name={item.name}
                     description={item.description}
                     mimeType={item.mimeType}
-                    resourceContent={resourceContent[item.uri] || ""}
+                    resourceContent={resourceContent[item.uri] || {}}
                     onReadResource={onReadResource}
                   />
                 )}

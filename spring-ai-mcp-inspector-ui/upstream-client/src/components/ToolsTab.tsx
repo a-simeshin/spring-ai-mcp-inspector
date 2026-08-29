@@ -225,7 +225,7 @@ const ToolsTab = ({
   isPollingTask?: boolean;
   nextCursor: ListToolsResult["nextCursor"];
   error: string | null;
-  resourceContent: Record<string, string>;
+  resourceContent: Record<string, unknown>;
   onReadResource?: (uri: string) => void;
   serverSupportsTaskRequests: boolean;
 }) => {

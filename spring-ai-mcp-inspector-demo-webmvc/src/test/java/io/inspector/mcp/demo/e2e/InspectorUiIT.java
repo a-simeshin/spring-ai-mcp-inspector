@@ -1186,17 +1186,82 @@ class InspectorUiIT {
 		}
 
 		@Test
-		@Story("Resource read")
-		@Severity(SeverityLevel.NORMAL)
-		@Description("Reading the demo-logo resource indicates a PNG / blob payload.")
-		@DisplayName("readsBlobResource — demo-logo result indicates a PNG / blob payload")
-		void readResource_blob_showsPngOrBlobPayload() {
+		@Story("Resource preview")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Clicking demo-logo renders an <img> element with the PNG data URI in the resource preview pane.")
+		@DisplayName("resourcePreview_imageResource_showsImg — demo-logo renders as <img> with data:image/png;base64,...")
+		void resourcePreview_imageResource_showsImg() {
 			// given & when
 			selectRow("demo-logo");
 
 			// then
-			activePanel().shouldHave(Condition.or("blob signal", text("image/png"), text("blob")),
-					Duration.ofSeconds(15));
+			// After the MediaContentView fix, image/* resources should render as <img>.
+			// This will FAIL against current behavior (JsonView shows base64 text) and
+			// PASS after the implementation.
+			activePanel().$("img[src^='data:image/png;base64,']").shouldBe(visible, Duration.ofSeconds(15));
+			// The image should have a non-zero natural width (proving it rendered).
+			Long naturalWidth = Selenide.executeJavaScript("return document.querySelector("
+					+ "'[role=tabpanel][data-state=active] img[src^=\"data:image/png\"]')" + "?.naturalWidth || 0;");
+			Assertions.assertTrue(naturalWidth != null && naturalWidth > 0,
+					"Image should have non-zero natural width, got: " + naturalWidth);
+		}
+
+		@Test
+		@Story("Resource preview")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Clicking demo-logo exposes a download/open control for the binary resource bytes.")
+		@DisplayName("resourcePreview_downloadControlPresent — demo-logo exposes a download/open control")
+		void resourcePreview_downloadControlPresent() {
+			// given & when
+			selectRow("demo-logo");
+
+			// then
+			// Wait for the resource read to materialize the right-panel header (the
+			// selected resource name) regardless of render implementation.
+			activePanel().$$("h3").findBy(exactText("demo-logo")).shouldBe(visible, Duration.ofSeconds(15));
+			// Binary resource preview must expose a download/open affordance (per the
+			// shared MediaContentView recommendation: <a download href=data:...> for
+			// binary/*). Red against current behavior (no download control exists),
+			// green after the implementation. `exists()` on the composed selector so
+			// any one of the affordance shapes satisfies the check.
+			Assertions.assertTrue(
+					!activePanel().$$("a[download]").isEmpty()
+							|| !activePanel().$$("button").filterBy(exactText("Download")).isEmpty()
+							|| !activePanel().$$("button").filterBy(exactText("Open")).isEmpty(),
+					"Expected a download/open control in the resource preview pane after clicking demo-logo");
+		}
+
+		@Test
+		@Story("Resource preview")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("After clicking demo-logo, the raw base64 blob content is not displayed by default (collapsed).")
+		@DisplayName("resourcePreview_base64CollapsedByDefault — raw base64 not visible after clicking demo-logo")
+		void resourcePreview_base64CollapsedByDefault() {
+			// given & when
+			selectRow("demo-logo");
+
+			// then
+			// The base64 blob content should NOT be visible as raw text in the panel.
+			// The TINY_PNG_BASE64 from DemoAdvancedResourcesProvider starts with this
+			// known prefix. This will FAIL against current behavior (base64 is visible
+			// in JsonView) and PASS after the implementation (base64 hidden behind
+			// <img> / collapsed).
+			activePanel().shouldNotHave(text("iVBORw0KGgo"), Duration.ofSeconds(15));
+		}
+
+		@Test
+		@Story("Resource preview")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Reading the demo-greeting text resource still renders content via JsonView (unchanged after fix).")
+		@DisplayName("resourcePreview_textResourceUnchanged — text resource still renders via JsonView")
+		void resourcePreview_textResourceUnchanged() {
+			// given & when
+			selectRow("demo-greeting");
+
+			// then
+			// Text resources must remain unchanged after the MediaContentView fix.
+			// The greeting text should still be visible.
+			activePanel().shouldHave(text("Hello from MCP demo"), Duration.ofSeconds(15));
 		}
 
 		@Test

@@ -16,8 +16,74 @@ import ListPane from "./ListPane";
 import { useEffect, useState } from "react";
 import { useCompletionState } from "@/lib/hooks/useCompletionState";
 import JsonView from "./JsonView";
+import MediaContentView from "./MediaContentView";
 import { UriTemplate } from "@modelcontextprotocol/sdk/shared/uriTemplate.js";
 import IconDisplay, { WithIcons } from "./IconDisplay";
+
+interface ContentItem {
+  uri?: string;
+  mimeType?: string;
+  text?: string;
+  blob?: string;
+}
+
+/**
+ * Extracts the first content item from a ReadResourceResult and renders it
+ * via the shared MediaContentView based on mimeType.
+ * - image/* -> <img> with data URI
+ * - audio/* -> <audio controls>
+ * - other binary -> <a download>
+ * - text/* -> <JsonView> (unchanged)
+ *
+ * [spring-ai-mcp-inspector PATCH] Resource preview rendering (#108).
+ */
+const ResourceContentRenderer = ({
+  resourceContent,
+}: {
+  resourceContent: unknown;
+}) => {
+  // If resourceContent is still a string (fallback), render via JsonView
+  if (typeof resourceContent === "string") {
+    return (
+      <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded text-sm overflow-auto max-h-96 text-gray-900 dark:text-gray-100">
+        <JsonView data={resourceContent} />
+      </div>
+    );
+  }
+
+  // Extract contents array from the parsed ReadResourceResult
+  const parsed = resourceContent as Record<string, unknown> | null;
+  const contents = parsed?.contents as ContentItem[] | undefined;
+  if (!contents || contents.length === 0) {
+    return (
+      <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded text-sm overflow-auto max-h-96 text-gray-900 dark:text-gray-100">
+        <JsonView data={resourceContent} />
+      </div>
+    );
+  }
+
+  // Render each content item
+  return (
+    <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded text-sm overflow-auto max-h-96 text-gray-900 dark:text-gray-100">
+      {contents.map((item, idx) => {
+        const isBinary = "blob" in item && typeof item.blob === "string";
+        const fileName = item.uri?.split("/").pop();
+        return (
+          <div key={idx} className="mb-4">
+            <MediaContentView
+              mimeType={item.mimeType}
+              base64Data={isBinary ? item.blob : undefined}
+              text={!isBinary ? item.text : undefined}
+              alt={fileName || "Resource content"}
+              filename={fileName}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 
 const ResourcesTab = ({
   resources,
@@ -56,7 +122,7 @@ const ResourcesTab = ({
     context?: Record<string, string>,
   ) => Promise<string[]>;
   completionsSupported: boolean;
-  resourceContent: string;
+  resourceContent: unknown;
   nextCursor: ListResourcesResult["nextCursor"];
   nextTemplateCursor: ListResourceTemplatesResult["nextCursor"];
   error: string | null;
@@ -247,9 +313,8 @@ const ResourcesTab = ({
                 </AlertDescription>
               </Alert>
             ) : selectedResource ? (
-              <JsonView
-                data={resourceContent}
-                className="bg-gray-50 dark:bg-gray-800 p-4 rounded text-sm overflow-auto max-h-96 text-gray-900 dark:text-gray-100"
+              <ResourceContentRenderer
+                resourceContent={resourceContent}
               />
             ) : selectedTemplate ? (
               <div className="space-y-4">

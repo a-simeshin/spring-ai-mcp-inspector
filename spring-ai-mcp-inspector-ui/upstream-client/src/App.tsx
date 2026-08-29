@@ -165,9 +165,9 @@ const App = () => {
   const [resourceTemplates, setResourceTemplates] = useState<
     ResourceTemplate[]
   >([]);
-  const [resourceContent, setResourceContent] = useState<string>("");
+  const [resourceContent, setResourceContent] = useState<unknown>("");
   const [resourceContentMap, setResourceContentMap] = useState<
-    Record<string, string>
+    Record<string, unknown>
   >({});
   const [fetchingResources, setFetchingResources] = useState<Set<string>>(
     new Set(),
@@ -984,11 +984,10 @@ const App = () => {
         responseLength: JSON.stringify(response).length,
         hasContents: !!(response as { contents?: unknown[] }).contents,
       });
-      const content = JSON.stringify(response, null, 2);
-      setResourceContent(content);
+      setResourceContent(response);
       setResourceContentMap((prev) => ({
         ...prev,
-        [uri]: content,
+        [uri]: response,
       }));
     } catch (error) {
       console.error(`[App] Failed to read resource ${uri}:`, error);
