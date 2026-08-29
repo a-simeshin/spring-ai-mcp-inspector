@@ -418,7 +418,10 @@ public class StreamableHttpProxyController {
 			if (dto != null) {
 				LOG.warn("proxy[{}] await response failed (auth {}): {}", session.sessionId(), dto.status(),
 						ex.toString());
-				if (includeSessionHeader) {
+				// Clean up on auth error if this is the initial handshake OR the session
+				// has a bound auth profile (D3/D5: no partial connect state, no orphaned
+				// registry entry, no retained profile binding).
+				if (includeSessionHeader || session.profileId() != null) {
 					this.registry.removeAndClose(session.sessionId());
 				}
 				return ResponseEntity.status(dto.status())

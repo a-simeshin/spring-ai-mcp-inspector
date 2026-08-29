@@ -762,7 +762,10 @@ public class ProxyHandler {
 				// session id to the client, so the registered/bound session is orphaned —
 				// tear it down instead of leaking it. The D5-redacted upstream url is
 				// attached so the browser sees scheme/host/path without any secret.
-				if (includeSessionHeader) {
+				// Also clean up when the session has a bound auth profile (D3/D5: no
+				// partial connect state, no orphaned registry entry, no retained profile
+				// binding).
+				if (includeSessionHeader || session.profileId() != null) {
 					this.registry.removeAndClose(session.sessionId());
 				}
 				return ServerResponse.status(dto.status())
