@@ -101,7 +101,7 @@ public final class McpTrafficRecorder {
 				this.timelineService.append(event);
 			}
 		}
-		else if (message instanceof JSONRPCNotification notification) {
+		else if (message instanceof JSONRPCNotification) {
 			final String correlationId = UUID.randomUUID().toString();
 			try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, correlationId)) {
 				final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
@@ -145,7 +145,7 @@ public final class McpTrafficRecorder {
 				this.timelineService.append(event);
 			}
 		}
-		else if (message instanceof JSONRPCNotification notification) {
+		else if (message instanceof JSONRPCNotification) {
 			final String correlationId = UUID.randomUUID().toString();
 			try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, correlationId)) {
 				final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
