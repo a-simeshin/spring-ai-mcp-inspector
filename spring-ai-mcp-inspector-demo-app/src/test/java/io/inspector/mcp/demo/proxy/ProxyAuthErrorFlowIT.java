@@ -859,10 +859,16 @@ class ProxyAuthErrorFlowIT {
 
 		/** Awaits the first frame with the given event name and returns it. */
 		SseFrame awaitFrame(final String event) {
-			Awaitility.await("SSE " + event + " frame on " + ProxyAppHarness.stack())
-				.atMost(Duration.ofSeconds(15))
-				.pollInterval(Duration.ofMillis(50))
-				.until(() -> this.frames.stream().anyMatch((frame) -> event.equals(frame.event())));
+			try {
+				Awaitility.await("SSE " + event + " frame on " + ProxyAppHarness.stack())
+					.atMost(Duration.ofSeconds(15))
+					.pollInterval(Duration.ofMillis(50))
+					.until(() -> this.frames.stream().anyMatch((frame) -> event.equals(frame.event())));
+			}
+			catch (final org.awaitility.core.ConditionTimeoutException ex) {
+				throw new AssertionError("no '" + event + "' frame on " + ProxyAppHarness.stack() + "; frames="
+						+ this.frames + ", readerError=" + this.error.get() + ", finished=" + this.finished.get(), ex);
+			}
 			return this.frames.stream().filter((frame) -> event.equals(frame.event())).findFirst().orElseThrow();
 		}
 
@@ -877,10 +883,16 @@ class ProxyAuthErrorFlowIT {
 
 		/** Awaits the end of the stream (the relay completed or aborted it). */
 		void awaitEnd() {
-			Awaitility.await("SSE stream end on " + ProxyAppHarness.stack())
-				.atMost(Duration.ofSeconds(15))
-				.pollInterval(Duration.ofMillis(50))
-				.until(this.finished::get);
+			try {
+				Awaitility.await("SSE stream end on " + ProxyAppHarness.stack())
+					.atMost(Duration.ofSeconds(15))
+					.pollInterval(Duration.ofMillis(50))
+					.until(this.finished::get);
+			}
+			catch (final org.awaitility.core.ConditionTimeoutException ex) {
+				throw new AssertionError("SSE stream did not end on " + ProxyAppHarness.stack() + "; frames="
+						+ this.frames + ", readerError=" + this.error.get(), ex);
+			}
 		}
 
 		List<SseFrame> frames() {
