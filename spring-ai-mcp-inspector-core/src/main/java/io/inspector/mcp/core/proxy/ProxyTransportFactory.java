@@ -183,15 +183,13 @@ public class ProxyTransportFactory {
 		final HttpClientSseClientTransport.Builder builder = HttpClientSseClientTransport.builder(baseUri)
 			.sseEndpoint(ssePath)
 			.messageEndpointValidator(noopValidator())
+			.requestBuilder(HttpRequest.newBuilder().timeout(this.sseRequestTimeout))
 			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR));
 		if (customizer != null) {
 			builder.httpRequestCustomizer(customizer);
 		}
 		final HttpRequest.Builder requestTemplate = HttpRequest.newBuilder().timeout(this.sseRequestTimeout);
-		final HttpClient preflightClient = HttpClient.newBuilder()
-			.connectTimeout(this.sseRequestTimeout)
-			.executor(SHARED_HTTP_EXECUTOR)
-			.build();
+		final HttpClient preflightClient = HttpClient.newBuilder().executor(SHARED_HTTP_EXECUTOR).build();
 		final URI target = URI.create(baseUri).resolve(ssePath);
 		return new SsePreflightTransport(builder.build(), target, requestTemplate, customizer, preflightClient);
 	}
