@@ -60,7 +60,14 @@
     "zod": "^3.25.76"
   },
   "overrides": {
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.1",
+    "@hono/node-server": "^1.19.15",
+    "hono": "^4.12.34",
+    "brace-expansion": "^1.1.18",
+    "body-parser": "^2.3.0",
+    "fast-uri": "^3.1.5",
+    "form-data": "^4.0.6",
+    "ip-address": "^10.3.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.11.1",
@@ -82,7 +89,7 @@
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^29.7.0",
     "jest-fixed-jsdom": "^0.0.9",
-    "postcss": "^8.5.6",
+    "postcss": "^8.5.23",
     "tailwindcss": "^3.4.13",
     "tailwindcss-animate": "^1.0.7",
     "ts-jest": "^29.4.0",
