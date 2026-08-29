@@ -185,13 +185,39 @@ public class ProxyTransportFactory {
 			.messageEndpointValidator(noopValidator())
 			.requestBuilder(HttpRequest.newBuilder().timeout(this.sseRequestTimeout))
 			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR));
-		if (customizer != null) {
-			builder.httpRequestCustomizer(customizer);
-		}
+		// The SDK's requestBuilder template applies the timeout to ALL requests the
+		// transport makes (the SSE GET stream AND every message POST). For the POST
+		// the SDK's BodyHandlers.ofString() waits for the response body to complete,
+		// but the MCP protocol delivers the response as an SSE event on the stream,
+		// not in the POST body — so a healthy POST would time out. The customizer
+		// removes the timeout for POST requests, keeping it only for the SSE GET
+		// (where it detects silent upstream disconnects, closing ConnectFailureIT).
+		builder.httpRequestCustomizer(noPostTimeoutCustomizer(customizer));
 		final HttpRequest.Builder requestTemplate = HttpRequest.newBuilder().timeout(this.sseRequestTimeout);
 		final HttpClient preflightClient = HttpClient.newBuilder().executor(SHARED_HTTP_EXECUTOR).build();
 		final URI target = URI.create(baseUri).resolve(ssePath);
-		return new SsePreflightTransport(builder.build(), target, requestTemplate, customizer, preflightClient);
+		return new SsePreflightTransport(builder.build(), target, requestTemplate, noPostTimeoutCustomizer(customizer),
+				preflightClient);
+	}
+
+	/**
+	 * Wraps an optional header customizer so that POST requests (message frames) never
+	 * carry the per-request SSE timeout — the MCP protocol delivers the response as an
+	 * SSE event on the stream, not in the POST body, so a healthy POST would time out.
+	 * The GET (SSE stream) timeout from the {@code requestBuilder} template is preserved.
+	 * @param delegate the existing header customizer, or {@code null}
+	 * @return a composite customizer
+	 */
+	private static McpSyncHttpClientRequestCustomizer noPostTimeoutCustomizer(
+			final McpSyncHttpClientRequestCustomizer delegate) {
+		return (builder, method, endpoint, body, context) -> {
+			if ("POST".equals(method)) {
+				builder.timeout(Duration.ZERO);
+			}
+			if (delegate != null) {
+				delegate.customize(builder, method, endpoint, body, context);
+			}
+		};
 	}
 
 	/**
