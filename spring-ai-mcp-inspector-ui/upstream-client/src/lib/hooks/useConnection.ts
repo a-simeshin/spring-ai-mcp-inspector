@@ -53,6 +53,7 @@ import { ConnectionStatus, CLIENT_IDENTITY } from "../constants";
 import { isConnectionAuthError } from "../connectionAuthErrors";
 import {
   ConnectFailedError,
+  CONNECT_FAILED_ERROR_CODE,
   connectionFailureFromError,
   parseConnectFailureResponse,
   type ConnectFailure,
@@ -736,8 +737,11 @@ export function useConnection({
               // [spring-ai-mcp-inspector PATCH] Surface the proxy's structured
               // MCP_CONNECT_FAILED error (non-2xx JSON on POST /mcp) as a
               // ConnectFailedError instead of letting the SDK swallow the body
-              // into an opaque HTTP-status error. Everything else (ok
-              // responses, non-contract bodies) passes through untouched.
+              // into an opaque HTTP-status error. HTTP 401 from the fork
+              // server's own auth filter (missing/mismatched X-MCP-Inspector-Auth
+              // header) is caught here and thrown as unauthorized so the UI
+              // renders the dedicated auth banner instead of falling through to
+              // the generic connection-error alert.
               fetch: async (
                 url: string | URL | globalThis.Request,
                 init?: RequestInit,
@@ -747,6 +751,17 @@ export function useConnection({
                   const failure = await parseConnectFailureResponse(response);
                   if (failure) {
                     throw new ConnectFailedError(failure);
+                  }
+                  if (response.status === 401) {
+                    throw new ConnectFailedError({
+                      code: CONNECT_FAILED_ERROR_CODE,
+                      reason: "unauthorized",
+                      message:
+                        "The inspector server requires authentication via X-MCP-Inspector-Auth header. " +
+                        "The auth token is generated at server start. Find it in the server log or configuration, " +
+                        "then add it as a custom header in the Configuration panel.",
+                      retryable: true,
+                    });
                   }
                 }
                 return response;
@@ -863,8 +878,14 @@ export function useConnection({
           return connect(undefined, retryCount + 1);
         }
         if (isConnectionAuthError(error)) {
-          // Don't set error state if we're about to redirect for auth
-
+          // [spring-ai-mcp-inspector PATCH] OAuth already failed
+          // (handleAuthError returned false above). Don't return silently
+          // — set the connection error so the UI shows an unauthorized
+          // banner instead of a blank disconnected state, giving the user
+          // a path forward (custom auth header, token from server log).
+          // See NOTICE.d/connect-401-banner.txt.
+          setConnectionError(connectionFailureFromError(error));
+          setConnectionStatus("error");
           return;
         }
         // [spring-ai-mcp-inspector PATCH] Surface connection failures in the
