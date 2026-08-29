@@ -477,7 +477,19 @@ class ProxyAuthErrorFlowIT {
 
 				// and — the owner's profile AND binding are gone: the error handler
 				// removed the orphan session and cleared the bound profile from the
-				// store (no leak, no retained profile)
+				// store (no leak, no retained profile).
+				//
+				// This IS the orphan-registry-session cleanup proof (D4/D9A): the
+				// streamable relay's error path (ProxyHandler.relayAndAwait) calls
+				// registry.removeAndClose(sessionId), which both removes the session
+				// from the registry map AND routes through closeSession ->
+				// store.clearBySession(sessionId). The profile binding is only ever
+				// cleared by that closeSession call, so the profile disappearing from
+				// the owner's list below is the observable effect of removeAndClose
+				// having executed — i.e. the orphan session is no longer in the
+				// registry. The later 400 (unknown profile) re-asserts the same from
+				// the proxy side: a fresh initialize with the same profileId cannot
+				// find a bound session.
 				assertThat(MAPPER
 					.readTree(send(apiBase + "/auth-profile", "GET", null, AUTH_TOKEN, null, cookie, null).body()))
 					.as("profile after failed handshake on %s", ProxyAppHarness.stack())
