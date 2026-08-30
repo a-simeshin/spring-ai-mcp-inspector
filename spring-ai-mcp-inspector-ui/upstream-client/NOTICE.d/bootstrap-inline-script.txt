@@ -1,0 +1,8 @@
+index.html — keep the <!--MCP_INSPECTOR_BOOTSTRAP--> placeholder in the v2.3.0
+template. The Spring starter's BootstrapHtmlRenderer substitutes this literal
+with an inline <script>window.__MCP_INSPECTOR_BOOTSTRAP = {...};</script> block
+so the SPA boots without a config round-trip (and TimelineScreen reads the auth
+token from it). Upstream v2.3.0 has no placeholder (it ships a standalone
+build); the v0.22.0 vendored template carried it and the patch must survive the
+re-vendor, otherwise WebMvcBootstrapInlineIT fails: the renderer returns the
+template untouched and the bootstrap global never appears.
