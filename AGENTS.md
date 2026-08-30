@@ -28,8 +28,8 @@ forgotten in the other is an incomplete change, and CI runs both.
 
 **There is no `main`.** The only pull request bases are:
 
-- `develop/2.x` — default, the 2.x release line;
-- `develop/1.x` — the maintained 1.x release line.
+- `develop/2.x`: default, the 2.x release line;
+- `develop/1.x`: the maintained 1.x release line.
 
 Targeting anything else is a mistake, and so is assuming the repository default
 without checking. Before opening a pull request, look at where recent merges
@@ -78,23 +78,27 @@ their own pull request, never bundled with a product change.
 | `notice registry` | Every change to vendored UI code is registered |
 
 A red run that finishes in twenty to thirty seconds is a build, style or
-configuration failure — no test ran in it. Read the first failing job before
+configuration failure: no test ran in it. Read the first failing job before
 forming a theory about a test.
 
 ## Vendored UI code
 
 `spring-ai-mcp-inspector-ui/upstream-client/` is a vendored copy of the upstream
-inspector client. Two rules, both enforced by the `notice registry` job:
+inspector client. Two rules, only one of which CI can currently catch:
 
-1. mark every local change in place with a comment containing
-   `[spring-ai-mcp-inspector PATCH]`, so the next re-vendor does not silently
-   drop it;
-2. add one file per patch under `upstream-client/NOTICE.d/` describing what it
-   does. Do not append to a single shared list: parallel pull requests conflict
-   on it, and renumbering during conflict resolution breaks references from the
-   code.
+1. **Register the patch.** Add one file per patch under
+   `upstream-client/NOTICE.d/` describing what it does. Do not append to a
+   single shared list: parallel pull requests conflict on it, and renumbering
+   during conflict resolution breaks references from the code. The
+   `notice registry` job enforces this for changes under `upstream-client/src/`.
+2. **Mark the patch in place.** Put a comment containing
+   `[spring-ai-mcp-inspector PATCH]` at every local change. **No CI job checks
+   this today.** It holds by convention, and it matters most exactly where
+   nothing is watching: an unmarked change is invisible to whoever raises the
+   upstream version next, and it disappears silently on re-vendor. Treat a
+   missing marker as a defect even though the build stays green.
 
-Editing inside an already-marked block needs no new marker — extend the comment
+Editing inside an already-marked block needs no new marker: extend the comment
 on the existing one.
 
 Frontend commands run from `upstream-client/`: `npm test` (Jest),
@@ -102,11 +106,11 @@ Frontend commands run from `upstream-client/`: `npm test` (Jest),
 
 ## Pull requests
 
-- **Language: English** for everything that lands in the repository — commit
+- **Language: English** for everything that lands in the repository: commit
   messages, pull request title and body, code comments, test names, issue and
   review comments.
 - **Link the issue with a keyword**: `Refs #N`. A bare `#N` in prose renders as
-  a cross-reference but is not read as work on that issue — the tooling matches
+  a cross-reference but is not read as work on that issue. The tooling matches
   `closes`, `fixes`, `resolves` and `refs` only. Prefer `Refs` over `Closes`
   whenever the change has a twin, so merging one line cannot close an issue the
   other line still owes.
@@ -130,4 +134,4 @@ Frontend commands run from `upstream-client/`: `npm test` (Jest),
 - Integration tests are `**/*IT.java` (Failsafe); unit tests are
   `**/*Tests.java` (Surefire).
 - In vendored frontend code, the surrounding upstream style wins over local
-  preference — it keeps re-vendoring diffs readable.
+  preference: it keeps re-vendoring diffs readable.
