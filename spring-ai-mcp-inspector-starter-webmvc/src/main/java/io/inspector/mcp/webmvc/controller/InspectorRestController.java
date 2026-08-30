@@ -256,6 +256,7 @@ public class InspectorRestController implements ApplicationContextAware {
 		}
 
 		final SessionState state = new SessionState(client);
+		state.initializeSnapshot(SessionState.InitializeSnapshot.from(client.getCurrentInitializationResult()));
 		holder.state = state;
 		this.sessions.put(sessionId, state);
 		if (this.closed) {
@@ -313,6 +314,19 @@ public class InspectorRestController implements ApplicationContextAware {
 		}
 		this.emitterRegistry.close(id);
 		return ResponseEntity.noContent().build();
+	}
+
+	@GetMapping(path = "/session/{id}/initialize", produces = MediaType.APPLICATION_JSON_VALUE)
+	public ResponseEntity<?> getInitializeSnapshot(@PathVariable("id") final String id) {
+		final SessionState state = this.sessions.get(id);
+		if (state == null) {
+			return ResponseEntity.notFound().build();
+		}
+		final SessionState.InitializeSnapshot snapshot = state.initializeSnapshot();
+		if (snapshot == null) {
+			return ResponseEntity.noContent().build();
+		}
+		return ResponseEntity.ok(snapshot);
 	}
 
 	/**

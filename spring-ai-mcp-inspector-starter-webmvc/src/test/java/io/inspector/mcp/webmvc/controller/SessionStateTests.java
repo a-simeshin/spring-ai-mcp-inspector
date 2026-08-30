@@ -19,6 +19,7 @@ package io.inspector.mcp.webmvc.controller;
 import java.util.List;
 
 import io.modelcontextprotocol.client.McpSyncClient;
+import io.modelcontextprotocol.spec.McpSchema;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -210,6 +211,80 @@ class SessionStateTests {
 			SessionStateTests.this.state.closeQuietly();
 			verify(SessionStateTests.this.client).closeGracefully();
 			verify(SessionStateTests.this.client).close();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("initializeSnapshot")
+	class InitializeSnapshotTests {
+
+		@Test
+		@Story("InitializeSnapshot")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("from() builds a snapshot from a full InitializeResult with all capability sections set")
+		void from_withFullResult_extractsAllFields() {
+			// given
+			final McpSchema.Implementation serverInfo = new McpSchema.Implementation("test-server", "1.0.0");
+			final McpSchema.ServerCapabilities caps = McpSchema.ServerCapabilities.builder().tools(true).build();
+			final McpSchema.InitializeResult result = new McpSchema.InitializeResult("2025-03-26", caps, serverInfo,
+					null, null);
+
+			// when
+			final SessionState.InitializeSnapshot snapshot = SessionState.InitializeSnapshot.from(result);
+
+			// then
+			assertThat(snapshot.clientRequestedVersion()).isEqualTo("2025-03-26");
+			assertThat(snapshot.negotiatedVersion()).isEqualTo("2025-03-26");
+			assertThat(snapshot.serverName()).isEqualTo("test-server");
+			assertThat(snapshot.serverVersion()).isEqualTo("1.0.0");
+			assertThat(snapshot.capabilities()).containsKey("tools");
+		}
+
+		@Test
+		@Story("InitializeSnapshot")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("from() produces an empty capabilities map when the remote result has no capabilities")
+		void from_withNullCapabilities_producesEmptyCaps() {
+			// given
+			final McpSchema.Implementation serverInfo = new McpSchema.Implementation("minimal", "0.0.1");
+			final McpSchema.InitializeResult result = new McpSchema.InitializeResult("2024-11-05",
+					McpSchema.ServerCapabilities.builder().build(), serverInfo, null, null);
+
+			// when
+			final SessionState.InitializeSnapshot snapshot = SessionState.InitializeSnapshot.from(result);
+
+			// then
+			assertThat(snapshot.clientRequestedVersion()).isEqualTo("2024-11-05");
+			assertThat(snapshot.serverName()).isEqualTo("minimal");
+			assertThat(snapshot.capabilities()).isEmpty();
+		}
+
+		@Test
+		@Story("InitializeSnapshot")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("initializeSnapshot() round-trips through getter and setter on SessionState")
+		void initializeSnapshot_roundTripsThroughSessionState() {
+			// given
+			final McpSchema.Implementation serverInfo = new McpSchema.Implementation("srv", "3.4.5");
+			final McpSchema.InitializeResult result = new McpSchema.InitializeResult("2025-03-26",
+					McpSchema.ServerCapabilities.builder().build(), serverInfo, null, null);
+			final SessionState.InitializeSnapshot snapshot = SessionState.InitializeSnapshot.from(result);
+
+			// when
+			SessionStateTests.this.state.initializeSnapshot(snapshot);
+
+			// then
+			assertThat(SessionStateTests.this.state.initializeSnapshot()).isSameAs(snapshot);
+		}
+
+		@Test
+		@Story("InitializeSnapshot")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Before any snapshot is set, initializeSnapshot() returns null — no garbage")
+		void initializeSnapshot_whenNotSet_returnsNull() {
+			// then
+			assertThat(SessionStateTests.this.state.initializeSnapshot()).isNull();
 		}
 
 	}
