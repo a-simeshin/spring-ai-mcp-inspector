@@ -159,12 +159,28 @@ public final class McpProxy {
 		// takeUntilOther: close() may fail to complete the sink if another thread owns
 		// it at that instant, so the pump is unsubscribed off the session's lock-free
 		// close signal instead of trusting the sink's terminal event to arrive.
-		session.browserToTarget().asFlux().takeUntilOther(session.closeSignal()).concatMap((frame) -> {
+		session.browserToTarget().asFlux().takeUntilOther(session.closeSignal()).flatMap((frame) -> {
 			final JSONRPCMessage typed = toTyped(frame);
 			if (typed == null) {
 				return Mono.empty();
 			}
 			recordOutbound(session, typed, frame);
+			// Notifications need no response; send async so they do not
+			// occupy a flatMap slot while the server processes them, which
+			// would delay concurrent frame processing (e.g. the browser
+			// response to a roots/list request triggered by
+			// roots/list_changed).
+			if (typed instanceof McpSchema.JSONRPCNotification) {
+				sendWithOneRetry(session, typed).timeout(Duration.ofMinutes(1))
+					.doOnSuccess((v) -> LOG.debug("proxy[{}] notification completed: {}", session.sessionId(), typed))
+					.onErrorResume((err) -> {
+						LOG.warn("proxy[{}] notification send failed: {}: {}", session.sessionId(), typed,
+								err.toString());
+						return Mono.empty();
+					})
+					.subscribe();
+				return Mono.empty();
+			}
 			LOG.debug("proxy[{}] forwarding frame: {}", session.sessionId(), typed);
 			return sendWithOneRetry(session, typed).timeout(Duration.ofMinutes(1))
 				.doOnSuccess((v) -> LOG.debug("proxy[{}] frame completed: {}", session.sessionId(), typed))
