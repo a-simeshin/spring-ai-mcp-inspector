@@ -19,7 +19,6 @@ package io.inspector.mcp.webmvc.controller;
 import java.util.List;
 
 import io.modelcontextprotocol.client.McpSyncClient;
-import io.modelcontextprotocol.spec.McpSchema;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
