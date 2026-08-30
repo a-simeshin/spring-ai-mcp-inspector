@@ -21,7 +21,8 @@ package io.inspector.mcp.core.timeline;
  *
  * <p>
  * Each value corresponds to a JSON-RPC or stream event category emitted by the
- * {@link McpTrafficRecorder}.
+ * {@link McpTrafficRecorder} or, for {@link #APP_LOG}, by the {@link TimelineAppender} /
+ * {@link SystemErrOutSink}.
  *
  * @author Artem Simeshin
  */
@@ -45,7 +46,13 @@ public enum TimelineEventType {
 	/**
 	 * A streamable HTTP streaming event (e.g. SSE chunk).
 	 */
-	MCP_STREAM_EVENT("mcp.stream.event");
+	MCP_STREAM_EVENT("mcp.stream.event"),
+
+	/**
+	 * An application log entry captured by the {@link TimelineAppender} or
+	 * {@link SystemErrOutSink}.
+	 */
+	APP_LOG("mcp.app.log");
 
 	private final String wireName;
 
