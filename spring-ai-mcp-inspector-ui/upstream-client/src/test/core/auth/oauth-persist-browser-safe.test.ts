@@ -20,7 +20,7 @@ import { dirname, resolve } from "node:path";
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
-const coreDir = resolve(here, "../../../../../../core");
+const coreDir = resolve(here, "../../../../core");
 
 // Browser-reachable modules (value-import graph from storage-remote.ts,
 // excluding the intentional `node/` backend which is never bundled).
