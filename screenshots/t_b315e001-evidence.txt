@@ -1,0 +1,20 @@
+=== Timeline API Evidence ===
+GET /mcp-inspector/api/timeline
+All events: 34 (all APP_LOG)
+Filtered by type=APP_LOG: 34
+Chronological order (newest first): PASS
+
+=== Test Results ===
+Core unit tests: 276 passed
+WebMVC unit tests: 151 passed
+Frontend test suites: 35 passed (568 tests)
+Frontend lint: clean
+
+=== Defect: McpTrafficRecorder NOT wired into McpProxy ===
+The McpProxy bean in McpInspectorWebMvcAutoConfiguration line 236-237
+calls new McpProxy(objectMapper) without McpTrafficRecorder.
+Even with timeline.enabled=true and traffic-enabled=true,
+MCP_JSONRPC_REQUEST/RESPONSE/NOTIFICATION/STREAM_EVENT events
+are never recorded because trafficRecorder is null in McpProxy.
+The BoundedTimelineService, TimelineAppender, SystemErrOutSink
+all work correctly, but the recorder never sees any traffic.
