@@ -16,6 +16,7 @@ import {
   CheckCheck,
   Server,
   AlertTriangle,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -768,38 +769,81 @@ const Sidebar = ({
           {/* [spring-ai-mcp-inspector PATCH] Surface connect failures with a
               human-readable reason and a Retry button instead of only
               logging them (see NOTICE.d/connect-error-alert.txt). */}
-          {connectionError && (
-            <div
-              role="alert"
-              className="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200 rounded-lg p-3 mb-4"
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                <span className="text-sm font-medium">
-                  Failed to connect to the MCP server
-                </span>
-              </div>
-              <p className="text-xs mb-2">
-                {humanReadableReason(connectionError.reason)}
-                {connectionError.message && (
-                  <>
+          {connectionError && (() => {
+            if (connectionError.reason === "unauthorized") {
+              return (
+                <div
+                  role="alert"
+                  className="bg-amber-50 dark:bg-amber-950 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 rounded-lg p-3 mb-4"
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <Lock className="w-4 h-4 flex-shrink-0" />
+                    <span className="text-sm font-medium">
+                      Authentication Required
+                    </span>
+                  </div>
+                  <p className="text-xs mb-2">
+                    The inspector server requires authentication via the{" "}
+                    <code className="text-xs bg-amber-100 dark:bg-amber-900 px-1 rounded">
+                      X-MCP-Inspector-Auth
+                    </code>{" "}
+                    header. The auth token is generated at server start.
                     <br />
-                    {connectionError.message}
-                  </>
-                )}
-              </p>
-              <Button
-                data-testid="retry-connect-button"
-                size="sm"
-                variant="outline"
-                className="w-full"
-                onClick={onConnect}
+                    Find it in the server log or configuration, then add it as a
+                    custom header in the Configuration panel below.
+                    {connectionError.message && (
+                      <>
+                        <br />
+                        {connectionError.message}
+                      </>
+                    )}
+                  </p>
+                  <Button
+                    data-testid="retry-connect-button"
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={onConnect}
+                  >
+                    <RotateCcw className="w-4 h-4 mr-2" />
+                    Retry
+                  </Button>
+                </div>
+              );
+            }
+            return (
+              <div
+                role="alert"
+                className="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200 rounded-lg p-3 mb-4"
               >
-                <RotateCcw className="w-4 h-4 mr-2" />
-                Retry
-              </Button>
-            </div>
-          )}
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span className="text-sm font-medium">
+                    Failed to connect to the MCP server
+                  </span>
+                </div>
+                <p className="text-xs mb-2">
+                  {humanReadableReason(connectionError.reason)}
+                  {connectionError.message && (
+                    <>
+                      <br />
+                      {connectionError.message}
+                    </>
+                  )}
+                </p>
+                <Button
+                  data-testid="retry-connect-button"
+                  size="sm"
+                  variant="outline"
+                  className="w-full"
+                  onClick={onConnect}
+                >
+                  <RotateCcw className="w-4 h-4 mr-2" />
+                  Retry
+                </Button>
+              </div>
+            );
+          })()}
 
           <div className="space-y-2">
             {connectionStatus === "connected" && (

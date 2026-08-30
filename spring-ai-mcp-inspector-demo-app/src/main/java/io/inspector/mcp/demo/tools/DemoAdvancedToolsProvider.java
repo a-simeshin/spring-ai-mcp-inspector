@@ -249,26 +249,6 @@ public class DemoAdvancedToolsProvider {
 	}
 
 	/**
-	 * Slow tool — exercises the "long-running" / spinner UI state.
-	 *
-	 * <p>
-	 * Deliberately declared without tool annotations so that {@code tools/list} emits no
-	 * {@code annotations} object for this tool — demonstrating the client-side
-	 * spec-default path (readOnlyHint=false, destructiveHint=true per the MCP spec).
-	 */
-	@McpTool(name = "slowEcho", description = "Echo text after a ~2 second delay")
-	public String slowEcho(@McpToolParam(description = "text to echo (slowly)", required = true) String text) {
-		try {
-			Thread.sleep(2000L);
-		}
-		catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			throw new RuntimeException("slowEcho interrupted", e);
-		}
-		return text;
-	}
-
-	/**
 	 * Build a structurally nested map of {@code depth} levels — exercises the recursive
 	 * JsonView renderer. Depth is capped at {@value #DEEP_JSON_MAX_DEPTH}.
 	 */

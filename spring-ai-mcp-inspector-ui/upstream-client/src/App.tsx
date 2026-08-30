@@ -183,9 +183,9 @@ const App = () => {
   const [resourceTemplates, setResourceTemplates] = useState<
     ResourceTemplate[]
   >([]);
-  const [resourceContent, setResourceContent] = useState<string>("");
+  const [resourceContent, setResourceContent] = useState<unknown>("");
   const [resourceContentMap, setResourceContentMap] = useState<
-    Record<string, string>
+    Record<string, unknown>
   >({});
   const [fetchingResources, setFetchingResources] = useState<Set<string>>(
     new Set(),
@@ -970,11 +970,10 @@ const App = () => {
         responseLength: JSON.stringify(response).length,
         hasContents: !!(response as { contents?: unknown[] }).contents,
       });
-      const content = JSON.stringify(response, null, 2);
-      setResourceContent(content);
+      setResourceContent(response);
       setResourceContentMap((prev) => ({
         ...prev,
-        [uri]: content,
+        [uri]: response,
       }));
     } catch (error) {
       console.error(`[App] Failed to read resource ${uri}:`, error);
@@ -1373,12 +1372,20 @@ const App = () => {
     <div className="flex flex-col lg:flex-row lg:h-screen min-h-screen bg-background">
       {/* [spring-ai-mcp-inspector PATCH] Compact (<lg) sidebar (#60): the
           draggable inline width applies only on desktop (>=lg); below it the
-          sidebar is a full-width block with a definite h-[50vh] height and the
+          sidebar is a full-width block with a definite vh cap and the
           desktop-only drag handle is not mounted, so a compact pointer press
           on the right edge cannot enter the drag path or mutate the hidden
           sidebar width state. A max-height-only wrapper would resolve the
           Sidebar's internal h-full chain to auto and scroll the whole block
-          (header included) instead of its body column. */}
+          (header included) instead of its body column. data-testid
+          "config-pane" (#58) anchors the sidebar for Selenide geometry
+          assertions; no layout change. Below `sm` (640px) the cap is 30vh
+          (not the sm..lg 50vh): at a 375x667 phone the accepted mobile
+          contract (issue #58, plan v10) requires the config/list/detail pane
+          rects to fit the viewport at scrollY=0, and a 50vh sidebar leaves
+          less than 200px for the stacked Tools panes below the wrapped tab
+          bar — too little for the list and detail to both be usable with
+          their internal scrolling. */}
       <div
         style={
           isCompactLayout
@@ -1390,7 +1397,8 @@ const App = () => {
                 transition: isSidebarDragging ? "none" : "width 0.15s",
               }
         }
-        className="bg-card border-border flex flex-col relative w-full lg:w-auto lg:border-r border-b lg:border-b-0 h-[50vh] lg:h-auto overflow-y-auto lg:overflow-y-visible"
+        className="bg-card border-border flex flex-col relative w-full lg:w-auto lg:border-r border-b lg:border-b-0 h-[30vh] sm:h-[50vh] lg:h-auto overflow-y-auto lg:overflow-y-visible"
+        data-testid="config-pane"
       >
         <Sidebar
           connectionStatus={connectionStatus}

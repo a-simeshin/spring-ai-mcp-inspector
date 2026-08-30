@@ -122,4 +122,23 @@ describe("Sidebar connect-failure alert", () => {
     fireEvent.click(screen.getByTestId("retry-connect-button"));
     expect(onConnect).toHaveBeenCalledTimes(1);
   });
+
+  it("renders a dedicated amber unauthorized banner for 401", () => {
+    renderSidebar({
+      connectionError: {
+        code: "MCP_CONNECT_FAILED",
+        reason: "unauthorized",
+        message: "Server rejected token: invalid",
+        retryable: true,
+      },
+    });
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Authentication Required");
+    expect(alert).toHaveTextContent("X-MCP-Inspector-Auth");
+    expect(alert).toHaveTextContent("server log or configuration");
+    expect(alert).toHaveTextContent("invalid");
+    // Still has a Retry button
+    expect(screen.getByTestId("retry-connect-button")).toBeInTheDocument();
+  });
 });

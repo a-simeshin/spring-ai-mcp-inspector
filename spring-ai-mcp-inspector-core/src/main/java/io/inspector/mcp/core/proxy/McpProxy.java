@@ -37,6 +37,7 @@ import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.auth.OAuth2GrantMode;
 import io.inspector.mcp.core.auth.OAuth2Profile;
+import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 
 /**
  * Wires a {@link ProxySession}'s two sinks to the target {@link McpClientTransport}.
@@ -89,12 +90,24 @@ public final class McpProxy {
 	/** Auth-code exchanger; {@code null} in bare wiring. */
 	private final OAuth2AuthCodeTokenExchanger authCodeExchanger;
 
+	/** Traffic recorder; {@code null} to skip recording. */
+	private final McpTrafficRecorder trafficRecorder;
+
 	public McpProxy(final JsonMapper objectMapper) {
-		this(objectMapper, null, null, null);
+		this(objectMapper, null, null, null, null);
 	}
 
 	/**
-	 * Creates a proxy with the OAuth2 wiring for the D9 one-retry.
+	 * Creates a proxy with traffic recording, no auth wiring.
+	 * @param objectMapper the JSON mapper (may be {@code null} to use a default)
+	 * @param trafficRecorder the traffic recorder, or {@code null} to skip recording
+	 */
+	public McpProxy(final JsonMapper objectMapper, final McpTrafficRecorder trafficRecorder) {
+		this(objectMapper, null, null, null, trafficRecorder);
+	}
+
+	/**
+	 * Creates a proxy with the OAuth2 wiring for the D9 one-retry, no traffic recording.
 	 * @param objectMapper the JSON mapper backing the relay
 	 * @param authProfileStore the owner-scoped profile store (may be {@code null})
 	 * @param ccTokenManager the client-credentials token manager (may be {@code null})
@@ -103,11 +116,26 @@ public final class McpProxy {
 	public McpProxy(final JsonMapper objectMapper, final AuthProfileStore authProfileStore,
 			final OAuth2ClientCredentialsTokenManager ccTokenManager,
 			final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
+		this(objectMapper, authProfileStore, ccTokenManager, authCodeExchanger, null);
+	}
+
+	/**
+	 * Creates a proxy with the OAuth2 wiring and optional traffic recording.
+	 * @param objectMapper the JSON mapper backing the relay
+	 * @param authProfileStore the owner-scoped profile store (may be {@code null})
+	 * @param ccTokenManager the client-credentials token manager (may be {@code null})
+	 * @param authCodeExchanger the auth-code exchanger (may be {@code null})
+	 * @param trafficRecorder the traffic recorder, or {@code null} to skip recording
+	 */
+	public McpProxy(final JsonMapper objectMapper, final AuthProfileStore authProfileStore,
+			final OAuth2ClientCredentialsTokenManager ccTokenManager,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger, final McpTrafficRecorder trafficRecorder) {
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.mcpJsonMapper = new JacksonMcpJsonMapper(this.objectMapper);
 		this.authProfileStore = authProfileStore;
 		this.ccTokenManager = ccTokenManager;
 		this.authCodeExchanger = authCodeExchanger;
+		this.trafficRecorder = trafficRecorder;
 	}
 
 	/**
@@ -135,19 +163,7 @@ public final class McpProxy {
 			if (typed == null) {
 				return Mono.empty();
 			}
-			// Per-frame onErrorResume (NOT onErrorContinue) keeps the relay alive
-			// without Reactor's context-scoped error-continue key. The SDK's internal
-			// chains re-apply the subscriber context via contextWrite, so a plain
-			// onErrorContinue here made their flatMaps route 401/403 errors into this
-			// handler instead of sendWithOneRetry's onErrorResume: the D9 one-retry
-			// never fired and the per-request POST awaiter hung until the
-			// streamable-request timeout. The SDK also re-surfaces protocol-level
-			// replies from a LIVE server (e.g. a 404 "session not found") through this
-			// same pump, so only transport-level failures (refused / dns / timeout)
-			// justify tearing the session down — anything unrecognized is logged and
-			// the relay keeps forwarding. failUpstream is idempotent, so the first
-			// terminal signal wins (sendWithOneRetry already failed the session for
-			// non-retryable errors before re-throwing).
+			recordOutbound(session, typed, frame);
 			return sendWithOneRetry(session, typed).onErrorResume((err) -> {
 				final ProxyConnectFailure failure = ProxyConnectFailure.classify(err);
 				LOG.warn("proxy[{}] browser->target stream error ({}): {}", session.sessionId(),
@@ -201,6 +217,7 @@ public final class McpProxy {
 			.flatMap((message) -> {
 				final JsonNode body = toJsonNode(message);
 				if (body != null) {
+					recordInbound(session, message, body);
 					final Sinks.EmitResult er = session.targetToBrowser().tryEmitNext(body);
 					if (er.isFailure()) {
 						LOG.debug("proxy[{}] target->browser emit failure: {}", session.sessionId(), er.name());
@@ -290,6 +307,42 @@ public final class McpProxy {
 			.subscribeOn(Schedulers.boundedElastic())
 			.doOnNext((handle) -> session.authorizationRef().set("Bearer " + handle.accessToken()))
 			.then();
+	}
+
+	/**
+	 * Records an outbound (browser → target) message via the traffic recorder, if
+	 * configured.
+	 * @param session the proxy session (must not be {@code null})
+	 * @param typed the typed JSON-RPC message (must not be {@code null})
+	 * @param frame the raw JSON frame (may be {@code null})
+	 */
+	private void recordOutbound(final ProxySession session, final JSONRPCMessage typed, final JsonNode frame) {
+		if (this.trafficRecorder != null) {
+			try {
+				this.trafficRecorder.recordOutbound(session.sessionId(), typed, frame);
+			}
+			catch (final Exception ex) {
+				LOG.warn("proxy[{}] traffic recorder outbound failed: {}", session.sessionId(), ex.toString());
+			}
+		}
+	}
+
+	/**
+	 * Records an inbound (target → browser) message via the traffic recorder, if
+	 * configured.
+	 * @param session the proxy session (must not be {@code null})
+	 * @param message the typed JSON-RPC message (must not be {@code null})
+	 * @param body the serialised JSON body (may be {@code null})
+	 */
+	private void recordInbound(final ProxySession session, final JSONRPCMessage message, final JsonNode body) {
+		if (this.trafficRecorder != null) {
+			try {
+				this.trafficRecorder.recordInbound(session.sessionId(), message, body);
+			}
+			catch (final Exception ex) {
+				LOG.warn("proxy[{}] traffic recorder inbound failed: {}", session.sessionId(), ex.toString());
+			}
+		}
 	}
 
 	/**

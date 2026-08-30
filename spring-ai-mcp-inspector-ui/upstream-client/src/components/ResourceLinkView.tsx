@@ -1,12 +1,13 @@
 import { useState, useCallback, useMemo, memo } from "react";
 import JsonView from "./JsonView";
+import MediaContentView from "./MediaContentView";
 
 interface ResourceLinkViewProps {
   uri: string;
   name?: string;
   description?: string;
   mimeType?: string;
-  resourceContent: string;
+  resourceContent: unknown;
   onReadResource?: (uri: string) => void;
 }
 
@@ -24,18 +25,35 @@ const ResourceLinkView = memo(
       loading: false,
     });
 
-    const expandedContent = useMemo(
-      () =>
-        expanded && resourceContent ? (
-          <div className="mt-2">
-            <div className="flex justify-between items-center mb-1">
-              <span className="font-semibold text-green-600">Resource:</span>
-            </div>
-            <JsonView data={resourceContent} className="bg-background" />
+    const expandedContent = useMemo(() => {
+      if (!expanded || !resourceContent) return null;
+
+      // Try to extract content items from a parsed ReadResourceResult
+      const parsed = typeof resourceContent === "object" && resourceContent !== null
+        ? resourceContent as Record<string, unknown>
+        : null;
+      const contents = parsed?.contents as Array<Record<string, unknown>> | undefined;
+      const firstItem = contents?.[0];
+
+      return (
+        <div className="mt-2">
+          <div className="flex justify-between items-center mb-1">
+            <span className="font-semibold text-green-600">Resource:</span>
           </div>
-        ) : null,
-      [expanded, resourceContent],
-    );
+          {firstItem ? (
+            <MediaContentView
+              mimeType={(firstItem.mimeType as string) || mimeType}
+              base64Data={"blob" in firstItem ? firstItem.blob as string : undefined}
+              text={"text" in firstItem ? firstItem.text as string : undefined}
+              filename={firstItem.uri ? (firstItem.uri as string).split("/").pop() : undefined}
+              className="bg-background"
+            />
+          ) : (
+            <JsonView data={resourceContent} className="bg-background" />
+          )}
+        </div>
+      );
+    }, [expanded, resourceContent, mimeType]);
 
     const handleClick = useCallback(() => {
       if (!onReadResource) return;

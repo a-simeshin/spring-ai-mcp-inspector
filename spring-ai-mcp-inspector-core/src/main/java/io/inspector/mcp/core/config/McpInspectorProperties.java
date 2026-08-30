@@ -87,6 +87,10 @@ public class McpInspectorProperties {
 	@NestedConfigurationProperty
 	private Shutdown shutdown = new Shutdown();
 
+	/** Timeline configuration. */
+	@NestedConfigurationProperty
+	private Timeline timeline = new Timeline();
+
 	public boolean isEnabled() {
 		return this.enabled;
 	}
@@ -179,6 +183,14 @@ public class McpInspectorProperties {
 
 	public void setShutdown(final Shutdown shutdown) {
 		this.shutdown = (shutdown != null) ? shutdown : new Shutdown();
+	}
+
+	public Timeline getTimeline() {
+		return this.timeline;
+	}
+
+	public void setTimeline(final Timeline timeline) {
+		this.timeline = (timeline != null) ? timeline : new Timeline();
 	}
 
 	/**
@@ -320,6 +332,30 @@ public class McpInspectorProperties {
 
 		public void setSessionReaper(final Duration sessionReaper) {
 			this.sessionReaper = sessionReaper;
+		}
+
+	}
+
+	/**
+	 * Timeline/event-recording configuration. Bound under
+	 * {@code spring.ai.mcp.inspector.timeline}.
+	 */
+	public static class Timeline {
+
+		/**
+		 * Whether in-JVM MCP traffic recording is enabled. When {@code true}, every
+		 * JSON-RPC request, response, notification, and stream event is captured by the
+		 * {@code McpTrafficRecorder} and forwarded to the {@code TimelineService}.
+		 * Defaults to {@code false}.
+		 */
+		private boolean trafficEnabled;
+
+		public boolean isTrafficEnabled() {
+			return this.trafficEnabled;
+		}
+
+		public void setTrafficEnabled(final boolean trafficEnabled) {
+			this.trafficEnabled = trafficEnabled;
 		}
 
 	}
