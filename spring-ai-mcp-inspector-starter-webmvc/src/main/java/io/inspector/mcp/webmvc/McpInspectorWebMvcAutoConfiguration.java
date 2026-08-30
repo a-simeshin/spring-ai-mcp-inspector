@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 import io.modelcontextprotocol.spec.McpServerTransportProviderBase;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
@@ -50,10 +51,12 @@ import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.shutdown.McpServerTransportDrain;
+import io.inspector.mcp.core.timeline.TimelineService;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.webmvc.controller.InspectorConfigController;
 import io.inspector.mcp.webmvc.controller.InspectorIndexController;
 import io.inspector.mcp.webmvc.controller.InspectorRestController;
+import io.inspector.mcp.webmvc.controller.TimelineController;
 import io.inspector.mcp.webmvc.filter.InspectorAuthFilter;
 import io.inspector.mcp.webmvc.proxy.ProxyAuthFilter;
 import io.inspector.mcp.webmvc.proxy.ProxyConfigController;
@@ -208,6 +211,18 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 	public McpServerTransportDrain mcpInspectorServerTransportDrain(
 			final ObjectProvider<McpServerTransportProviderBase> providers, final McpInspectorProperties properties) {
 		return new McpServerTransportDrain(providers, properties);
+	}
+
+	/**
+	 * REST endpoint for querying timeline events, active only when the timeline subsystem
+	 * is enabled via {@code spring.ai.mcp.inspector.timeline.enabled=true}.
+	 * @param timelineService the shared timeline service
+	 * @return the timeline controller
+	 */
+	@Bean
+	@ConditionalOnBean(TimelineService.class)
+	public TimelineController mcpInspectorTimelineController(final TimelineService timelineService) {
+		return new TimelineController(timelineService);
 	}
 
 	@Bean
