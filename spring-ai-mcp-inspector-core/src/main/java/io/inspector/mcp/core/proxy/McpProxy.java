@@ -167,7 +167,7 @@ public final class McpProxy {
 			recordOutbound(session, typed, frame);
 			LOG.debug("proxy[{}] forwarding frame: {}", session.sessionId(), typed);
 			return sendWithOneRetry(session, typed).timeout(Duration.ofMinutes(1))
-				.doOnSuccess(v -> LOG.debug("proxy[{}] frame completed: {}", session.sessionId(), typed))
+				.doOnSuccess((v) -> LOG.debug("proxy[{}] frame completed: {}", session.sessionId(), typed))
 				.onErrorResume((err) -> {
 					if (err instanceof java.util.concurrent.TimeoutException) {
 						LOG.warn("proxy[{}] sendMessage timed out for frame: {}", session.sessionId(), typed);
