@@ -17,6 +17,7 @@
 package io.inspector.mcp.core.timeline;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -142,6 +143,54 @@ class BoundedTimelineServiceTests {
 		defaultService
 			.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "msg", null));
 		assertThat(defaultService.size()).isOne();
+	}
+
+	@Test
+	@DisplayName("returns chronological newest-first even with out-of-order appends")
+	void outOfOrderAppendsSortByTimestamp() {
+		final Instant older = Instant.now().minusSeconds(30);
+		final Instant newer = Instant.now();
+		// append newer first, then older: insertion order must not leak
+		this.service.append(new TimelineEvent("a", "c1", null, TimelineEventType.APP_LOG, newer, null));
+		this.service.append(new TimelineEvent("b", "c2", null, TimelineEventType.APP_LOG, older, null));
+		final List<TimelineEvent> result = this.service.query(TimelineQuery.all());
+		assertThat(result).extracting(TimelineEvent::id).containsExactly("a", "b");
+	}
+
+	@Test
+	@DisplayName("concurrent appends still produce timestamp-ordered results")
+	void concurrentAppendsRemainOrdered() throws Exception {
+		final int n = 80;
+		final Instant base = Instant.now();
+		final java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(8);
+		final java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+		final List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
+		for (int i = 0; i < n; i++) {
+			final int seq = i;
+			futures.add(pool.submit(() -> {
+				try {
+					start.await();
+				}
+				catch (final InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+				// timestamps derived from seq, but the append order is racy
+				this.service.append(new TimelineEvent("id-" + seq, "c", null, TimelineEventType.APP_LOG,
+						base.plusSeconds(seq), null));
+				return null;
+			}));
+		}
+		start.countDown();
+		for (final java.util.concurrent.Future<?> f : futures) {
+			f.get(10, java.util.concurrent.TimeUnit.SECONDS);
+		}
+		pool.shutdown();
+
+		final List<TimelineEvent> result = this.service.query(TimelineQuery.all());
+		assertThat(result).hasSize(n);
+		for (int i = 0; i < result.size() - 1; i++) {
+			assertThat(result.get(i).timestamp()).isAfterOrEqualTo(result.get(i + 1).timestamp());
+		}
 	}
 
 	@Test
