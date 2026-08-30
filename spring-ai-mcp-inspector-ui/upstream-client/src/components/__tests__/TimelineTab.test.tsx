@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] TimelineTab test — schema alignment, APP_LOG rendering, empty state (#130).
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import TimelineTab from "../TimelineTab";
