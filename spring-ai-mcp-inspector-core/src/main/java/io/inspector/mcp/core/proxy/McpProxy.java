@@ -16,6 +16,7 @@
 
 package io.inspector.mcp.core.proxy;
 
+import java.time.Duration;
 import java.util.Optional;
 import java.util.function.Function;
 
@@ -153,28 +154,22 @@ public final class McpProxy {
 				return Mono.empty();
 			}
 			recordOutbound(session, typed, frame);
-			// Per-frame onErrorResume (NOT onErrorContinue) keeps the relay alive
-			// without Reactor's context-scoped error-continue key. The SDK's internal
-			// chains re-apply the subscriber context via contextWrite, so a plain
-			// onErrorContinue here made their flatMaps route 401/403 errors into this
-			// handler instead of sendWithOneRetry's onErrorResume: the D9 one-retry
-			// never fired and the per-request POST awaiter hung until the
-			// streamable-request timeout. The SDK also re-surfaces protocol-level
-			// replies from a LIVE server (e.g. a 404 "session not found") through this
-			// same pump, so only transport-level failures (refused / dns / timeout)
-			// justify tearing the session down — anything unrecognized is logged and
-			// the relay keeps forwarding. failUpstream is idempotent, so the first
-			// terminal signal wins (sendWithOneRetry already failed the session for
-			// non-retryable errors before re-throwing).
-			return sendWithOneRetry(session, typed).onErrorResume((err) -> {
-				final ProxyConnectFailure failure = ProxyConnectFailure.classify(err);
-				LOG.warn("proxy[{}] browser->target stream error ({}): {}", session.sessionId(),
-						failure.reason().wire(), err.toString());
-				if (failure.reason() != ProxyConnectFailure.Reason.UNKNOWN) {
-					session.failUpstream(err);
-				}
-				return Mono.empty();
-			});
+			LOG.debug("proxy[{}] forwarding frame: {}", session.sessionId(), typed);
+			return sendWithOneRetry(session, typed).timeout(Duration.ofMinutes(1))
+				.doOnSuccess(v -> LOG.debug("proxy[{}] frame completed: {}", session.sessionId(), typed))
+				.onErrorResume((err) -> {
+					if (err instanceof java.util.concurrent.TimeoutException) {
+						LOG.warn("proxy[{}] sendMessage timed out for frame: {}", session.sessionId(), typed);
+						return Mono.empty();
+					}
+					final ProxyConnectFailure failure = ProxyConnectFailure.classify(err);
+					LOG.warn("proxy[{}] browser->target stream error ({}): {}", session.sessionId(),
+							failure.reason().wire(), err.toString());
+					if (failure.reason() != ProxyConnectFailure.Reason.UNKNOWN) {
+						session.failUpstream(err);
+					}
+					return Mono.empty();
+				});
 		}).subscribe();
 
 		// When the session closes, drop its pending request correlations so abandoned
