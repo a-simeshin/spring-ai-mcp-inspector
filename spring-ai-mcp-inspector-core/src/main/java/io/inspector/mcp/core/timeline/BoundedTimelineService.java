@@ -20,55 +20,53 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
-import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
- * Thread-safe, bounded, in-memory timeline backed by a deque with TTL-based eviction.
+ * Bounded in-memory ring-buffer implementation of {@link TimelineService}.
  *
  * <p>
- * Events are retained up to {@code capacity} items and for at most {@code ttl} duration.
- * Eviction runs on every {@code append} and {@code query} call.
+ * Stores up to the configured maximum number of events. When the buffer is full, the
+ * oldest event is evicted to make room for the new one. All operations are thread-safe
+ * via a {@link ReentrantReadWriteLock}.
  *
  * @author Artem Simeshin
  */
 public final class BoundedTimelineService implements TimelineService {
 
-	/** Default maximum number of events to retain. */
-	public static final int DEFAULT_CAPACITY = 1000;
+	/** Default maximum number of events retained in the ring buffer. */
+	static final int DEFAULT_MAX_EVENTS = 1000;
 
-	/** Default TTL for events. */
-	public static final Duration DEFAULT_TTL = Duration.ofMinutes(15);
+	private final int maxEvents;
 
-	private final int capacity;
+	private final TimelineEvent[] buffer;
 
-	private final Duration ttl;
+	private int nextIndex;
 
-	private final ConcurrentLinkedDeque<TimelineEvent> deque;
+	private int size;
+
+	private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
 	/**
-	 * Creates a service with the default capacity (1000) and TTL (15 minutes).
+	 * Creates a new bounded timeline service with the default capacity.
 	 */
 	public BoundedTimelineService() {
-		this(DEFAULT_CAPACITY, DEFAULT_TTL);
+		this(DEFAULT_MAX_EVENTS);
 	}
 
 	/**
-	 * Creates a service with the given capacity and TTL.
+	 * Creates a new bounded timeline service with the given capacity.
 	 * @param capacity maximum number of events to retain
-	 * @param ttl maximum age of retained events
 	 */
-	public BoundedTimelineService(final int capacity, final Duration ttl) {
+	public BoundedTimelineService(final int capacity) {
 		if (capacity <= 0) {
 			throw new IllegalArgumentException("capacity must be positive: " + capacity);
 		}
-		if (ttl == null || ttl.isNegative() || ttl.isZero()) {
-			throw new IllegalArgumentException("ttl must be positive: " + ttl);
-		}
-		this.capacity = capacity;
-		this.ttl = ttl;
-		this.deque = new ConcurrentLinkedDeque<>();
+		this.maxEvents = capacity;
+		this.buffer = new TimelineEvent[capacity];
+		this.nextIndex = 0;
+		this.size = 0;
 	}
 
 	@Override
@@ -76,72 +74,89 @@ public final class BoundedTimelineService implements TimelineService {
 		if (event == null) {
 			return;
 		}
-		this.deque.addLast(event);
-		evict();
+		this.lock.writeLock().lock();
+		try {
+			this.buffer[this.nextIndex] = event;
+			this.nextIndex = (this.nextIndex + 1) % this.maxEvents;
+			if (this.size < this.maxEvents) {
+				this.size++;
+			}
+		}
+		finally {
+			this.lock.writeLock().unlock();
+		}
 	}
 
 	@Override
 	public List<TimelineEvent> query(final TimelineQuery query) {
-		evict();
-		if (query == null) {
-			return List.of();
-		}
-		final List<TimelineEvent> result = new ArrayList<>();
-		for (final TimelineEvent event : this.deque) {
-			if (matches(event, query)) {
-				result.add(event);
+		this.lock.readLock().lock();
+		try {
+			final List<TimelineEvent> result = new ArrayList<>(this.size);
+			// Walk the buffer from newest to oldest
+			for (int i = 0; i < this.size; i++) {
+				final int idx = (this.nextIndex - 1 - i + this.maxEvents) % this.maxEvents;
+				final TimelineEvent event = this.buffer[idx];
+				if (event == null) {
+					continue;
+				}
+				if (matches(query, event)) {
+					result.add(event);
+				}
 			}
+			final int limit = query.limit();
+			if (result.size() > limit) {
+				return Collections.unmodifiableList(result.subList(0, limit));
+			}
+			return Collections.unmodifiableList(result);
 		}
-		result.sort(Comparator.comparing(TimelineEvent::timestamp).reversed());
-		final int limit = Math.min(query.limit(), result.size());
-		return Collections.unmodifiableList(result.subList(0, limit));
+		finally {
+			this.lock.readLock().unlock();
+		}
 	}
 
 	@Override
 	public void clear() {
-		this.deque.clear();
+		this.lock.writeLock().lock();
+		try {
+			for (int i = 0; i < this.maxEvents; i++) {
+				this.buffer[i] = null;
+			}
+			this.nextIndex = 0;
+			this.size = 0;
+		}
+		finally {
+			this.lock.writeLock().unlock();
+		}
 	}
 
 	/**
-	 * Returns the current number of events in the buffer (after eviction).
+	 * Returns the current number of events in the buffer.
 	 * @return event count
 	 */
 	public int size() {
-		evict();
-		return this.deque.size();
-	}
-
-	private void evict() {
-		final Instant cutoff = Instant.now().minus(this.ttl);
-		while (!this.deque.isEmpty()) {
-			final TimelineEvent oldest = this.deque.peekFirst();
-			if (oldest != null && oldest.timestamp().isBefore(cutoff)) {
-				this.deque.pollFirst();
-			}
-			else {
-				break;
-			}
+		this.lock.readLock().lock();
+		try {
+			return this.size;
 		}
-		while (this.deque.size() > this.capacity) {
-			this.deque.pollFirst();
+		finally {
+			this.lock.readLock().unlock();
 		}
 	}
 
-	private static boolean matches(final TimelineEvent event, final TimelineQuery query) {
+	private static boolean matches(final TimelineQuery query, final TimelineEvent event) {
 		if (query.correlationId() != null && !query.correlationId().equals(event.correlationId())) {
 			return false;
 		}
 		if (query.sessionId() != null && !query.sessionId().equals(event.sessionId())) {
 			return false;
 		}
+		if (query.type() != null && query.type() != event.type()) {
+			return false;
+		}
 		if (query.since() != null && event.timestamp().isBefore(query.since())) {
 			return false;
 		}
-		if (query.until() != null && event.timestamp().isAfter(query.until())) {
-			return false;
-		}
-		if (query.eventTypes() != null && !query.eventTypes().isEmpty()
-				&& !query.eventTypes().contains(event.eventType())) {
+		if (query.until() != null && !event.timestamp().isBefore(query.until())) {
 			return false;
 		}
 		return true;

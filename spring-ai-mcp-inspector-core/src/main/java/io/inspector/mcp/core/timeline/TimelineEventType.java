@@ -17,30 +17,55 @@
 package io.inspector.mcp.core.timeline;
 
 /**
- * Discriminator for the kind of event captured on the timeline.
+ * Discriminator for the kind of event that was recorded on the timeline.
  *
  * <p>
- * Each value maps to a distinct set of populated fields in {@link TimelineEvent}. Only
- * {@link #APP_LOG} carries log-level, logger-name, thread-name, message and throwable
- * fields; the MCP-related types carry request/response/error payloads.
+ * Each value corresponds to a JSON-RPC or stream event category emitted by the
+ * {@link McpTrafficRecorder} or, for {@link #APP_LOG}, by the
+ * {@link TimelineAppender} / {@link SystemErrOutSink}.
  *
  * @author Artem Simeshin
  */
 public enum TimelineEventType {
 
-	/** An outgoing JSON-RPC request sent to the MCP server. */
-	MCP_JSONRPC_REQUEST,
+	/**
+	 * A JSON-RPC request sent from the browser to the target MCP server.
+	 */
+	MCP_JSONRPC_REQUEST("mcp.jsonrpc.request"),
 
-	/** A JSON-RPC response received from the MCP server. */
-	MCP_JSONRPC_RESPONSE,
+	/**
+	 * A JSON-RPC response (success or error) received from the target MCP server.
+	 */
+	MCP_JSONRPC_RESPONSE("mcp.jsonrpc.response"),
 
-	/** A JSON-RPC notification received from the MCP server. */
-	MCP_JSONRPC_NOTIFICATION,
+	/**
+	 * A JSON-RPC notification (no {@code id}) sent or received.
+	 */
+	MCP_JSONRPC_NOTIFICATION("mcp.jsonrpc.notification"),
 
-	/** A streaming event (e.g. SSE chunk) from the MCP server. */
-	MCP_STREAM_EVENT,
+	/**
+	 * A streamable HTTP streaming event (e.g. SSE chunk).
+	 */
+	MCP_STREAM_EVENT("mcp.stream.event"),
 
-	/** An application log entry emitted by the host JVM. */
-	APP_LOG
+	/**
+	 * An application log entry captured by the {@link TimelineAppender} or
+	 * {@link SystemErrOutSink}.
+	 */
+	APP_LOG("mcp.app.log");
+
+	private final String wireName;
+
+	TimelineEventType(final String wireName) {
+		this.wireName = wireName;
+	}
+
+	/**
+	 * Returns the wire-level name used in the event payload.
+	 * @return the wire name (never {@code null})
+	 */
+	public String wireName() {
+		return this.wireName;
+	}
 
 }

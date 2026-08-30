@@ -19,7 +19,6 @@ package io.inspector.mcp.core.timeline;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
-import java.util.UUID;
 
 /**
  * Captures {@link System#out} and {@link System#err} output that bypasses Logback (e.g.
@@ -153,7 +152,7 @@ public final class SystemErrOutSink implements AutoCloseable {
 
 		private void emitLine(final String line) {
 			if (!SystemErrOutSink.this.closed && !line.isEmpty()) {
-				SystemErrOutSink.this.timelineService.append(TimelineEvent.createLogEvent((UUID) null, this.level,
+				SystemErrOutSink.this.timelineService.append(TimelineEvent.createLogEvent(null, this.level,
 						this.loggerName, Thread.currentThread().getName(), line, null));
 			}
 		}

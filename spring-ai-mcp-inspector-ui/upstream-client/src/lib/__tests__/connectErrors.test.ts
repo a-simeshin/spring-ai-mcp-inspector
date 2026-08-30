@@ -4,6 +4,7 @@ import {
   connectionFailureFromError,
   humanReadableReason,
   isConnectFailedError,
+  isHttp401Error,
   parseConnectFailureResponse,
   type ConnectFailure,
 } from "../connectErrors";
@@ -136,6 +137,57 @@ describe("humanReadableReason", () => {
     expect(humanReadableReason("timeout")).toContain("timed out");
     expect(humanReadableReason("connection_refused")).toContain("refused");
     expect(humanReadableReason("dns")).toContain("DNS");
+    expect(humanReadableReason("unauthorized")).toContain("Authentication");
     expect(humanReadableReason("unknown")).toContain("Unknown");
+  });
+});
+
+describe("isHttp401Error", () => {
+  class SdkError extends Error {
+    code: number;
+    constructor(code: number) {
+      super(`Error ${code}`);
+      this.code = code;
+    }
+  }
+
+  it("detects objects with numeric code === 401", () => {
+    expect(isHttp401Error(new SdkError(401))).toBe(true);
+  });
+
+  it("rejects objects with other status codes", () => {
+    expect(isHttp401Error(new SdkError(403))).toBe(false);
+    expect(isHttp401Error(new SdkError(500))).toBe(false);
+  });
+
+  it("returns false for non-object, null, and strings", () => {
+    expect(isHttp401Error(null)).toBe(false);
+    expect(isHttp401Error("401")).toBe(false);
+    expect(isHttp401Error(undefined)).toBe(false);
+  });
+});
+
+describe("connectionFailureFromError — unauthorized detection", () => {
+  it("maps SDK-level errors with code 401 to unauthorized reason", () => {
+    const sdk401 = new Error("HTTP 401 Unauthorized");
+    (sdk401 as unknown as Record<string, unknown>).code = 401;
+    const failure = connectionFailureFromError(sdk401);
+    expect(failure.reason).toBe("unauthorized");
+    expect(failure.message).toBe("HTTP 401 Unauthorized");
+  });
+
+  it("keeps the generic unknown reason for non-401 errors", () => {
+    const failure = connectionFailureFromError(new Error("Failed to fetch"));
+    expect(failure.reason).toBe("unknown");
+  });
+
+  it("keep structured ConnectFailedError as-is regardless of reason", () => {
+    const unauthorized: ConnectFailure = {
+      code: CONNECT_FAILED_ERROR_CODE,
+      reason: "unauthorized",
+      message: "Custom 401 message",
+      retryable: true,
+    };
+    expect(connectionFailureFromError(new ConnectFailedError(unauthorized))).toEqual(unauthorized);
   });
 });

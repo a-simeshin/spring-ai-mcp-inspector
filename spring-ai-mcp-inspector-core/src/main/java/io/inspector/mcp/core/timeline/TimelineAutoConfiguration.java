@@ -60,8 +60,7 @@ public class TimelineAutoConfiguration {
 	@Bean
 	@ConditionalOnMissingBean(TimelineService.class)
 	public BoundedTimelineService mcpInspectorTimelineService() {
-		return new BoundedTimelineService(this.properties.getTimeline().getCapacity(),
-				this.properties.getTimeline().getTtl());
+		return new BoundedTimelineService(this.properties.getTimeline().getCapacity());
 	}
 
 	/**

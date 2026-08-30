@@ -17,7 +17,6 @@
 package io.inspector.mcp.core.timeline;
 
 import java.util.Map;
-import java.util.UUID;
 
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
@@ -61,8 +60,7 @@ public final class TimelineAppender extends AppenderBase<ILoggingEvent> {
 			return;
 		}
 		final Map<String, String> mdc = event.getMDCPropertyMap();
-		final String correlationIdStr = (mdc != null) ? mdc.get(MDC_CORRELATION_ID) : null;
-		final UUID correlationId = (correlationIdStr != null) ? tryParseUuid(correlationIdStr) : null;
+		final String correlationId = (mdc != null) ? mdc.get(MDC_CORRELATION_ID) : null;
 		final String throwableStr = extractThrowable(event.getThrowableProxy());
 		final TimelineEvent timelineEvent = TimelineEvent.createLogEvent(correlationId, event.getLevel().toString(),
 				event.getLoggerName(), event.getThreadName(), event.getFormattedMessage(), throwableStr);
@@ -74,15 +72,6 @@ public final class TimelineAppender extends AppenderBase<ILoggingEvent> {
 			return null;
 		}
 		return ThrowableProxyUtil.asString(proxy);
-	}
-
-	private static UUID tryParseUuid(final String str) {
-		try {
-			return UUID.fromString(str);
-		}
-		catch (final IllegalArgumentException ex) {
-			return null;
-		}
 	}
 
 }
