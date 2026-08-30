@@ -183,7 +183,7 @@ public class ProxyTransportFactory {
 		final HttpClientSseClientTransport.Builder builder = HttpClientSseClientTransport.builder(baseUri)
 			.sseEndpoint(ssePath)
 			.messageEndpointValidator(noopValidator())
-			.requestBuilder(HttpRequest.newBuilder().timeout(this.sseRequestTimeout))
+			.requestBuilder(HttpRequest.newBuilder())
 			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR));
 		// The SDK's requestBuilder template applies the timeout to ALL requests the
 		// transport makes (the SSE GET stream AND every message POST). For the POST
@@ -192,27 +192,29 @@ public class ProxyTransportFactory {
 		// not in the POST body — so a healthy POST would time out. The customizer
 		// removes the timeout for POST requests, keeping it only for the SSE GET
 		// (where it detects silent upstream disconnects, closing ConnectFailureIT).
-		builder.httpRequestCustomizer(noPostTimeoutCustomizer(customizer));
+		builder.httpRequestCustomizer(noPostTimeoutCustomizer(customizer, this.sseRequestTimeout));
 		final HttpRequest.Builder requestTemplate = HttpRequest.newBuilder().timeout(this.sseRequestTimeout);
 		final HttpClient preflightClient = HttpClient.newBuilder().executor(SHARED_HTTP_EXECUTOR).build();
 		final URI target = URI.create(baseUri).resolve(ssePath);
-		return new SsePreflightTransport(builder.build(), target, requestTemplate, noPostTimeoutCustomizer(customizer),
-				preflightClient);
+		return new SsePreflightTransport(builder.build(), target, requestTemplate,
+				noPostTimeoutCustomizer(customizer, this.sseRequestTimeout), preflightClient);
 	}
 
 	/**
 	 * Wraps an optional header customizer so that POST requests (message frames) never
 	 * carry the per-request SSE timeout — the MCP protocol delivers the response as an
 	 * SSE event on the stream, not in the POST body, so a healthy POST would time out.
-	 * The GET (SSE stream) timeout from the {@code requestBuilder} template is preserved.
+	 * The GET (SSE stream) timeout from the {@code requestBuilder} template is applied
+	 * here instead, so it only affects the SSE stream and not message POSTs.
 	 * @param delegate the existing header customizer, or {@code null}
+	 * @param timeout the timeout to apply to GET requests
 	 * @return a composite customizer
 	 */
 	private static McpSyncHttpClientRequestCustomizer noPostTimeoutCustomizer(
-			final McpSyncHttpClientRequestCustomizer delegate) {
+			final McpSyncHttpClientRequestCustomizer delegate, final Duration timeout) {
 		return (builder, method, endpoint, body, context) -> {
-			if ("POST".equals(method)) {
-				builder.timeout(Duration.ZERO);
+			if (!"POST".equals(method)) {
+				builder.timeout(timeout);
 			}
 			if (delegate != null) {
 				delegate.customize(builder, method, endpoint, body, context);
