@@ -18,7 +18,6 @@ package io.inspector.mcp.webmvc.controller;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.UUID;
 
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -62,7 +61,7 @@ public class TimelineController {
 	 * @return matching timeline events
 	 */
 	@GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-	public List<TimelineEvent> query(@RequestParam(name = "correlationId", required = false) final UUID correlationId,
+	public List<TimelineEvent> query(@RequestParam(name = "correlationId", required = false) final String correlationId,
 			@RequestParam(name = "sessionId", required = false) final String sessionId,
 			@RequestParam(name = "since", required = false) final Instant since,
 			@RequestParam(name = "until", required = false) final Instant until,
