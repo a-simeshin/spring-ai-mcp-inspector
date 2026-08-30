@@ -33,6 +33,8 @@ import tools.jackson.databind.node.ObjectNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.mock;
 
 /** Unit tests for {@link McpTrafficRecorder}. */
 class McpTrafficRecorderTests {
@@ -47,6 +49,11 @@ class McpTrafficRecorderTests {
 	void setUp() {
 		this.timelineService = new BoundedTimelineService();
 		this.recorder = new McpTrafficRecorder(this.timelineService);
+	}
+
+	private JSONRPCMessage deserialize(final JsonNode frame) throws Exception {
+		return McpSchema.deserializeJsonRpcMessage(
+				new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(this.mapper), frame.toString());
 	}
 
 	@Nested
@@ -442,6 +449,324 @@ class McpTrafficRecorderTests {
 			// the two sessions have different correlations
 			assertThat(resAevent.correlationId()).as("correlations differ between sessions")
 				.isNotEqualTo(resBevent.correlationId());
+		}
+
+	}
+
+	@Nested
+	@DisplayName("clearSession")
+	class ClearSession {
+
+		@Test
+		@DisplayName("ignores null sessionId")
+		void ignoresNullSessionId() {
+			// when
+			McpTrafficRecorderTests.this.recorder.clearSession(null);
+
+			// then — no exception
+			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isZero();
+		}
+
+		@Test
+		@DisplayName("removes pending correlations for the given session")
+		void removesPendingForSession() throws Exception {
+			// given — record a request in session-a
+			final ObjectNode req = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.put("method", "tools/list");
+			final JSONRPCMessage typed = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					req.toString());
+			McpTrafficRecorderTests.this.recorder.recordOutbound("session-a", typed, req);
+			McpTrafficRecorderTests.this.recorder.recordOutbound("session-b", typed, req);
+			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(2);
+
+			// when
+			McpTrafficRecorderTests.this.recorder.clearSession("session-a");
+
+			// then — only session-b remains
+			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(1);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("recordStreamEvent with correlation")
+	class RecordStreamEventWithCorrelation {
+
+		@Test
+		@DisplayName("preserves the originating correlation id")
+		void preservesOriginatingCorrelation() throws Exception {
+			// given
+			final JsonNode payload = McpTrafficRecorderTests.this.mapper.createObjectNode().put("chunk", true);
+			final String originatingCorrelationId = UUID.randomUUID().toString();
+
+			// when
+			McpTrafficRecorderTests.this.recorder.recordStreamEvent("s-1", originatingCorrelationId, payload);
+
+			// then
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			assertThat(events).hasSize(1);
+			assertThat(events.get(0).correlationId()).isEqualTo(originatingCorrelationId);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("MDC preservation")
+	class MdcPreservation {
+
+		@Test
+		@DisplayName("restores prior MDC correlationId after outbound request")
+		void restoresPriorMdcAfterOutbound() throws Exception {
+			// given
+			MDC.put(McpTrafficRecorder.MDC_CORRELATION_ID, "outer-context");
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.put("method", "tools/list");
+			final JSONRPCMessage typed = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					reqFrame.toString());
+
+			try {
+				// when
+				McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", typed, reqFrame);
+
+				// then — MDC is restored
+				assertThat(MDC.get(McpTrafficRecorder.MDC_CORRELATION_ID)).isEqualTo("outer-context");
+			}
+			finally {
+				MDC.remove(McpTrafficRecorder.MDC_CORRELATION_ID);
+			}
+		}
+
+		@Test
+		@DisplayName("restores prior MDC correlationId after inbound response")
+		void restoresPriorMdcAfterInbound() throws Exception {
+			// given — record a request first
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 42)
+				.put("method", "tools/call");
+			final JSONRPCMessage reqTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					reqFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", reqTyped, reqFrame);
+
+			MDC.put(McpTrafficRecorder.MDC_CORRELATION_ID, "outer-context");
+			final ObjectNode resFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 42)
+				.set("result", McpTrafficRecorderTests.this.mapper.createObjectNode().put("ok", true));
+			final JSONRPCMessage resTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					resFrame.toString());
+
+			try {
+				// when
+				McpTrafficRecorderTests.this.recorder.recordInbound("s-1", resTyped, resFrame);
+
+				// then — MDC is restored
+				assertThat(MDC.get(McpTrafficRecorder.MDC_CORRELATION_ID)).isEqualTo("outer-context");
+			}
+			finally {
+				MDC.remove(McpTrafficRecorder.MDC_CORRELATION_ID);
+			}
+		}
+
+	}
+
+	@Nested
+	@DisplayName("inbound progress notification")
+	class InboundProgressNotification {
+
+		@Test
+		@DisplayName("routes notifications/progress through recordStreamEvent")
+		void routesProgressNotification() throws Exception {
+			// given — a request with a progress token
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 10)
+				.put("method", "tools/call");
+			final JSONRPCMessage reqTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					reqFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", reqTyped, reqFrame);
+
+			// when — an inbound progress notification
+			final ObjectNode progressFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("method", "notifications/progress");
+			final JSONRPCMessage progressTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					progressFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", progressTyped, progressFrame);
+
+			// then — it's recorded as a stream event, not a notification
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			final TimelineEvent progressEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_STREAM_EVENT)
+				.findFirst()
+				.orElseThrow();
+			assertThat(progressEvent).isNotNull();
+		}
+
+		@Test
+		@DisplayName("progress notification reuses the originating request correlation")
+		void progressNotificationReusesCorrelation() throws Exception {
+			// given: an outbound request carrying params._meta.progressToken
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 11)
+				.put("method", "tools/call");
+			reqFrame.putObject("params").putObject("_meta").put("progressToken", "tok-1");
+			final JSONRPCMessage reqTyped = deserialize(reqFrame);
+			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", reqTyped, reqFrame);
+			final String requestCorrelation = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all())
+				.get(0)
+				.correlationId();
+
+			// when: an inbound progress notification with the same token
+			final ObjectNode progressFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("method", "notifications/progress");
+			progressFrame.putObject("params").put("progressToken", "tok-1");
+			final JSONRPCMessage progressTyped = deserialize(progressFrame);
+			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", progressTyped, progressFrame);
+
+			// then: the stream event shares the request's correlation
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			final TimelineEvent streamEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_STREAM_EVENT)
+				.findFirst()
+				.orElseThrow();
+			assertThat(streamEvent.correlationId()).isEqualTo(requestCorrelation);
+		}
+
+		@Test
+		@DisplayName("unknown progress token falls back to a fresh correlation")
+		void unknownProgressTokenFallsBack() throws Exception {
+			// given: no matching request recorded
+			final ObjectNode progressFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("method", "notifications/progress");
+			progressFrame.putObject("params").put("progressToken", "tok-unknown");
+			final JSONRPCMessage progressTyped = deserialize(progressFrame);
+
+			// when
+			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", progressTyped, progressFrame);
+
+			// then: still recorded as a stream event with a generated correlation
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			assertThat(events).hasSize(1);
+			assertThat(events.get(0).type()).isEqualTo(TimelineEventType.MCP_STREAM_EVENT);
+			assertThat(events.get(0).correlationId()).isNotNull();
+		}
+
+		@Test
+		@DisplayName("non-scalar progress token is ignored")
+		void nonScalarProgressTokenIsIgnored() throws Exception {
+			// given: progressToken is an object, not a value node
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 12)
+				.put("method", "tools/call");
+			reqFrame.putObject("params").putObject("_meta").putObject("progressToken").put("nested", true);
+			final JSONRPCMessage reqTyped = deserialize(reqFrame);
+
+			// when
+			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", reqTyped, reqFrame);
+
+			// then: request still pending and correlated, token simply not registered
+			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(1);
+		}
+
+		@Test
+		@DisplayName("outbound request without an id is still recorded")
+		void outboundRequestWithoutIdIsRecorded() throws Exception {
+			// given: a JSONRPCRequest whose id is null cannot exist via the typed
+			// deserialiser, so exercise the null-session key normalisation instead
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 13)
+				.put("method", "tools/list");
+			final JSONRPCMessage reqTyped = deserialize(reqFrame);
+
+			// when: null sessionId normalises to the empty key
+			McpTrafficRecorderTests.this.recorder.recordOutbound(null, reqTyped, reqFrame);
+
+			// then
+			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(1);
+
+			// and the matching response with a null session finds it
+			final ObjectNode resFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 13)
+				.set("result", McpTrafficRecorderTests.this.mapper.createObjectNode());
+			final JSONRPCMessage resTyped = deserialize(resFrame);
+			McpTrafficRecorderTests.this.recorder.recordInbound(null, resTyped, resFrame);
+			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isZero();
+		}
+
+		@Test
+		@DisplayName("response with null id gets a fresh correlation")
+		void responseWithNullIdGetsFreshCorrelation() {
+			// given: the typed JSONRPCResponse with a null id cannot be deserialised
+			// (SDK validation rejects it), so mock the record interface
+			final McpSchema.JSONRPCResponse nullIdResponse = mock(McpSchema.JSONRPCResponse.class);
+			given(nullIdResponse.id()).willReturn(null);
+
+			// when
+			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", nullIdResponse, null);
+
+			// then: recorded as a response, no pending entry touched
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			assertThat(events).hasSize(1);
+			assertThat(events.get(0).type()).isEqualTo(TimelineEventType.MCP_JSONRPC_RESPONSE);
+			assertThat(events.get(0).correlationId()).isNotNull();
+		}
+
+		@Test
+		@DisplayName("unexpected outbound and inbound message types are ignored")
+		void unexpectedMessageTypesAreIgnored() throws Exception {
+			// given
+			final ObjectNode resFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 14)
+				.set("result", McpTrafficRecorderTests.this.mapper.createObjectNode());
+			final JSONRPCMessage resTyped = deserialize(resFrame);
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 15)
+				.put("method", "tools/list");
+			final JSONRPCMessage reqTyped = deserialize(reqFrame);
+
+			// when: a response outbound and a request inbound — neither is expected
+			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", resTyped, resFrame);
+			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", reqTyped, reqFrame);
+
+			// then: both fall through to the unexpected-type branch; nothing recorded
+			assertThat(McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all())).isEmpty();
+			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isZero();
+		}
+
+		@Test
+		@DisplayName("pending correlations are bounded at MAX_PENDING_CORRELATIONS")
+		void pendingCorrelationsAreBounded() throws Exception {
+			// given/when: send more requests than the bound, all unanswered
+			for (int i = 0; i < McpTrafficRecorder.MAX_PENDING_CORRELATIONS + 5; i++) {
+				final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+					.put("jsonrpc", "2.0")
+					.put("id", 100_000 + i)
+					.put("method", "tools/list");
+				McpTrafficRecorderTests.this.recorder.recordOutbound("s-bulk", deserialize(reqFrame), reqFrame);
+			}
+
+			// then: map never exceeds the bound
+			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations())
+				.isLessThanOrEqualTo(McpTrafficRecorder.MAX_PENDING_CORRELATIONS);
 		}
 
 	}

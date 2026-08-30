@@ -106,7 +106,11 @@ public final class BoundedTimelineService implements TimelineService {
 				}
 			}
 			final int limit = query.limit();
-			result.sort(Comparator.comparing(TimelineEvent::timestamp));
+			// The REST contract is newest-first; the ring walk already favours
+			// recency, but an out-of-order append (e.g. async log flush) must not
+			// leak insertion order into the result: sort by timestamp explicitly.
+			// The stable sort keeps insertion order within identical timestamps.
+			result.sort(Comparator.comparing(TimelineEvent::timestamp).reversed());
 			if (result.size() > limit) {
 				return Collections.unmodifiableList(result.subList(0, limit));
 			}
@@ -153,8 +157,7 @@ public final class BoundedTimelineService implements TimelineService {
 		if (query.sessionId() != null && !query.sessionId().equals(event.sessionId())) {
 			return false;
 		}
-		if (query.eventTypes() != null && !query.eventTypes().isEmpty()
-				&& !query.eventTypes().contains(event.type())) {
+		if (query.eventTypes() != null && !query.eventTypes().isEmpty() && !query.eventTypes().contains(event.type())) {
 			return false;
 		}
 		if (query.since() != null && event.timestamp().isBefore(query.since())) {

@@ -85,6 +85,9 @@ public class InspectorBootstrapAssembler {
 		final InspectorBootstrap bootstrap = new InspectorBootstrap();
 		bootstrap.setAuthToken(this.authTokenProvider.token());
 		bootstrap.setProxyAddress(prefix(requestPrefix) + this.properties.getProxyPath());
+		// The SPA's own API surface (timeline etc.) is mounted under this path; the
+		// browser must use the deployed prefix, not a hard-coded default.
+		bootstrap.setInspectorPath(prefix(requestPrefix) + this.properties.getPath());
 
 		final DetectedTransport detected = this.transportDetector.detect();
 		bootstrap.setDetectedTransport(mapTransportName(detected.type()));

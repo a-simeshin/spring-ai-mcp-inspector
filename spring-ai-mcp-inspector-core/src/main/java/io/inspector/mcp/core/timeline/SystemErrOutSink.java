@@ -50,16 +50,22 @@ public final class SystemErrOutSink implements AutoCloseable {
 
 	private final PrintStream originalErr;
 
+	private final DetachedConsoleStreams detachedStreams;
+
 	private volatile boolean closed;
 
 	/**
-	 * Creates a sink that captures {@code System.out} and {@code System.err}.
+	 * Creates a sink that captures {@code System.out} and {@code System.err}. Logback
+	 * console appenders are detached to the raw standard-stream descriptors first, so
+	 * logged lines reach the timeline exactly once (via {@link TimelineAppender}) and
+	 * only genuine direct-to-console writes show up as sink-captured APP_LOG events.
 	 * @param timelineService the target timeline service
 	 */
 	public SystemErrOutSink(final TimelineService timelineService) {
 		this.timelineService = timelineService;
 		this.originalOut = System.out;
 		this.originalErr = System.err;
+		this.detachedStreams = DetachedConsoleStreams.detach();
 		System.setOut(new CaptureStream(this.originalOut, STDOUT_LOGGER, "INFO"));
 		System.setErr(new CaptureStream(this.originalErr, STDERR_LOGGER, "WARN"));
 	}
@@ -72,6 +78,7 @@ public final class SystemErrOutSink implements AutoCloseable {
 		this.closed = true;
 		System.setOut(this.originalOut);
 		System.setErr(this.originalErr);
+		this.detachedStreams.restore();
 	}
 
 	/**
@@ -152,10 +159,18 @@ public final class SystemErrOutSink implements AutoCloseable {
 
 		private void emitLine(final String line) {
 			if (!SystemErrOutSink.this.closed && !line.isEmpty()) {
-				final String safeLevel = (this.level != null) ? this.level : "";
-				final String safeLogger = (this.loggerName != null) ? this.loggerName : "";
-				SystemErrOutSink.this.timelineService.append(TimelineEvent.createLogEvent(null, safeLevel, safeLogger,
-						Thread.currentThread().getName(), line, null));
+				// Capture failures must never propagate into ordinary logging: a
+				// throwing TimelineService used to make System.out.println throw too.
+				// The original output above is already flushed at this point.
+				try {
+					final String safeLevel = (this.level != null) ? this.level : "";
+					final String safeLogger = (this.loggerName != null) ? this.loggerName : "";
+					SystemErrOutSink.this.timelineService.append(TimelineEvent.createLogEvent(null, safeLevel,
+							safeLogger, Thread.currentThread().getName(), line, null));
+				}
+				catch (final RuntimeException ex) {
+					// Best-effort: a failing timeline must not take the console down.
+				}
 			}
 		}
 

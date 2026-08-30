@@ -68,7 +68,12 @@ public final class TimelineAppender extends AppenderBase<ILoggingEvent> {
 		final String message = (event.getFormattedMessage() != null) ? event.getFormattedMessage() : "";
 		final TimelineEvent timelineEvent = TimelineEvent.createLogEvent(correlationId, level, loggerName, threadName,
 				message, throwableStr);
-		this.timelineService.append(timelineEvent);
+		try {
+			this.timelineService.append(timelineEvent);
+		}
+		catch (final RuntimeException ex) {
+			// An appender failure must never break the host application's logging.
+		}
 	}
 
 	private static String extractThrowable(final IThrowableProxy proxy) {

@@ -10,22 +10,16 @@ type TimelineEventType =
   | "MCP_STREAM_EVENT"
   | "APP_LOG";
 
+// Mirrors io.inspector.mcp.core.timeline.TimelineEvent as serialized by the REST
+// API: flat metadata plus the raw JSON-RPC frame (MCP events) or a log-fields
+// object (APP_LOG events) under `payload`.
 interface TimelineEvent {
   id: string;
-  correlationId: string;
-  timestamp: string;
-  eventType: TimelineEventType;
+  correlationId: string | null;
   sessionId: string | null;
-  requestId: string | null;
-  method: string | null;
-  params: unknown | null;
-  result: unknown | null;
-  error: unknown | null;
-  logLevel: string | null;
-  loggerName: string | null;
-  threadName: string | null;
-  message: string | null;
-  throwable: string | null;
+  type: TimelineEventType;
+  timestamp: string;
+  payload: Record<string, unknown> | null;
 }
 
 const EVENT_COLORS: Record<TimelineEventType, string> = {
@@ -51,11 +45,17 @@ function formatTimestamp(ts: string): string {
 
 function TimelineEventRow({ event }: { event: TimelineEvent }) {
   const [expanded, setExpanded] = useState(false);
-  const colorClass = EVENT_COLORS[event.eventType] || "text-gray-400";
-  const bgClass = EVENT_BG[event.eventType] || "bg-gray-950/30";
+  const type = event.type;
+  const colorClass = EVENT_COLORS[type] || "text-gray-400";
+  const bgClass = EVENT_BG[type] || "bg-gray-950/30";
 
-  const typeLabel = event.eventType.replace("MCP_", "").replace("_", " ");
-  const label = event.method || event.logLevel || typeLabel;
+  const payload = event.payload ?? {};
+  const typeLabel = (type || "").replace("MCP_", "").replace("_", " ");
+  const label =
+    (typeof payload.method === "string" && payload.method) ||
+    (typeof payload.message === "string" && payload.message) ||
+    (typeof payload.logLevel === "string" && payload.logLevel) ||
+    typeLabel;
 
   return (
     <div
@@ -74,31 +74,11 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
       </div>
       {expanded ? (
         <div className="mt-1 text-[11px] font-mono opacity-80 overflow-x-auto whitespace-pre-wrap max-h-40 overflow-y-auto">
-          {event.params != null ? (
-            <div className="mb-1">
-              <span className="opacity-50">params:</span> {JSON.stringify(event.params, null, 2)}
-            </div>
-          ) : null}
-          {event.result != null ? (
-            <div className="mb-1">
-              <span className="opacity-50">result:</span> {JSON.stringify(event.result, null, 2)}
-            </div>
-          ) : null}
-          {event.error != null ? (
-            <div className="mb-1">
-              <span className="opacity-50">error:</span> {JSON.stringify(event.error, null, 2)}
-            </div>
-          ) : null}
-          {event.message != null ? (
-            <div className="mb-1">
-              <span className="opacity-50">message:</span> {event.message}
-            </div>
-          ) : null}
-          {event.throwable != null ? (
-            <div className="mb-1">
-              <span className="opacity-50">throwable:</span> {event.throwable}
-            </div>
-          ) : null}
+          {Object.keys(payload).length > 0 ? (
+            <div className="mb-1">{JSON.stringify(payload, null, 2)}</div>
+          ) : (
+            <div className="opacity-50">no payload</div>
+          )}
         </div>
       ) : null}
     </div>
@@ -120,8 +100,14 @@ const TimelineTab = () => {
         headers["Authorization"] = "Bearer " + parsed.MCP_PROXY_AUTH_TOKEN.value;
       }
     }
+    // The API is mounted under the configured spring.ai.mcp.inspector.path; the
+    // server advertises the deployed prefix through the bootstrap payload.
+    const bootstrap = (window as unknown as {
+      __MCP_INSPECTOR_BOOTSTRAP?: { inspectorPath?: string };
+    }).__MCP_INSPECTOR_BOOTSTRAP;
+    const apiBase = (bootstrap?.inspectorPath || "/mcp-inspector").replace(/\/$/, "");
     try {
-      const res = await fetch("/mcp-inspector/api/timeline?limit=200", { headers });
+      const res = await fetch(`${apiBase}/api/timeline?limit=200`, { headers });
       if (res.ok) {
         const data = (await res.json()) as TimelineEvent[];
         setEvents(data);
