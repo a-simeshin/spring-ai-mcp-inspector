@@ -19,7 +19,6 @@ package io.inspector.mcp.core.timeline;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.UUID;
 
 /**
  * Filter criteria for querying the timeline.
@@ -27,29 +26,17 @@ import java.util.UUID;
  * <p>
  * All fields are optional; omitted (null/empty) criteria are not applied.
  *
- * @param correlationId filter by correlation id
- * @param sessionId filter by session id
- * @param since include events on or after this instant
- * @param until include events on or before this instant
- * @param eventTypes include only events of these types (empty = all types)
+ * @param correlationId filter by correlation id (may be {@code null})
+ * @param sessionId filter by session id (may be {@code null})
+ * @param since include events on or after this instant (may be {@code null})
+ * @param until include events on or before this instant (may be {@code null})
+ * @param eventTypes include only events of these types (empty = all types, may be
+ * {@code null})
  * @param limit maximum number of events to return (default 500)
  * @author Artem Simeshin
  */
-public record TimelineQuery(
-
-		UUID correlationId,
-
-		String sessionId,
-
-		Instant since,
-
-		Instant until,
-
-		List<TimelineEventType> eventTypes,
-
-		int limit
-
-) {
+public record TimelineQuery(String correlationId, String sessionId, Instant since, Instant until,
+		List<TimelineEventType> eventTypes, int limit) {
 
 	/** Default limit when none is specified. */
 	public static final int DEFAULT_LIMIT = 500;
@@ -70,6 +57,35 @@ public record TimelineQuery(
 	}
 
 	/**
+	 * Convenience: returns the first event type if only one is specified, or {@code null}
+	 * if none or multiple.
+	 * @return the single type filter, may be {@code null}
+	 */
+	public TimelineEventType type() {
+		if (this.eventTypes == null || this.eventTypes.isEmpty()) {
+			return null;
+		}
+		return this.eventTypes.get(0);
+	}
+
+	/**
+	 * Creates a query that filters by correlation ID.
+	 * @param correlationId the correlation ID to match
+	 * @return a new query with just the correlation filter
+	 */
+	public static TimelineQuery byCorrelationId(final String correlationId) {
+		return new TimelineQuery(correlationId, null, null, null, null, DEFAULT_LIMIT);
+	}
+
+	/**
+	 * Creates a query with no filters, returning up to the default limit.
+	 * @return a new query (never {@code null})
+	 */
+	public static TimelineQuery all() {
+		return new TimelineQuery(null, null, null, null, null, DEFAULT_LIMIT);
+	}
+
+	/**
 	 * Returns a builder for {@code TimelineQuery}.
 	 * @return a new builder
 	 */
@@ -82,7 +98,7 @@ public record TimelineQuery(
 	 */
 	public static final class Builder {
 
-		private UUID correlationId;
+		private String correlationId;
 
 		private String sessionId;
 
@@ -97,7 +113,7 @@ public record TimelineQuery(
 		private Builder() {
 		}
 
-		public Builder correlationId(final UUID correlationId) {
+		public Builder correlationId(final String correlationId) {
 			this.correlationId = correlationId;
 			return this;
 		}

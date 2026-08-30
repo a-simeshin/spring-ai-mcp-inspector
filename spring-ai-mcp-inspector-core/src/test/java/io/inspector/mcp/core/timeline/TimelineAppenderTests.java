@@ -47,7 +47,7 @@ class TimelineAppenderTests {
 		this.appender.append(event);
 		final List<TimelineEvent> events = this.timelineService.query(TimelineQuery.builder().build());
 		assertThat(events).hasSize(1);
-		assertThat(events.get(0).eventType()).isEqualTo(TimelineEventType.APP_LOG);
+		assertThat(events.get(0).type()).isEqualTo(TimelineEventType.APP_LOG);
 		assertThat(events.get(0).message()).isEqualTo("hello world");
 		assertThat(events.get(0).loggerName()).isEqualTo("test.Logger");
 		assertThat(events.get(0).logLevel()).isEqualTo("INFO");
@@ -107,7 +107,7 @@ class TimelineAppenderTests {
 		this.appender.append(event);
 		final List<TimelineEvent> events = this.timelineService.query(TimelineQuery.builder().build());
 		assertThat(events).hasSize(1);
-		assertThat(events.get(0).correlationId()).isNull();
+		assertThat(events.get(0).correlationId()).isEqualTo("not-a-uuid");
 	}
 
 	@Test

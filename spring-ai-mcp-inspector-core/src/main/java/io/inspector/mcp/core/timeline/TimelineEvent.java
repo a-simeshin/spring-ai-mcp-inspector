@@ -17,87 +17,129 @@
 package io.inspector.mcp.core.timeline;
 
 import java.time.Instant;
+import java.util.Objects;
 import java.util.UUID;
 
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
- * An immutable event recorded on the MCP inspector timeline.
+ * A single event on the inspector timeline.
  *
  * <p>
- * Every event carries a unique {@code id} and a {@code correlationId} that links it to
- * the top-level JSON-RPC request that triggered it. Additional fields are populated
- * according to {@link #eventType()}.
+ * Recorded by the {@link McpTrafficRecorder} (or a log appender) and stored in the
+ * {@link TimelineService} for retrieval by the UI.
  *
- * @param id globally unique event identifier
- * @param correlationId correlation id linking this event to the originating JSON-RPC
- * request (set via MDC key {@code mcp.correlationId})
- * @param timestamp instant when the event occurred
- * @param eventType discriminator for the kind of event
- * @param sessionId optional MCP session identifier
- * @param requestId optional JSON-RPC request id
- * @param method optional JSON-RPC method name
- * @param params optional JSON-RPC params payload ({@code null} for {@code APP_LOG})
- * @param result optional JSON-RPC result payload ({@code null} for {@code APP_LOG})
- * @param error optional JSON-RPC error payload ({@code null} for {@code APP_LOG})
- * @param logLevel log level name (only for {@link TimelineEventType#APP_LOG};
- * {@code null} otherwise)
- * @param loggerName logger name (only for {@code APP_LOG}; {@code null} otherwise)
- * @param threadName thread name that produced the event ({@code null} for MCP events)
- * @param message formatted log message (only for {@code APP_LOG}; {@code null} otherwise)
- * @param throwable stack trace of the throwable, if any (only for {@code APP_LOG};
- * {@code null} otherwise)
+ * @param id unique event identifier (never {@code null})
+ * @param correlationId correlation identifier linking paired request/response or a group
+ * of related events (may be {@code null} for log events without MDC context)
+ * @param sessionId proxy session identifier (may be {@code null})
+ * @param type event type discriminator (never {@code null})
+ * @param timestamp instant when the event occurred (never {@code null})
+ * @param payload JSON payload of the message (may be {@code null})
  * @author Artem Simeshin
  */
-public record TimelineEvent(
-
-		UUID id,
-
-		UUID correlationId,
-
-		Instant timestamp,
-
-		TimelineEventType eventType,
-
-		String sessionId,
-
-		String requestId,
-
-		String method,
-
-		JsonNode params,
-
-		JsonNode result,
-
-		JsonNode error,
-
-		String logLevel,
-
-		String loggerName,
-
-		String threadName,
-
-		String message,
-
-		String throwable
-
-) {
+public record TimelineEvent(String id, String correlationId, String sessionId, TimelineEventType type,
+		Instant timestamp, JsonNode payload) {
 
 	/**
-	 * Creates a minimal {@code APP_LOG} event with the given correlation, log metadata
-	 * and message.
-	 * @param correlationId the correlation id from the MDC
-	 * @param logLevel the log level string
-	 * @param loggerName the logger name
-	 * @param threadName the current thread name
-	 * @param message the formatted log message
-	 * @param throwable optional stack trace, may be {@code null}
-	 * @return a new {@code APP_LOG} event
+	 * Compact constructor with null-safety.
 	 */
-	public static TimelineEvent createLogEvent(final UUID correlationId, final String logLevel, final String loggerName,
-			final String threadName, final String message, final String throwable) {
-		return new TimelineEvent(UUID.randomUUID(), correlationId, Instant.now(), TimelineEventType.APP_LOG, null, null,
-				null, null, null, null, logLevel, loggerName, threadName, message, throwable);
+	public TimelineEvent {
+		Objects.requireNonNull(id, "id must not be null");
+		Objects.requireNonNull(type, "type must not be null");
+		Objects.requireNonNull(timestamp, "timestamp must not be null");
+	}
+
+	/**
+	 * Creates a minimal {@code APP_LOG} event with the given log metadata and message.
+	 * The log-specific fields are encoded as a JSON payload.
+	 * @param correlationId the correlation id from the MDC (may be {@code null})
+	 * @param logLevel the log level string (must not be {@code null})
+	 * @param loggerName the logger name (must not be {@code null})
+	 * @param threadName the current thread name (must not be {@code null})
+	 * @param message the formatted log message (must not be {@code null})
+	 * @param throwable optional stack trace, may be {@code null}
+	 * @return a new {@code APP_LOG} event (never {@code null})
+	 */
+	public static TimelineEvent createLogEvent(final String correlationId, final String logLevel,
+			final String loggerName, final String threadName, final String message, final String throwable) {
+		final ObjectNode payload = JsonNodeFactory.instance.objectNode();
+		payload.put("logLevel", Objects.requireNonNullElse(logLevel, ""));
+		payload.put("loggerName", Objects.requireNonNullElse(loggerName, ""));
+		payload.put("threadName", Objects.requireNonNullElse(threadName, ""));
+		payload.put("message", Objects.requireNonNullElse(message, ""));
+		if (throwable != null) {
+			payload.put("throwable", throwable);
+		}
+		return new TimelineEvent(UUID.randomUUID().toString(), correlationId, null, TimelineEventType.APP_LOG,
+				Instant.now(), payload);
+	}
+
+	/**
+	 * Returns the log level from the payload, or {@code null} if not an APP_LOG event or
+	 * payload is absent.
+	 * @return the log level, may be {@code null}
+	 */
+	public String logLevel() {
+		if (this.payload == null || this.type != TimelineEventType.APP_LOG) {
+			return null;
+		}
+		final JsonNode node = this.payload.get("logLevel");
+		return (node != null) ? node.asText() : null;
+	}
+
+	/**
+	 * Returns the logger name from the payload, or {@code null} if not an APP_LOG event
+	 * or payload is absent.
+	 * @return the logger name, may be {@code null}
+	 */
+	public String loggerName() {
+		if (this.payload == null || this.type != TimelineEventType.APP_LOG) {
+			return null;
+		}
+		final JsonNode node = this.payload.get("loggerName");
+		return (node != null) ? node.asText() : null;
+	}
+
+	/**
+	 * Returns the thread name from the payload, or {@code null} if not an APP_LOG event
+	 * or payload is absent.
+	 * @return the thread name, may be {@code null}
+	 */
+	public String threadName() {
+		if (this.payload == null || this.type != TimelineEventType.APP_LOG) {
+			return null;
+		}
+		final JsonNode node = this.payload.get("threadName");
+		return (node != null) ? node.asText() : null;
+	}
+
+	/**
+	 * Returns the log message from the payload, or {@code null} if not an APP_LOG event
+	 * or payload is absent.
+	 * @return the message, may be {@code null}
+	 */
+	public String message() {
+		if (this.payload == null || this.type != TimelineEventType.APP_LOG) {
+			return null;
+		}
+		final JsonNode node = this.payload.get("message");
+		return (node != null) ? node.asText() : null;
+	}
+
+	/**
+	 * Returns the stack trace from the payload, or {@code null} if not an APP_LOG event
+	 * or payload is absent, or no throwable was recorded.
+	 * @return the throwable text, may be {@code null}
+	 */
+	public String throwable() {
+		if (this.payload == null || this.type != TimelineEventType.APP_LOG) {
+			return null;
+		}
+		final JsonNode node = this.payload.get("throwable");
+		return (node != null) ? node.asText() : null;
 	}
 
 }

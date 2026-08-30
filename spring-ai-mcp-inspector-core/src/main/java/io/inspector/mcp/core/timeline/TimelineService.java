@@ -19,31 +19,35 @@ package io.inspector.mcp.core.timeline;
 import java.util.List;
 
 /**
- * Service that captures and retrieves {@link TimelineEvent timeline events}.
+ * Service that stores and retrieves {@link TimelineEvent timeline events}.
  *
  * <p>
- * Implementations are expected to be thread-safe and bounded (in-memory ring buffer with
- * configurable capacity and TTL).
+ * Events are appended by the {@link McpTrafficRecorder} (for JSON-RPC traffic) and by a
+ * log appender (for application logs). A downstream consumer — the inspector UI — queries
+ * the timeline via {@link #query(TimelineQuery)}.
+ *
+ * <p>
+ * All implementations must be thread-safe.
  *
  * @author Artem Simeshin
  */
 public interface TimelineService {
 
 	/**
-	 * Append an event to the timeline.
+	 * Appends an event to the timeline.
 	 * @param event the event to append (must not be {@code null})
 	 */
 	void append(TimelineEvent event);
 
 	/**
-	 * Query events matching the given filter criteria.
-	 * @param query the filter criteria (must not be {@code null})
-	 * @return matching events, newest first, never {@code null}
+	 * Queries the timeline with the given filter.
+	 * @param query the query parameters (must not be {@code null})
+	 * @return an immutable list of matching events, newest first (never {@code null})
 	 */
 	List<TimelineEvent> query(TimelineQuery query);
 
 	/**
-	 * Remove all events from the timeline.
+	 * Removes all events from the timeline.
 	 */
 	void clear();
 
