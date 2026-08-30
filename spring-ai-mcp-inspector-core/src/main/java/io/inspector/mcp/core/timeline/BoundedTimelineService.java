@@ -18,6 +18,7 @@ package io.inspector.mcp.core.timeline;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -105,6 +106,7 @@ public final class BoundedTimelineService implements TimelineService {
 				}
 			}
 			final int limit = query.limit();
+			result.sort(Comparator.comparing(TimelineEvent::timestamp));
 			if (result.size() > limit) {
 				return Collections.unmodifiableList(result.subList(0, limit));
 			}
@@ -151,7 +153,8 @@ public final class BoundedTimelineService implements TimelineService {
 		if (query.sessionId() != null && !query.sessionId().equals(event.sessionId())) {
 			return false;
 		}
-		if (query.type() != null && query.type() != event.type()) {
+		if (query.eventTypes() != null && !query.eventTypes().isEmpty()
+				&& !query.eventTypes().contains(event.type())) {
 			return false;
 		}
 		if (query.since() != null && event.timestamp().isBefore(query.since())) {

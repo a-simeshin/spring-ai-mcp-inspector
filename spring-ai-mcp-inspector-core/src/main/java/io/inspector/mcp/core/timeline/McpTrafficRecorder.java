@@ -64,6 +64,9 @@ public final class McpTrafficRecorder {
 	/** MDC key where the correlation ID is stored. */
 	static final String MDC_CORRELATION_ID = "mcp.correlationId";
 
+	/** Maximum number of pending request→response correlations before eviction. */
+	static final int MAX_PENDING_CORRELATIONS = 1000;
+
 	private final TimelineService timelineService;
 
 	private final ConcurrentHashMap<CorrelationKey, String> requestCorrelations = new ConcurrentHashMap<>();
@@ -97,21 +100,35 @@ public final class McpTrafficRecorder {
 		if (message instanceof JSONRPCRequest request) {
 			final Object id = request.id();
 			final String correlationId = UUID.randomUUID().toString();
+			final String priorMdc = MDC.get(MDC_CORRELATION_ID);
 			if (id != null) {
-				this.requestCorrelations.put(new CorrelationKey(sessionId, id), correlationId);
+				final CorrelationKey key = new CorrelationKey(sessionId, id);
+				if (this.requestCorrelations.size() >= MAX_PENDING_CORRELATIONS) {
+					// Evict the oldest entry to keep the map bounded
+					this.requestCorrelations.values().stream().findFirst().ifPresent(
+							v -> this.requestCorrelations.values().remove(v));
+				}
+				this.requestCorrelations.put(key, correlationId);
 			}
 			try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, correlationId)) {
 				final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
 						TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), rawFrame);
 				this.timelineService.append(event);
 			}
+			if (priorMdc != null) {
+				MDC.put(MDC_CORRELATION_ID, priorMdc);
+			}
 		}
 		else if (message instanceof JSONRPCNotification) {
 			final String correlationId = UUID.randomUUID().toString();
+			final String priorMdc = MDC.get(MDC_CORRELATION_ID);
 			try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, correlationId)) {
 				final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
 						TimelineEventType.MCP_JSONRPC_NOTIFICATION, Instant.now(), rawFrame);
 				this.timelineService.append(event);
+			}
+			if (priorMdc != null) {
+				MDC.put(MDC_CORRELATION_ID, priorMdc);
 			}
 		}
 		else {
@@ -145,18 +162,26 @@ public final class McpTrafficRecorder {
 			}
 			final String effectiveCorrelationId = (correlationId != null) ? correlationId
 					: UUID.randomUUID().toString();
+			final String priorMdc = MDC.get(MDC_CORRELATION_ID);
 			try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, effectiveCorrelationId)) {
 				final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), effectiveCorrelationId,
 						sessionId, TimelineEventType.MCP_JSONRPC_RESPONSE, Instant.now(), rawFrame);
 				this.timelineService.append(event);
 			}
+			if (priorMdc != null) {
+				MDC.put(MDC_CORRELATION_ID, priorMdc);
+			}
 		}
 		else if (message instanceof JSONRPCNotification) {
 			final String correlationId = UUID.randomUUID().toString();
+			final String priorMdc = MDC.get(MDC_CORRELATION_ID);
 			try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, correlationId)) {
 				final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
 						TimelineEventType.MCP_JSONRPC_NOTIFICATION, Instant.now(), rawFrame);
 				this.timelineService.append(event);
+			}
+			if (priorMdc != null) {
+				MDC.put(MDC_CORRELATION_ID, priorMdc);
 			}
 		}
 		else {
@@ -171,10 +196,14 @@ public final class McpTrafficRecorder {
 	 */
 	public void recordStreamEvent(final String sessionId, final JsonNode payload) {
 		final String correlationId = UUID.randomUUID().toString();
+		final String priorMdc = MDC.get(MDC_CORRELATION_ID);
 		try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, correlationId)) {
 			final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
 					TimelineEventType.MCP_STREAM_EVENT, Instant.now(), payload);
 			this.timelineService.append(event);
+		}
+		if (priorMdc != null) {
+			MDC.put(MDC_CORRELATION_ID, priorMdc);
 		}
 	}
 
