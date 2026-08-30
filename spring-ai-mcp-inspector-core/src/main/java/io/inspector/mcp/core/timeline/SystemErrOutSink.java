@@ -152,8 +152,10 @@ public final class SystemErrOutSink implements AutoCloseable {
 
 		private void emitLine(final String line) {
 			if (!SystemErrOutSink.this.closed && !line.isEmpty()) {
-				SystemErrOutSink.this.timelineService.append(TimelineEvent.createLogEvent(null, this.level,
-						this.loggerName, Thread.currentThread().getName(), line, null));
+				final String safeLevel = (this.level != null) ? this.level : "";
+				final String safeLogger = (this.loggerName != null) ? this.loggerName : "";
+				SystemErrOutSink.this.timelineService.append(TimelineEvent.createLogEvent(null, safeLevel, safeLogger,
+						Thread.currentThread().getName(), line, null));
 			}
 		}
 

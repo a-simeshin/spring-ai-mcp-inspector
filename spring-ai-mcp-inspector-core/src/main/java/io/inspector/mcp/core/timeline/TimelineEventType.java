@@ -21,8 +21,8 @@ package io.inspector.mcp.core.timeline;
  *
  * <p>
  * Each value corresponds to a JSON-RPC or stream event category emitted by the
- * {@link McpTrafficRecorder} or, for {@link #APP_LOG}, by the
- * {@link TimelineAppender} / {@link SystemErrOutSink}.
+ * {@link McpTrafficRecorder} or, for {@link #APP_LOG}, by the {@link TimelineAppender} /
+ * {@link SystemErrOutSink}.
  *
  * @author Artem Simeshin
  */

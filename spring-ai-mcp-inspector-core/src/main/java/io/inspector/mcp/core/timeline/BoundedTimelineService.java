@@ -16,8 +16,6 @@
 
 package io.inspector.mcp.core.timeline;
 
-import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -37,6 +35,9 @@ public final class BoundedTimelineService implements TimelineService {
 
 	/** Default maximum number of events retained in the ring buffer. */
 	static final int DEFAULT_MAX_EVENTS = 1000;
+
+	/** Public alias for the default capacity. */
+	public static final int MAX_EVENTS = DEFAULT_MAX_EVENTS;
 
 	private final int maxEvents;
 

@@ -62,8 +62,12 @@ public final class TimelineAppender extends AppenderBase<ILoggingEvent> {
 		final Map<String, String> mdc = event.getMDCPropertyMap();
 		final String correlationId = (mdc != null) ? mdc.get(MDC_CORRELATION_ID) : null;
 		final String throwableStr = extractThrowable(event.getThrowableProxy());
-		final TimelineEvent timelineEvent = TimelineEvent.createLogEvent(correlationId, event.getLevel().toString(),
-				event.getLoggerName(), event.getThreadName(), event.getFormattedMessage(), throwableStr);
+		final String level = (event.getLevel() != null) ? event.getLevel().toString() : "";
+		final String loggerName = (event.getLoggerName() != null) ? event.getLoggerName() : "";
+		final String threadName = (event.getThreadName() != null) ? event.getThreadName() : "";
+		final String message = (event.getFormattedMessage() != null) ? event.getFormattedMessage() : "";
+		final TimelineEvent timelineEvent = TimelineEvent.createLogEvent(correlationId, level, loggerName, threadName,
+				message, throwableStr);
 		this.timelineService.append(timelineEvent);
 	}
 

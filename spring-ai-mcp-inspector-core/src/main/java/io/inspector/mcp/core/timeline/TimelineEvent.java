@@ -33,7 +33,7 @@ import tools.jackson.databind.node.ObjectNode;
  *
  * @param id unique event identifier (never {@code null})
  * @param correlationId correlation identifier linking paired request/response or a group
- * of related events (never {@code null})
+ * of related events (may be {@code null} for log events without MDC context)
  * @param sessionId proxy session identifier (may be {@code null})
  * @param type event type discriminator (never {@code null})
  * @param timestamp instant when the event occurred (never {@code null})
@@ -48,7 +48,6 @@ public record TimelineEvent(String id, String correlationId, String sessionId, T
 	 */
 	public TimelineEvent {
 		Objects.requireNonNull(id, "id must not be null");
-		Objects.requireNonNull(correlationId, "correlationId must not be null");
 		Objects.requireNonNull(type, "type must not be null");
 		Objects.requireNonNull(timestamp, "timestamp must not be null");
 	}
@@ -57,20 +56,20 @@ public record TimelineEvent(String id, String correlationId, String sessionId, T
 	 * Creates a minimal {@code APP_LOG} event with the given log metadata and message.
 	 * The log-specific fields are encoded as a JSON payload.
 	 * @param correlationId the correlation id from the MDC (may be {@code null})
-	 * @param logLevel the log level string
-	 * @param loggerName the logger name
-	 * @param threadName the current thread name
-	 * @param message the formatted log message
+	 * @param logLevel the log level string (must not be {@code null})
+	 * @param loggerName the logger name (must not be {@code null})
+	 * @param threadName the current thread name (must not be {@code null})
+	 * @param message the formatted log message (must not be {@code null})
 	 * @param throwable optional stack trace, may be {@code null}
 	 * @return a new {@code APP_LOG} event (never {@code null})
 	 */
-	public static TimelineEvent createLogEvent(final String correlationId, final String logLevel, final String loggerName,
-			final String threadName, final String message, final String throwable) {
+	public static TimelineEvent createLogEvent(final String correlationId, final String logLevel,
+			final String loggerName, final String threadName, final String message, final String throwable) {
 		final ObjectNode payload = JsonNodeFactory.instance.objectNode();
-		payload.put("logLevel", logLevel);
-		payload.put("loggerName", loggerName);
-		payload.put("threadName", threadName);
-		payload.put("message", message);
+		payload.put("logLevel", Objects.requireNonNullElse(logLevel, ""));
+		payload.put("loggerName", Objects.requireNonNullElse(loggerName, ""));
+		payload.put("threadName", Objects.requireNonNullElse(threadName, ""));
+		payload.put("message", Objects.requireNonNullElse(message, ""));
 		if (throwable != null) {
 			payload.put("throwable", throwable);
 		}
@@ -79,8 +78,8 @@ public record TimelineEvent(String id, String correlationId, String sessionId, T
 	}
 
 	/**
-	 * Returns the log level from the payload, or {@code null} if not an APP_LOG event
-	 * or payload is absent.
+	 * Returns the log level from the payload, or {@code null} if not an APP_LOG event or
+	 * payload is absent.
 	 * @return the log level, may be {@code null}
 	 */
 	public String logLevel() {

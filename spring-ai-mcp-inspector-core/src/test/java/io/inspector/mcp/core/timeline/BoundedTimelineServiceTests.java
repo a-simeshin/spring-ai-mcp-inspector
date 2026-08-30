@@ -21,7 +21,6 @@ import java.util.List;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
-
 import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -42,7 +41,7 @@ class BoundedTimelineServiceTests {
 				null);
 		this.service.append(event);
 		final List<TimelineEvent> result = this.service
-				.query(TimelineQuery.builder().correlationId(correlationId).build());
+			.query(TimelineQuery.builder().correlationId(correlationId).build());
 		assertThat(result).hasSize(1);
 		assertThat(result.get(0).message()).isEqualTo("hello");
 	}
@@ -53,7 +52,7 @@ class BoundedTimelineServiceTests {
 		this.service.append(TimelineEvent.createLogEvent(correlationId, "INFO", "test", "main", "first", null));
 		this.service.append(TimelineEvent.createLogEvent(correlationId, "INFO", "test", "main", "second", null));
 		final List<TimelineEvent> result = this.service
-				.query(TimelineQuery.builder().correlationId(correlationId).build());
+			.query(TimelineQuery.builder().correlationId(correlationId).build());
 		assertThat(result).hasSize(2);
 		assertThat(result.get(0).message()).isEqualTo("second");
 		assertThat(result.get(1).message()).isEqualTo("first");
@@ -73,16 +72,18 @@ class BoundedTimelineServiceTests {
 
 	@Test
 	void queryByType() {
-		this.service.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "log", null));
+		this.service
+			.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "log", null));
 		final List<TimelineEvent> result = this.service
-				.query(TimelineQuery.builder().eventTypes(List.of(TimelineEventType.APP_LOG)).build());
+			.query(TimelineQuery.builder().eventTypes(List.of(TimelineEventType.APP_LOG)).build());
 		assertThat(result).hasSize(1);
 	}
 
 	@Test
 	void queryByTimeRange() {
 		final Instant now = Instant.now();
-		this.service.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "old", null));
+		this.service
+			.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "old", null));
 		final List<TimelineEvent> result = this.service.query(TimelineQuery.builder().since(now).build());
 		assertThat(result).hasSize(1);
 	}
@@ -94,13 +95,14 @@ class BoundedTimelineServiceTests {
 			this.service.append(TimelineEvent.createLogEvent(correlationId, "INFO", "test", "main", "msg-" + i, null));
 		}
 		final List<TimelineEvent> result = this.service
-				.query(TimelineQuery.builder().correlationId(correlationId).limit(3).build());
+			.query(TimelineQuery.builder().correlationId(correlationId).limit(3).build());
 		assertThat(result).hasSize(3);
 	}
 
 	@Test
 	void clearRemovesAll() {
-		this.service.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "msg", null));
+		this.service
+			.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "msg", null));
 		this.service.clear();
 		assertThat(this.service.size()).isZero();
 	}
@@ -121,22 +123,23 @@ class BoundedTimelineServiceTests {
 	void capacityEviction() {
 		final BoundedTimelineService small = new BoundedTimelineService(3);
 		for (int i = 0; i < 5; i++) {
-			small.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "msg-" + i, null));
+			small.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "msg-" + i,
+					null));
 		}
 		assertThat(small.size()).isEqualTo(3);
 	}
 
 	@Test
 	void constructorRejectsInvalidCapacity() {
-		assertThatThrownBy(() -> new BoundedTimelineService(0))
-				.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> new BoundedTimelineService(0)).isInstanceOf(IllegalArgumentException.class);
 	}
 
 	@Test
 	void defaultConstructorUsesSaneDefaults() {
 		final BoundedTimelineService defaultService = new BoundedTimelineService();
 		assertThat(defaultService.size()).isZero();
-		defaultService.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "msg", null));
+		defaultService
+			.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "msg", null));
 		assertThat(defaultService.size()).isOne();
 	}
 
