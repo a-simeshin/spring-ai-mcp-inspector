@@ -16,6 +16,7 @@
 
 package io.inspector.mcp.core.proxy;
 
+import java.time.Duration;
 import java.util.Optional;
 import java.util.function.Function;
 
@@ -164,15 +165,22 @@ public final class McpProxy {
 				return Mono.empty();
 			}
 			recordOutbound(session, typed, frame);
-			return sendWithOneRetry(session, typed).onErrorResume((err) -> {
-				final ProxyConnectFailure failure = ProxyConnectFailure.classify(err);
-				LOG.warn("proxy[{}] browser->target stream error ({}): {}", session.sessionId(),
-						failure.reason().wire(), err.toString());
-				if (failure.reason() != ProxyConnectFailure.Reason.UNKNOWN) {
-					session.failUpstream(err);
-				}
-				return Mono.empty();
-			});
+			LOG.debug("proxy[{}] forwarding frame: {}", session.sessionId(), typed);
+			return sendWithOneRetry(session, typed).timeout(Duration.ofMinutes(1))
+				.doOnSuccess(v -> LOG.debug("proxy[{}] frame completed: {}", session.sessionId(), typed))
+				.onErrorResume((err) -> {
+					if (err instanceof java.util.concurrent.TimeoutException) {
+						LOG.warn("proxy[{}] sendMessage timed out for frame: {}", session.sessionId(), typed);
+						return Mono.empty();
+					}
+					final ProxyConnectFailure failure = ProxyConnectFailure.classify(err);
+					LOG.warn("proxy[{}] browser->target stream error ({}): {}", session.sessionId(),
+							failure.reason().wire(), err.toString());
+					if (failure.reason() != ProxyConnectFailure.Reason.UNKNOWN) {
+						session.failUpstream(err);
+					}
+					return Mono.empty();
+				});
 		}).subscribe();
 
 		// Route any terminal transport failure (e.g. the upstream MCP server dies
