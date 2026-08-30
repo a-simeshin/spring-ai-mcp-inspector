@@ -162,6 +162,45 @@ class WebMvcAutoConfigurationIT {
 	}
 
 	@Test
+	@DisplayName("JSON-RPC initialize relays the cached handshake result")
+	@Story("JSON-RPC relay")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("After /connect, relaying method initialize returns the server's negotiated protocol version and serverInfo, mirroring the webflux relay")
+	void jsonRpcRelayCallsInitialize() throws Exception {
+		// given: same loopback session setup as the tools/list relay
+		setPort(this.portHolder, this.port);
+		final HttpHeaders jsonHeaders = new HttpHeaders();
+		jsonHeaders.setContentType(MediaType.APPLICATION_JSON);
+		final HttpEntity<String> connectEntity = new HttpEntity<>("{}", jsonHeaders);
+		final ResponseEntity<String> connectResponse = this.restTemplate.exchange(url("/mcp-inspector/api/connect"),
+				HttpMethod.POST, connectEntity, String.class);
+		assertThat(connectResponse.getStatusCode()).as("connect: %s", connectResponse.getBody())
+			.isEqualTo(HttpStatus.OK);
+		final String sessionId = this.objectMapper.readTree(connectResponse.getBody()).path("sessionId").asText(null);
+		assertThat(sessionId).as("sessionId from /connect").isNotBlank();
+
+		// when
+		final Map<String, Object> relayPayload = Map.of("jsonrpc", "2.0", "id", 1, "method", "initialize", "params",
+				Map.of());
+		final HttpEntity<String> relayEntity = new HttpEntity<>(this.objectMapper.writeValueAsString(relayPayload),
+				jsonHeaders);
+		final String jsonrpcUri = UriComponentsBuilder.fromUriString(url("/mcp-inspector/api/jsonrpc"))
+			.queryParam("sessionId", sessionId)
+			.build()
+			.toUriString();
+		final ResponseEntity<String> jsonRpcResponse = this.restTemplate.exchange(jsonrpcUri, HttpMethod.POST,
+				relayEntity, String.class);
+
+		// then: the cached InitializeResult comes back through the relay
+		assertThat(jsonRpcResponse.getStatusCode()).as("jsonrpc: %s", jsonRpcResponse.getBody())
+			.isEqualTo(HttpStatus.OK);
+		final JsonNode result = this.objectMapper.readTree(jsonRpcResponse.getBody()).path("result");
+		assertThat(result.path("protocolVersion").asText()).isNotBlank();
+		assertThat(result.path("serverInfo").path("name").asText()).isNotBlank();
+		assertThat(result.path("capabilities").isObject()).isTrue();
+	}
+
+	@Test
 	@DisplayName("hashed bundle assets are served long-lived, not no-store")
 	@Story("Static asset caching")
 	@Severity(SeverityLevel.CRITICAL)

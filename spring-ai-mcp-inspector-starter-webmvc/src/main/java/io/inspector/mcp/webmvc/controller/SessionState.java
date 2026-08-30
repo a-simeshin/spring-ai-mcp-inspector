@@ -17,13 +17,10 @@
 package io.inspector.mcp.webmvc.controller;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import io.modelcontextprotocol.client.McpSyncClient;
-import io.modelcontextprotocol.spec.McpSchema;
 
 import io.inspector.mcp.core.client.PendingServerRequests;
 import io.inspector.mcp.core.dto.RootDto;
@@ -32,7 +29,7 @@ import io.inspector.mcp.core.oauth.OAuthTokenResponse;
 /**
  * Servlet-stack per-session state. Holds the loopback MCP client, the mutable list of
  * roots advertised to the server, the pending server-to-client request bridge, the
- * in-flight OAuth state / token (Auth Debugger), and the initialize-handshake snapshot.
+ * in-flight OAuth state / token (Auth Debugger).
  *
  * @author Artem Simeshin
  */
@@ -53,8 +50,6 @@ final class SessionState {
 	private volatile String oauthRedirectUri;
 
 	private volatile OAuthTokenResponse oauthToken;
-
-	private volatile InitializeSnapshot initializeSnapshot;
 
 	SessionState(final McpSyncClient client) {
 		this.client = client;
@@ -119,14 +114,6 @@ final class SessionState {
 		this.oauthToken = value;
 	}
 
-	InitializeSnapshot initializeSnapshot() {
-		return this.initializeSnapshot;
-	}
-
-	void initializeSnapshot(final InitializeSnapshot value) {
-		this.initializeSnapshot = value;
-	}
-
 	/**
 	 * Tears the loopback client down and waits for it. Plain {@code close()} would not
 	 * do: {@code McpTransport.close()} is {@code closeGracefully().subscribe()}, so the
@@ -164,60 +151,6 @@ final class SessionState {
 				/* best-effort */
 			}
 		}
-	}
-
-	/**
-	 * Immutable snapshot of the MCP initialize handshake: what the loopback client
-	 * requested, what the server negotiated, and the server's identity / capabilities.
-	 *
-	 * @param clientRequestedVersion the protocol version the loopback client sends in the
-	 * {@code InitializeRequest}
-	 * @param negotiatedVersion the protocol version the server responded with in the
-	 * {@code InitializeResult}
-	 * @param serverName the server's name ({@code serverInfo.name()})
-	 * @param serverVersion the server's version ({@code serverInfo.version()})
-	 * @param capabilities a map of the server's advertised capabilities
-	 */
-	record InitializeSnapshot(String clientRequestedVersion, String negotiatedVersion, String serverName,
-			String serverVersion, Map<String, Object> capabilities) {
-
-		/**
-		 * Builds a snapshot from the server's {@link InitializeResult}.
-		 * @param result the raw result returned by the loopback client's
-		 * {@code initialize()} call; may be {@code null} (returns {@code null})
-		 * @return a new snapshot with extracted fields, or {@code null} if result is
-		 * {@code null}
-		 */
-		static InitializeSnapshot from(final McpSchema.InitializeResult result) {
-			if (result == null) {
-				return null;
-			}
-			final Map<String, Object> caps = new LinkedHashMap<>();
-			if (result.capabilities() != null) {
-				final McpSchema.ServerCapabilities sc = result.capabilities();
-				if (sc.completions() != null) {
-					caps.put("completions", sc.completions());
-				}
-				if (sc.experimental() != null) {
-					caps.put("experimental", sc.experimental());
-				}
-				if (sc.logging() != null) {
-					caps.put("logging", sc.logging());
-				}
-				if (sc.prompts() != null) {
-					caps.put("prompts", sc.prompts());
-				}
-				if (sc.resources() != null) {
-					caps.put("resources", sc.resources());
-				}
-				if (sc.tools() != null) {
-					caps.put("tools", sc.tools());
-				}
-			}
-			return new InitializeSnapshot(result.protocolVersion(), result.protocolVersion(),
-					result.serverInfo().name(), result.serverInfo().version(), caps);
-		}
-
 	}
 
 }
