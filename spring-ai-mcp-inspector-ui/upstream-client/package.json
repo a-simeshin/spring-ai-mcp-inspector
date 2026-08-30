@@ -12,7 +12,10 @@
     "url": "https://github.com/modelcontextprotocol/inspector",
     "directory": "clients/web"
   },
-  "files": ["dist", "LICENSE"],
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "vite --port 6274",
     "build": "vite build",
@@ -31,9 +34,14 @@
     "@mantine/notifications": "^8.3.17",
     "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/core": "2.0.0",
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@modelcontextprotocol/server": "2.0.0",
+    "@napi-rs/keyring": "^1.3.0",
+    "@testing-library/dom": "^10.4.1",
     "ajv": "^8.17.1",
     "papaparse": "^5.5.4",
+    "pino": "^10.3.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-icons": "^5.6.0",
@@ -48,9 +56,9 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.2",
-    "@testing-library/user-event": "^14.6.1",
+    "@testing-library/user-event": "^14.6.6",
     "@types/node": "^24.12.4",
     "@types/papaparse": "^5.5.2",
     "@types/react": "^19.2.14",

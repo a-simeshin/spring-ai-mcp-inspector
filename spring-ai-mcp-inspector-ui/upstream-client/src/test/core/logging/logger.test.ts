@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { silentLogger } from "../../../../../../core/logging/logger.js";
+import { silentLogger } from "../../../../core/logging/logger.js";
 
 describe("silentLogger", () => {
   it("reports silent level", () => {
