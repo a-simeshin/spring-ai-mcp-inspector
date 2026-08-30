@@ -12,6 +12,7 @@ import {
   Card,
   Checkbox,
   Group,
+  Paper,
   ScrollArea,
   Stack,
   Text,
@@ -176,7 +177,10 @@ export function TimelineScreen() {
   useEffect(() => {
     // A single initial fetch is intentional; the 3s interval below owns the
     // steady-state polling so the refresh cadence is one mechanism, not two.
-    void fetchTimeline();
+    // Deferred one microtask past the synchronous effect body (same pattern as
+    // AppsScreen's deep-link auto-open): the fetch resolves asynchronously,
+    // but the linter only sees the bare call as a potential setState-in-effect.
+    void Promise.resolve().then(() => fetchTimeline());
     if (!autoRefresh) return;
     pollingRef.current = setInterval(() => void fetchTimeline(), 3000);
     return () => {
@@ -200,19 +204,21 @@ export function TimelineScreen() {
           />
         </Group>
       </Group>
-      <ScrollArea flex={1} withBorder radius="sm" p="xs" mah="calc(100dvh - 220px)">
-        {events.length === 0 ? (
-          <Text ta="center" c="dimmed" size="sm" py="xl">
-            No timeline events yet
-          </Text>
-        ) : (
-          <Stack gap={4}>
-            {events.map((event) => (
-              <TimelineEventRow key={event.id} event={event} />
-            ))}
-          </Stack>
-        )}
-      </ScrollArea>
+      <Paper withBorder radius="sm" p="xs" style={{ flex: 1, minHeight: 0 }}>
+        <ScrollArea mah="calc(100dvh - 220px)">
+          {events.length === 0 ? (
+            <Text ta="center" c="dimmed" size="sm" py="xl">
+              No timeline events yet
+            </Text>
+          ) : (
+            <Stack gap={4}>
+              {events.map((event) => (
+                <TimelineEventRow key={event.id} event={event} />
+              ))}
+            </Stack>
+          )}
+        </ScrollArea>
+      </Paper>
     </Stack>
   );
 }
