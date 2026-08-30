@@ -45,6 +45,7 @@ import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.shutdown.McpServerTransportDrain;
+import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.webflux.filter.InspectorAuthWebFilter;
 import io.inspector.mcp.webflux.proxy.ProxyAuthWebFilter;
@@ -195,8 +196,9 @@ public class McpInspectorWebFluxAutoConfiguration {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public McpProxy mcpInspectorMcpProxy(final JsonMapper objectMapper) {
-		return new McpProxy(objectMapper);
+	public McpProxy mcpInspectorMcpProxy(final JsonMapper objectMapper,
+			final ObjectProvider<McpTrafficRecorder> trafficRecorder) {
+		return new McpProxy(objectMapper, trafficRecorder.getIfAvailable());
 	}
 
 	@Bean
