@@ -3,6 +3,9 @@ spring:
     name: mcp-inspector-demo
   ai:
     mcp:
+      inspector:
+        timeline:
+          enabled: true
       server:
         name: mcp-inspector-demo
         version: 0.1.0
