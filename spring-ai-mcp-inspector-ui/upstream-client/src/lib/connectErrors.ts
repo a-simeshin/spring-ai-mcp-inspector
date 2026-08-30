@@ -16,6 +16,7 @@ export type ConnectFailureReason =
   | "timeout"
   | "connection_refused"
   | "dns"
+  | "unauthorized"
   | "unknown";
 
 export interface ConnectFailure {
@@ -31,6 +32,7 @@ const CONNECT_FAILURE_REASONS: readonly ConnectFailureReason[] = [
   "timeout",
   "connection_refused",
   "dns",
+  "unauthorized",
   "unknown",
 ];
 
@@ -105,10 +107,28 @@ export async function parseConnectFailureResponse(
 }
 
 /**
+ * Checks whether an unknown error represents an HTTP-level 401 from the SDK.
+ * Covered SDK error types: SseError (SSE), StreamableHTTPError (streamable HTTP),
+ * UnauthorizedError (OAuth). Other error types with .code === 401 are also
+ * treated as auth failures for the purpose of displaying the correct banner.
+ */
+export function isHttp401Error(error: unknown): boolean {
+  if (error && typeof error === "object") {
+    const err = error as Record<string, unknown>;
+    const code = err.code;
+    return typeof code === "number" && code === 401;
+  }
+  return false;
+}
+
+/**
  * Maps any connect failure to the structured contract so the UI always has a
  * reason + message to show. Structured failures keep their classification;
  * everything else (network errors, SDK errors, unexpected shapes) is
  * reported as `unknown` with the error's own message.
+ *
+ * SDK-level HTTP 401 errors (SseError, StreamableHTTPError, etc.) are mapped
+ * to the `unauthorized` reason so the UI can show a dedicated auth banner.
  */
 export function connectionFailureFromError(error: unknown): ConnectFailure {
   if (isConnectFailedError(error)) {
@@ -117,6 +137,14 @@ export function connectionFailureFromError(error: unknown): ConnectFailure {
       reason: error.reason,
       message: error.message,
       retryable: error.retryable,
+    };
+  }
+  if (isHttp401Error(error)) {
+    return {
+      code: CONNECT_FAILED_ERROR_CODE,
+      reason: "unauthorized",
+      message: error instanceof Error ? error.message : String(error),
+      retryable: true,
     };
   }
   return {
@@ -136,6 +164,8 @@ export function humanReadableReason(reason: ConnectFailureReason): string {
       return "Connection refused (connection_refused)";
     case "dns":
       return "Could not resolve the host (DNS)";
+    case "unauthorized":
+      return "Authentication required (unauthorized)";
     case "unknown":
       return "Unknown error (unknown)";
   }
