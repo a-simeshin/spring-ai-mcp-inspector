@@ -363,6 +363,87 @@ class McpTrafficRecorderTests {
 			assertThat(req2Event.correlationId()).isNotEqualTo(req1Event.correlationId());
 		}
 
+		@Test
+		@DisplayName("same JSON-RPC id in different sessions are correlated independently")
+		void sameIdAcrossSessionsIsIndependent() throws Exception {
+			// given - two sessions each issue a request with id=1
+			final ObjectNode frame1 = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.put("method", "tools/list");
+			final JSONRPCMessage typed1 = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					frame1.toString());
+
+			final ObjectNode frame2 = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.put("method", "resources/list");
+			final JSONRPCMessage typed2 = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					frame2.toString());
+
+			// when
+			McpTrafficRecorderTests.this.recorder.recordOutbound("session-a", typed1, frame1);
+			McpTrafficRecorderTests.this.recorder.recordOutbound("session-b", typed2, frame2);
+
+			// then - both pending, no collision
+			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(2);
+
+			// record a response for session-a
+			final ObjectNode resA = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.set("result", McpTrafficRecorderTests.this.mapper.createObjectNode());
+			final JSONRPCMessage resTypedA = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					resA.toString());
+			McpTrafficRecorderTests.this.recorder.recordInbound("session-a", resTypedA, resA);
+			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(1);
+
+			// record a response for session-b
+			final ObjectNode resB = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.set("result", McpTrafficRecorderTests.this.mapper.createObjectNode());
+			final JSONRPCMessage resTypedB = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					resB.toString());
+			McpTrafficRecorderTests.this.recorder.recordInbound("session-b", resTypedB, resB);
+			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(0);
+
+			// verify: session-a request/response share correlation
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			final TimelineEvent reqA = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_REQUEST)
+				.filter((e) -> "session-a".equals(e.sessionId()))
+				.findFirst()
+				.orElseThrow();
+			final TimelineEvent resAevent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.filter((e) -> "session-a".equals(e.sessionId()))
+				.findFirst()
+				.orElseThrow();
+			assertThat(resAevent.correlationId()).as("session-a pair").isEqualTo(reqA.correlationId());
+
+			// session-b request/response share correlation
+			final TimelineEvent reqB = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_REQUEST)
+				.filter((e) -> "session-b".equals(e.sessionId()))
+				.findFirst()
+				.orElseThrow();
+			final TimelineEvent resBevent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.filter((e) -> "session-b".equals(e.sessionId()))
+				.findFirst()
+				.orElseThrow();
+			assertThat(resBevent.correlationId()).as("session-b pair").isEqualTo(reqB.correlationId());
+
+			// the two sessions have different correlations
+			assertThat(resAevent.correlationId()).as("correlations differ between sessions")
+				.isNotEqualTo(resBevent.correlationId());
+		}
+
 	}
 
 	@Nested

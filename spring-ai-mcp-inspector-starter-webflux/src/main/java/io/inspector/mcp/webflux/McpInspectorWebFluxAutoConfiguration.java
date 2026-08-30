@@ -21,6 +21,7 @@ import java.util.List;
 import io.modelcontextprotocol.spec.McpServerTransportProviderBase;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
@@ -46,12 +47,14 @@ import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.shutdown.McpServerTransportDrain;
 import io.inspector.mcp.core.timeline.McpTrafficRecorder;
+import io.inspector.mcp.core.timeline.TimelineService;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.webflux.filter.InspectorAuthWebFilter;
 import io.inspector.mcp.webflux.proxy.ProxyAuthWebFilter;
 import io.inspector.mcp.webflux.proxy.ProxyHandler;
 import io.inspector.mcp.webflux.router.InspectorHandler;
 import io.inspector.mcp.webflux.router.InspectorRouterConfig;
+import io.inspector.mcp.webflux.router.TimelineHandler;
 
 /**
  * Reactive (WebFlux) auto-configuration for the Spring AI MCP Inspector.
@@ -215,6 +218,20 @@ public class McpInspectorWebFluxAutoConfiguration {
 	public ProxyAuthWebFilter mcpInspectorProxyAuthWebFilter(final McpInspectorProperties properties,
 			final InspectorAuthTokenProvider tokenProvider) {
 		return new ProxyAuthWebFilter(properties, tokenProvider);
+	}
+
+	/**
+	 * Reactive handler for {@code GET ${path}/api/timeline}, mirroring the WebMVC
+	 * {@code TimelineController}: active only when the timeline subsystem is enabled (the
+	 * same {@code spring.ai.mcp.inspector.timeline.enabled} flag gates the
+	 * {@link TimelineService} bean in the core auto-configuration).
+	 * @param timelineService the shared timeline service
+	 * @return the timeline handler
+	 */
+	@Bean
+	@ConditionalOnBean(TimelineService.class)
+	public TimelineHandler mcpInspectorTimelineHandler(final TimelineService timelineService) {
+		return new TimelineHandler(timelineService);
 	}
 
 	@Bean

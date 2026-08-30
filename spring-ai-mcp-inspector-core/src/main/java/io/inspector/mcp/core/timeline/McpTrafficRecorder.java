@@ -37,8 +37,13 @@ import tools.jackson.databind.JsonNode;
  * For every new top-level request (a JSON-RPC request with an {@code id}), the recorder
  * generates a correlation ID, stores it in MDC under {@code mcp.correlationId}, and
  * records a {@link TimelineEventType#MCP_JSONRPC_REQUEST} event. When the matching
- * response arrives, it looks up the correlation ID by the message ID, restores it in MDC,
- * and records a {@link TimelineEventType#MCP_JSONRPC_RESPONSE} event.
+ * response arrives, it looks up the correlation ID by the session and message ID,
+ * restores it in MDC, and records a {@link TimelineEventType#MCP_JSONRPC_RESPONSE} event.
+ *
+ * <p>
+ * The correlation key is {@code (sessionId, requestId)} rather than {@code requestId}
+ * alone, so two concurrent proxy sessions that each issue a request with JSON-RPC id
+ * {@code 1} do not corrupt each other's correlation.
  *
  * <p>
  * Notifications (JSON-RPC messages without an {@code id}) are recorded as
@@ -61,7 +66,7 @@ public final class McpTrafficRecorder {
 
 	private final TimelineService timelineService;
 
-	private final ConcurrentHashMap<Object, String> requestCorrelations = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<CorrelationKey, String> requestCorrelations = new ConcurrentHashMap<>();
 
 	/**
 	 * Creates a new traffic recorder.
@@ -93,7 +98,7 @@ public final class McpTrafficRecorder {
 			final Object id = request.id();
 			final String correlationId = UUID.randomUUID().toString();
 			if (id != null) {
-				this.requestCorrelations.put(id, correlationId);
+				this.requestCorrelations.put(new CorrelationKey(sessionId, id), correlationId);
 			}
 			try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, correlationId)) {
 				final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
@@ -131,7 +136,8 @@ public final class McpTrafficRecorder {
 		}
 		if (message instanceof JSONRPCResponse response) {
 			final Object id = response.id();
-			final String correlationId = (id != null) ? this.requestCorrelations.remove(id) : null;
+			final String correlationId = (id != null)
+					? this.requestCorrelations.remove(new CorrelationKey(sessionId, id)) : null;
 			if (correlationId == null) {
 				// No matching request recorded (e.g. server-initiated response),
 				// or the event was evicted. Fallback to a fresh ID.
@@ -179,6 +185,23 @@ public final class McpTrafficRecorder {
 	 */
 	public int pendingCorrelations() {
 		return this.requestCorrelations.size();
+	}
+
+	/**
+	 * A session-scoped correlation key. Uses {@code (sessionId, requestId)} so that two
+	 * proxy sessions with the same JSON-RPC id do not collide.
+	 *
+	 * @param sessionId the proxy session identifier, normalised to empty when
+	 * {@code null}
+	 * @param requestId the JSON-RPC message id
+	 */
+	record CorrelationKey(String sessionId, Object requestId) {
+
+		CorrelationKey {
+			// Normalise null sessionId to empty string so the map key is consistent
+			sessionId = (sessionId != null) ? sessionId : "";
+		}
+
 	}
 
 }
