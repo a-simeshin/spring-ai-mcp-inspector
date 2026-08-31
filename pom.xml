@@ -80,11 +80,12 @@
 
         <!-- Allure test reporting. allure.version: latest stable Allure 2.x (known-good
              recent release). aspectj.version MUST match the aspectjweaver version managed
-             by spring-boot-dependencies (3.5.15 → 1.9.25.1) so the -javaagent jar path on
-             surefire/failsafe argLine resolves to a real jar in the local repository. -->
+             by spring-boot-dependencies (3.5.15 -> 1.9.25.1) so the -javaagent jar path on
+             surefire/failsafe argLine resolves to a real jar in the local repository.
+             allure-maven-plugin bumped to 3.0.3 (latest). -->
         <allure.version>2.29.1</allure.version>
         <aspectj.version>1.9.25.1</aspectj.version>
-        <allure-maven-plugin.version>2.15.2</allure-maven-plugin.version>
+        <allure-maven-plugin.version>3.0.3</allure-maven-plugin.version>
 
         <!-- Browser automation for the Selenide UI tests. Declared here because the
              demo split put them on three classpaths at once (demo-app, demo-webmvc,
