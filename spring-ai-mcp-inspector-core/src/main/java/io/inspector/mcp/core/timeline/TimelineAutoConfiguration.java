@@ -114,6 +114,20 @@ public class TimelineAutoConfiguration {
 	}
 
 	/**
+	 * Runs the {@code @Mcp*} handler-to-client correlation diagnostics at startup and
+	 * emits structured diagnostic events into the timeline. Active only when client
+	 * capture is enabled, because the diagnostics are meaningful only for apps that use
+	 * Spring AI MCP client annotations.
+	 * @param timelineService the timeline service to append diagnostic events to
+	 * @return a new {@link ClientDiagnosticsRecorder}
+	 */
+	@Bean
+	@ConditionalOnBean(McpClientTrafficRecorder.class)
+	public ClientDiagnosticsRecorder mcpInspectorClientDiagnosticsRecorder(final TimelineService timelineService) {
+		return new ClientDiagnosticsRecorder(timelineService);
+	}
+
+	/**
 	 * Registers the {@link TimelineAppender} with Logback's root logger, wrapped in an
 	 * {@link AsyncAppender} for non-blocking behaviour.
 	 * @param timelineService the timeline service to forward events to
