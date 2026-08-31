@@ -3541,17 +3541,17 @@ class InspectorUiIT {
 				bootAndCreateProfile(tokenServer);
 				connectTo(stub);
 
-				// then — the retried round-trip reached Connected.
-				$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
-
-				// and — exactly one refresh: a fresh client_credentials exchange,
-				// never a refresh_token grant, and the upstream saw the original
-				// token then the refreshed one.
+				// and - cheap assertions first: failing here means the retry
+				// mechanism didn't work as expected, and the 30s UI wait below
+				// would have masked the real cause.
 				Assertions.assertEquals(2, tokenServer.requestCount(), "token exchanges");
 				Assertions.assertFalse(tokenServer.anyRequestWithField("refresh_token"), "no refresh_token grant");
 				Assertions.assertEquals(
 						List.of("Bearer " + E2eTokenServer.tokenValue(1), "Bearer " + E2eTokenServer.tokenValue(2)),
 						stub.authorizations().subList(0, 2), "Authorization per upstream message POST");
+
+				// then - the retried round-trip reached Connected.
+				$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
 			}
 		}
 
