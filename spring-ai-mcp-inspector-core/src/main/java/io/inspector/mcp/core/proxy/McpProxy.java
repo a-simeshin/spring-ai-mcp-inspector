@@ -131,6 +131,12 @@ public final class McpProxy {
 			}
 		}).subscribe();
 
+		// When the session closes, drop its pending request correlations so abandoned
+		// calls leave no residue in the recorder.
+		if (this.trafficRecorder != null) {
+			session.closeSignal().subscribe((ignored) -> this.trafficRecorder.clearSession(session.sessionId()));
+		}
+
 		// Route any terminal transport failure (e.g. the upstream MCP server dies
 		// mid-session) onto the targetToBrowser sink so the per-request POST awaiter
 		// and the SSE backchannel subscriber fail fast instead of blocking to the

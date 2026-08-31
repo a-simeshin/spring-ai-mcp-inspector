@@ -51,6 +51,7 @@ import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.shutdown.McpServerTransportDrain;
+import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 import io.inspector.mcp.core.timeline.TimelineService;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.webmvc.controller.InspectorConfigController;
@@ -233,8 +234,9 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public McpProxy mcpInspectorMcpProxy(final JsonMapper objectMapper) {
-		return new McpProxy(objectMapper);
+	public McpProxy mcpInspectorMcpProxy(final JsonMapper objectMapper,
+			final ObjectProvider<McpTrafficRecorder> trafficRecorder) {
+		return new McpProxy(objectMapper, trafficRecorder.getIfAvailable());
 	}
 
 	@Bean

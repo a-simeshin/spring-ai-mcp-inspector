@@ -26,6 +26,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpMethod;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
@@ -40,6 +41,7 @@ import io.inspector.mcp.webflux.proxy.ProxyHandler;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.mock;
 
 /**
@@ -79,6 +81,20 @@ class InspectorRouterConfigTests {
 		return properties;
 	}
 
+	@SuppressWarnings("unchecked")
+	private static ObjectProvider<TimelineHandler> emptyTimelineProvider() {
+		final ObjectProvider<TimelineHandler> provider = mock(ObjectProvider.class);
+		given(provider.getIfAvailable()).willReturn(null);
+		return provider;
+	}
+
+	@SuppressWarnings("unchecked")
+	private static ObjectProvider<TimelineHandler> timelineProvider(final TimelineHandler handler) {
+		final ObjectProvider<TimelineHandler> provider = mock(ObjectProvider.class);
+		given(provider.getIfAvailable()).willReturn(handler);
+		return provider;
+	}
+
 	private static ServerRequest request(final HttpMethod method, final String uri) {
 		final MockServerHttpRequest mock = MockServerHttpRequest.method(method, uri).build();
 		final MockServerWebExchange exchange = MockServerWebExchange.from(mock);
@@ -106,8 +122,8 @@ class InspectorRouterConfigTests {
 		@Description("inspectorRouter routes GET ${path}/api/config to the config handler at the default prefix")
 		void configRoute_matchesConfiguredPath() {
 			// given
-			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config
-				.inspectorRouter(InspectorRouterConfigTests.this.handler, properties("/mcp-inspector"));
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/mcp-inspector"));
 
 			// when
 			final boolean matched = matches(router, request(HttpMethod.GET, "/mcp-inspector/api/config"));
@@ -122,8 +138,8 @@ class InspectorRouterConfigTests {
 		@Description("inspectorRouter routes GET ${path}/api/introspection to the introspection handler at the default prefix")
 		void introspectionRoute_matchesConfiguredPath() {
 			// given
-			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config
-				.inspectorRouter(InspectorRouterConfigTests.this.handler, properties("/mcp-inspector"));
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/mcp-inspector"));
 
 			// when
 			final boolean matched = matches(router, request(HttpMethod.GET, "/mcp-inspector/api/introspection"));
@@ -138,8 +154,8 @@ class InspectorRouterConfigTests {
 		@Description("inspectorRouter re-mounts every route under a custom path prefix")
 		void apiRoutes_matchUnderCustomPrefix() {
 			// given
-			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config
-				.inspectorRouter(InspectorRouterConfigTests.this.handler, properties("/custom"));
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/custom"));
 
 			// when & then
 			assertThat(matches(router, request(HttpMethod.GET, "/custom/api/config"))).isTrue();
@@ -154,8 +170,8 @@ class InspectorRouterConfigTests {
 		@Description("inspectorRouter does NOT match the default prefix once a custom path is configured")
 		void defaultPrefix_doesNotMatchAfterRemount() {
 			// given
-			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config
-				.inspectorRouter(InspectorRouterConfigTests.this.handler, properties("/custom"));
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/custom"));
 
 			// when
 			final boolean matched = matches(router, request(HttpMethod.GET, "/mcp-inspector/api/config"));
@@ -170,8 +186,8 @@ class InspectorRouterConfigTests {
 		@Description("inspectorRouter keeps the top-level /oauth/callback routes regardless of the configured prefix")
 		void oauthCallbackRoutes_matchAtTopLevel() {
 			// given
-			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config
-				.inspectorRouter(InspectorRouterConfigTests.this.handler, properties("/custom"));
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/custom"));
 
 			// when & then
 			assertThat(matches(router, request(HttpMethod.GET, "/oauth/callback"))).isTrue();
@@ -184,8 +200,8 @@ class InspectorRouterConfigTests {
 		@Description("The root redirect prefixes Location with the request's base path — the framework does not do it for a manual header")
 		void rootRedirect_underBasePath_prefixesLocation() {
 			// given
-			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config
-				.inspectorRouter(InspectorRouterConfigTests.this.handler, properties("/mcp-inspector"));
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/mcp-inspector"));
 			final ServerRequest request = requestWithContextPath(HttpMethod.GET, "/app/mcp-inspector", "/app");
 
 			// when
@@ -202,8 +218,8 @@ class InspectorRouterConfigTests {
 		@Description("The root redirect stays unprefixed for a root-mounted application")
 		void rootRedirect_withoutBasePath_keepsPlainLocation() {
 			// given
-			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config
-				.inspectorRouter(InspectorRouterConfigTests.this.handler, properties("/mcp-inspector"));
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/mcp-inspector"));
 			final ServerRequest request = request(HttpMethod.GET, "/mcp-inspector/");
 
 			// when
@@ -220,14 +236,53 @@ class InspectorRouterConfigTests {
 		@Description("inspectorRouter does not match a method/path that is not registered")
 		void unregisteredPath_doesNotMatch() {
 			// given
-			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config
-				.inspectorRouter(InspectorRouterConfigTests.this.handler, properties("/mcp-inspector"));
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/mcp-inspector"));
 
 			// when
 			final boolean matched = matches(router, request(HttpMethod.POST, "/mcp-inspector/api/config"));
 
 			// then — config is a GET route only, POST must not match
 			assertThat(matched).isFalse();
+		}
+
+		@Test
+		@Story("Timeline routing")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("inspectorRouter serves GET ${path}/api/timeline through the timeline handler when the timeline subsystem is enabled")
+		void timelineRoute_isServedByTimelineHandler() {
+			// given
+			final TimelineHandler timeline = mock(TimelineHandler.class);
+			given(timeline.query(any())).willReturn(ServerResponse.ok().build());
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
+					InspectorRouterConfigTests.this.handler, timelineProvider(timeline), properties("/mcp-inspector"));
+
+			// when
+			final ServerRequest request = request(HttpMethod.GET, "/mcp-inspector/api/timeline");
+			final ServerResponse response = router.route(request)
+				.flatMap((handlerFunction) -> handlerFunction.handle(request))
+				.block();
+
+			// then - the timeline handler answered, not the resource catch-all
+			assertThat(response).isNotNull();
+			then(timeline).should().query(request);
+		}
+
+		@Test
+		@Story("Timeline routing")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("inspectorRouter under a custom path mounts the timeline route on the same prefix")
+		void timelineRoute_matchesUnderCustomPrefix() {
+			// given
+			final TimelineHandler timeline = mock(TimelineHandler.class);
+			given(timeline.query(any())).willReturn(ServerResponse.ok().build());
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
+					InspectorRouterConfigTests.this.handler, timelineProvider(timeline), properties("/custom"));
+
+			// when & then
+			final ServerRequest request = request(HttpMethod.GET, "/custom/api/timeline");
+			final boolean handled = router.route(request).blockOptional().isPresent();
+			assertThat(handled).isTrue();
 		}
 
 	}

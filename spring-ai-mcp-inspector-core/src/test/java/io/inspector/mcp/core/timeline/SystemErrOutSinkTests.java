@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.willAnswer;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mock;
 
 /**
@@ -146,6 +147,19 @@ class SystemErrOutSinkTests {
 			System.out.write(data, 0, data.length);
 		}
 		// Without a newline, the line buffer is never flushed
+		assertThat(this.captured).isEmpty();
+	}
+
+	@Test
+	void timelineServiceFailureDoesNotPropagate() {
+		// given — a timeline service that throws
+		final TimelineService failing = mock(TimelineService.class);
+		willThrow(new RuntimeException("timeline unavailable")).given(failing).append(any());
+		try (SystemErrOutSink sink = new SystemErrOutSink(failing)) {
+			// when — the sink must not throw
+			System.out.println("hello");
+		}
+		// then — no exception propagated, capture didn't happen
 		assertThat(this.captured).isEmpty();
 	}
 

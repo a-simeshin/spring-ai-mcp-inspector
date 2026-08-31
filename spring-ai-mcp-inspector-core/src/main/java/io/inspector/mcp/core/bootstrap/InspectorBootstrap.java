@@ -45,6 +45,8 @@ public class InspectorBootstrap {
 
 	private String proxyAddress;
 
+	private String inspectorPath;
+
 	private String detectedTransport;
 
 	private String detectedUrl;
@@ -73,6 +75,14 @@ public class InspectorBootstrap {
 
 	public void setProxyAddress(final String proxyAddress) {
 		this.proxyAddress = proxyAddress;
+	}
+
+	public String getInspectorPath() {
+		return this.inspectorPath;
+	}
+
+	public void setInspectorPath(final String inspectorPath) {
+		this.inspectorPath = inspectorPath;
 	}
 
 	public String getDetectedTransport() {

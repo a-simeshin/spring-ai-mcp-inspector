@@ -125,6 +125,23 @@ class TimelineAppenderTests {
 		assertThat(events.get(0).throwable()).isNotNull();
 	}
 
+	@Test
+	void timelineServiceFailureDoesNotPropagate() {
+		// given — a timeline service that throws
+		final TimelineService failing = mock(TimelineService.class);
+		org.mockito.BDDMockito.willThrow(new RuntimeException("timeline unavailable"))
+			.given(failing)
+			.append(org.mockito.ArgumentMatchers.any());
+		final TimelineAppender safeAppender = new TimelineAppender(failing);
+		final ILoggingEvent event = createLogEvent("test.Logger", Level.INFO, "hello", null, Map.of());
+
+		// when — the appender must not throw
+		safeAppender.append(event);
+
+		// then — no exception propagated
+		assertThat(this.timelineService.size()).isZero();
+	}
+
 	static ILoggingEvent createLogEvent(final String loggerName, final Level level, final String message,
 			final IThrowableProxy throwableProxy, final Map<String, String> mdc) {
 		final ILoggingEvent event = mock(ILoggingEvent.class);

@@ -32,9 +32,10 @@ import io.inspector.mcp.core.config.McpInspectorProperties;
  * Auto-configuration for the timeline event capturing subsystem.
  *
  * <p>
- * Registers the {@link BoundedTimelineService}, the {@link TimelineAppender} (wrapped in
- * a Logback {@link AsyncAppender}), and the {@link SystemErrOutSink} when the
- * corresponding feature flags are enabled.
+ * Registers the {@link BoundedTimelineService}, the {@link McpTrafficRecorder} consumed
+ * by the proxy, the {@link TimelineAppender} (wrapped in a Logback
+ * {@link AsyncAppender}), and the {@link SystemErrOutSink} when the corresponding feature
+ * flags are enabled.
  *
  * <p>
  * This configuration is imported by both the WebMVC and WebFlux starter
@@ -61,6 +62,23 @@ public class TimelineAutoConfiguration {
 	@ConditionalOnMissingBean(TimelineService.class)
 	public BoundedTimelineService mcpInspectorTimelineService() {
 		return new BoundedTimelineService(this.properties.getTimeline().getCapacity());
+	}
+
+	/**
+	 * The shared traffic recorder wired into the proxy when the timeline is enabled and
+	 * traffic recording is not switched off. Absent (proxy runs without recording) when
+	 * {@code spring.ai.mcp.inspector.timeline.enabled} is unset or {@code false}, or when
+	 * {@code spring.ai.mcp.inspector.timeline.traffic-enabled=false}; the proxy falls
+	 * back to the no-recorder constructor in that case.
+	 * @param timelineService the timeline service to append events to
+	 * @return a new {@link McpTrafficRecorder}
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline", name = "traffic-enabled", havingValue = "true",
+			matchIfMissing = true)
+	public McpTrafficRecorder mcpInspectorMcpTrafficRecorder(final TimelineService timelineService) {
+		return new McpTrafficRecorder(timelineService);
 	}
 
 	/**

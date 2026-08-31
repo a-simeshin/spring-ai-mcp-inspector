@@ -17,9 +17,11 @@
 package io.inspector.mcp.core.timeline;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
@@ -141,6 +143,126 @@ class BoundedTimelineServiceTests {
 		defaultService
 			.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "msg", null));
 		assertThat(defaultService.size()).isOne();
+	}
+
+	@Test
+	@DisplayName("returns chronological newest-first even with out-of-order appends")
+	void outOfOrderAppendsSortByTimestamp() {
+		final Instant older = Instant.now().minusSeconds(30);
+		final Instant newer = Instant.now();
+		// append newer first, then older: insertion order must not leak
+		this.service.append(new TimelineEvent("a", "c1", null, TimelineEventType.APP_LOG, newer, null));
+		this.service.append(new TimelineEvent("b", "c2", null, TimelineEventType.APP_LOG, older, null));
+		final List<TimelineEvent> result = this.service.query(TimelineQuery.all());
+		assertThat(result).extracting(TimelineEvent::id).containsExactly("a", "b");
+	}
+
+	@Test
+	@DisplayName("concurrent appends still produce timestamp-ordered results")
+	void concurrentAppendsRemainOrdered() throws Exception {
+		final int n = 80;
+		final Instant base = Instant.now();
+		final java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(8);
+		final java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+		final List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
+		for (int i = 0; i < n; i++) {
+			final int seq = i;
+			futures.add(pool.submit(() -> {
+				try {
+					start.await();
+				}
+				catch (final InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+				// timestamps derived from seq, but the append order is racy
+				this.service.append(new TimelineEvent("id-" + seq, "c", null, TimelineEventType.APP_LOG,
+						base.plusSeconds(seq), null));
+				return null;
+			}));
+		}
+		start.countDown();
+		for (final java.util.concurrent.Future<?> f : futures) {
+			f.get(10, java.util.concurrent.TimeUnit.SECONDS);
+		}
+		pool.shutdown();
+
+		final List<TimelineEvent> result = this.service.query(TimelineQuery.all());
+		assertThat(result).hasSize(n);
+		for (int i = 0; i < result.size() - 1; i++) {
+			assertThat(result.get(i).timestamp()).isAfterOrEqualTo(result.get(i + 1).timestamp());
+		}
+	}
+
+	@Test
+	@DisplayName("query filters by multiple event types")
+	void queryByMultipleTypes() {
+		this.service
+			.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "log", null));
+		this.service
+			.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "log2", null));
+		final List<TimelineEvent> result = this.service.query(TimelineQuery.builder()
+			.eventTypes(List.of(TimelineEventType.APP_LOG, TimelineEventType.MCP_JSONRPC_REQUEST))
+			.build());
+		assertThat(result).hasSize(2);
+	}
+
+	@Test
+	@DisplayName("query filters by since, dropping older events")
+	void queryBySince() {
+		final Instant past = Instant.now().minusSeconds(60);
+		this.service
+			.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "recent", null));
+		this.service.append(
+				new TimelineEvent("old-1", "corr-old", null, TimelineEventType.APP_LOG, past.minusSeconds(3600), null));
+		final List<TimelineEvent> result = this.service.query(TimelineQuery.builder().since(past).build());
+		assertThat(result).extracting(TimelineEvent::message).containsExactly("recent");
+	}
+
+	@Test
+	@DisplayName("query filters by until (exclusive cutoff)")
+	void queryByUntil() {
+		this.service
+			.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "before", null));
+		try {
+			Thread.sleep(5);
+		}
+		catch (final InterruptedException ex) {
+			Thread.currentThread().interrupt();
+		}
+		final Instant cutoff = Instant.now();
+		try {
+			Thread.sleep(5);
+		}
+		catch (final InterruptedException ex) {
+			Thread.currentThread().interrupt();
+		}
+		this.service
+			.append(TimelineEvent.createLogEvent(UUID.randomUUID().toString(), "INFO", "test", "main", "late", null));
+		final List<TimelineEvent> result = this.service.query(TimelineQuery.builder().until(cutoff).build());
+		assertThat(result).extracting(TimelineEvent::message).containsExactly("before");
+	}
+
+	@Test
+	@DisplayName("query filters by sessionId")
+	void queryBySessionIdFilter() {
+		final ObjectNode payload = JsonNodeFactory.instance.objectNode();
+		payload.put("method", "tools/list");
+		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), UUID.randomUUID().toString(), "session-1",
+				TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), payload));
+		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), UUID.randomUUID().toString(), "session-2",
+				TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), payload));
+		final List<TimelineEvent> result = this.service.query(TimelineQuery.builder().sessionId("session-1").build());
+		assertThat(result).hasSize(1);
+		assertThat(result.get(0).sessionId()).isEqualTo("session-1");
+	}
+
+	@Test
+	@DisplayName("query returns empty for non-matching correlationId")
+	void queryByNonMatchingCorrelationId() {
+		this.service.append(TimelineEvent.createLogEvent("corr-1", "INFO", "test", "main", "msg", null));
+		final List<TimelineEvent> result = this.service
+			.query(TimelineQuery.builder().correlationId("non-existent").build());
+		assertThat(result).isEmpty();
 	}
 
 }

@@ -16,7 +16,9 @@
 
 package io.inspector.mcp.core.timeline;
 
+import java.io.PrintStream;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
@@ -47,11 +49,23 @@ public final class TimelineAppender extends AppenderBase<ILoggingEvent> {
 	private final TimelineService timelineService;
 
 	/**
+	 * One-shot guard: first swallow writes a warning to the original stderr (captured at
+	 * construction time, before any {@link SystemErrOutSink} may have replaced it),
+	 * subsequent ones stay silent. Using the raw {@code FileDescriptor.err} is
+	 * incompatible with Surefire forked JVMs (same root cause as the old
+	 * {@code repointConsole}).
+	 */
+	private static final AtomicBoolean STALLED_WARNED = new AtomicBoolean();
+
+	private final PrintStream originalErr;
+
+	/**
 	 * Creates a new appender that forwards events to the given service.
 	 * @param timelineService the target timeline service (must not be {@code null})
 	 */
 	public TimelineAppender(final TimelineService timelineService) {
 		this.timelineService = timelineService;
+		this.originalErr = System.err;
 	}
 
 	@Override
@@ -68,7 +82,19 @@ public final class TimelineAppender extends AppenderBase<ILoggingEvent> {
 		final String message = (event.getFormattedMessage() != null) ? event.getFormattedMessage() : "";
 		final TimelineEvent timelineEvent = TimelineEvent.createLogEvent(correlationId, level, loggerName, threadName,
 				message, throwableStr);
-		this.timelineService.append(timelineEvent);
+		try {
+			this.timelineService.append(timelineEvent);
+		}
+		catch (final RuntimeException ex) {
+			// An appender failure must never break the host application's logging.
+			if (STALLED_WARNED.compareAndSet(false, true)) {
+				// One-shot signal: the appender is silently dropping events.
+				// Write to the original stderr captured at construction time, not to
+				// FileDescriptor.err (the raw descriptor is incompatible with
+				// Surefire forked JVMs.
+				this.originalErr.println("[TimelineAppender] timeline append failed; suppressing further warnings");
+			}
+		}
 	}
 
 	private static String extractThrowable(final IThrowableProxy proxy) {
