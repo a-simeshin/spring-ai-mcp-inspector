@@ -40,6 +40,11 @@ import org.springframework.core.env.Environment;
  * from the {@link Environment}. This gives the exact set of configured client names and
  * their transport families, which is all the desync detector needs.
  *
+ * <p>
+ * URL and command values are redacted before leaving this reader: userinfo and query
+ * string in URLs are masked, and command arguments beyond the executable are masked. This
+ * prevents credential leakage through diagnostic logs and timeline events.
+ *
  * @author Artem Simeshin
  */
 public final class ClientConfigReader {
@@ -81,8 +86,9 @@ public final class ClientConfigReader {
 			final String transportType) {
 		final Set<String> names = readConnectionNames(prefix);
 		for (final String name : names) {
-			final String detail = readTransportDetail(prefix, name);
-			clients.put(name, new ClientConfig(name, transportType, detail));
+			final String url = readUrl(prefix, name);
+			final String command = readCommand(prefix, name);
+			clients.put(name, new ClientConfig(name, transportType, url, command));
 		}
 	}
 
@@ -103,16 +109,61 @@ public final class ClientConfigReader {
 		return new TreeSet<>(connectionMap.keySet());
 	}
 
-	private String readTransportDetail(final String prefix, final String name) {
-		final String url = this.environment.getProperty(prefix + "." + name + ".url");
-		if (url != null) {
-			return url;
+	private String readUrl(final String prefix, final String name) {
+		return redactUrl(this.environment.getProperty(prefix + "." + name + ".url"));
+	}
+
+	private String readCommand(final String prefix, final String name) {
+		return redactCommand(this.environment.getProperty(prefix + "." + name + ".command"));
+	}
+
+	/**
+	 * Redacts sensitive parts of a URL: userinfo (user:password@) is replaced with
+	 * {@code ***@} and the query string is replaced with {@code ?***}. The scheme, host,
+	 * port, path and fragment are preserved because they are needed for transport
+	 * mismatch diagnostics.
+	 * @param raw the raw URL, or {@code null}
+	 * @return the redacted URL, or {@code null} if the input was {@code null}
+	 */
+	static String redactUrl(final String raw) {
+		if (raw == null) {
+			return null;
 		}
-		final String command = this.environment.getProperty(prefix + "." + name + ".command");
-		if (command != null) {
-			return command;
+		String result = raw;
+		final int schemeEnd = result.indexOf("://");
+		if (schemeEnd < 0) {
+			return result;
 		}
-		return null;
+		final int atSign = result.indexOf('@', schemeEnd + 3);
+		if (atSign >= 0) {
+			final int queryStart = result.indexOf('?');
+			if (queryStart < 0 || atSign < queryStart) {
+				result = result.substring(0, schemeEnd + 3) + "***" + result.substring(atSign);
+			}
+		}
+		final int queryStart = result.indexOf('?');
+		if (queryStart >= 0) {
+			result = result.substring(0, queryStart + 1) + "***";
+		}
+		return result;
+	}
+
+	/**
+	 * Redacts a command by keeping only the executable (first token) and replacing the
+	 * rest with {@code ***}. This prevents leakage of secrets that may be passed as
+	 * inline arguments.
+	 * @param raw the raw command, or {@code null}
+	 * @return the redacted command, or {@code null} if the input was {@code null}
+	 */
+	static String redactCommand(final String raw) {
+		if (raw == null) {
+			return null;
+		}
+		final String[] parts = raw.split("\\s+", 2);
+		if (parts.length > 1) {
+			return parts[0] + " ***";
+		}
+		return raw;
 	}
 
 	/**
@@ -129,10 +180,12 @@ public final class ClientConfigReader {
 	 * @param name the client (connection) name
 	 * @param transportType the transport family: {@code stdio}, {@code sse}, or
 	 * {@code streamable-http}
-	 * @param detail the URL or command, if readable from the properties (may be
+	 * @param url the redacted URL, if the {@code url} property is configured (may be
 	 * {@code null})
+	 * @param command the redacted command, if the {@code command} property is configured
+	 * (may be {@code null})
 	 */
-	public record ClientConfig(String name, String transportType, String detail) {
+	public record ClientConfig(String name, String transportType, String url, String command) {
 	}
 
 }

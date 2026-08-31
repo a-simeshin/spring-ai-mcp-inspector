@@ -53,6 +53,11 @@ import org.springframework.util.StringUtils;
  * An empty or absent {@code clients()} array means the handler applies to ALL configured
  * clients. The scanner represents that with the sentinel {@link #ALL_CLIENTS}.
  *
+ * <p>
+ * Method identity is overload-safe: the deduplication key includes the full method
+ * descriptor (parameter types), so two valid overloads of the same name (e.g.
+ * {@code handle(String)} and {@code handle(Integer)}) are both preserved.
+ *
  * @author Artem Simeshin
  */
 public class ClientHandlerScanner implements ApplicationContextAware {
@@ -147,11 +152,50 @@ public class ClientHandlerScanner implements ApplicationContextAware {
 		if (clientNames.isEmpty()) {
 			clientNames.add(ALL_CLIENTS);
 		}
+		final String descriptor = methodDescriptor(method);
 		for (final String clientName : clientNames) {
-			final String key = handlerKind + ":" + clientName + ":" + beanName + ":" + method.getName();
+			final String key = handlerKind + ":" + clientName + ":" + beanName + ":" + method.getName() + descriptor;
 			byKey.putIfAbsent(key, new HandlerBinding(handlerKind, clientName, beanName,
-					ClassUtils.getUserClass(beanClass).getName(), method.getName(), annotationFqcn));
+					ClassUtils.getUserClass(beanClass).getName(), method.getName(), descriptor, annotationFqcn));
 		}
+	}
+
+	/**
+	 * Builds a JVM-style method descriptor that uniquely identifies overloads by
+	 * parameter types: {@code (Ljava/lang/String;)Ljava/lang/String;}. This is
+	 * overload-safe: two methods with the same name but different parameter types get
+	 * different descriptors.
+	 * @param method the method (must not be {@code null})
+	 * @return the descriptor string (never {@code null})
+	 */
+	static String methodDescriptor(final Method method) {
+		final StringBuilder sb = new StringBuilder("(");
+		for (final Class<?> paramType : method.getParameterTypes()) {
+			sb.append(typeDescriptor(paramType));
+		}
+		sb.append(")");
+		sb.append(typeDescriptor(method.getReturnType()));
+		return sb.toString();
+	}
+
+	private static final Map<Class<?>, String> PRIMITIVE_DESCRIPTORS = Map.of(void.class, "V", int.class, "I",
+			boolean.class, "Z", byte.class, "B", char.class, "C", short.class, "S", long.class, "J", float.class, "F",
+			double.class, "D");
+
+	/**
+	 * Returns the JVM descriptor string for a single type: {@code I} for int,
+	 * {@code Ljava/lang/String;} for objects, {@code [I} for int[], etc.
+	 * @param type the type (must not be {@code null})
+	 * @return the descriptor string (never {@code null})
+	 */
+	private static String typeDescriptor(final Class<?> type) {
+		if (type.isPrimitive()) {
+			return PRIMITIVE_DESCRIPTORS.getOrDefault(type, "V");
+		}
+		if (type.isArray()) {
+			return "[" + typeDescriptor(type.getComponentType());
+		}
+		return "L" + type.getName().replace('.', '/') + ";";
 	}
 
 	/**
@@ -195,10 +239,11 @@ public class ClientHandlerScanner implements ApplicationContextAware {
 	 * @param beanName the Spring bean name carrying the annotated method
 	 * @param beanClassName the user class of the bean
 	 * @param methodName the annotated method name
+	 * @param methodDescriptor the JVM-style method descriptor, overload-safe
 	 * @param annotationFqcn the FQCN of the annotation
 	 */
 	public record HandlerBinding(String handlerKind, String clientName, String beanName, String beanClassName,
-			String methodName, String annotationFqcn) {
+			String methodName, String methodDescriptor, String annotationFqcn) {
 	}
 
 }
