@@ -367,7 +367,17 @@ public final class McpProxy {
 	 * @return a {@link Mono} completing after the refresh
 	 */
 	private Mono<Void> refreshToken(final ProxySession session) {
-		return Mono.fromCallable(() -> this.ccTokenManager.getAccessToken(session.profileId(), true))
+		return Mono.fromCallable(() -> {
+			final OAuth2ClientCredentialsTokenManager.TokenHandle handle = this.ccTokenManager
+				.getAccessToken(session.profileId(), true);
+			LOG.warn("proxy[{}] refreshToken succeeded: len={} ccTokenManager={} profileId={}", session.sessionId(),
+					Integer.toHexString(handle.accessToken().hashCode()), System.identityHashCode(this.ccTokenManager),
+					session.profileId());
+			return handle;
+		})
+			.doOnError((err) -> LOG.warn("proxy[{}] refreshToken failed: {} (ccTokenManager={}, profileId={})",
+					session.sessionId(), err.toString(), System.identityHashCode(this.ccTokenManager),
+					session.profileId()))
 			.subscribeOn(Schedulers.boundedElastic())
 			.doOnNext((handle) -> session.authorizationRef().set("Bearer " + handle.accessToken()))
 			.then();
