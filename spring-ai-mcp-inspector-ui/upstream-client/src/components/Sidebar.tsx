@@ -858,11 +858,17 @@ const Sidebar = ({
                     case "connected":
                       return "Connected";
                     case "error": {
-                      const hasProxyToken = config.MCP_PROXY_AUTH_TOKEN?.value;
-                      if (!hasProxyToken) {
-                        return "Connection Error - Did you add the proxy session token in Configuration?";
+                      const reason = connectionError?.reason;
+                      if (reason === "unauthorized") {
+                        return "Connection Error - Check if your proxy token is correct";
                       }
-                      return "Connection Error - Check if your MCP server is running and proxy token is correct";
+                      if (reason === "connection_refused" || reason === "dns") {
+                        return "Connection Error - Check if your MCP server is running and the URL is reachable";
+                      }
+                      if (reason === "timeout") {
+                        return "Connection Error - The server is not responding";
+                      }
+                      return "Connection Error - Check if your MCP server is running";
                     }
                     case "error-connecting-to-proxy":
                       return "Error Connecting to MCP Inspector Proxy - Check Console logs";
