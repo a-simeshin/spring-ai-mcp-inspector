@@ -74,8 +74,8 @@
              verify phase (needs compiled bytecode). spotbugs.version pins the core
              engine to the same train as the plugin wrapper. demo/ui opt out via
              <spotbugs.skip>true</spotbugs.skip>. -->
-        <spotbugs-maven-plugin.version>4.9.3.0</spotbugs-maven-plugin.version>
-        <spotbugs.version>4.9.3</spotbugs.version>
+        <spotbugs-maven-plugin.version>4.10.4.0</spotbugs-maven-plugin.version>
+        <spotbugs.version>4.10.4</spotbugs.version>
         <spotbugs.skip>false</spotbugs.skip>
 
         <!-- Allure test reporting. allure.version: latest stable Allure 2.x (known-good
