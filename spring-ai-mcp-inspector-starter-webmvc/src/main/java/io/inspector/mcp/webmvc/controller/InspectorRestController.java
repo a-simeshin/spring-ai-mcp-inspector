@@ -75,6 +75,7 @@ import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthInitiateResponse;
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
+import io.inspector.mcp.core.protocol.ProtocolRevision;
 import io.inspector.mcp.core.shutdown.ShutdownDrain;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
@@ -258,6 +259,8 @@ public class InspectorRestController implements ApplicationContextAware {
 		final SessionState state = new SessionState(client);
 		holder.state = state;
 		this.sessions.put(sessionId, state);
+		// Capture the InitializeResult snapshot after a successful handshake.
+		state.initializeSnapshot(client.getCurrentInitializationResult());
 		if (this.closed) {
 			// Lost the race: the shutdown sweep snapshotted the map while this handshake
 			// was still connecting upstream, so nothing will ever close this session. The
@@ -313,6 +316,41 @@ public class InspectorRestController implements ApplicationContextAware {
 		}
 		this.emitterRegistry.close(id);
 		return ResponseEntity.noContent().build();
+	}
+
+	/**
+	 * Returns the initialize handshake snapshot for a connected session, together with
+	 * the protocol-revision compatibility check between the client's requested version
+	 * and the server's negotiated version.
+	 * <p>
+	 * The snapshot is available only after the loopback client's {@code initialize()} has
+	 * completed. When the session is unknown or the snapshot has not yet been captured
+	 * (racing connect), the endpoint returns 404.
+	 * @param id the inspector session identifier
+	 * @return 200 with snapshot + compatibility result, or 404
+	 */
+	@GetMapping(path = "/session/{id}/initialize", produces = MediaType.APPLICATION_JSON_VALUE)
+	public ResponseEntity<Map<String, Object>> getInitializeSnapshot(@PathVariable("id") final String id) {
+		final SessionState state = this.sessions.get(id);
+		if (state == null) {
+			return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "Unknown sessionId: " + id));
+		}
+		final SessionState.InitializeSnapshot snapshot = state.initializeSnapshot();
+		if (snapshot == null) {
+			return ResponseEntity.status(HttpStatus.NOT_FOUND)
+				.body(Map.of("error", "Initialize snapshot not yet available"));
+		}
+		final ProtocolRevision.CompatibilityResult compatibility = ProtocolRevision
+			.check(snapshot.clientRequestedVersion(), snapshot.negotiatedVersion());
+		final Map<String, Object> result = new LinkedHashMap<>();
+		result.put("clientRequestedVersion", snapshot.clientRequestedVersion());
+		result.put("negotiatedVersion", snapshot.negotiatedVersion());
+		result.put("serverName", snapshot.serverName());
+		result.put("serverVersion", snapshot.serverVersion());
+		result.put("capabilities", snapshot.capabilities());
+		result.put("compatibility", Map.of("severity", compatibility.severity().name(), "affectedMethods",
+				compatibility.affectedMethods(), "summary", compatibility.summary()));
+		return ResponseEntity.ok(result);
 	}
 
 	/**

@@ -17,10 +17,13 @@
 package io.inspector.mcp.webmvc.controller;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import io.modelcontextprotocol.client.McpSyncClient;
+import io.modelcontextprotocol.spec.McpSchema;
 
 import io.inspector.mcp.core.client.PendingServerRequests;
 import io.inspector.mcp.core.dto.RootDto;
@@ -34,6 +37,14 @@ import io.inspector.mcp.core.oauth.OAuthTokenResponse;
  * @author Artem Simeshin
  */
 final class SessionState {
+
+	/**
+	 * The protocol version the loopback client requests in its {@code initialize} call.
+	 * Hard-coded because the Java SDK does not expose its {@code LATEST_PROTOCOL_VERSION}
+	 * as a public constant; the value {@code 2025-11-25} is the latest version the SDK
+	 * 2.0.0 supports.
+	 */
+	static final String CLIENT_PROTOCOL_VERSION = "2025-11-25";
 
 	private final McpSyncClient client;
 
@@ -51,12 +62,38 @@ final class SessionState {
 
 	private volatile OAuthTokenResponse oauthToken;
 
+	private volatile InitializeSnapshot initializeSnapshot;
+
 	SessionState(final McpSyncClient client) {
 		this.client = client;
 	}
 
 	McpSyncClient client() {
 		return this.client;
+	}
+
+	/**
+	 * Stores the InitializeResult snapshot after the loopback client's
+	 * {@code initialize()} succeeds. {@code null} until then.
+	 * @return the snapshot, or {@code null} if not yet captured
+	 */
+	InitializeSnapshot initializeSnapshot() {
+		return this.initializeSnapshot;
+	}
+
+	/**
+	 * Captures the {@link McpSchema.InitializeResult} fields into the session's snapshot,
+	 * together with the version the loopback client requested.
+	 * @param result the result from the server's {@code initialize} response
+	 */
+	void initializeSnapshot(final McpSchema.InitializeResult result) {
+		if (result == null) {
+			return;
+		}
+		final String serverName = (result.serverInfo() != null) ? result.serverInfo().name() : null;
+		final String serverVersion = (result.serverInfo() != null) ? result.serverInfo().version() : null;
+		this.initializeSnapshot = new InitializeSnapshot(CLIENT_PROTOCOL_VERSION, result.protocolVersion(), serverName,
+				serverVersion, copyServerCapabilities(result.capabilities()));
 	}
 
 	List<RootDto> roots() {
@@ -151,6 +188,51 @@ final class SessionState {
 				/* best-effort */
 			}
 		}
+	}
+
+	private static Map<String, Object> copyServerCapabilities(final McpSchema.ServerCapabilities caps) {
+		if (caps == null) {
+			return Map.of();
+		}
+		final Map<String, Object> result = new LinkedHashMap<>();
+		if (caps.logging() != null) {
+			result.put("logging", true);
+		}
+		if (caps.prompts() != null) {
+			result.put("prompts", true);
+		}
+		if (caps.resources() != null) {
+			result.put("resources", true);
+		}
+		if (caps.tools() != null) {
+			result.put("tools", true);
+		}
+		if (caps.completions() != null) {
+			result.put("completions", true);
+		}
+		if (caps.experimental() != null) {
+			result.put("experimental", caps.experimental());
+		}
+		return result;
+	}
+
+	/**
+	 * Snapshot of the MCP initialize handshake, captured after the loopback client's
+	 * {@code initialize()} succeeds.
+	 *
+	 * @param clientRequestedVersion the protocol version the loopback client requested
+	 * @param negotiatedVersion the protocol version the server negotiated
+	 * @param serverName the server's name, or {@code null}
+	 * @param serverVersion the server's version, or {@code null}
+	 * @param capabilities the server's advertised capabilities (never {@code null})
+	 */
+	record InitializeSnapshot(String clientRequestedVersion, String negotiatedVersion, String serverName,
+			String serverVersion, Map<String, Object> capabilities) {
+
+		InitializeSnapshot {
+			capabilities = (capabilities != null) ? Map.copyOf(capabilities) : Map.of();
+		}
+
 	}
 
 }
