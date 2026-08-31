@@ -80,7 +80,7 @@
              surefire/failsafe argLine resolves to a real jar in the local repository. -->
         <allure.version>2.29.1</allure.version>
         <aspectj.version>1.9.25.1</aspectj.version>
-        <allure-maven-plugin.version>2.15.2</allure-maven-plugin.version>
+        <allure-maven-plugin.version>3.0.3</allure-maven-plugin.version>
 
         <!-- Browser automation for the Selenide UI tests. Declared here because the
              demo split put them on three classpaths at once (demo-app, demo-webmvc,
