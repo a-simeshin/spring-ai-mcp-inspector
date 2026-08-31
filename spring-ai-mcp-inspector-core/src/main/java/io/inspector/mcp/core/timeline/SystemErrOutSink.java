@@ -17,8 +17,6 @@
 package io.inspector.mcp.core.timeline;
 
 import java.io.ByteArrayOutputStream;
-import java.io.FileDescriptor;
-import java.io.FileOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -181,10 +179,12 @@ public final class SystemErrOutSink implements AutoCloseable {
 					// Best-effort: a failing timeline must not take the console down.
 					if (STALLED_WARNED.compareAndSet(false, true)) {
 						// One-shot signal: the sink is silently dropping events.
-						final PrintStream ps = new PrintStream(new FileOutputStream(FileDescriptor.err), true,
-								StandardCharsets.UTF_8);
-						ps.println("[SystemErrOutSink] timeline append failed; suppressing further warnings");
-						ps.close();
+						// Write to the original stderr captured at detach time, not to
+						// FileDescriptor.err (the raw descriptor is incompatible with
+						// Surefire forked JVMs (same root cause as the old
+						// repointConsole).
+						SystemErrOutSink.this.originalErr
+							.println("[SystemErrOutSink] timeline append failed; suppressing further warnings");
 					}
 				}
 			}

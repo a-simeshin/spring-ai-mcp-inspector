@@ -16,10 +16,7 @@
 
 package io.inspector.mcp.core.timeline;
 
-import java.io.FileDescriptor;
-import java.io.FileOutputStream;
 import java.io.PrintStream;
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -52,10 +49,15 @@ public final class TimelineAppender extends AppenderBase<ILoggingEvent> {
 	private final TimelineService timelineService;
 
 	/**
-	 * One-shot guard: first swallow writes a warning to raw stderr, subsequent ones stay
-	 * silent.
+	 * One-shot guard: first swallow writes a warning to the original stderr (captured at
+	 * construction time, before any {@link SystemErrOutSink} may have replaced it),
+	 * subsequent ones stay silent. Using the raw {@code FileDescriptor.err} is
+	 * incompatible with Surefire forked JVMs (same root cause as the old
+	 * {@code repointConsole}).
 	 */
 	private static final AtomicBoolean STALLED_WARNED = new AtomicBoolean();
+
+	private final PrintStream originalErr;
 
 	/**
 	 * Creates a new appender that forwards events to the given service.
@@ -63,6 +65,7 @@ public final class TimelineAppender extends AppenderBase<ILoggingEvent> {
 	 */
 	public TimelineAppender(final TimelineService timelineService) {
 		this.timelineService = timelineService;
+		this.originalErr = System.err;
 	}
 
 	@Override
@@ -86,10 +89,10 @@ public final class TimelineAppender extends AppenderBase<ILoggingEvent> {
 			// An appender failure must never break the host application's logging.
 			if (STALLED_WARNED.compareAndSet(false, true)) {
 				// One-shot signal: the appender is silently dropping events.
-				final PrintStream ps = new PrintStream(new FileOutputStream(FileDescriptor.err), true,
-						StandardCharsets.UTF_8);
-				ps.println("[TimelineAppender] timeline append failed; suppressing further warnings");
-				ps.close();
+				// Write to the original stderr captured at construction time, not to
+				// FileDescriptor.err (the raw descriptor is incompatible with
+				// Surefire forked JVMs.
+				this.originalErr.println("[TimelineAppender] timeline append failed; suppressing further warnings");
 			}
 		}
 	}
