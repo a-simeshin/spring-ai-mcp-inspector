@@ -28,7 +28,7 @@ import io.inspector.mcp.core.oauth.OAuthTokenResponse;
 
 /**
  * Servlet-stack per-session state. Holds the loopback MCP client, the mutable list of
- * roots advertised to the server, the pending server-to-client request bridge, the
+ * roots advertised to the server, the pending server-to-client request bridge, and the
  * in-flight OAuth state / token (Auth Debugger).
  *
  * @author Artem Simeshin
