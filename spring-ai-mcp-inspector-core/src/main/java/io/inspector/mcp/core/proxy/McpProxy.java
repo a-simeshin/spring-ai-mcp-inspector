@@ -184,15 +184,15 @@ public final class McpProxy {
 					LOG.debug("proxy[{}] initialize completed, opening gate: {}", session.sessionId(), typed);
 					handshakeGate.tryEmitEmpty();
 				}).onErrorResume((err) -> {
+					handshakeGate.tryEmitError(err);
+					session.failUpstream(err);
 					if (err instanceof java.util.concurrent.TimeoutException) {
 						LOG.warn("proxy[{}] sendMessage timed out for initialize", session.sessionId());
-						return Mono.empty();
 					}
-					final ProxyConnectFailure failure = ProxyConnectFailure.classify(err);
-					LOG.warn("proxy[{}] initialize stream error ({}): {}", session.sessionId(), failure.reason().wire(),
-							err.toString());
-					if (failure.reason() != ProxyConnectFailure.Reason.UNKNOWN) {
-						session.failUpstream(err);
+					else {
+						final ProxyConnectFailure failure = ProxyConnectFailure.classify(err);
+						LOG.warn("proxy[{}] initialize stream error ({}): {}", session.sessionId(),
+								failure.reason().wire(), err.toString());
 					}
 					return Mono.empty();
 				});

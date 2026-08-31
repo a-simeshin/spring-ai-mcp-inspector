@@ -95,7 +95,7 @@ class McpProxyTests {
 	}
 
 	@Nested
-	@DisplayName("start() — browser → target")
+	@DisplayName("start() - browser → target")
 	class BrowserToTarget {
 
 		@Test
@@ -151,7 +151,7 @@ class McpProxyTests {
 				.willReturn(Mono.error(new RuntimeException("send failed")), Mono.empty());
 			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
 
-			// when — two valid frames; the first send errors, the second must still be
+			// when - two valid frames; the first send errors, the second must still be
 			// relayed
 			McpProxyTests.this.browserToTarget
 				.tryEmitNext(McpProxyTests.this.mapper.createObjectNode().put("jsonrpc", "2.0").put("method", "ping"));
@@ -169,7 +169,7 @@ class McpProxyTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("a sendMessage failure (e.g. connection refused) fails the session upstream so per-request awaiters and the SSE backchannel wake fast")
 		void start_whenSendMessageFails_terminatesUpstream() {
-			// given — the SDK masks sendMessage errors and re-surfaces them on the
+			// given - the SDK masks sendMessage errors and re-surfaces them on the
 			// pump as a wrapped completion failure
 			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
 			final java.util.concurrent.CompletionException connectError = new java.util.concurrent.CompletionException(
@@ -183,7 +183,7 @@ class McpProxyTests {
 				.put("id", 1)
 				.put("method", "initialize"));
 
-			// then — the upstream failure is propagated to the browser side instead of
+			// then - the upstream failure is propagated to the browser side instead of
 			// being swallowed until the streamable-request timeout
 			verify(McpProxyTests.this.transport, timeout(1000)).sendMessage(any());
 			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
@@ -228,10 +228,73 @@ class McpProxyTests {
 					(req) -> assertThat(req.method()).isEqualTo("tools/list"));
 		}
 
+		@Test
+		@Story("Handshake gate release on error")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("when initialize sendMessage errors, the handshake gate is released with the error, "
+				+ "and subsequent frames waiting on the gate fail fast instead of hanging forever")
+		void start_whenInitializeErrors_releasesGateWaiters() {
+			// given - initialize send fails
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any()))
+				.willReturn(Mono.error(new RuntimeException("init failed")));
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+
+			// when: send initialize (which errors) and tools/list back-to-back
+			McpProxyTests.this.browserToTarget.tryEmitNext(initFrame());
+			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
+
+			// then: initialize was sent, the gate was released with the error,
+			// and the session is terminated. The tools/list frame waiting on the
+			// gate completed (via error) instead of hanging forever.
+			verify(McpProxyTests.this.transport, timeout(1000).atLeast(1)).sendMessage(any());
+			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
+			StepVerifier.create(McpProxyTests.this.targetToBrowser.asFlux())
+				.expectError()
+				.verify(Duration.ofSeconds(3));
+		}
+
+		@Test
+		@Story("Handshake gate release on timeout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("when initialize sendMessage never completes, the 1-minute timeout releases the "
+				+ "handshake gate with an error, and subsequent frames do not hang forever")
+		void start_whenInitializeTimesOut_releasesGateWaiters() {
+			// given - initialize send never completes
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any())).willReturn(Mono.never());
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+
+			// when: send initialize (which never returns) and tools/list back-to-back
+			McpProxyTests.this.browserToTarget.tryEmitNext(initFrame());
+			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
+
+			// then: the 1-minute timeout should fire, releasing the gate and failing
+			// the session. tools/list must complete (not hang) - we verify this by
+			// waiting for the session to be terminated (via the targetToBrowser error)
+			// within a reasonable time after the 1-minute timeout.
+			// sendMessage is called once for initialize (the mock returns Mono.never());
+			// the tools/list frame is blocked by the gate, so its sendMessage is never
+			// reached before the timeout fires. After the timeout the gate error is
+			// propagated through onErrorContinue and the session is terminated.
+			StepVerifier.create(McpProxyTests.this.targetToBrowser.asFlux())
+				.expectError()
+				.verify(Duration.ofMinutes(2));
+			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
+		}
+
+		private static JsonNode initFrame() {
+			return new JsonMapper().createObjectNode().put("jsonrpc", "2.0").put("id", 1).put("method", "initialize");
+		}
+
+		private static JsonNode toolsListFrame() {
+			return new JsonMapper().createObjectNode().put("jsonrpc", "2.0").put("id", 2).put("method", "tools/list");
+		}
+
 	}
 
 	@Nested
-	@DisplayName("start() — target → browser")
+	@DisplayName("start() - target → browser")
 	class TargetToBrowser {
 
 		@Test
@@ -254,7 +317,7 @@ class McpProxyTests {
 					McpProxyTests.this.mapper.createObjectNode().put("ok", true), null);
 			final Mono<JSONRPCMessage> reply = handler.apply(Mono.just(inbound));
 
-			// then — handler returns empty (proxy never originates a reply)
+			// then - handler returns empty (proxy never originates a reply)
 			StepVerifier.create(reply).verifyComplete();
 			// and the inbound frame was emitted to the browser sink
 			StepVerifier.create(McpProxyTests.this.targetToBrowser.asFlux().next())
@@ -271,7 +334,7 @@ class McpProxyTests {
 				+ "and still returns an empty reply")
 		@SuppressWarnings("unchecked")
 		void start_whenBrowserSinkComplete_handlerSwallowsEmitFailure() {
-			// given — complete the browser sink so tryEmitNext reports a failure result
+			// given - complete the browser sink so tryEmitNext reports a failure result
 			McpProxyTests.this.targetToBrowser.tryEmitComplete();
 			final ArgumentCaptor<Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>>> handlerCaptor = ArgumentCaptor
 				.forClass(Function.class);
@@ -284,14 +347,14 @@ class McpProxyTests {
 			// when
 			final Mono<JSONRPCMessage> reply = handler.apply(Mono.just(inbound));
 
-			// then — the handler never originates a reply even when emission fails
+			// then - the handler never originates a reply even when emission fails
 			StepVerifier.create(reply).verifyComplete();
 		}
 
 	}
 
 	@Nested
-	@DisplayName("start() — connect wiring")
+	@DisplayName("start() - connect wiring")
 	class ConnectWiring {
 
 		@Test
@@ -383,7 +446,7 @@ class McpProxyTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("a 401 on a client-credentials session refreshes the token (client_credentials, never refresh_token) and re-sends ONCE")
 		void sendMessage_401_refreshesTokenAndRetriesOnce() {
-			// given — a session bound to a client-credentials profile with stored
+			// given - a session bound to a client-credentials profile with stored
 			// credentials and a cached token
 			bindClientCredentialsSession();
 			this.tokenServer.respond(200, "{\"access_token\":\"tok-2\",\"expires_in\":3600,\"token_type\":\"Bearer\"}");
@@ -396,7 +459,7 @@ class McpProxyTests {
 			// when
 			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
 
-			// then — exactly two send attempts: the original and the retry with the
+			// then - exactly two send attempts: the original and the retry with the
 			// fresh token; the refresh re-exchanged stored client credentials (no
 			// refresh_token grant) and the session survived
 			awaitTrue(() -> "Bearer tok-2".equals(McpProxyTests.this.session.authorizationRef().get()),
@@ -426,7 +489,7 @@ class McpProxyTests {
 			// when
 			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
 
-			// then — one retry happened (two sends total), then the session failed
+			// then - one retry happened (two sends total), then the session failed
 			// upstream instead of retrying again
 			awaitTrue(() -> McpProxyTests.this.session.isUpstreamTerminated(), Duration.ofSeconds(3));
 			verify(McpProxyTests.this.transport, timeout(3000).times(2)).sendMessage(any());
@@ -448,7 +511,7 @@ class McpProxyTests {
 			// when
 			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
 
-			// then — a single send attempt, no refresh, session failed upstream
+			// then - a single send attempt, no refresh, session failed upstream
 			awaitTrue(() -> McpProxyTests.this.session.isUpstreamTerminated(), Duration.ofSeconds(3));
 			verify(McpProxyTests.this.transport, timeout(3000)).sendMessage(any());
 			assertThat(this.tokenServer.requestCount()).isEqualTo(1);
