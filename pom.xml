@@ -91,7 +91,7 @@
              demo-webflux); a single pair of properties keeps the browser stack from
              drifting apart between the stack modules. -->
         <selenide.version>7.18.1</selenide.version>
-        <webdrivermanager.version>6.1.0</webdrivermanager.version>
+        <webdrivermanager.version>6.3.4</webdrivermanager.version>
 
         <!-- JaCoCo coverage gate (Surefire only — IT/E2E run under Failsafe
              and do not contribute). Override per-module to relax or skip. -->
