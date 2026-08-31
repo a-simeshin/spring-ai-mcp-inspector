@@ -1,5 +1,5 @@
 src/components/AuthProfiles.tsx (new) + src/lib/auth-profiles.ts (new)
-+ src/lib/connectionAuthErrors.ts + src/lib/hooks/useConnection.ts +
++ src/lib/connectionErrors.ts + src/lib/hooks/useConnection.ts +
 src/components/Sidebar.tsx + src/components/OAuthCallback.tsx +
 src/App.tsx — named auth profiles for debugging protected MCP
 servers (issue #54, plan v15 D1/D2/D3/D7/D9B/D10). Upstream keeps
