@@ -44,8 +44,8 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
         <spring-boot.version>4.1.0</spring-boot.version>
-        <spring-ai.version>2.0.0</spring-ai.version>
-        <!-- MCP Java SDK is BOM-managed by spring-ai-bom 2.0.0 (mcp 2.0.0). Do NOT pin it
+        <spring-ai.version>2.0.1</spring-ai.version>
+        <!-- MCP Java SDK is BOM-managed by spring-ai-bom 2.0.1 (mcp 2.0.0). Do NOT pin it
              here: an explicit override would drag the SDK two majors behind the BOM and
              silently reintroduce 0.18 APIs. -->
         <!-- mcp-sdk.version intentionally removed; managed by spring-ai-bom -->
