@@ -27,16 +27,24 @@ import java.util.TreeMap;
  * Pure (I/O-free) compatibility checker for MCP protocol revisions.
  * <p>
  * Compares a client's requested version against the server's negotiated version and
- * reports whether the mismatch constitutes a downgrade, along with the methods affected
- * by the gap. Supported revisions and their method deltas are registered in a static
- * table ({@link #KNOWN_REVISIONS}) that is easy to extend with new spec revisions.
+ * reports whether the mismatch makes methods unavailable on the wire. The wire runs at
+ * the <em>negotiated</em> revision, so methods that the negotiated revision (or any
+ * revision newer than it) removed from the spec are not available. If the client's
+ * requested revision still expects those methods, they are reported as affected.
  * <p>
- * Revision 2026-07-28 removes {@code ping}, {@code logging/setLevel},
- * {@code resources/subscribe} and {@code resources/unsubscribe} and moves the core to
- * stateless semantics: a peer pinned to the older revision answers these calls with
- * {@code MethodNotFound}. A client that requested 2026-07-28 while the server negotiated
- * an older revision therefore silently loses those four methods, and the mismatch is
- * reported here as {@link Severity#DOWNGRADE} with the affected methods listed.
+ * Two distinct mismatch cases are reported with different {@link Severity} values:
+ * <ul>
+ * <li>{@link Severity#DOWNGRADE DOWNGRADE} &mdash; client requested a newer revision than
+ * the server negotiated. The server is older, so new features the client may rely on are
+ * absent.</li>
+ * <li>{@link Severity#INCOMPATIBLE INCOMPATIBLE} &mdash; client requested an older
+ * revision than the server negotiated. The server is newer and has removed methods the
+ * client still expects; calls to those methods will fail with
+ * {@code MethodNotFound}.</li>
+ * </ul>
+ * <p>
+ * Supported revisions and their method deltas are registered in a static table
+ * ({@link #KNOWN_REVISIONS}) that is easy to extend with new spec revisions.
  *
  * @author Artem Simeshin
  */
@@ -44,8 +52,9 @@ public final class ProtocolRevision {
 
 	/**
 	 * Known spec revisions in chronological order, mapped to the set of methods that
-	 * revision removed relative to its predecessor. Extend by adding a new entry; the
-	 * comparison logic is table-driven, not an if-cascade.
+	 * revision <em>removed</em> relative to its predecessor. The baseline revision
+	 * (2025-11-25) removes nothing. Extend by adding a new entry; the comparison logic is
+	 * table-driven, not an if-cascade.
 	 */
 	private static final NavigableMap<String, Set<String>> KNOWN_REVISIONS;
 
@@ -53,9 +62,21 @@ public final class ProtocolRevision {
 		final NavigableMap<String, Set<String>> revisions = new TreeMap<>();
 		// 2025-11-25: baseline revision, nothing removed.
 		revisions.put("2025-11-25", Set.of());
-		// 2026-07-28: drops ping, logging/setLevel, resources/subscribe,
-		// resources/unsubscribe; core becomes stateless.
-		revisions.put("2026-07-28", Set.of("ping", "logging/setLevel", "resources/subscribe", "resources/unsubscribe"));
+		// 2026-07-28: stateless protocol; removes handshake, ping, logging,
+		// subscriptions, roots, tasks, and elicitation.
+		revisions.put("2026-07-28", Set.of(
+				// Major 2: initialize and notifications/initialized removed (stateless).
+				"initialize", "notifications/initialized",
+				// Major 4: resources/subscribe, resources/unsubscribe replaced by
+				// subscriptions/listen.
+				"resources/subscribe", "resources/unsubscribe",
+				// Major 5: ping, logging/setLevel, notifications/roots/list_changed
+				// removed.
+				"ping", "logging/setLevel", "notifications/roots/list_changed",
+				// Major 6: tasks/list and tasks/result moved to extension.
+				"tasks/list", "tasks/result",
+				// Minor 11: notifications/elicitation/complete removed (MRTR pattern).
+				"notifications/elicitation/complete"));
 		KNOWN_REVISIONS = revisions;
 	}
 
@@ -65,10 +86,14 @@ public final class ProtocolRevision {
 	/**
 	 * Check compatibility between a client-requested and a server-negotiated protocol
 	 * revision.
-	 * @param requestedVersion the revision the client requested in its {@code initialize}
-	 * call, e.g. {@code "2026-07-28"}
-	 * @param negotiatedVersion the revision the server negotiated in its
-	 * {@code initialize} response
+	 * <p>
+	 * The wire runs at the <em>negotiated</em> revision. Methods that the negotiated
+	 * revision (or any revision newer than it) removed are not available. The result
+	 * lists the methods that the client still expects (based on its requested revision)
+	 * but are unavailable on the wire.
+	 * @param requestedVersion the revision the client requested, e.g.
+	 * {@code "2026-07-28"}
+	 * @param negotiatedVersion the revision the server negotiated in its response
 	 * @return a {@link CompatibilityResult} describing the mismatch
 	 */
 	public static CompatibilityResult check(final String requestedVersion, final String negotiatedVersion) {
@@ -94,28 +119,41 @@ public final class ProtocolRevision {
 					"Client and server agreed on revision " + requestedVersion + ".");
 		}
 
-		// Revision keys are ISO dates, so lexicographic order equals chronological order.
+		// Revision keys are ISO dates, so lexicographic order equals chronological
+		// order.
 		final int comparison = requestedVersion.compareTo(negotiatedVersion);
 		if (comparison < 0) {
-			// Client asked for an older revision than the server negotiated: the server
-			// superset satisfies it.
-			return new CompatibilityResult(Severity.OK, List.of(), "Client requested revision " + requestedVersion
-					+ ", server negotiated newer " + negotiatedVersion + ". Compatible.");
+			// Client requested an OLDER revision than the server negotiated.
+			// The server is running a newer protocol that may have removed methods
+			// the client still expects. Compute affected methods: those removed by
+			// revisions strictly between requested and negotiated (inclusive of
+			// negotiated).
+			final Set<String> affected = new LinkedHashSet<>();
+			for (final Map.Entry<String, Set<String>> entry : KNOWN_REVISIONS.entrySet()) {
+				if (entry.getKey().compareTo(requestedVersion) > 0
+						&& entry.getKey().compareTo(negotiatedVersion) <= 0) {
+					affected.addAll(entry.getValue());
+				}
+			}
+			if (affected.isEmpty()) {
+				return new CompatibilityResult(Severity.OK, List.of(), "Client requested revision " + requestedVersion
+						+ ", server negotiated newer " + negotiatedVersion + ". Compatible.");
+			}
+			final List<String> affectedMethods = sortedCopy(affected);
+			return new CompatibilityResult(Severity.INCOMPATIBLE, affectedMethods,
+					"Client requested revision " + requestedVersion + " but server negotiated newer "
+							+ negotiatedVersion + ". The server removed methods: " + affectedMethods
+							+ ". Calls to these methods will fail with MethodNotFound.");
 		}
 
-		// Client requested a NEWER revision than the server negotiated: downgrade.
-		// Every method removed by a revision strictly newer than the negotiated one, up
-		// to and including the requested revision, is unavailable on this connection.
-		final Set<String> affected = new LinkedHashSet<>();
-		for (final Map.Entry<String, Set<String>> entry : KNOWN_REVISIONS.entrySet()) {
-			if (entry.getKey().compareTo(negotiatedVersion) > 0 && entry.getKey().compareTo(requestedVersion) <= 0) {
-				affected.addAll(entry.getValue());
-			}
-		}
-		final List<String> affectedMethods = sortedCopy(affected);
-		return new CompatibilityResult(Severity.DOWNGRADE, affectedMethods,
-				"Client requested revision " + requestedVersion + " but server negotiated " + negotiatedVersion
-						+ ". Calls to " + affectedMethods + " will fail with MethodNotFound.");
+		// Client requested a NEWER revision than the server negotiated: the server
+		// is older. The table only tracks removals, not additions, so we cannot
+		// enumerate the specific new features the client is missing. The summary
+		// flags this as a downgrade.
+		return new CompatibilityResult(Severity.DOWNGRADE, List.of(),
+				"Client requested revision " + requestedVersion + " but server negotiated older " + negotiatedVersion
+						+ ". The server is running an older protocol; new features" + " from " + requestedVersion
+						+ " are unavailable.");
 	}
 
 	private static CompatibilityResult unknown(final String summary) {
@@ -131,10 +169,12 @@ public final class ProtocolRevision {
 	 */
 	public enum Severity {
 
-		/** Client and server are compatible (same revision, or server is newer). */
+		/** Client and server are compatible (same revision). */
 		OK,
 		/** Client requested a newer revision than the server negotiated. */
 		DOWNGRADE,
+		/** Client requested an older revision than the server negotiated. */
+		INCOMPATIBLE,
 		/** One or both revision strings are not recognised. */
 		UNKNOWN
 

@@ -38,37 +38,42 @@ class ProtocolRevisionTests {
 
 	private static final String REV_2026_07_28 = "2026-07-28";
 
+	private static final String[] ALL_REMOVED_2026_07_28 = { "initialize", "logging/setLevel",
+			"notifications/elicitation/complete", "notifications/initialized", "notifications/roots/list_changed",
+			"ping", "resources/subscribe", "resources/unsubscribe", "tasks/list", "tasks/result" };
+
 	@Nested
 	@DisplayName("Downgrade: client requests newer revision than server negotiated")
 	class Downgrade {
 
 		@Test
 		@Story("2026-07-28 requested, 2025-11-25 negotiated")
-		@Description("A downgrade across the 2026-07-28 boundary lists all four removed methods")
-		void check_requestedNewerThanNegotiated_reportsDowngradeWithAllFourRemovedMethods() {
+		@Description("A newer client against an older server: new features are unavailable but the server "
+				+ "still supports all methods the older protocol provided")
+		void check_requestedNewerThanNegotiated_reportsDowngrade() {
 			final CompatibilityResult result = ProtocolRevision.check(REV_2026_07_28, REV_2025_11_25);
 
 			assertThat(result.severity()).isEqualTo(Severity.DOWNGRADE);
-			assertThat(result.affectedMethods()).containsExactlyInAnyOrder("ping", "logging/setLevel",
-					"resources/subscribe", "resources/unsubscribe");
-			assertThat(result.summary()).contains("2026-07-28").contains("2025-11-25").contains("MethodNotFound");
+			assertThat(result.affectedMethods()).isEmpty();
+			assertThat(result.summary()).contains("2026-07-28").contains("2025-11-25").contains("unavailable");
 		}
 
 	}
 
 	@Nested
-	@DisplayName("Upgrade-safe: client requests older revision than server negotiated")
-	class NotADowngrade {
+	@DisplayName("Incompatible: client requests older revision than server negotiated")
+	class Incompatible {
 
 		@Test
 		@Story("2025-11-25 requested, 2026-07-28 negotiated")
-		@Description("The reverse pair is compatible: the newer server satisfies the older client")
-		void check_requestedOlderThanNegotiated_reportsOkWithNoAffectedMethods() {
+		@Description("An older client against a newer server: the server removed methods the client "
+				+ "still expects, all ten removed methods are listed")
+		void check_requestedOlderThanNegotiated_reportsIncompatibleWithAllRemovedMethods() {
 			final CompatibilityResult result = ProtocolRevision.check(REV_2025_11_25, REV_2026_07_28);
 
-			assertThat(result.severity()).isEqualTo(Severity.OK);
-			assertThat(result.affectedMethods()).isEmpty();
-			assertThat(result.summary()).isNotBlank();
+			assertThat(result.severity()).isEqualTo(Severity.INCOMPATIBLE);
+			assertThat(result.affectedMethods()).containsExactlyInAnyOrder(ALL_REMOVED_2026_07_28);
+			assertThat(result.summary()).contains("2025-11-25").contains("2026-07-28").contains("MethodNotFound");
 		}
 
 	}
@@ -79,13 +84,15 @@ class ProtocolRevisionTests {
 
 		@Test
 		@Story("Same known revision on both sides")
-		@Description("Identical requested and negotiated revisions are reported as ok")
+		@Description("Identical requested and negotiated revisions are reported as OK")
 		void check_sameRevisionOnBothSides_reportsOk() {
 			final CompatibilityResult result = ProtocolRevision.check(REV_2026_07_28, REV_2026_07_28);
+
 			assertThat(result.severity()).isEqualTo(Severity.OK);
 			assertThat(result.affectedMethods()).isEmpty();
 
 			final CompatibilityResult older = ProtocolRevision.check(REV_2025_11_25, REV_2025_11_25);
+
 			assertThat(older.severity()).isEqualTo(Severity.OK);
 			assertThat(older.affectedMethods()).isEmpty();
 		}
