@@ -22,6 +22,10 @@
  * {@link io.inspector.mcp.core.timeline.TimelineService} interface and bounded in-memory
  * implementation, a {@link io.inspector.mcp.core.timeline.McpTrafficRecorder} that
  * intercepts JSON-RPC traffic at the proxy boundary, a
+ * {@link io.inspector.mcp.core.timeline.McpClientTrafficRecorder} that captures outgoing
+ * MCP client traffic via a
+ * {@link io.inspector.mcp.core.timeline.RecordingMcpClientTransport} decorator wired by a
+ * {@link io.inspector.mcp.core.timeline.RecordingTransportPostProcessor}, a
  * {@link io.inspector.mcp.core.timeline.TimelineAppender} that bridges Logback events,
  * and a {@link io.inspector.mcp.core.timeline.SystemErrOutSink} that captures
  * System.out/err output.
