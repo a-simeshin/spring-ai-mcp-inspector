@@ -36,7 +36,7 @@ import { ConnectionStatus } from "@/lib/constants";
 import {
   humanReadableReason,
   type ConnectFailure,
-} from "@/lib/connectErrors";
+} from "@/lib/connectionErrors";
 import useTheme from "../lib/hooks/useTheme";
 // Vendored: upstream imports version from monorepo root package.json
 // (../../../package.json). In our vendored layout we point at the client's
@@ -56,7 +56,7 @@ import { validateRedirectUrl } from "@/utils/urlValidation";
 // (issue #54).
 import AuthProfiles from "./AuthProfiles";
 import { AuthProfileSummary } from "@/lib/auth-profiles";
-import { ProxyErrorDto } from "@/lib/connectionAuthErrors";
+import { ProxyErrorDto } from "@/lib/connectionErrors";
 
 interface SidebarProps {
   connectionStatus: ConnectionStatus;

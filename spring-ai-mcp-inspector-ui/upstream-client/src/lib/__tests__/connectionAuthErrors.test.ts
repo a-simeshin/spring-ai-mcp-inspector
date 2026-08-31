@@ -6,7 +6,7 @@
 import {
   isProxyErrorDto,
   parseProxyErrorDto,
-} from "../connectionAuthErrors";
+} from "../connectionErrors";
 
 describe("isProxyErrorDto", () => {
   it("accepts a well-formed DTO", () => {

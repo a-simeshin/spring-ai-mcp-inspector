@@ -4,7 +4,7 @@ import "@testing-library/jest-dom";
 import Sidebar from "../Sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DEFAULT_INSPECTOR_CONFIG } from "@/lib/constants";
-import type { ConnectFailure } from "@/lib/connectErrors";
+import type { ConnectFailure } from "@/lib/connectionErrors";
 import { LoggingLevel } from "@modelcontextprotocol/sdk/types.js";
 
 jest.mock("@/lib/hooks/useToast", () => ({

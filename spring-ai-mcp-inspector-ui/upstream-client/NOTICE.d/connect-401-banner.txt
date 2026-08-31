@@ -1,23 +1,23 @@
-src/lib/connectErrors.ts + src/lib/hooks/useConnection.ts +
+src/lib/connectionErrors.ts + src/lib/hooks/useConnection.ts +
  src/components/Sidebar.tsx + NOTICE.d/connect-401-banner.txt —
  distinguish HTTP 401 from generic connect failures and render a
  dedicated auth banner.
- 
- connectErrors.ts: added "unauthorized" ConnectFailureReason,
- isHttp401Error helper, and connectionFailureFromError maps SDK-level
- 401 errors (StreamableHTTPError, SseError, etc.) to "unauthorized".
- 
- useConnection.ts: proxy streamable-http fetch wrapper intercepts
- HTTP 401 from the fork server's auth filter (missing X-MCP-Inspector-Auth
- header) and throws ConnectFailedError with reason "unauthorized" before
- the SDK sees the response. The connect() catch handler: when OAuth
- fails on a 401 connection auth error, sets the unauthorized failure
- instead of returning silently.
- 
- Sidebar.tsx: renders an amber "Authentication Required" banner
- (Lock icon, guidance about X-MCP-Inspector-Auth header + server
- log) for reason === "unauthorized", keeping the red generic banner
- for all other connect failures.
- 
- Covered by src/lib/__tests__/connectErrors.test.ts and
- src/components/__tests__/Sidebar.connectFailureAlert.test.tsx.
+
+connectionErrors.ts: added "unauthorized" ConnectFailureReason,
+isHttp401Error helper, and connectionFailureFromError maps SDK-level
+401 errors (StreamableHTTPError, SseError, etc.) to "unauthorized".
+
+useConnection.ts: proxy streamable-http fetch wrapper intercepts
+HTTP 401 from the fork server's auth filter (missing X-MCP-Inspector-Auth
+header) and throws ConnectFailedError with reason "unauthorized" before
+the SDK sees the response. The connect() catch handler: when OAuth
+fails on a 401 connection auth error, sets the unauthorized failure
+instead of returning silently.
+
+Sidebar.tsx: renders an amber "Authentication Required" banner
+(Lock icon, guidance about X-MCP-Inspector-Auth header + server
+log) for reason === "unauthorized", keeping the red generic banner
+for all other connect failures.
+
+Covered by src/lib/__tests__/connectErrors.test.ts and
+src/components/__tests__/Sidebar.connectFailureAlert.test.tsx.

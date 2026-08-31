@@ -7,7 +7,7 @@ import {
   isHttp401Error,
   parseConnectFailureResponse,
   type ConnectFailure,
-} from "../connectErrors";
+} from "../connectionErrors";
 
 /** Minimal Response-shaped object; the parser only touches clone().json(). */
 const responseWithBody = (body: unknown): Response => {
