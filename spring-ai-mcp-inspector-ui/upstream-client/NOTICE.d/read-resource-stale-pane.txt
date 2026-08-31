@@ -1,6 +1,0 @@
-src/App.tsx#readResource — fix stale right-pane after switching
-between resources and templates. Upstream early-returns on cache
-hit without syncing the singleton `resourceContent` state that
-ResourcesTab renders. Local fix: on cache hit, call
-`setResourceContent(resourceContentMap[uri])` before returning.
-Upstream: https://github.com/modelcontextprotocol/inspector/issues/1266

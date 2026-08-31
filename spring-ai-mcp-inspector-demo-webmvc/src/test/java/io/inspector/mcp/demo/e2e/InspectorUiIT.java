@@ -382,9 +382,9 @@ class InspectorUiIT {
 		return $(".bg-card.border-r");
 	}
 
-	/** Sidebar Connect button (first-time; has no testid — match by visible text). */
+	/** Sidebar Connect toggle (v2.3.0+: Mantine Switch inside the server card). */
 	private static SelenideElement connectButton() {
-		return sidebar().$(byText("Connect"));
+		return $("input[role=switch]");
 	}
 
 	/** Active Radix tab panel ({@code [role=tabpanel][data-state=active]}). */
@@ -465,19 +465,18 @@ class InspectorUiIT {
 	}
 
 	/**
-	 * Open the page, click Connect, and wait for a Connected indicator. We assert the
-	 * {@code [data-testid=connect-button]} (Restart/Reconnect) appears — this testid is
-	 * only mounted in the post-connect branch (see UPSTREAM_DOM_MAP.md, Section 2.6), so
-	 * its presence is an unambiguous "connected" signal that doesn't suffer the
-	 * "Disconnected" / "Connected" substring overlap problem of plain text checks.
+	 * Open the page, click Connect, and wait for a Connected indicator. In v2.3.0+ the
+	 * header renders {@code data-testid="connection-status"} with
+	 * {@code data-status="connected"} once the handshake completes.
 	 */
 	private static void openAndConnect() {
 		open("/mcp-inspector/index.html");
-		// Sidebar must finish first render before we click anything.
+		// Server list must finish first render before we click the ConnectionToggle.
 		connectButton().shouldBe(visible, Duration.ofSeconds(15));
 		connectButton().click();
-		// Restart/Reconnect button is only mounted when connectionStatus === "connected".
-		$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+		// Header connection-status is only mounted with data-status="connected" when
+		// the handshake completes.
+		$("[data-testid=connection-status][data-status=connected]").shouldBe(visible, Duration.ofSeconds(30));
 	}
 
 	/**

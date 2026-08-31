@@ -2,158 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/mcp.svg" />
+    <link rel="icon" type="image/svg+xml" href="/src/theme/assets/MCP.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@300..700&family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet" />
     <title>MCP Inspector</title>
     <!--MCP_INSPECTOR_BOOTSTRAP-->
   </head>
   <body>
-    <div id="root" class="w-full"></div>
-    <!--
-      Spring AI MCP Inspector bootstrap.
-
-      The MCP_INSPECTOR_BOOTSTRAP placeholder in the head is replaced
-      server-side by InspectorIndexController (webmvc) / InspectorHandler.index()
-      (webflux) via BootstrapHtmlRenderer with an inline script that assigns:
-
-        window.__MCP_INSPECTOR_BOOTSTRAP = { ... };
-
-      carrying the typed InspectorBootstrap payload (authToken, proxyAddress,
-      detectedTransport, detectedUrl, defaultUrl, defaultTransport, ...).
-
-      Because that injection is inline and synchronous, by the time the seed
-      script below executes, window.__MCP_INSPECTOR_BOOTSTRAP is populated.
-
-      NOTE: keep this comment free of the literal HTML comment-close sequence and
-      of raw script tags — an embedded close sequence would terminate this comment
-      early and leak the rest as live DOM (and execute the example as script).
-
-      The seed script writes into THREE upstream storage surfaces:
-
-        1. localStorage 'inspectorConfig_v1'             — non-session config
-           Shape: { [MCP_CONFIG_KEY]: { value, label?, description?, is_session_item? } }
-           initializeInspectorConfig (configUtils.ts) merges this on top of
-           DEFAULT_INSPECTOR_CONFIG and then re-stamps label/description/
-           is_session_item from defaults, so providing only `{value}` works.
-
-        2. sessionStorage 'inspectorConfig_v1_ephemeral' — session-scoped config
-           Same shape; intended for is_session_item:true entries like
-           MCP_PROXY_AUTH_TOKEN. See saveInspectorConfig() which splits config
-           by is_session_item between persistent and ephemeral.
-
-        3. localStorage 'lastTransportType' / 'lastSseUrl' — TOP-LEVEL standalone
-           keys (NOT part of inspectorConfig_v1!) consumed by
-           getInitialTransportType() / getInitialSseUrl() in configUtils.ts
-           and written back by App.tsx#connect.
-
-      Mapping from bootstrap payload to upstream keys (verified against
-      client/src/lib/constants.ts#DEFAULT_INSPECTOR_CONFIG,
-      client/src/App.tsx#CONFIG_LOCAL_STORAGE_KEY, lines 527/531):
-
-        bootstrap.proxyAddress       → inspectorConfig_v1.MCP_PROXY_FULL_ADDRESS.value
-        bootstrap.authToken          → inspectorConfig_v1_ephemeral.MCP_PROXY_AUTH_TOKEN.value
-        detectedTransport|defaultTransport → localStorage 'lastTransportType'
-        detectedUrl|defaultUrl       → localStorage 'lastSseUrl'
-
-      The previous flat-shape seed ({proxyAddress, lastTransportType, lastSseUrl})
-      crashed initializeInspectorConfig at:
-        DEFAULT_INSPECTOR_CONFIG[key].label → undefined → TypeError
-      because those flat keys are not valid InspectorConfig keys. See
-      BootstrapRegressionE2ETest for the regression assertion.
-
-      We merge into existing localStorage rather than overwriting so values
-      the user has explicitly changed in the Settings UI survive a reload.
-    -->
-    <script>
-      (function () {
-        var b = window.__MCP_INSPECTOR_BOOTSTRAP || {};
-        var configKey = 'inspectorConfig_v1';
-        var ephemeralKey = 'inspectorConfig_v1_ephemeral';
-
-        function safeParse(raw) {
-          if (!raw) return {};
-          try {
-            var parsed = JSON.parse(raw);
-            return parsed && typeof parsed === 'object' ? parsed : {};
-          } catch (e) {
-            return {};
-          }
-        }
-
-        function setEntryValue(map, key, value) {
-          if (value === undefined || value === null || value === '') return;
-          var existing = map[key];
-          if (existing && typeof existing === 'object' && 'label' in existing) {
-            // Preserve label/description/is_session_item if a previous, well-shaped
-            // entry is already there (e.g. user changed it via Settings UI).
-            existing.value = value;
-          } else {
-            // Either no entry yet or it's a stale flat-shape value from an
-            // older buggy bootstrap — replace with a value-only object;
-            // initializeInspectorConfig re-stamps label/description/is_session_item
-            // from DEFAULT_INSPECTOR_CONFIG.
-            map[key] = { value: value };
-          }
-        }
-
-        // (1) persistent config — inspectorConfig_v1
-        var persisted;
-        try {
-          persisted = safeParse(localStorage.getItem(configKey));
-        } catch (e) {
-          persisted = {};
-        }
-        // The backend injects a path like `/mcp-inspector-api`. The upstream
-        // client passes it straight to `new URL(...)` (see
-        // `useConnection.ts#checkProxyHealth`), which throws on relative URLs.
-        // Resolve against the current origin to make it absolute. Pass-through
-        // for absolute URLs.
-        var proxyAddress = b.proxyAddress;
-        if (proxyAddress && proxyAddress.charAt(0) === '/') {
-          try {
-            proxyAddress = new URL(proxyAddress, window.location.origin).toString();
-            // Strip the trailing slash `new URL` appends if proxyAddress had
-            // none — getMCPProxyAddress() also strips them but be defensive.
-            proxyAddress = proxyAddress.replace(/\/+$/, '');
-          } catch (e) {
-            /* leave proxyAddress as-is */
-          }
-        }
-        setEntryValue(persisted, 'MCP_PROXY_FULL_ADDRESS', proxyAddress);
-        try { localStorage.setItem(configKey, JSON.stringify(persisted)); } catch (e) {}
-
-        // (2) ephemeral config — inspectorConfig_v1_ephemeral
-        var ephemeral;
-        try {
-          ephemeral = safeParse(sessionStorage.getItem(ephemeralKey));
-        } catch (e) {
-          ephemeral = {};
-        }
-        setEntryValue(ephemeral, 'MCP_PROXY_AUTH_TOKEN', b.authToken);
-        try { sessionStorage.setItem(ephemeralKey, JSON.stringify(ephemeral)); } catch (e) {}
-
-        // (3) standalone top-level keys consumed by getInitialTransportType /
-        //     getInitialSseUrl. These are NOT part of inspectorConfig_v1.
-        var transport = b.detectedTransport || b.defaultTransport;
-        if (transport) {
-          try { localStorage.setItem('lastTransportType', transport); } catch (e) {}
-        }
-        // [spring-ai-mcp-inspector PATCH] Seed a WAF-safe, relative same-origin target.
-        // detectedUrl is already relative ('/mcp'); default to '/mcp' and, defensively,
-        // strip an injected absolute same-origin origin back to a relative path so the
-        // proxy ?url= never carries an absolute http://localhost (OWASP CRS 934110 SSRF).
-        // The backend resolves the relative path to the loopback MCP endpoint server-side.
-        var sseUrl = b.detectedUrl || b.defaultUrl || '/mcp';
-        try {
-          if (sseUrl && sseUrl.indexOf(window.location.origin) === 0) {
-            sseUrl = sseUrl.slice(window.location.origin.length) || '/';
-          }
-        } catch (e) { /* leave sseUrl as-is */ }
-        if (sseUrl) {
-          try { localStorage.setItem('lastSseUrl', sseUrl); } catch (e) {}
-        }
-      })();
-    </script>
+    <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
