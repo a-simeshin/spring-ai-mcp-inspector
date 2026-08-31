@@ -91,6 +91,14 @@ public final class McpTrafficRecorder {
 	private final ConcurrentHashMap<String, String> progressCorrelations = new ConcurrentHashMap<>();
 
 	/**
+	 * Guards the check-then-evict-then-insert sequence in {@link #storePending}: a plain
+	 * {@code size() >= MAX} check races with concurrent inserts, letting several writers
+	 * pass the bound check and transiently exceed it. Removals (responses, expiry,
+	 * session cleanup) shrink the map and stay lock-free.
+	 */
+	private final Object pendingLock = new Object();
+
+	/**
 	 * Creates a new traffic recorder.
 	 * @param timelineService the backing store (must not be {@code null})
 	 */
@@ -119,30 +127,18 @@ public final class McpTrafficRecorder {
 		if (message instanceof JSONRPCRequest request) {
 			final Object id = request.id();
 			final String correlationId = UUID.randomUUID().toString();
-			final String priorMdc = MDC.get(MDC_CORRELATION_ID);
 			if (id != null) {
 				storePending(new CorrelationKey(sessionId, id), correlationId, progressTokenOf(rawFrame));
 			}
-			try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, correlationId)) {
-				final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
-						TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), rawFrame);
-				this.timelineService.append(event);
-			}
-			if (priorMdc != null) {
-				MDC.put(MDC_CORRELATION_ID, priorMdc);
-			}
+			final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
+					TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), rawFrame);
+			appendWithMdc(correlationId, event);
 		}
 		else if (message instanceof JSONRPCNotification) {
 			final String correlationId = UUID.randomUUID().toString();
-			final String priorMdc = MDC.get(MDC_CORRELATION_ID);
-			try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, correlationId)) {
-				final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
-						TimelineEventType.MCP_JSONRPC_NOTIFICATION, Instant.now(), rawFrame);
-				this.timelineService.append(event);
-			}
-			if (priorMdc != null) {
-				MDC.put(MDC_CORRELATION_ID, priorMdc);
-			}
+			final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
+					TimelineEventType.MCP_JSONRPC_NOTIFICATION, Instant.now(), rawFrame);
+			appendWithMdc(correlationId, event);
 		}
 		else {
 			LOG.debug("traffic: unexpected outbound message type: {}", message.getClass().getSimpleName());
@@ -179,15 +175,9 @@ public final class McpTrafficRecorder {
 			}
 			final String effectiveCorrelationId = (correlationId != null) ? correlationId
 					: UUID.randomUUID().toString();
-			final String priorMdc = MDC.get(MDC_CORRELATION_ID);
-			try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, effectiveCorrelationId)) {
-				final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), effectiveCorrelationId,
-						sessionId, TimelineEventType.MCP_JSONRPC_RESPONSE, Instant.now(), rawFrame);
-				this.timelineService.append(event);
-			}
-			if (priorMdc != null) {
-				MDC.put(MDC_CORRELATION_ID, priorMdc);
-			}
+			final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), effectiveCorrelationId,
+					sessionId, TimelineEventType.MCP_JSONRPC_RESPONSE, Instant.now(), rawFrame);
+			appendWithMdc(effectiveCorrelationId, event);
 		}
 		else if (message instanceof JSONRPCNotification notification) {
 			// Server-initiated progress frames are the streaming events of an in-flight
@@ -201,15 +191,9 @@ public final class McpTrafficRecorder {
 				return;
 			}
 			final String correlationId = UUID.randomUUID().toString();
-			final String priorMdc = MDC.get(MDC_CORRELATION_ID);
-			try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, correlationId)) {
-				final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
-						TimelineEventType.MCP_JSONRPC_NOTIFICATION, Instant.now(), rawFrame);
-				this.timelineService.append(event);
-			}
-			if (priorMdc != null) {
-				MDC.put(MDC_CORRELATION_ID, priorMdc);
-			}
+			final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
+					TimelineEventType.MCP_JSONRPC_NOTIFICATION, Instant.now(), rawFrame);
+			appendWithMdc(correlationId, event);
 		}
 		else {
 			LOG.debug("traffic: unexpected inbound message type: {}", message.getClass().getSimpleName());
@@ -238,14 +222,32 @@ public final class McpTrafficRecorder {
 			final JsonNode payload) {
 		final String correlationId = (originatingCorrelationId != null) ? originatingCorrelationId
 				: UUID.randomUUID().toString();
+		final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
+				TimelineEventType.MCP_STREAM_EVENT, Instant.now(), payload);
+		appendWithMdc(correlationId, event);
+	}
+
+	/**
+	 * Appends {@code event} to the timeline with {@code correlationId} in the MDC, then
+	 * restores the prior MDC value. Restoration happens in a {@code finally} block: a
+	 * throwing {@link TimelineService} must never leak the recorder's correlation into
+	 * the calling thread's MDC, and must not hide it either.
+	 * @param correlationId the correlation id to expose in the MDC during the append
+	 * @param event the timeline event to append
+	 */
+	private void appendWithMdc(final String correlationId, final TimelineEvent event) {
 		final String priorMdc = MDC.get(MDC_CORRELATION_ID);
-		try (MDC.MDCCloseable ignored = MDC.putCloseable(MDC_CORRELATION_ID, correlationId)) {
-			final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
-					TimelineEventType.MCP_STREAM_EVENT, Instant.now(), payload);
+		MDC.put(MDC_CORRELATION_ID, correlationId);
+		try {
 			this.timelineService.append(event);
 		}
-		if (priorMdc != null) {
-			MDC.put(MDC_CORRELATION_ID, priorMdc);
+		finally {
+			if (priorMdc != null) {
+				MDC.put(MDC_CORRELATION_ID, priorMdc);
+			}
+			else {
+				MDC.remove(MDC_CORRELATION_ID);
+			}
 		}
 	}
 
@@ -268,22 +270,25 @@ public final class McpTrafficRecorder {
 	 * @param progressToken the request's progress token text, may be {@code null}
 	 */
 	private void storePending(final CorrelationKey key, final String correlationId, final String progressToken) {
-		expirePending();
-		while (this.requestCorrelations.size() >= MAX_PENDING_CORRELATIONS) {
-			// Evict the oldest-inserted entry (lowest sequence).
-			final Map.Entry<CorrelationKey, PendingCorrelation> oldest = this.requestCorrelations.entrySet()
-				.stream()
-				.min(Comparator
-					.comparingLong((Map.Entry<CorrelationKey, PendingCorrelation> e) -> e.getValue().sequence()))
-				.orElse(null);
-			if (oldest == null) {
-				break;
+		final PendingCorrelation value = new PendingCorrelation(correlationId, this.pendingSequence.incrementAndGet(),
+				Instant.now(), progressToken);
+		synchronized (this.pendingLock) {
+			expirePending();
+			while (this.requestCorrelations.size() >= MAX_PENDING_CORRELATIONS) {
+				// Evict the oldest-inserted entry (lowest sequence).
+				final Map.Entry<CorrelationKey, PendingCorrelation> oldest = this.requestCorrelations.entrySet()
+					.stream()
+					.min(Comparator
+						.comparingLong((Map.Entry<CorrelationKey, PendingCorrelation> e) -> e.getValue().sequence()))
+					.orElse(null);
+				if (oldest == null) {
+					break;
+				}
+				this.requestCorrelations.remove(oldest.getKey());
+				evictProgress(oldest.getKey(), oldest.getValue());
 			}
-			this.requestCorrelations.remove(oldest.getKey());
-			evictProgress(oldest.getKey(), oldest.getValue());
+			this.requestCorrelations.put(key, value);
 		}
-		this.requestCorrelations.put(key, new PendingCorrelation(correlationId, this.pendingSequence.incrementAndGet(),
-				Instant.now(), progressToken));
 		if (progressToken != null) {
 			this.progressCorrelations.put(keyOf(key.sessionId(), progressToken), correlationId);
 		}

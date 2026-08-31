@@ -65,14 +65,18 @@ public class TimelineAutoConfiguration {
 	}
 
 	/**
-	 * The shared traffic recorder wired into the proxy when the timeline is enabled.
-	 * Absent (proxy runs without recording) when
-	 * {@code spring.ai.mcp.inspector.timeline.enabled} is unset or {@code false}.
+	 * The shared traffic recorder wired into the proxy when the timeline is enabled and
+	 * traffic recording is not switched off. Absent (proxy runs without recording) when
+	 * {@code spring.ai.mcp.inspector.timeline.enabled} is unset or {@code false}, or when
+	 * {@code spring.ai.mcp.inspector.timeline.traffic-enabled=false}; the proxy falls
+	 * back to the no-recorder constructor in that case.
 	 * @param timelineService the timeline service to append events to
 	 * @return a new {@link McpTrafficRecorder}
 	 */
 	@Bean
 	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline", name = "traffic-enabled", havingValue = "true",
+			matchIfMissing = true)
 	public McpTrafficRecorder mcpInspectorMcpTrafficRecorder(final TimelineService timelineService) {
 		return new McpTrafficRecorder(timelineService);
 	}

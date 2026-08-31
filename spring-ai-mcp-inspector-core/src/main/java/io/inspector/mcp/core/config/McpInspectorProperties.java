@@ -332,12 +332,13 @@ public class McpInspectorProperties {
 		private boolean enabled = false;
 
 		/**
-		 * Whether in-JVM MCP traffic recording is enabled. When {@code true}, every
-		 * JSON-RPC request, response, notification, and stream event is captured by the
-		 * {@code McpTrafficRecorder} and forwarded to the {@code TimelineService}.
-		 * Defaults to {@code false}.
+		 * Whether in-JVM MCP traffic recording is enabled. When {@code true} (the
+		 * default), a {@code McpTrafficRecorder} bean exists and the proxy captures every
+		 * JSON-RPC request, response, notification, and stream event into the
+		 * {@code TimelineService}. Set to {@code false} to skip creating and wiring the
+		 * recorder entirely; only has an effect while {@link #enabled} is {@code true}.
 		 */
-		private boolean trafficEnabled;
+		private boolean trafficEnabled = true;
 
 		/**
 		 * Whether Logback appender bridge is enabled. Defaults to {@code true} when

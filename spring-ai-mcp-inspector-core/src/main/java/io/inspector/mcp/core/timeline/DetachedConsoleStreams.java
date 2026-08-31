@@ -25,7 +25,9 @@ import java.util.Map;
 
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.core.Appender;
+import ch.qos.logback.core.ConsoleAppender;
 import ch.qos.logback.core.OutputStreamAppender;
+import ch.qos.logback.core.joran.spi.ConsoleTarget;
 import org.slf4j.LoggerFactory;
 
 /**
@@ -37,10 +39,14 @@ import org.slf4j.LoggerFactory;
  * {@link TimelineAppender} on the root logger, and once because the ConsoleAppender
  * writes through the already-wrapped {@code System.out}, which the sink captures as a
  * second APP_LOG event (or, at best, creates an append-from-within-append reentry).
- * {@code ConsoleAppender.start()} resolves {@code System.out} eagerly at start-up and
- * stores it via {@code setOutputStream}, so replacing that field with a stream bound
- * directly to {@link FileDescriptor#out}/ {@link FileDescriptor#err} detaches console
- * output from whatever {@code System.out} later becomes.
+ * {@code ConsoleAppender} does not hold {@code System.out} itself: at
+ * {@code ConsoleAppender.start()} it stores the lazy {@code ConsoleTarget} delegate,
+ * whose {@code write} re-reads the current {@code System.out} static on every call. A
+ * {@code System.out == currentStream} identity check therefore never matches a console
+ * appender - it has to be recognised by type (and by the delegate it holds), then
+ * repointed at a stream bound directly to {@link FileDescriptor#out} /
+ * {@link FileDescriptor#err}, which detaches console output from whatever
+ * {@code System.out} later becomes.
  *
  * <p>
  * The original streams are remembered and can be restored on {@link #restore()}, which
@@ -74,6 +80,8 @@ public final class DetachedConsoleStreams {
 	 */
 	public static DetachedConsoleStreams detach() {
 		final Map<OutputStreamAppender<?>, OutputStream> saved = new IdentityHashMap<>();
+		final OutputStream consoleOut = System.out;
+		final OutputStream consoleErr = System.err;
 		final Object factory;
 		try {
 			factory = LoggerFactory.getILoggerFactory();
@@ -87,7 +95,7 @@ public final class DetachedConsoleStreams {
 		for (final ch.qos.logback.classic.Logger logger : context.getLoggerList()) {
 			final var it = logger.iteratorForAppenders();
 			while (it.hasNext()) {
-				repoint(it.next(), RAW_STDOUT, RAW_STDERR, saved);
+				repoint(it.next(), consoleOut, consoleErr, saved);
 			}
 		}
 		return new DetachedConsoleStreams(saved);
@@ -108,29 +116,70 @@ public final class DetachedConsoleStreams {
 		this.previous.clear();
 	}
 
-	private static void repoint(final Appender<?> appender, final OutputStream rawOut, final OutputStream rawErr,
-			final Map<OutputStreamAppender<?>, OutputStream> saved) {
+	private static void repoint(final Appender<?> appender, final OutputStream consoleOut,
+			final OutputStream consoleErr, final Map<OutputStreamAppender<?>, OutputStream> saved) {
 		if (!(appender instanceof final OutputStreamAppender<?> streamAppender)) {
 			return;
 		}
 		final OutputStream current = streamAppender.getOutputStream();
-		if (current == System.out) {
+		// A ConsoleAppender's stored stream is the lazy ConsoleTarget delegate, never
+		// the identity of System.out/err it will resolve at write time: match it by the
+		// target it points at, and re-point through the public setter so the class
+		// contract (encoder re-init included) stays intact.
+		if (streamAppender instanceof final ConsoleAppender<?> console) {
+			repointConsole(console, saved);
+			return;
+		}
+		if (current == consoleOut) {
 			saved.put(streamAppender, current);
 			try {
-				setOutputStreamField(streamAppender, rawOut);
+				setOutputStreamField(streamAppender, RAW_STDOUT);
 			}
 			catch (final ReflectiveOperationException ex) {
 				saved.remove(streamAppender);
 			}
 		}
-		else if (current == System.err) {
+		else if (current == consoleErr) {
 			saved.put(streamAppender, current);
 			try {
-				setOutputStreamField(streamAppender, rawErr);
+				setOutputStreamField(streamAppender, RAW_STDERR);
 			}
 			catch (final ReflectiveOperationException ex) {
 				saved.remove(streamAppender);
 			}
+		}
+	}
+
+	/**
+	 * Repoints a console appender whose stored stream is one of the lazy
+	 * {@link ConsoleTarget} delegates (the only shape {@code ConsoleAppender.start()}
+	 * produces without JANSI). The delegate re-reads the live {@code System.out} /
+	 * {@code System.err} static on every write, so once the sink installs its capture
+	 * wrapper the delegate would route console output through it and duplicate every
+	 * logged line. Appenders on any other stream (JANSI-wrapped, or a stream set
+	 * explicitly) are left alone.
+	 * @param console the console appender to repoint
+	 * @param saved map remembering each repointed appender's previous stream
+	 */
+	private static void repointConsole(final ConsoleAppender<?> console,
+			final Map<OutputStreamAppender<?>, OutputStream> saved) {
+		final OutputStream current = console.getOutputStream();
+		final OutputStream replacement;
+		if (current == ConsoleTarget.SystemOut.getStream()) {
+			replacement = RAW_STDOUT;
+		}
+		else if (current == ConsoleTarget.SystemErr.getStream()) {
+			replacement = RAW_STDERR;
+		}
+		else {
+			return;
+		}
+		saved.put(console, current);
+		try {
+			setOutputStreamField(console, replacement);
+		}
+		catch (final ReflectiveOperationException ex) {
+			saved.remove(console);
 		}
 	}
 

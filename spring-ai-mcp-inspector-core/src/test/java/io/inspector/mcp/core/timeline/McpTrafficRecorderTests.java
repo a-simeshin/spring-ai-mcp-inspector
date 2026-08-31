@@ -17,8 +17,14 @@
 package io.inspector.mcp.core.timeline;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
@@ -26,6 +32,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
 import org.slf4j.MDC;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -34,6 +41,7 @@ import tools.jackson.databind.node.ObjectNode;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mock;
 
 /** Unit tests for {@link McpTrafficRecorder}. */
@@ -574,6 +582,113 @@ class McpTrafficRecorderTests {
 			finally {
 				MDC.remove(McpTrafficRecorder.MDC_CORRELATION_ID);
 			}
+		}
+
+		@Test
+		@DisplayName("restores prior MDC when the timeline throws on append")
+		void restoresPriorMdcWhenAppendThrows() {
+			final TimelineService failing = mock(TimelineService.class);
+			willThrow(new IllegalStateException("sink down")).given(failing)
+				.append(ArgumentMatchers.any(TimelineEvent.class));
+			final McpTrafficRecorder throwingRecorder = new McpTrafficRecorder(failing);
+
+			// given: a prior MDC value and a request the recorder will try to append
+			MDC.put(McpTrafficRecorder.MDC_CORRELATION_ID, "outer-context");
+			try {
+				// when: append throws; the recorder must still hand the thread back
+				// with the prior correlation in place
+				assertThatThrownBy(() -> throwingRecorder.recordStreamEvent("s-1",
+						McpTrafficRecorderTests.this.mapper.createObjectNode().put("chunk", true)))
+					.isInstanceOf(IllegalStateException.class)
+					.hasMessage("sink down");
+
+				// then
+				assertThat(MDC.get(McpTrafficRecorder.MDC_CORRELATION_ID)).isEqualTo("outer-context");
+			}
+			finally {
+				MDC.remove(McpTrafficRecorder.MDC_CORRELATION_ID);
+			}
+		}
+
+		@Test
+		@DisplayName("clears MDC on failure when there was no prior value")
+		void clearsMdcWhenAppendThrowsWithoutPrior() {
+			final TimelineService failing = mock(TimelineService.class);
+			willThrow(new IllegalStateException("sink down")).given(failing)
+				.append(ArgumentMatchers.any(TimelineEvent.class));
+			final McpTrafficRecorder throwingRecorder = new McpTrafficRecorder(failing);
+
+			MDC.remove(McpTrafficRecorder.MDC_CORRELATION_ID);
+			// when
+			assertThatThrownBy(() -> throwingRecorder.recordStreamEvent("s-1",
+					McpTrafficRecorderTests.this.mapper.createObjectNode().put("chunk", true)))
+				.isInstanceOf(IllegalStateException.class);
+
+			// then: the recorder's own correlation id must not leak
+			assertThat(MDC.get(McpTrafficRecorder.MDC_CORRELATION_ID)).isNull();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("pending bound under concurrency")
+	class PendingBoundConcurrency {
+
+		@Test
+		@DisplayName("never exceeds MAX_PENDING_CORRELATIONS under concurrent inserts")
+		void concurrentStoresNeverExceedBound() throws Exception {
+			// given: N writers each inserting unique requests past the bound,
+			// released simultaneously by a barrier so they race in storePending
+			final int threads = 8;
+			final int perThread = 250;
+			final ExecutorService pool = Executors.newFixedThreadPool(threads);
+			final CountDownLatch ready = new CountDownLatch(threads);
+			final CountDownLatch go = new CountDownLatch(1);
+			final AtomicInteger maxSeen = new AtomicInteger();
+			final List<Throwable> failures = new ArrayList<>();
+			try {
+				final List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
+				for (int t = 0; t < threads; t++) {
+					final int tid = t;
+					futures.add(pool.submit(() -> {
+						try {
+							ready.countDown();
+							go.await();
+							for (int i = 0; i < perThread; i++) {
+								final ObjectNode frame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+									.put("jsonrpc", "2.0")
+									.put("id", tid * 100_000 + i)
+									.put("method", "tools/list");
+								McpTrafficRecorderTests.this.recorder.recordOutbound("s-race",
+										McpTrafficRecorderTests.this.deserialize(frame), frame);
+								final int seen = McpTrafficRecorderTests.this.recorder.pendingCorrelations();
+								maxSeen.accumulateAndGet(seen, Math::max);
+							}
+						}
+						catch (final Throwable ex) {
+							synchronized (failures) {
+								failures.add(ex);
+							}
+						}
+					}));
+				}
+				assertThat(ready.await(10, TimeUnit.SECONDS)).as("writers ready").isTrue();
+				// when
+				go.countDown();
+				for (final java.util.concurrent.Future<?> future : futures) {
+					future.get(30, TimeUnit.SECONDS);
+				}
+			}
+			finally {
+				pool.shutdownNow();
+			}
+			assertThat(failures).isEmpty();
+
+			// then: the invariant is the observed maximum, not the final size
+			assertThat(maxSeen.get()).as("pending map peak size must never exceed the bound")
+				.isLessThanOrEqualTo(McpTrafficRecorder.MAX_PENDING_CORRELATIONS);
+			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations())
+				.isLessThanOrEqualTo(McpTrafficRecorder.MAX_PENDING_CORRELATIONS);
 		}
 
 	}
