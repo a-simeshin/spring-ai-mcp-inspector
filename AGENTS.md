@@ -127,6 +127,25 @@ Frontend commands run from `upstream-client/`: `npm test` (Jest),
 - **A pull request is not done until CI is green on it**, and green means the
   run on the pull request, not a local run.
 
+- **A review verdict lives in a comment, not in GitHub's review state.** Every
+  pull request here is opened by the same GitHub App that reviews it, and
+  GitHub refuses a review from the author of a pull request. `reviewDecision`
+  is therefore always empty on this repository, and a pull request with no
+  formal review is not an unreviewed one. Look for a top-level comment headed
+  `## Review verdict`:
+
+  ```bash
+  # unreviewed pull requests, the only reliable way here
+  for n in $(gh pr list --json number --jq '.[].number'); do
+    gh pr view "$n" --json comments \
+      --jq 'if any(.comments[]; .body | startswith("## Review verdict")) then empty else "'"$n"' unreviewed" end'
+  done
+  ```
+
+  Reviewers: keep that exact heading, it is the only machine-readable marker
+  the repository has. Anyone scanning by `reviewDecision` will duplicate the
+  review that already exists.
+
 ## Conventions
 
 - Java code follows spring-javaformat; Checkstyle enforces the rest.
