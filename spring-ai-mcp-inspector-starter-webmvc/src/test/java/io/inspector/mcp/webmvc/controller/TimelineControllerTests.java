@@ -78,7 +78,7 @@ class TimelineControllerTests {
 
 			// when
 			final List<TimelineEvent> result = TimelineControllerTests.this.controller.query(null, null, null, null,
-					null, 100);
+					null, null, null, 100);
 
 			// then
 			assertThat(result).hasSize(1).contains(event);
@@ -95,7 +95,7 @@ class TimelineControllerTests {
 
 			// when
 			TimelineControllerTests.this.controller.query(UUID.randomUUID().toString(), "sess1", now, now,
-					"MCP_JSONRPC_REQUEST,APP_LOG", 10);
+					"MCP_JSONRPC_REQUEST,APP_LOG", null, null, 10);
 
 			// then
 			verify(TimelineControllerTests.this.timelineService).query(argThat((q) -> q.limit() == 10));
@@ -116,7 +116,7 @@ class TimelineControllerTests {
 			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of());
 
 			// when
-			TimelineControllerTests.this.controller.query(null, null, null, null, null, 500);
+			TimelineControllerTests.this.controller.query(null, null, null, null, null, null, null, 500);
 
 			// then
 			verify(TimelineControllerTests.this.timelineService)
@@ -132,7 +132,8 @@ class TimelineControllerTests {
 			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of());
 
 			// when
-			TimelineControllerTests.this.controller.query(null, null, null, null, "MCP_JSONRPC_REQUEST,APP_LOG", 500);
+			TimelineControllerTests.this.controller.query(null, null, null, null, "MCP_JSONRPC_REQUEST,APP_LOG", null,
+					null, 500);
 
 			// then: the query contains both parsed types
 			verify(TimelineControllerTests.this.timelineService).query(argThat((q) -> {
@@ -151,7 +152,7 @@ class TimelineControllerTests {
 			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of());
 
 			// when
-			TimelineControllerTests.this.controller.query(null, null, null, null, "UNKNOWN,APP_LOG", 500);
+			TimelineControllerTests.this.controller.query(null, null, null, null, "UNKNOWN,APP_LOG", null, null, 500);
 
 			// then: only APP_LOG survives
 			verify(TimelineControllerTests.this.timelineService).query(argThat((q) -> {
@@ -170,7 +171,7 @@ class TimelineControllerTests {
 
 			// when
 			TimelineControllerTests.this.controller.query(null, null, null, null,
-					"  MCP_JSONRPC_RESPONSE , , BAD , MCP_JSONRPC_NOTIFICATION  ", 500);
+					"  MCP_JSONRPC_RESPONSE , , BAD , MCP_JSONRPC_NOTIFICATION  ", null, null, 500);
 
 			// then
 			verify(TimelineControllerTests.this.timelineService).query(argThat((q) -> {
@@ -194,7 +195,7 @@ class TimelineControllerTests {
 			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of());
 
 			// when
-			TimelineControllerTests.this.controller.query(null, null, null, null, null, 0);
+			TimelineControllerTests.this.controller.query(null, null, null, null, null, null, null, 0);
 
 			// then
 			verify(TimelineControllerTests.this.timelineService)
@@ -209,7 +210,7 @@ class TimelineControllerTests {
 			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of());
 
 			// when
-			TimelineControllerTests.this.controller.query(null, null, null, null, null, 999999);
+			TimelineControllerTests.this.controller.query(null, null, null, null, null, null, null, 999999);
 
 			// then
 			verify(TimelineControllerTests.this.timelineService)
