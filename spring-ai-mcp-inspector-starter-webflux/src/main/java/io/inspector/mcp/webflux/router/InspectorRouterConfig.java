@@ -19,6 +19,7 @@ package io.inspector.mcp.webflux.router;
 import java.net.URI;
 import java.util.concurrent.TimeUnit;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
@@ -72,11 +73,13 @@ public class InspectorRouterConfig {
 
 	@Bean
 	public RouterFunction<ServerResponse> inspectorRouter(final InspectorHandler handler,
-			final McpInspectorProperties properties) {
+			final ObjectProvider<TimelineHandler> timelineHandler, final McpInspectorProperties properties) {
 		final String basePath = properties.getPath();
 		final String apiPath = basePath + "/api";
 		final String indexPath = basePath + "/index.html";
-		return route(GET(basePath), (req) -> ServerResponse.temporaryRedirect(indexRedirect(req, indexPath)).build())
+		final TimelineHandler timeline = timelineHandler.getIfAvailable();
+		RouterFunction<ServerResponse> router = route(GET(basePath),
+				(req) -> ServerResponse.temporaryRedirect(indexRedirect(req, indexPath)).build())
 			.andRoute(GET(basePath + "/"),
 					(req) -> ServerResponse.temporaryRedirect(indexRedirect(req, indexPath)).build())
 			.andRoute(GET(basePath + "/index.html"), handler::index)
@@ -100,9 +103,14 @@ public class InspectorRouterConfig {
 			.andRoute(PUT(apiPath + "/roots"), handler::putRoots)
 			.andRoute(POST(apiPath + "/oauth/initiate"), handler::oauthInitiate)
 			.andRoute(GET(apiPath + "/oauth/callback"), handler::oauthCallback)
-			.andRoute(DELETE(apiPath + "/session/{id}"), handler::deleteSession)
-			.and(RouterFunctions.resources(basePath + "/**", UI_ROOT,
-					(resource, headers) -> headers.setCacheControl(ASSET_CACHE_CONTROL)));
+			.andRoute(DELETE(apiPath + "/session/{id}"), handler::deleteSession);
+		if (timeline != null) {
+			// Same path and query contract as the WebMVC TimelineController; the
+			// route must be claimed before the /** resource catch-all below.
+			router = router.andRoute(GET(apiPath + "/timeline"), timeline::query);
+		}
+		return router.and(RouterFunctions.resources(basePath + "/**", UI_ROOT,
+				(resource, headers) -> headers.setCacheControl(ASSET_CACHE_CONTROL)));
 	}
 
 	/**

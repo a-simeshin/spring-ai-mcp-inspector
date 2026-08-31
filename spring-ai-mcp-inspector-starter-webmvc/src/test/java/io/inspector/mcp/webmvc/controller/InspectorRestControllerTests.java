@@ -281,6 +281,28 @@ class InspectorRestControllerTests {
 
 		@Test
 		@Story("JSON-RPC relay")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("jsonrpc() dispatches initialize to the client's cached initialization result")
+		void jsonrpc_withInitialize_returnsCurrentInitializationResult() {
+			// given
+			final McpSyncClient client = mock(McpSyncClient.class);
+			final McpSchema.InitializeResult initResult = mock(McpSchema.InitializeResult.class);
+			given(client.getCurrentInitializationResult()).willReturn(initResult);
+			final String sessionId = registerSession(client);
+			final JsonRpcRelay relay = new JsonRpcRelay("2.0", 9, "initialize", Map.of());
+
+			// when
+			final ResponseEntity<Map<String, Object>> response = InspectorRestControllerTests.this.controller
+				.jsonrpc(sessionId, relay);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(response.getBody().get("result")).isSameAs(initResult);
+			verify(client).getCurrentInitializationResult();
+		}
+
+		@Test
+		@Story("JSON-RPC relay")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("jsonrpc() routes tools/call into a CallToolRequest with the supplied name and arguments")
 		void jsonrpc_withToolsCall_buildsCallToolRequest() {

@@ -87,6 +87,8 @@ import Sidebar from "./components/Sidebar";
 import ToolsTab from "./components/ToolsTab";
 import TasksTab from "./components/TasksTab";
 import AppsTab from "./components/AppsTab";
+// [spring-ai-mcp-inspector PATCH] TimelineTab — MCP event timeline (#112).
+import TimelineTab from "./components/TimelineTab";
 import { InspectorConfig } from "./lib/configurationTypes";
 import {
   getMCPProxyAddress,
@@ -1581,6 +1583,11 @@ const App = () => {
                   <Settings className="w-4 h-4 mr-2" />
                   Metadata
                 </TabsTrigger>
+                {/* [spring-ai-mcp-inspector PATCH] Timeline tab (#112). */}
+                <TabsTrigger value="timeline">
+                  <Bell className="w-4 h-4 mr-2" />
+                  Timeline
+                </TabsTrigger>
               </TabsList>
 
               <div className="w-full">
@@ -1817,6 +1824,8 @@ const App = () => {
                       metadata={metadata}
                       onMetadataChange={handleMetadataChange}
                     />
+                    {/* [spring-ai-mcp-inspector PATCH] Timeline tab (#112). */}
+                    <TimelineTab />
                   </>
                 )}
               </div>

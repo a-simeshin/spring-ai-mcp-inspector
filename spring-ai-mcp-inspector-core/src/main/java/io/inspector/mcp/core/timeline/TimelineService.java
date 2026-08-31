@@ -16,7 +16,6 @@
 
 package io.inspector.mcp.core.timeline;
 
-import java.time.Instant;
 import java.util.List;
 
 /**
@@ -51,52 +50,5 @@ public interface TimelineService {
 	 * Removes all events from the timeline.
 	 */
 	void clear();
-
-	/**
-	 * Query parameters for the timeline.
-	 *
-	 * @param correlationId optional correlation ID filter
-	 * @param sessionId optional session ID filter
-	 * @param type optional event type filter
-	 * @param since optional start time (inclusive)
-	 * @param until optional end time (exclusive)
-	 * @param limit maximum number of results (default 100, must be positive)
-	 */
-	record TimelineQuery(String correlationId, String sessionId, TimelineEventType type, Instant since, Instant until,
-			int limit) {
-
-		/**
-		 * Compact constructor with default limit.
-		 * @param correlationId optional correlation ID filter
-		 * @param sessionId optional session ID filter
-		 * @param type optional event type filter
-		 * @param since optional start time (inclusive)
-		 * @param until optional end time (exclusive)
-		 * @param limit the maximum number of results
-		 */
-		public TimelineQuery {
-			if (limit <= 0) {
-				limit = 100;
-			}
-		}
-
-		/**
-		 * Creates a query with no filters, returning up to 100 events.
-		 * @return a new query (never {@code null})
-		 */
-		public static TimelineQuery all() {
-			return new TimelineQuery(null, null, null, null, null, 100);
-		}
-
-		/**
-		 * Creates a query that filters by correlation ID.
-		 * @param correlationId the correlation ID to match
-		 * @return a new query with just the correlation filter
-		 */
-		public static TimelineQuery byCorrelationId(final String correlationId) {
-			return new TimelineQuery(correlationId, null, null, null, null, 100);
-		}
-
-	}
 
 }

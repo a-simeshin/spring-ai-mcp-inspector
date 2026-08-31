@@ -18,6 +18,7 @@ package io.inspector.mcp.core.timeline;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -25,16 +26,21 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * Bounded in-memory ring-buffer implementation of {@link TimelineService}.
  *
  * <p>
- * Stores up to {@link #MAX_EVENTS} events. When the buffer is full, the oldest event is
- * evicted to make room for the new one. All operations are thread-safe via a
- * {@link ReentrantReadWriteLock}.
+ * Stores up to the configured maximum number of events. When the buffer is full, the
+ * oldest event is evicted to make room for the new one. All operations are thread-safe
+ * via a {@link ReentrantReadWriteLock}.
  *
  * @author Artem Simeshin
  */
 public final class BoundedTimelineService implements TimelineService {
 
-	/** Maximum number of events retained in the ring buffer. */
-	static final int MAX_EVENTS = 1000;
+	/** Default maximum number of events retained in the ring buffer. */
+	static final int DEFAULT_MAX_EVENTS = 1000;
+
+	/** Public alias for the default capacity. */
+	public static final int MAX_EVENTS = DEFAULT_MAX_EVENTS;
+
+	private final int maxEvents;
 
 	private final TimelineEvent[] buffer;
 
@@ -48,7 +54,19 @@ public final class BoundedTimelineService implements TimelineService {
 	 * Creates a new bounded timeline service with the default capacity.
 	 */
 	public BoundedTimelineService() {
-		this.buffer = new TimelineEvent[MAX_EVENTS];
+		this(DEFAULT_MAX_EVENTS);
+	}
+
+	/**
+	 * Creates a new bounded timeline service with the given capacity.
+	 * @param capacity maximum number of events to retain
+	 */
+	public BoundedTimelineService(final int capacity) {
+		if (capacity <= 0) {
+			throw new IllegalArgumentException("capacity must be positive: " + capacity);
+		}
+		this.maxEvents = capacity;
+		this.buffer = new TimelineEvent[capacity];
 		this.nextIndex = 0;
 		this.size = 0;
 	}
@@ -61,8 +79,8 @@ public final class BoundedTimelineService implements TimelineService {
 		this.lock.writeLock().lock();
 		try {
 			this.buffer[this.nextIndex] = event;
-			this.nextIndex = (this.nextIndex + 1) % MAX_EVENTS;
-			if (this.size < MAX_EVENTS) {
+			this.nextIndex = (this.nextIndex + 1) % this.maxEvents;
+			if (this.size < this.maxEvents) {
 				this.size++;
 			}
 		}
@@ -78,7 +96,7 @@ public final class BoundedTimelineService implements TimelineService {
 			final List<TimelineEvent> result = new ArrayList<>(this.size);
 			// Walk the buffer from newest to oldest
 			for (int i = 0; i < this.size; i++) {
-				final int idx = (this.nextIndex - 1 - i + MAX_EVENTS) % MAX_EVENTS;
+				final int idx = (this.nextIndex - 1 - i + this.maxEvents) % this.maxEvents;
 				final TimelineEvent event = this.buffer[idx];
 				if (event == null) {
 					continue;
@@ -88,6 +106,12 @@ public final class BoundedTimelineService implements TimelineService {
 				}
 			}
 			final int limit = query.limit();
+			// The REST contract is newest-first; the ring walk goes from newest to
+			// oldest, but an out-of-order append (e.g. async log flush) must not
+			// leak insertion order into the result: sort by timestamp explicitly.
+			// The stable sort preserves the ring-walk order (newest-first) within
+			// identical timestamps, which is the reverse of insertion order.
+			result.sort(Comparator.comparing(TimelineEvent::timestamp).reversed());
 			if (result.size() > limit) {
 				return Collections.unmodifiableList(result.subList(0, limit));
 			}
@@ -102,7 +126,7 @@ public final class BoundedTimelineService implements TimelineService {
 	public void clear() {
 		this.lock.writeLock().lock();
 		try {
-			for (int i = 0; i < MAX_EVENTS; i++) {
+			for (int i = 0; i < this.maxEvents; i++) {
 				this.buffer[i] = null;
 			}
 			this.nextIndex = 0;
@@ -134,7 +158,7 @@ public final class BoundedTimelineService implements TimelineService {
 		if (query.sessionId() != null && !query.sessionId().equals(event.sessionId())) {
 			return false;
 		}
-		if (query.type() != null && query.type() != event.type()) {
+		if (query.eventTypes() != null && !query.eventTypes().isEmpty() && !query.eventTypes().contains(event.type())) {
 			return false;
 		}
 		if (query.since() != null && event.timestamp().isBefore(query.since())) {

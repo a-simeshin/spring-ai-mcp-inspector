@@ -1,0 +1,4 @@
+TimelineTab.tsx, App.tsx, __tests__/TimelineTab.test.tsx — new TimelineTab component that polls /mcp-inspector/api/timeline
+and renders a color-coded, expandable chronological event log for MCP traffic and
+application logs. No upstream equivalent exists; this is a Spring AI MCP Inspector
+extension. Tab icon: Bell (lucide-react, already a project dependency).

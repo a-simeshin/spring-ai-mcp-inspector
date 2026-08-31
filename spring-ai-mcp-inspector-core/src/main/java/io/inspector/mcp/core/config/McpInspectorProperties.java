@@ -343,12 +343,56 @@ public class McpInspectorProperties {
 	public static class Timeline {
 
 		/**
-		 * Whether in-JVM MCP traffic recording is enabled. When {@code true}, every
-		 * JSON-RPC request, response, notification, and stream event is captured by the
-		 * {@code McpTrafficRecorder} and forwarded to the {@code TimelineService}.
-		 * Defaults to {@code false}.
+		 * Whether the timeline feature is enabled overall. Defaults to {@code false}
+		 * (opt-in).
 		 */
-		private boolean trafficEnabled;
+		private boolean enabled = false;
+
+		/**
+		 * Whether in-JVM MCP traffic recording is enabled. When {@code true} (the
+		 * default), a {@code McpTrafficRecorder} bean exists and the proxy captures every
+		 * JSON-RPC request, response, notification, and stream event into the
+		 * {@code TimelineService}. Set to {@code false} to skip creating and wiring the
+		 * recorder entirely; only has an effect while {@link #enabled} is {@code true}.
+		 */
+		private boolean trafficEnabled = true;
+
+		/**
+		 * Whether Logback appender bridge is enabled. Defaults to {@code true} when
+		 * {@link #enabled} is {@code true}.
+		 */
+		private boolean logsEnabled = true;
+
+		/**
+		 * Whether System.err/out capture is enabled. Defaults to {@code true} when
+		 * {@link #enabled} is {@code true}.
+		 */
+		private boolean stdioCaptureEnabled = true;
+
+		/**
+		 * Maximum number of timeline events to retain in the ring buffer. Default
+		 * {@code 1000}.
+		 */
+		private int capacity = 1000;
+
+		/**
+		 * Queue size for the async Logback appender. Default {@code 1024}.
+		 */
+		private int appenderQueueSize = 1024;
+
+		/**
+		 * Whether to discard events when the async appender queue is full ({@code true})
+		 * or block the calling thread ({@code false}). Default {@code true}.
+		 */
+		private boolean appenderDiscardingPolicy = true;
+
+		public boolean isEnabled() {
+			return this.enabled;
+		}
+
+		public void setEnabled(final boolean enabled) {
+			this.enabled = enabled;
+		}
 
 		public boolean isTrafficEnabled() {
 			return this.trafficEnabled;
@@ -356,6 +400,46 @@ public class McpInspectorProperties {
 
 		public void setTrafficEnabled(final boolean trafficEnabled) {
 			this.trafficEnabled = trafficEnabled;
+		}
+
+		public boolean isLogsEnabled() {
+			return this.logsEnabled;
+		}
+
+		public void setLogsEnabled(final boolean logsEnabled) {
+			this.logsEnabled = logsEnabled;
+		}
+
+		public boolean isStdioCaptureEnabled() {
+			return this.stdioCaptureEnabled;
+		}
+
+		public void setStdioCaptureEnabled(final boolean stdioCaptureEnabled) {
+			this.stdioCaptureEnabled = stdioCaptureEnabled;
+		}
+
+		public int getCapacity() {
+			return this.capacity;
+		}
+
+		public void setCapacity(final int capacity) {
+			this.capacity = capacity;
+		}
+
+		public int getAppenderQueueSize() {
+			return this.appenderQueueSize;
+		}
+
+		public void setAppenderQueueSize(final int appenderQueueSize) {
+			this.appenderQueueSize = appenderQueueSize;
+		}
+
+		public boolean isAppenderDiscardingPolicy() {
+			return this.appenderDiscardingPolicy;
+		}
+
+		public void setAppenderDiscardingPolicy(final boolean appenderDiscardingPolicy) {
+			this.appenderDiscardingPolicy = appenderDiscardingPolicy;
 		}
 
 	}

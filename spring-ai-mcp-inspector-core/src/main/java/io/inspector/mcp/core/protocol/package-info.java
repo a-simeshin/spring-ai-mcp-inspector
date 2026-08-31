@@ -15,15 +15,10 @@
  */
 
 /**
- * Timeline event model, service and traffic recorder for the MCP inspector.
+ * Protocol revision compatibility checking.
  *
  * <p>
- * Provides the {@link io.inspector.mcp.core.timeline.TimelineEvent} model,
- * {@link io.inspector.mcp.core.timeline.TimelineService} interface and bounded in-memory
- * implementation, a {@link io.inspector.mcp.core.timeline.McpTrafficRecorder} that
- * intercepts JSON-RPC traffic at the proxy boundary, a
- * {@link io.inspector.mcp.core.timeline.TimelineAppender} that bridges Logback events,
- * and a {@link io.inspector.mcp.core.timeline.SystemErrOutSink} that captures
- * System.out/err output.
+ * Provides a pure (I/O-free) module for comparing MCP protocol revisions and identifying
+ * methods affected by version mismatches.
  */
-package io.inspector.mcp.core.timeline;
+package io.inspector.mcp.core.protocol;

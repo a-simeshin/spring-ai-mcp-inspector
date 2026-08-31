@@ -63,7 +63,6 @@
     "esbuild": "^0.28.1",
     "@hono/node-server": "^1.19.15",
     "hono": "^4.12.34",
-    "brace-expansion": "^1.1.18",
     "body-parser": "^2.3.0",
     "fast-uri": "^3.1.5",
     "form-data": "^4.0.6",
