@@ -159,12 +159,44 @@ public final class McpProxy {
 		// takeUntilOther: close() may fail to complete the sink if another thread owns
 		// it at that instant, so the pump is unsubscribed off the session's lock-free
 		// close signal instead of trusting the sink's terminal event to arrive.
+		// Handshake gate: the initialize request must complete its send before any
+		// non-handshake frame is dispatched. Without this, flatMap (which replaced
+		// concatMap to avoid a circular wait on server-initiated roots/list) lets
+		// tools/list overtain initialize and arrive at the upstream before the
+		// session is registered, causing a 404 that tears the SSE stream down (PR #89).
+		// The gate is a Sinks.One that opens when initialize's send completes.
+		// notifications/initialized is part of the handshake and passes through.
+		// If no initialize is ever sent (e.g. unit tests that inject tools/list
+		// directly), the gate auto-opens on the first non-handshake request.
+		final Sinks.One<Void> handshakeGate = Sinks.one();
+		final java.util.concurrent.atomic.AtomicBoolean initializeSeen = new java.util.concurrent.atomic.AtomicBoolean();
 		session.browserToTarget().asFlux().takeUntilOther(session.closeSignal()).flatMap((frame) -> {
 			final JSONRPCMessage typed = toTyped(frame);
 			if (typed == null) {
 				return Mono.empty();
 			}
 			recordOutbound(session, typed, frame);
+			// Initialize opens the gate when its send completes.
+			if (typed instanceof McpSchema.JSONRPCRequest req && McpSchema.METHOD_INITIALIZE.equals(req.method())) {
+				initializeSeen.set(true);
+				LOG.debug("proxy[{}] forwarding initialize (opens handshake gate): {}", session.sessionId(), typed);
+				return sendWithOneRetry(session, typed).timeout(Duration.ofMinutes(1)).doOnSuccess((v) -> {
+					LOG.debug("proxy[{}] initialize completed, opening gate: {}", session.sessionId(), typed);
+					handshakeGate.tryEmitEmpty();
+				}).onErrorResume((err) -> {
+					if (err instanceof java.util.concurrent.TimeoutException) {
+						LOG.warn("proxy[{}] sendMessage timed out for initialize", session.sessionId());
+						return Mono.empty();
+					}
+					final ProxyConnectFailure failure = ProxyConnectFailure.classify(err);
+					LOG.warn("proxy[{}] initialize stream error ({}): {}", session.sessionId(), failure.reason().wire(),
+							err.toString());
+					if (failure.reason() != ProxyConnectFailure.Reason.UNKNOWN) {
+						session.failUpstream(err);
+					}
+					return Mono.empty();
+				});
+			}
 			// Notifications need no response; send async so they do not
 			// occupy a flatMap slot while the server processes them, which
 			// would delay concurrent frame processing (e.g. the browser
@@ -181,22 +213,29 @@ public final class McpProxy {
 					.subscribe();
 				return Mono.empty();
 			}
-			LOG.debug("proxy[{}] forwarding frame: {}", session.sessionId(), typed);
-			return sendWithOneRetry(session, typed).timeout(Duration.ofMinutes(1))
-				.doOnSuccess((v) -> LOG.debug("proxy[{}] frame completed: {}", session.sessionId(), typed))
-				.onErrorResume((err) -> {
-					if (err instanceof java.util.concurrent.TimeoutException) {
-						LOG.warn("proxy[{}] sendMessage timed out for frame: {}", session.sessionId(), typed);
+			// All other frames wait for the handshake gate before sending. If no
+			// initialize was ever sent (e.g. direct unit test injection), auto-open
+			// the gate so the frame is not blocked forever.
+			if (!initializeSeen.get()) {
+				handshakeGate.tryEmitEmpty();
+			}
+			LOG.debug("proxy[{}] forwarding frame (awaiting gate): {}", session.sessionId(), typed);
+			return handshakeGate.asMono()
+				.then(sendWithOneRetry(session, typed).timeout(Duration.ofMinutes(1))
+					.doOnSuccess((v) -> LOG.debug("proxy[{}] frame completed: {}", session.sessionId(), typed))
+					.onErrorResume((err) -> {
+						if (err instanceof java.util.concurrent.TimeoutException) {
+							LOG.warn("proxy[{}] sendMessage timed out for frame: {}", session.sessionId(), typed);
+							return Mono.empty();
+						}
+						final ProxyConnectFailure failure = ProxyConnectFailure.classify(err);
+						LOG.warn("proxy[{}] browser->target stream error ({}): {}", session.sessionId(),
+								failure.reason().wire(), err.toString());
+						if (failure.reason() != ProxyConnectFailure.Reason.UNKNOWN) {
+							session.failUpstream(err);
+						}
 						return Mono.empty();
-					}
-					final ProxyConnectFailure failure = ProxyConnectFailure.classify(err);
-					LOG.warn("proxy[{}] browser->target stream error ({}): {}", session.sessionId(),
-							failure.reason().wire(), err.toString());
-					if (failure.reason() != ProxyConnectFailure.Reason.UNKNOWN) {
-						session.failUpstream(err);
-					}
-					return Mono.empty();
-				});
+					}));
 		}).subscribe();
 
 		// Route any terminal transport failure (e.g. the upstream MCP server dies
