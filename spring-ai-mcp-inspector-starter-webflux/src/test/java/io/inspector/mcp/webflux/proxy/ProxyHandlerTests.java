@@ -781,9 +781,12 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() opening a new session maps an upstream connect failure into a 502 bad gateway")
 		void postMcp_newSessionWhenUpstreamConnectFails_returns502() {
-			// given
+			// given - ConnectException is what the SDK throws when the upstream
+			// port is closed; ProxyConnectFailure.classify maps it to
+			// CONNECTION_REFUSED. Wrapped in RuntimeException because
+			// openStreamable does not declare checked exceptions.
 			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class)))
-				.willThrow(new RuntimeException("connection refused"));
+				.willThrow(new RuntimeException(new java.net.ConnectException("Connection refused")));
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://up/mcp")
 						.contentType(MediaType.APPLICATION_JSON)
@@ -792,9 +795,11 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
 
-			// then
+			// then - 502 bad gateway with the structured MCP_CONNECT_FAILED payload
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			assertThat(entityBody(response).get("error").toString()).contains("MCP_CONNECT_FAILED");
+			assertThat(entityBody(response).get("error").toString()).contains("connection_refused");
 		}
 
 		@Test
@@ -1527,7 +1532,8 @@ class ProxyHandlerTests {
 			// then — 504 gateway timeout and the orphaned new session is removed
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
-			assertThat(entityBody(response).get("error").toString()).contains("did not respond");
+			assertThat(entityBody(response).get("error").toString()).contains("MCP_CONNECT_FAILED");
+			assertThat(entityBody(response).get("error").toString()).contains("timeout");
 			verify(ProxyHandlerTests.this.registry).removeAndClose(captured[0].sessionId());
 		}
 
