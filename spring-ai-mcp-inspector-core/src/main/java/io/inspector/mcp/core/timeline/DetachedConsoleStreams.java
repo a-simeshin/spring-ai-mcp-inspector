@@ -16,8 +16,6 @@
 
 package io.inspector.mcp.core.timeline;
 
-import java.io.FileDescriptor;
-import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.util.IdentityHashMap;
@@ -30,40 +28,7 @@ import ch.qos.logback.core.OutputStreamAppender;
 import ch.qos.logback.core.joran.spi.ConsoleTarget;
 import org.slf4j.LoggerFactory;
 
-/**
- * Repoints Logback's console appenders at the raw standard streams before
- * {@link SystemErrOutSink} wraps {@code System.out}/{@code System.err}.
- *
- * <p>
- * Without this, a log line reaches the timeline twice: once through the
- * {@link TimelineAppender} on the root logger, and once because the ConsoleAppender
- * writes through the already-wrapped {@code System.out}, which the sink captures as a
- * second APP_LOG event (or, at best, creates an append-from-within-append reentry).
- * {@code ConsoleAppender} does not hold {@code System.out} itself: at
- * {@code ConsoleAppender.start()} it stores the lazy {@code ConsoleTarget} delegate,
- * whose {@code write} re-reads the current {@code System.out} static on every call. A
- * {@code System.out == currentStream} identity check therefore never matches a console
- * appender - it has to be recognised by type (and by the delegate it holds), then
- * repointed at a stream bound directly to {@link FileDescriptor#out} /
- * {@link FileDescriptor#err}, which detaches console output from whatever
- * {@code System.out} later becomes.
- *
- * <p>
- * The original streams are remembered and can be restored on {@link #restore()}, which
- * keeps the change reversible for tests and for sink shutdown.
- *
- * @author Artem Simeshin
- */
 public final class DetachedConsoleStreams {
-
-	/**
-	 * Streams bound to the raw standard descriptors. Process-scoped by design — like
-	 * {@code System.out} itself they are never closed, because closing {@code fd 1}/
-	 * {@code fd 2} would take the console down for the whole JVM.
-	 */
-	private static final OutputStream RAW_STDOUT = new FileOutputStream(FileDescriptor.out);
-
-	private static final OutputStream RAW_STDERR = new FileOutputStream(FileDescriptor.err);
 
 	private final Map<OutputStreamAppender<?>, OutputStream> previous = new IdentityHashMap<>();
 
@@ -73,9 +38,10 @@ public final class DetachedConsoleStreams {
 
 	/**
 	 * Rebinds every {@link OutputStreamAppender} currently attached to any logger in the
-	 * given context: appenders targeting the current {@code System.out} go to the raw
-	 * stdout descriptor, appenders targeting the current {@code System.err} go to the raw
-	 * stderr descriptor. Appenders on other streams (files, sockets) are left untouched.
+	 * given context: appenders targeting the current {@code System.out} go to the same
+	 * stream that was there before interception, appenders targeting the current
+	 * {@code System.err} go to the same stream. Appenders on other streams (files,
+	 * sockets) are left untouched.
 	 * @return a handle that restores the previous streams, never {@code null}
 	 */
 	public static DetachedConsoleStreams detach() {
@@ -127,13 +93,13 @@ public final class DetachedConsoleStreams {
 		// target it points at, and re-point through the public setter so the class
 		// contract (encoder re-init included) stays intact.
 		if (streamAppender instanceof final ConsoleAppender<?> console) {
-			repointConsole(console, saved);
+			repointConsole(console, consoleOut, consoleErr, saved);
 			return;
 		}
 		if (current == consoleOut) {
 			saved.put(streamAppender, current);
 			try {
-				setOutputStreamField(streamAppender, RAW_STDOUT);
+				setOutputStreamField(streamAppender, consoleOut);
 			}
 			catch (final ReflectiveOperationException ex) {
 				saved.remove(streamAppender);
@@ -142,7 +108,7 @@ public final class DetachedConsoleStreams {
 		else if (current == consoleErr) {
 			saved.put(streamAppender, current);
 			try {
-				setOutputStreamField(streamAppender, RAW_STDERR);
+				setOutputStreamField(streamAppender, consoleErr);
 			}
 			catch (final ReflectiveOperationException ex) {
 				saved.remove(streamAppender);
@@ -159,17 +125,19 @@ public final class DetachedConsoleStreams {
 	 * logged line. Appenders on any other stream (JANSI-wrapped, or a stream set
 	 * explicitly) are left alone.
 	 * @param console the console appender to repoint
+	 * @param consoleOut the original stdout stream captured before interception
+	 * @param consoleErr the original stderr stream captured before interception
 	 * @param saved map remembering each repointed appender's previous stream
 	 */
-	private static void repointConsole(final ConsoleAppender<?> console,
-			final Map<OutputStreamAppender<?>, OutputStream> saved) {
+	private static void repointConsole(final ConsoleAppender<?> console, final OutputStream consoleOut,
+			final OutputStream consoleErr, final Map<OutputStreamAppender<?>, OutputStream> saved) {
 		final OutputStream current = console.getOutputStream();
 		final OutputStream replacement;
 		if (current == ConsoleTarget.SystemOut.getStream()) {
-			replacement = RAW_STDOUT;
+			replacement = consoleOut;
 		}
 		else if (current == ConsoleTarget.SystemErr.getStream()) {
-			replacement = RAW_STDERR;
+			replacement = consoleErr;
 		}
 		else {
 			return;

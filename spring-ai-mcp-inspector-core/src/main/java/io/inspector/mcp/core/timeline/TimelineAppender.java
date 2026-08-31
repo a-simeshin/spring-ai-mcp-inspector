@@ -16,7 +16,12 @@
 
 package io.inspector.mcp.core.timeline;
 
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
@@ -47,6 +52,12 @@ public final class TimelineAppender extends AppenderBase<ILoggingEvent> {
 	private final TimelineService timelineService;
 
 	/**
+	 * One-shot guard: first swallow writes a warning to raw stderr, subsequent ones stay
+	 * silent.
+	 */
+	private static final AtomicBoolean STALLED_WARNED = new AtomicBoolean();
+
+	/**
 	 * Creates a new appender that forwards events to the given service.
 	 * @param timelineService the target timeline service (must not be {@code null})
 	 */
@@ -73,6 +84,13 @@ public final class TimelineAppender extends AppenderBase<ILoggingEvent> {
 		}
 		catch (final RuntimeException ex) {
 			// An appender failure must never break the host application's logging.
+			if (STALLED_WARNED.compareAndSet(false, true)) {
+				// One-shot signal: the appender is silently dropping events.
+				final PrintStream ps = new PrintStream(new FileOutputStream(FileDescriptor.err), true,
+						StandardCharsets.UTF_8);
+				ps.println("[TimelineAppender] timeline append failed; suppressing further warnings");
+				ps.close();
+			}
 		}
 	}
 

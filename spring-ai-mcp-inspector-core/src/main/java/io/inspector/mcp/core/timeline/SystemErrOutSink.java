@@ -17,8 +17,11 @@
 package io.inspector.mcp.core.timeline;
 
 import java.io.ByteArrayOutputStream;
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Captures {@link System#out} and {@link System#err} output that bypasses Logback (e.g.
@@ -53,6 +56,12 @@ public final class SystemErrOutSink implements AutoCloseable {
 	private final DetachedConsoleStreams detachedStreams;
 
 	private volatile boolean closed;
+
+	/**
+	 * One-shot guard: first swallow writes a warning to raw stderr, subsequent ones stay
+	 * silent.
+	 */
+	private static final AtomicBoolean STALLED_WARNED = new AtomicBoolean();
 
 	/**
 	 * Creates a sink that captures {@code System.out} and {@code System.err}. Logback
@@ -170,6 +179,13 @@ public final class SystemErrOutSink implements AutoCloseable {
 				}
 				catch (final RuntimeException ex) {
 					// Best-effort: a failing timeline must not take the console down.
+					if (STALLED_WARNED.compareAndSet(false, true)) {
+						// One-shot signal: the sink is silently dropping events.
+						final PrintStream ps = new PrintStream(new FileOutputStream(FileDescriptor.err), true,
+								StandardCharsets.UTF_8);
+						ps.println("[SystemErrOutSink] timeline append failed; suppressing further warnings");
+						ps.close();
+					}
 				}
 			}
 		}
