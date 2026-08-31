@@ -422,6 +422,7 @@ const App = () => {
     sendNotification,
     handleCompletion,
     completionsSupported,
+    mcpSessionId,
     connect: connectMcpServer,
     disconnect: disconnectMcpServer,
   } = useConnection({
@@ -1435,6 +1436,7 @@ const App = () => {
           connectionType={connectionType}
           setConnectionType={setConnectionType}
           serverImplementation={serverImplementation}
+          mcpSessionId={mcpSessionId}
         />
         {!isCompactLayout && (
           <div
