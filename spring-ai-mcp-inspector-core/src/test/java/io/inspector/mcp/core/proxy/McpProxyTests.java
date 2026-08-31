@@ -181,7 +181,7 @@ class McpProxyTests {
 			McpProxyTests.this.browserToTarget.tryEmitNext(McpProxyTests.this.mapper.createObjectNode()
 				.put("jsonrpc", "2.0")
 				.put("id", 1)
-				.put("method", "ping"));
+				.put("method", "initialize"));
 
 			// then — the upstream failure is propagated to the browser side instead of
 			// being swallowed until the streamable-request timeout
@@ -190,6 +190,42 @@ class McpProxyTests {
 			StepVerifier.create(McpProxyTests.this.targetToBrowser.asFlux())
 				.expectError()
 				.verify(Duration.ofSeconds(1));
+		}
+
+		@Test
+		@Story("Handshake ordering")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("initialize and tools/list sent back-to-back must reach the transport in order: "
+				+ "initialize first, then tools/list. Without the handshake gate, flatMap would send "
+				+ "tools/list concurrently and the server could reject it as an unknown session")
+		void start_handshakeGate_ordersInitializeBeforeNonHandshakeFrames() {
+			// given
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any())).willReturn(Mono.empty());
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+
+			// when: send initialize and tools/list back-to-back without waiting for a
+			// response
+			final JsonNode initFrame = McpProxyTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.put("method", "initialize");
+			final JsonNode toolsListFrame = McpProxyTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 2)
+				.put("method", "tools/list");
+			McpProxyTests.this.browserToTarget.tryEmitNext(initFrame);
+			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame);
+
+			// then: initialize must be sent before tools/list
+			final ArgumentCaptor<JSONRPCMessage> captor = ArgumentCaptor.forClass(JSONRPCMessage.class);
+			verify(McpProxyTests.this.transport, timeout(1000).times(2)).sendMessage(captor.capture());
+			final java.util.List<JSONRPCMessage> messages = captor.getAllValues();
+			assertThat(messages).hasSize(2);
+			assertThat(messages.get(0)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+					(req) -> assertThat(req.method()).isEqualTo("initialize"));
+			assertThat(messages.get(1)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+					(req) -> assertThat(req.method()).isEqualTo("tools/list"));
 		}
 
 	}
