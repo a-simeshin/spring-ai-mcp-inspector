@@ -263,23 +263,17 @@ class McpProxyTests {
 			// given - initialize send never completes
 			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
 			given(McpProxyTests.this.transport.sendMessage(any())).willReturn(Mono.never());
-			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
 
-			// when: send initialize (which never returns) and tools/list back-to-back
-			McpProxyTests.this.browserToTarget.tryEmitNext(initFrame());
-			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
-
-			// then: the 1-minute timeout should fire, releasing the gate and failing
-			// the session. tools/list must complete (not hang) - we verify this by
-			// waiting for the session to be terminated (via the targetToBrowser error)
-			// within a reasonable time after the 1-minute timeout.
-			// sendMessage is called once for initialize (the mock returns Mono.never());
-			// the tools/list frame is blocked by the gate, so its sendMessage is never
-			// reached before the timeout fires. After the timeout the gate error is
-			// propagated through onErrorContinue and the session is terminated.
-			StepVerifier.create(McpProxyTests.this.targetToBrowser.asFlux())
-				.expectError()
-				.verify(Duration.ofMinutes(2));
+			// when + then: advance virtual time past the 1-minute timeout.
+			// The timeout fires, releasing the gate with an error and failing the
+			// session via onErrorResume. tools/list, blocked on the gate, completes
+			// with the error instead of hanging forever.
+			StepVerifier.withVirtualTime(() -> {
+				McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+				McpProxyTests.this.browserToTarget.tryEmitNext(initFrame());
+				McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
+				return McpProxyTests.this.targetToBrowser.asFlux();
+			}).thenAwait(Duration.ofMinutes(1).plusSeconds(1)).expectError().verify();
 			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
 		}
 

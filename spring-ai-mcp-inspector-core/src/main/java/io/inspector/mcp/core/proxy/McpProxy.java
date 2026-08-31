@@ -221,6 +221,7 @@ public final class McpProxy {
 			}
 			LOG.debug("proxy[{}] forwarding frame (awaiting gate): {}", session.sessionId(), typed);
 			return handshakeGate.asMono()
+				.or(session.closeSignal())
 				.then(sendWithOneRetry(session, typed).timeout(Duration.ofMinutes(1))
 					.doOnSuccess((v) -> LOG.debug("proxy[{}] frame completed: {}", session.sessionId(), typed))
 					.onErrorResume((err) -> {
@@ -259,7 +260,7 @@ public final class McpProxy {
 			// (e.g. the SSE GET after markInitialized answering "Unrecognized server
 			// error when connecting to SSE stream, status code: 400" when the session
 			// id raced) through this handler; that is SDK dirt, not the death of the
-			// appstream — the request/response POST path is still alive and must keep
+			// appstream - the request/response POST path is still alive and must keep
 			// relaying. Same classification as the browser->target pump: only genuine
 			// transport-level failures (refused / dns / timeout) justify tearing the
 			// session down.
