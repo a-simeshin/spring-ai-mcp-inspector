@@ -57,6 +57,9 @@ public class TimelineController {
 	 * @param until optional end of time range (ISO-8601 instant)
 	 * @param types optional comma-separated list of event type names (e.g.
 	 * {@code MCP_JSONRPC_REQUEST,APP_LOG})
+	 * @param clientName optional client name filter (matches payload.clientName)
+	 * @param direction optional traffic direction filter, e.g. {@code client->server} or
+	 * {@code server->client} (matches payload.direction)
 	 * @param limit maximum number of events to return (default 500, max 5000)
 	 * @return matching timeline events
 	 */
@@ -66,6 +69,8 @@ public class TimelineController {
 			@RequestParam(name = "since", required = false) final Instant since,
 			@RequestParam(name = "until", required = false) final Instant until,
 			@RequestParam(name = "types", required = false) final String types,
+			@RequestParam(name = "clientName", required = false) final String clientName,
+			@RequestParam(name = "direction", required = false) final String direction,
 			@RequestParam(name = "limit", defaultValue = "500") final int limit) {
 
 		final List<TimelineEventType> eventTypes = parseTypes(types);
@@ -75,9 +80,20 @@ public class TimelineController {
 			.since(since)
 			.until(until)
 			.eventTypes(eventTypes)
+			.clientName(clientName)
+			.direction(direction)
 			.limit(limit)
 			.build();
 		return this.timelineService.query(query);
+	}
+
+	/**
+	 * Returns diagnostic events (client handler desync findings) from the timeline.
+	 * @return diagnostic events matching payload endpoint=client-diagnostics
+	 */
+	@GetMapping(path = "/diagnostics", produces = MediaType.APPLICATION_JSON_VALUE)
+	public List<TimelineEvent> diagnostics() {
+		return this.timelineService.query(TimelineQuery.all());
 	}
 
 	/**

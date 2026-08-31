@@ -1,4 +1,5 @@
 // [spring-ai-mcp-inspector PATCH] TimelineTab test — schema alignment, APP_LOG rendering, empty state (#130).
+// [spring-ai-mcp-inspector PATCH] Extended with client traffic, diagnostic badge, filter tests (#120, #141).
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import TimelineTab from "../TimelineTab";
@@ -45,6 +46,72 @@ const REQUEST_EVENT: WireEvent = {
     id: 1,
     method: "tools/list",
     params: {},
+  },
+};
+
+// Client traffic event: outgoing request.
+const CLIENT_REQUEST_EVENT: WireEvent = {
+  id: "evt-3",
+  correlationId: "mcpc:myClient:1",
+  sessionId: null,
+  type: "MCP_JSONRPC_REQUEST",
+  timestamp: "2026-08-30T12:00:02.000Z",
+  payload: {
+    endpoint: "client",
+    clientName: "myClient",
+    transport: "stdio",
+    direction: "client->server",
+    method: "tools/call",
+    id: "1",
+  },
+};
+
+// Client traffic event: incoming response with latency.
+const CLIENT_RESPONSE_EVENT: WireEvent = {
+  id: "evt-4",
+  correlationId: "mcpc:myClient:1",
+  sessionId: null,
+  type: "MCP_JSONRPC_RESPONSE",
+  timestamp: "2026-08-30T12:00:02.150Z",
+  payload: {
+    endpoint: "client",
+    clientName: "myClient",
+    transport: "stdio",
+    direction: "server->client",
+    latencyMs: 150,
+  },
+};
+
+// Diagnostic event: orphan handler.
+const DIAGNOSTIC_EVENT: WireEvent = {
+  id: "evt-5",
+  correlationId: "mcpcd:ORPHAN_HANDLER:myClient",
+  sessionId: null,
+  type: "APP_LOG",
+  timestamp: "2026-08-30T12:00:03.000Z",
+  payload: {
+    endpoint: "client-diagnostics",
+    desyncType: "ORPHAN_HANDLER",
+    clientName: "myClient",
+    handlerKind: "sampling",
+    source: "myBean#handleSampling",
+    message: "Handler references client 'myClient' which is not configured",
+  },
+};
+
+// Client error event: orphan response.
+const CLIENT_ORPHAN_EVENT: WireEvent = {
+  id: "evt-6",
+  correlationId: "mcpc:myClient:orphan",
+  sessionId: null,
+  type: "MCP_JSONRPC_RESPONSE",
+  timestamp: "2026-08-30T12:00:04.000Z",
+  payload: {
+    endpoint: "client",
+    clientName: "myClient",
+    transport: "stdio",
+    direction: "server->client",
+    orphan: true,
   },
 };
 
@@ -103,6 +170,68 @@ describe("TimelineTab", () => {
     );
   });
 
+  it("renders client traffic events with direction and client name", async () => {
+    mockFetch([CLIENT_REQUEST_EVENT, CLIENT_RESPONSE_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("2 events")).toBeInTheDocument(),
+    );
+    // Direction labels appear in the row (also in the filter dropdown options).
+    const dirLabels = screen.getAllByText("client->server");
+    expect(dirLabels.length).toBeGreaterThanOrEqual(1);
+    const respLabels = screen.getAllByText("server->client");
+    expect(respLabels.length).toBeGreaterThanOrEqual(1);
+    // Client name appears as a badge.
+    const clientLabels = screen.getAllByText("myClient");
+    expect(clientLabels.length).toBeGreaterThanOrEqual(2);
+    // Latency appears on the response.
+    expect(screen.getByText("150ms")).toBeInTheDocument();
+  });
+
+  it("renders diagnostic events with ORPHAN_HANDLER badge", async () => {
+    mockFetch([DIAGNOSTIC_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("1 event")).toBeInTheDocument(),
+    );
+    // Badge text is visible.
+    expect(screen.getByText("ORPHAN_HANDLER")).toBeInTheDocument();
+    // The diagnostic message is rendered.
+    expect(
+      screen.getByText(/Handler references client/),
+    ).toBeInTheDocument();
+  });
+
+  it("highlights orphan/error client events", async () => {
+    mockFetch([CLIENT_ORPHAN_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("1 event")).toBeInTheDocument(),
+    );
+    // The orphan event renders without crashing.
+    const dirLabels = screen.getAllByText("server->client");
+    expect(dirLabels.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("filters by direction when the dropdown is selected", async () => {
+    mockFetch([CLIENT_REQUEST_EVENT, CLIENT_RESPONSE_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("2 events")).toBeInTheDocument(),
+    );
+    // Two comboboxes: direction and client name. Pick the first (direction).
+    const selects = screen.getAllByRole("combobox");
+    expect(selects.length).toBeGreaterThanOrEqual(1);
+    fireEvent.change(selects[0], { target: { value: "server->client" } });
+    await waitFor(() =>
+      expect(screen.getByText("1 event")).toBeInTheDocument(),
+    );
+  });
+
   it("uses the inspector path advertised by the bootstrap", async () => {
     (window as unknown as Record<string, unknown>)[
       "__MCP_INSPECTOR_BOOTSTRAP"
@@ -125,5 +254,35 @@ describe("TimelineTab", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const calledUrl = String(fetchMock.mock.calls[0][0]);
     expect(calledUrl).toBe("/mcp-inspector/api/timeline?limit=200");
+  });
+
+  it("masks sensitive auth values in expanded payload", async () => {
+    const authEvent: WireEvent = {
+      ...REQUEST_EVENT,
+      id: "evt-auth",
+      payload: {
+        endpoint: "client",
+        clientName: "myClient",
+        transport: "sse",
+        direction: "client->server",
+        method: "tools/call",
+        token: "my-secret-token-12345",
+        authHeader: "Bearer super-secret-value",
+      },
+    };
+    mockFetch([authEvent]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("1 event")).toBeInTheDocument(),
+    );
+    // Expand the row.
+    fireEvent.click(screen.getByText("tools/call"));
+    await waitFor(() => {
+      // The token should be masked.
+      const text = document.body.textContent || "";
+      expect(text).not.toContain("my-secret-token-12345");
+      expect(text).not.toContain("super-secret-value");
+    });
   });
 });

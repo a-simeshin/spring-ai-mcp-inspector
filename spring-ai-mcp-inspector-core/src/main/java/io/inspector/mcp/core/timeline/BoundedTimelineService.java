@@ -167,6 +167,24 @@ public final class BoundedTimelineService implements TimelineService {
 		if (query.until() != null && !event.timestamp().isBefore(query.until())) {
 			return false;
 		}
+		if (query.clientName() != null) {
+			if (event.payload() == null) {
+				return false;
+			}
+			final var node = event.payload().get("clientName");
+			if (node == null || !query.clientName().equals(node.asText())) {
+				return false;
+			}
+		}
+		if (query.direction() != null) {
+			if (event.payload() == null) {
+				return false;
+			}
+			final var node = event.payload().get("direction");
+			if (node == null || !query.direction().equals(node.asText())) {
+				return false;
+			}
+		}
 		return true;
 	}
 
