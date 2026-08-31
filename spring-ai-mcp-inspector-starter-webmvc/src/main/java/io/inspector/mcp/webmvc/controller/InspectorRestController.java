@@ -476,6 +476,7 @@ public class InspectorRestController implements ApplicationContextAware {
 		final McpSyncClient client = state.client();
 		final Object params = relay.params();
 		return switch (relay.method()) {
+			case "initialize" -> client.getCurrentInitializationResult();
 			case "tools/list" -> client.listTools();
 			case "tools/call" -> {
 				final Map<String, Object> p = asMap(params);
