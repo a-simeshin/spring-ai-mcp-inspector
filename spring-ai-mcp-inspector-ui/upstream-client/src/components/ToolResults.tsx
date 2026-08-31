@@ -1,11 +1,15 @@
 import JsonView from "./JsonView";
 import ResourceLinkView from "./ResourceLinkView";
+import { Copy, CheckCheck } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   CallToolResultSchema,
   CompatibilityCallToolResult,
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { validateToolOutput, hasOutputSchema } from "@/utils/schemaUtils";
+import useCopy from "@/lib/hooks/useCopy";
+import { useToast } from "@/lib/hooks/useToast";
 
 interface ToolResultsProps {
   toolResult: CompatibilityCallToolResult | null;
@@ -66,6 +70,8 @@ const ToolResults = ({
   onReadResource,
   isPollingTask,
 }: ToolResultsProps) => {
+  const { toast } = useToast();
+  const { copied, setCopied } = useCopy();
   if (!toolResult) return null;
 
   if ("content" in toolResult) {
@@ -130,19 +136,53 @@ const ToolResults = ({
       );
     }
 
+    // [spring-ai-mcp-inspector PATCH] Copy button for full tool result + scrollable
+    // container: the result content is wrapped in a scrollable container so
+    // long output does not extend into the History pane below, and the horizontal
+    // scrollbar from JsonView stays inside the card. A Copy button at the top
+    // copies the complete un-truncated output to clipboard.
     return (
       <>
-        <h4 className="font-semibold mb-2">
-          Tool Result:{" "}
-          {isError ? (
-            <span className="text-red-600 font-semibold">Error</span>
-          ) : isTaskRunning ? (
-            <span className="text-yellow-600 font-semibold">Task Running</span>
-          ) : (
-            <span className="text-green-600 font-semibold">Success</span>
-          )}
-        </h4>
-        {structuredResult.structuredContent && (
+        <div className="flex items-center justify-between mb-2">
+          <h4 className="font-semibold">
+            Tool Result:{" "}
+            {isError ? (
+              <span className="text-red-600 font-semibold">Error</span>
+            ) : isTaskRunning ? (
+              <span className="text-yellow-600 font-semibold">Task Running</span>
+            ) : (
+              <span className="text-green-600 font-semibold">Success</span>
+            )}
+          </h4>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-2"
+            onClick={() => {
+              try {
+                navigator.clipboard.writeText(
+                  JSON.stringify(structuredResult, null, 2),
+                );
+                setCopied(true);
+              } catch (error) {
+                toast({
+                  title: "Error",
+                  description: `Failed to copy tool result: ${error instanceof Error ? error.message : String(error)}`,
+                  variant: "destructive",
+                });
+              }
+            }}
+          >
+            {copied ? (
+              <CheckCheck className="h-3.5 w-3.5 mr-1 dark:text-green-700 text-green-600" />
+            ) : (
+              <Copy className="h-3.5 w-3.5 mr-1" />
+            )}
+            {copied ? "Copied" : "Copy"}
+          </Button>
+        </div>
+        <div className="overflow-auto max-h-[60vh]">
+          {structuredResult.structuredContent && (
           <div className="mb-4">
             <h5 className="font-semibold mb-2 text-sm">Structured Content:</h5>
             <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
@@ -235,6 +275,7 @@ const ToolResults = ({
             ))}
           </div>
         )}
+        </div>
       </>
     );
   } else if ("toolResult" in toolResult) {
