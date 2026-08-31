@@ -90,7 +90,7 @@
              demo split put them on three classpaths at once (demo-app, demo-webmvc,
              demo-webflux); a single pair of properties keeps the browser stack from
              drifting apart between the stack modules. -->
-        <selenide.version>7.6.1</selenide.version>
+        <selenide.version>7.18.1</selenide.version>
         <webdrivermanager.version>6.1.0</webdrivermanager.version>
 
         <!-- JaCoCo coverage gate (Surefire only — IT/E2E run under Failsafe
