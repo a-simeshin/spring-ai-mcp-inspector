@@ -50,14 +50,14 @@ import { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/lib/hooks/useToast";
 import { ConnectionStatus, CLIENT_IDENTITY } from "../constants";
-import { isConnectionAuthError } from "../connectionAuthErrors";
+import { isConnectionAuthError } from "../connectionErrors";
 import {
   ConnectFailedError,
   CONNECT_FAILED_ERROR_CODE,
   connectionFailureFromError,
   parseConnectFailureResponse,
   type ConnectFailure,
-} from "../connectErrors";
+} from "../connectionErrors";
 import { Notification } from "../notificationTypes";
 import {
   auth,
@@ -88,7 +88,7 @@ import { resolveRefsInMessage } from "@/utils/schemaUtils";
 // [spring-ai-mcp-inspector PATCH] D3 structured error contract (issue #54):
 // the backend proxy emits `ProxyErrorDto` bodies on streamable 401/403 and
 // named SSE `error` events on the SSE path; parsed here for the error banner.
-import { ProxyErrorDto, parseProxyErrorDto } from "../connectionAuthErrors";
+import { ProxyErrorDto, parseProxyErrorDto } from "../connectionErrors";
 
 interface UseConnectionOptions {
   transportType: "stdio" | "sse" | "streamable-http";
