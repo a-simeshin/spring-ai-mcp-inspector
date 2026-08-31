@@ -132,6 +132,28 @@ class ClientHandlerScannerTests {
 			assertThat(bindings).isEmpty();
 		}
 
+		@Test
+		@DisplayName("preserves overloaded handler methods with same name")
+		void preservesOverloadedHandlers() {
+			// given
+			final StaticApplicationContext context = new StaticApplicationContext();
+			context.registerBean("overloadBean", OverloadedHandlerBean.class);
+			context.refresh();
+			ClientHandlerScannerTests.this.scanner.setApplicationContext(context);
+
+			// when
+			final List<HandlerBinding> bindings = ClientHandlerScannerTests.this.scanner.scanHandlers();
+
+			// then
+			assertThat(bindings).hasSize(2);
+			assertThat(bindings).allMatch((b) -> "sampling".equals(b.handlerKind()));
+			assertThat(bindings).allMatch((b) -> "client".equals(b.clientName()));
+			assertThat(bindings).allMatch((b) -> "handle".equals(b.methodName()));
+			assertThat(bindings).extracting(HandlerBinding::methodDescriptor)
+				.containsExactlyInAnyOrder("(Ljava/lang/String;)Ljava/lang/String;",
+						"(Ljava/lang/Integer;)Ljava/lang/String;");
+		}
+
 	}
 
 	@Nested
@@ -143,9 +165,9 @@ class ClientHandlerScannerTests {
 		void groupByClientWorks() {
 			// given
 			final List<HandlerBinding> bindings = List.of(
-					new HandlerBinding("sampling", "c1", "b1", "Foo", "m1", "fqcn1"),
-					new HandlerBinding("logging", "c1", "b2", "Bar", "m2", "fqcn2"),
-					new HandlerBinding("progress", "c2", "b3", "Baz", "m3", "fqcn3"));
+					new HandlerBinding("sampling", "c1", "b1", "Foo", "m1", "()V", "fqcn1"),
+					new HandlerBinding("logging", "c1", "b2", "Bar", "m2", "()V", "fqcn2"),
+					new HandlerBinding("progress", "c2", "b3", "Baz", "m3", "()V", "fqcn3"));
 
 			// when
 			final Map<String, List<HandlerBinding>> grouped = ClientHandlerScanner.groupByClient(bindings);
@@ -161,8 +183,8 @@ class ClientHandlerScannerTests {
 		void explicitClientNamesExcludesWildcard() {
 			// given
 			final List<HandlerBinding> bindings = List.of(
-					new HandlerBinding("sampling", "c1", "b1", "Foo", "m1", "fqcn1"),
-					new HandlerBinding("logging", ClientHandlerScanner.ALL_CLIENTS, "b2", "Bar", "m2", "fqcn2"));
+					new HandlerBinding("sampling", "c1", "b1", "Foo", "m1", "()V", "fqcn1"),
+					new HandlerBinding("logging", ClientHandlerScanner.ALL_CLIENTS, "b2", "Bar", "m2", "()V", "fqcn2"));
 
 			// when
 			final Set<String> names = ClientHandlerScanner.explicitClientNames(bindings);
@@ -206,6 +228,22 @@ class ClientHandlerScannerTests {
 
 		@org.springframework.ai.mcp.annotation.McpLogging(clients = "c1")
 		void onLog(final Object notification) {
+		}
+
+	}
+
+	/** Test fixture: a bean with two overloaded @McpSampling methods. */
+	@SuppressWarnings("unused")
+	static class OverloadedHandlerBean {
+
+		@org.springframework.ai.mcp.annotation.McpSampling(clients = "client")
+		String handle(final String request) {
+			return "result";
+		}
+
+		@org.springframework.ai.mcp.annotation.McpSampling(clients = "client")
+		String handle(final Integer request) {
+			return "result";
 		}
 
 	}

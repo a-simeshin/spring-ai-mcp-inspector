@@ -69,7 +69,8 @@ class ClientConfigReaderTests {
 			assertThat(clients).containsKey("server1");
 			final ClientConfig config = clients.get("server1");
 			assertThat(config.transportType()).isEqualTo("stdio");
-			assertThat(config.detail()).isEqualTo("echo");
+			assertThat(config.command()).isEqualTo("echo");
+			assertThat(config.url()).isNull();
 		}
 
 		@Test
@@ -88,7 +89,8 @@ class ClientConfigReaderTests {
 			assertThat(clients).containsKey("httpServer");
 			final ClientConfig config = clients.get("httpServer");
 			assertThat(config.transportType()).isEqualTo("sse");
-			assertThat(config.detail()).isEqualTo("https://example.com/sse");
+			assertThat(config.url()).isEqualTo("https://example.com/sse");
+			assertThat(config.command()).isNull();
 		}
 
 		@Test
@@ -156,6 +158,175 @@ class ClientConfigReaderTests {
 
 			// then
 			assertThat(names).containsExactlyInAnyOrder("s1", "s2");
+		}
+
+		@Test
+		@DisplayName("preserves both url and command when both are configured")
+		void preservesBothUrlAndCommand() {
+			// given
+			final MockEnvironment env = new MockEnvironment();
+			env.setProperty("spring.ai.mcp.client.sse.connections.mixed.url", "https://example.invalid/sse");
+			env.setProperty("spring.ai.mcp.client.sse.connections.mixed.command", "unexpected-command");
+			final ClientConfigReader reader = new ClientConfigReader(env);
+
+			// when
+			final Map<String, ClientConfig> clients = reader.readClients();
+
+			// then
+			assertThat(clients).hasSize(1);
+			final ClientConfig config = clients.get("mixed");
+			assertThat(config.url()).isEqualTo("https://example.invalid/sse");
+			assertThat(config.command()).isEqualTo("unexpected-command");
+		}
+
+	}
+
+	@Nested
+	@DisplayName("redaction")
+	class Redaction {
+
+		@Test
+		@DisplayName("redacts userinfo in URL")
+		void redactsUserinfo() {
+			// given
+			final String raw = "https://user:secret@example.invalid/mcp";
+
+			// when
+			final String redacted = ClientConfigReader.redactUrl(raw);
+
+			// then
+			assertThat(redacted).doesNotContain("user:secret");
+			assertThat(redacted).contains("***@example.invalid/mcp");
+		}
+
+		@Test
+		@DisplayName("redacts query string credentials in URL")
+		void redactsQueryCredentials() {
+			// given
+			final String raw = "https://example.invalid/mcp?token=abc123";
+
+			// when
+			final String redacted = ClientConfigReader.redactUrl(raw);
+
+			// then
+			assertThat(redacted).doesNotContain("token=abc123");
+			assertThat(redacted).endsWith("?***");
+		}
+
+		@Test
+		@DisplayName("redacts both userinfo and query string")
+		void redactsBothUserinfoAndQuery() {
+			// given
+			final String raw = "https://user:secret@example.invalid/mcp?token=abc123";
+
+			// when
+			final String redacted = ClientConfigReader.redactUrl(raw);
+
+			// then
+			assertThat(redacted).doesNotContain("user:secret");
+			assertThat(redacted).doesNotContain("token=abc123");
+			assertThat(redacted).isEqualTo("https://***@example.invalid/mcp?***");
+		}
+
+		@Test
+		@DisplayName("does not alter URL without credentials")
+		void doesNotAlterCleanUrl() {
+			// given
+			final String raw = "https://example.invalid/mcp";
+
+			// when
+			final String redacted = ClientConfigReader.redactUrl(raw);
+
+			// then
+			assertThat(redacted).isEqualTo(raw);
+		}
+
+		@Test
+		@DisplayName("does not alter non-URL string")
+		void doesNotAlterNonUrl() {
+			// given
+			final String raw = "echo";
+
+			// when
+			final String redacted = ClientConfigReader.redactUrl(raw);
+
+			// then
+			assertThat(redacted).isEqualTo(raw);
+		}
+
+		@Test
+		@DisplayName("redacts http URL with userinfo")
+		void redactsHttpUrlWithUserinfo() {
+			// given
+			final String raw = "http://user:secret@example.invalid/mcp";
+
+			// when
+			final String redacted = ClientConfigReader.redactUrl(raw);
+
+			// then
+			assertThat(redacted).doesNotContain("user:secret");
+			assertThat(redacted).contains("***@example.invalid/mcp");
+		}
+
+		@Test
+		@DisplayName("redacts command arguments beyond the executable")
+		void redactsCommandArgs() {
+			// given
+			final String raw = "npx --api-key=sk-secret-123 @mcp/server";
+
+			// when
+			final String redacted = ClientConfigReader.redactCommand(raw);
+
+			// then
+			assertThat(redacted).doesNotContain("sk-secret-123");
+			assertThat(redacted).doesNotContain("@mcp/server");
+			assertThat(redacted).startsWith("npx");
+			assertThat(redacted).endsWith("***");
+		}
+
+		@Test
+		@DisplayName("does not alter single-token command")
+		void doesNotAlterSingleTokenCommand() {
+			// given
+			final String raw = "echo";
+
+			// when
+			final String redacted = ClientConfigReader.redactCommand(raw);
+
+			// then
+			assertThat(redacted).isEqualTo(raw);
+		}
+
+		@Test
+		@DisplayName("returns null for null URL")
+		void returnsNullForNullUrl() {
+			assertThat(ClientConfigReader.redactUrl(null)).isNull();
+		}
+
+		@Test
+		@DisplayName("returns null for null command")
+		void returnsNullForNullCommand() {
+			assertThat(ClientConfigReader.redactCommand(null)).isNull();
+		}
+
+		@Test
+		@DisplayName("redacts secrets in readClients output")
+		void redactsInReadClientsOutput() {
+			// given
+			final MockEnvironment env = new MockEnvironment();
+			env.setProperty("spring.ai.mcp.client.sse.connections.secret.url",
+					"https://user:secret@example.invalid/mcp?token=abc123");
+			env.setProperty("spring.ai.mcp.client.stdio.connections.secret2.command", "npx --key=sk-secret tool");
+			final ClientConfigReader reader = new ClientConfigReader(env);
+
+			// when
+			final Map<String, ClientConfig> clients = reader.readClients();
+
+			// then
+			final ClientConfig sseConfig = clients.get("secret");
+			assertThat(sseConfig.url()).doesNotContain("user:secret").doesNotContain("token=abc123");
+			final ClientConfig stdioConfig = clients.get("secret2");
+			assertThat(stdioConfig.command()).doesNotContain("sk-secret");
 		}
 
 	}

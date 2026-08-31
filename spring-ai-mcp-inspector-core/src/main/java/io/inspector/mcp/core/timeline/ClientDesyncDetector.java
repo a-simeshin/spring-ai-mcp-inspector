@@ -36,7 +36,9 @@ import java.util.Set;
  * will answer {@code METHOD_NOT_FOUND}.</li>
  * <li><b>Transport mismatch</b>: an HTTP-configured connection has a stdio-style property
  * ({@code command}), or a stdio-configured connection has an HTTP-style property
- * ({@code url}). This is a misconfiguration of the transport family.</li>
+ * ({@code url}). This is a misconfiguration of the transport family. A conflicting extra
+ * property (both {@code url} and {@code command} on the same connection) is also
+ * reported.</li>
  * <li><b>Duplicate handler bindings</b>: the same handler kind is bound to the same
  * client name by more than one bean/method. Only one survives at runtime; the others are
  * silently lost.</li>
@@ -89,6 +91,16 @@ public final class ClientDesyncDetector {
 		return findings;
 	}
 
+	/**
+	 * Detector 2: a client is configured but no handler is bound to it where one is
+	 * expected. Spring AI supports clients with no sampling/elicitation/logging/progress
+	 * callbacks, so a missing handler is only a desync when at least one other client of
+	 * the same transport family has a handler bound to it. This signals intent: the user
+	 * set up handlers for this transport type but forgot one client.
+	 * @param handlerBindings the scanned bindings
+	 * @param clientConfigs the configured clients
+	 * @return findings for orphan clients
+	 */
 	static List<DesyncFinding> detectOrphanClients(final List<ClientHandlerScanner.HandlerBinding> handlerBindings,
 			final Map<String, ClientConfigReader.ClientConfig> clientConfigs) {
 		if (handlerBindings.isEmpty()) {
@@ -97,21 +109,36 @@ public final class ClientDesyncDetector {
 		final Set<String> boundClients = ClientHandlerScanner.explicitClientNames(handlerBindings);
 		final boolean hasWildcard = handlerBindings.stream()
 			.anyMatch((b) -> ClientHandlerScanner.ALL_CLIENTS.equals(b.clientName()));
+		if (hasWildcard) {
+			return List.of();
+		}
 		final List<DesyncFinding> findings = new ArrayList<>();
 		for (final Map.Entry<String, ClientConfigReader.ClientConfig> entry : clientConfigs.entrySet()) {
 			final String clientName = entry.getKey();
 			final ClientConfigReader.ClientConfig config = entry.getValue();
-			if (!boundClients.contains(clientName) && !hasWildcard) {
-				findings.add(new DesyncFinding(DesyncType.ORPHAN_CLIENT, clientName, "any", null,
-						"Client '" + clientName + "' (transport: " + config.transportType()
-								+ ") is configured but has no @Mcp* handler bound to it"));
+			if (boundClients.contains(clientName)) {
+				continue;
 			}
+			final boolean siblingHasHandler = clientConfigs.values()
+				.stream()
+				.anyMatch((c) -> !c.name().equals(clientName) && c.transportType().equals(config.transportType())
+						&& boundClients.contains(c.name()));
+			if (!siblingHasHandler) {
+				continue;
+			}
+			findings.add(new DesyncFinding(DesyncType.ORPHAN_CLIENT, clientName, "any", null,
+					"Client '" + clientName + "' (transport: " + config.transportType()
+							+ ") is configured but has no @Mcp* handler bound to it, while a sibling client"
+							+ " of the same transport type does. Did you forget a handler?"));
 		}
 		return findings;
 	}
 
 	/**
-	 * Detector 3: transport-type mismatch in the client configuration.
+	 * Detector 3: transport-type mismatch in the client configuration. This catches both
+	 * a wrong property for the transport family (e.g. stdio connection with a URL) and a
+	 * conflicting extra property (e.g. SSE connection with both {@code url} and
+	 * {@code command}).
 	 * @param clientConfigs the configured clients
 	 * @return findings for transport mismatches
 	 */
@@ -120,19 +147,35 @@ public final class ClientDesyncDetector {
 		final List<DesyncFinding> findings = new ArrayList<>();
 		for (final ClientConfigReader.ClientConfig config : clientConfigs.values()) {
 			final String transport = config.transportType();
-			final String detail = config.detail();
-			if (detail == null) {
+			final String url = config.url();
+			final String command = config.command();
+			if (url == null && command == null) {
 				continue;
 			}
-			if ("stdio".equals(transport) && looksLikeUrl(detail)) {
-				findings.add(new DesyncFinding(DesyncType.TRANSPORT_MISMATCH, config.name(), null, detail,
-						"Client '" + config.name() + "' is configured as stdio but has a URL property: " + detail
-								+ ". Did you mean sse or streamable-http?"));
+			if ("stdio".equals(transport)) {
+				if (url != null) {
+					findings.add(new DesyncFinding(DesyncType.TRANSPORT_MISMATCH, config.name(), null, url,
+							"Client '" + config.name() + "' is configured as stdio but has a URL property: " + url
+									+ ". Did you mean sse or streamable-http?"));
+				}
+				if (command != null && looksLikeUrl(command)) {
+					findings.add(new DesyncFinding(DesyncType.TRANSPORT_MISMATCH, config.name(), null, command,
+							"Client '" + config.name() + "' is configured as stdio but its command looks like a URL: "
+									+ command + ". Did you mean sse or streamable-http?"));
+				}
 			}
-			if (("sse".equals(transport) || "streamable-http".equals(transport)) && !looksLikeUrl(detail)) {
-				findings.add(new DesyncFinding(DesyncType.TRANSPORT_MISMATCH, config.name(), null, detail,
-						"Client '" + config.name() + "' is configured as " + transport + " but has a command property: "
-								+ detail + ". Did you mean stdio?"));
+			else {
+				if (command != null) {
+					findings.add(new DesyncFinding(DesyncType.TRANSPORT_MISMATCH, config.name(), null, command,
+							"Client '" + config.name() + "' is configured as " + transport
+									+ " but has a command property: " + command + ". Did you mean stdio?"));
+				}
+			}
+			if (url != null && command != null) {
+				findings.add(new DesyncFinding(DesyncType.TRANSPORT_MISMATCH, config.name(), null,
+						"url=" + url + ", command=" + command,
+						"Client '" + config.name() + "' has both url and command properties configured: " + "url=" + url
+								+ ", command=" + command + ". Only one transport property is allowed per connection."));
 			}
 		}
 		return findings;
@@ -157,7 +200,7 @@ public final class ClientDesyncDetector {
 				final ClientHandlerScanner.HandlerBinding first = entry.getValue().get(0);
 				final List<String> sources = new ArrayList<>();
 				for (final ClientHandlerScanner.HandlerBinding b : entry.getValue()) {
-					sources.add(b.beanName() + "#" + b.methodName());
+					sources.add(b.beanName() + "#" + b.methodName() + b.methodDescriptor());
 				}
 				findings.add(new DesyncFinding(DesyncType.DUPLICATE_BINDING, first.clientName(), first.handlerKind(),
 						String.join(", ", sources),
