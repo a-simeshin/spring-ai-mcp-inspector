@@ -1,0 +1,19 @@
+src/lib/types/savedConnection.ts + src/lib/savedConnections.ts +
+ src/components/Sidebar.tsx + src/App.tsx - persist connection
+ configurations (transport type, URL/command, args, custom headers,
+ env vars) in localStorage under a single schema-versioned key
+ `mcp-inspector.savedConnections.v1`. Users can save the current form
+ state under a name, recall it with one click to fill all form fields,
+ and delete saved entries. The list is sorted by last-used date, caps
+ at 20 entries, and shows a security warning when the saved
+ configuration includes Authorization headers or env vars. Upstream
+ had no save/restore feature at all: each page reload or server
+ restart required full manual re-entry of the connection parameters.
+ Local fix: new `SavedConnection` type in `src/lib/types/`,
+ `savedConnections.ts` storage layer with CRUD, `loadSavedConnections`,
+ `saveConnection`, `deleteSavedConnection`, `touchSavedConnection`,
+ and `migrateSavedConnections` for schema versioning; the Sidebar
+ renders a collapsible "Saved Connections" section with a "Save
+ Current" button and click-to-fill entries; App.tsx wires the state.
+ Covered by `src/lib/__tests__/savedConnections.test.ts` (17 unit
+ tests: CRUD, eviction, duplicate name, migration, edge cases).
