@@ -113,6 +113,7 @@ final class E2eSseMcpStub implements AutoCloseable {
 			exchange.close();
 			return;
 		}
+		System.err.println("[E2eSseMcpStub] GET /sse opening stream");
 		exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
 		exchange.sendResponseHeaders(200, 0);
 		try (OutputStream out = exchange.getResponseBody()) {
@@ -142,6 +143,8 @@ final class E2eSseMcpStub implements AutoCloseable {
 			this.authorizations.add(authorization);
 		}
 		final int n = this.postCount.incrementAndGet();
+		System.err.println("[E2eSseMcpStub] POST /message n=" + n + " rejectPosts=" + this.rejectPosts + " auth="
+				+ authorization + " -> " + (n <= this.rejectPosts ? "401" : "202"));
 		if (n <= this.rejectPosts) {
 			exchange.sendResponseHeaders(401, -1);
 			exchange.close();
