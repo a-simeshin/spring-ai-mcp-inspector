@@ -109,6 +109,13 @@ import {
   CustomHeaders,
   migrateFromLegacyAuth,
 } from "./lib/types/customHeaders";
+// [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+import type { SavedConnection } from "./lib/types/savedConnection";
+import {
+  loadSavedConnections,
+  saveConnection,
+  deleteSavedConnection,
+} from "./lib/savedConnections";
 import MetadataTab from "./components/MetadataTab";
 
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
@@ -513,6 +520,88 @@ const App = () => {
     defaultLoggingLevel: logLevel,
     metadata,
   });
+
+  // [spring-ai-mcp-inspector PATCH] Saved connections state (#121).
+  const [savedConnections, setSavedConnections] = useState<SavedConnection[]>(
+    () => loadSavedConnections(),
+  );
+  const [activeConnectionId, setActiveConnectionId] = useState<
+    string | undefined
+  >(undefined);
+
+  const handleSaveConnection = useCallback(
+    (name: string) => {
+      const draft = {
+        name,
+        transport: transportType,
+        connectionType,
+        url: transportType !== "stdio" ? sseUrl : undefined,
+        command: transportType === "stdio" ? command : undefined,
+        args: transportType === "stdio" ? args : undefined,
+        env: transportType === "stdio" ? env : undefined,
+        customHeaders,
+      };
+      const saved = saveConnection(draft, activeConnectionId);
+      setActiveConnectionId(saved.id);
+      setSavedConnections(loadSavedConnections());
+      return saved;
+    },
+    [
+      transportType,
+      connectionType,
+      sseUrl,
+      command,
+      args,
+      env,
+      customHeaders,
+      activeConnectionId,
+    ],
+  );
+
+  const handleDeleteConnection = useCallback(
+    (id: string) => {
+      deleteSavedConnection(id);
+      if (activeConnectionId === id) {
+        setActiveConnectionId(undefined);
+      }
+      setSavedConnections(loadSavedConnections());
+    },
+    [activeConnectionId],
+  );
+
+  const handleSelectConnection = useCallback(
+    (connection: SavedConnection) => {
+      setTransportType(connection.transport);
+      if (connection.connectionType) {
+        setConnectionType(connection.connectionType);
+      }
+      if (connection.url !== undefined) {
+        setSseUrl(connection.url);
+      }
+      if (connection.command !== undefined) {
+        setCommand(connection.command);
+      }
+      if (connection.args !== undefined) {
+        setArgs(connection.args);
+      }
+      if (connection.env !== undefined) {
+        setEnv(connection.env);
+      }
+      if (connection.customHeaders) {
+        setCustomHeaders(connection.customHeaders);
+      }
+      setActiveConnectionId(connection.id);
+    },
+    [
+      setTransportType,
+      setConnectionType,
+      setSseUrl,
+      setCommand,
+      setArgs,
+      setEnv,
+      setCustomHeaders,
+    ],
+  );
 
   useEffect(() => {
     if (serverCapabilities) {
@@ -1435,6 +1524,12 @@ const App = () => {
           connectionType={connectionType}
           setConnectionType={setConnectionType}
           serverImplementation={serverImplementation}
+          // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+          savedConnections={savedConnections}
+          activeConnectionId={activeConnectionId}
+          onSaveConnection={handleSaveConnection}
+          onDeleteConnection={handleDeleteConnection}
+          onSelectConnection={handleSelectConnection}
         />
         {!isCompactLayout && (
           <div
