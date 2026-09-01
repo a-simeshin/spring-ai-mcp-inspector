@@ -29,6 +29,8 @@ export const getServerSpecificKey = (
   return `[${serverUrl}] ${baseKey}`;
 };
 
+// [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+// Added "disconnected-remote" to the ConnectionStatus union type.
 export type ConnectionStatus =
   | "disconnected"
   | "connected"

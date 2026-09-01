@@ -21,7 +21,7 @@ function readStore(): HistoryStoreV1 {
   }
   try {
     const parsed = JSON.parse(raw) as Partial<HistoryStoreV1>;
-    if (parsed.schemaVersion === 1 && typeof parsed.byConnection === "object") {
+    if (parsed.schemaVersion === 1 && typeof parsed.byConnection === "object" && parsed.byConnection !== null) {
       return parsed as HistoryStoreV1;
     }
     return { schemaVersion: 1, byConnection: {} };
@@ -117,7 +117,11 @@ function evictGlobal(store: HistoryStoreV1): void {
  */
 export function loadHistory(connectionId: string): HistoryEntry[] {
   const store = readStore();
-  return store.byConnection[connectionId] ?? [];
+  const bucket = store.byConnection[connectionId];
+  if (!Array.isArray(bucket)) {
+    return [];
+  }
+  return bucket;
 }
 
 /**

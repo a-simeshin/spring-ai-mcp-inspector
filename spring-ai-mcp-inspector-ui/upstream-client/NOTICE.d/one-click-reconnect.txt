@@ -7,7 +7,7 @@ Every file changed in this feature carries the comment:
 ## Files changed
 
 ### New files
-- `src/lib/__tests__/reconnect.test.tsx` -- unit tests for reconnect state machine
+- `src/components/__tests__/Sidebar.reconnectBanner.test.tsx` -- unit tests for reconnect banner UI
 
 ### Modified files
 - `src/lib/constants.ts` -- added `"disconnected-remote"` to ConnectionStatus union type
