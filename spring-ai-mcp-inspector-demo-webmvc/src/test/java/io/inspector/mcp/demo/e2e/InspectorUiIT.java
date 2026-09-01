@@ -18,6 +18,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.stream.Stream;
 
@@ -3543,9 +3544,13 @@ class InspectorUiIT {
 
 				// and - cheap assertions first: failing here means the retry
 				// mechanism didn't work as expected, and the 30s UI wait below
-				// would have masked the real cause.
+				// would have masked the real cause.  We await the async proxy
+				// flow (token refresh + retry) with a timeout instead of
+				// asserting synchronously, which would race the retry (issue #89).
+				awaitRequestCount(tokenServer, 2, Duration.ofSeconds(30));
 				Assertions.assertEquals(2, tokenServer.requestCount(), "token exchanges");
-				Assertions.assertFalse(tokenServer.anyRequestWithField("refresh_token"), "no refresh_token grant");
+				Assertions.assertFalse(tokenServer.anyRequestWithField("refresh_token"),
+						"no refresh_token grant");
 				Assertions.assertEquals(
 						List.of("Bearer " + E2eTokenServer.tokenValue(1), "Bearer " + E2eTokenServer.tokenValue(2)),
 						stub.authorizations().subList(0, 2), "Authorization per upstream message POST");
@@ -3622,6 +3627,28 @@ class InspectorUiIT {
 		private void connectTo(final E2eSseMcpStub stub) {
 			setReactInputValue("#sse-url-input", stub.sseUrl());
 			connectButton().shouldBe(visible).click();
+		}
+
+		/**
+		 * Awaits the token server's request count to reach {@code expected}
+		 * within the given timeout, polling every 100ms.  Fails with a clear
+		 * message when the count never reaches the expected value, so the
+		 * caller can assert the exact count without racing the async proxy
+		 * flow (the token refresh + retry completes asynchronously).
+		 * @param server the token server to poll
+		 * @param expected the expected request count
+		 * @param timeout the maximum wait duration
+		 */
+		private static void awaitRequestCount(final E2eTokenServer server, final int expected,
+				final Duration timeout) throws InterruptedException {
+			final long deadline = System.nanoTime() + timeout.toNanos();
+			while (server.requestCount() < expected) {
+				if (System.nanoTime() > deadline) {
+					Assertions.fail("timed out waiting for token server request count to reach "
+							+ expected + ", was " + server.requestCount() + " after " + timeout.toMillis() + "ms");
+				}
+				TimeUnit.MILLISECONDS.sleep(100);
+			}
 		}
 
 	}
