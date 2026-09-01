@@ -99,3 +99,4 @@ logs/
 # Planning / spec artifacts — local only
 PLAN.md
 specs/
+spring-ai-mcp-inspector-ui/upstream-client/node_modules
