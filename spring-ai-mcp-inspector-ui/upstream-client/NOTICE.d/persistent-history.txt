@@ -1,0 +1,15 @@
+src/lib/types/historyEntry.ts + src/lib/persistentHistory.ts +
+ src/lib/hooks/useConnection.ts + src/App.tsx - persist inspector
+ request/response history in localStorage under a single schema-versioned
+ key `mcp-inspector.history.v1`, bucketed by connection id. History
+ entries (JSON-RPC requests, responses, errors, and timestamps) survive
+ page reload. Each connection bucket caps at 100 entries; the global
+ store caps at 500 KB, with FIFO eviction of the oldest entries when
+ limits are exceeded. The Clear button in the History panel clears both
+ in-memory and persistent storage for the current connection. Entries
+ for different saved connections are stored in separate buckets and do
+ not mix. Unsaved sessions use the bucket key "ephemeral". Upstream had
+ no persistent history at all: every page reload lost all recorded
+ requests and responses. Covered by
+ `src/lib/__tests__/persistentHistory.test.ts` (15 unit tests:
+ serialization, eviction, per-connection isolation, global limit).

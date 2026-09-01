@@ -85,6 +85,12 @@ import { InspectorConfig } from "../configurationTypes";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CustomHeaders } from "../types/customHeaders";
 import { resolveRefsInMessage } from "@/utils/schemaUtils";
+// [spring-ai-mcp-inspector PATCH] Persistent history (#121).
+import {
+  appendHistory,
+  clearHistory,
+  loadHistory,
+} from "../persistentHistory";
 
 interface UseConnectionOptions {
   transportType: "stdio" | "sse" | "streamable-http";
@@ -110,6 +116,8 @@ interface UseConnectionOptions {
   defaultLoggingLevel?: LoggingLevel;
   serverImplementation?: Implementation;
   metadata?: Record<string, string>;
+  // [spring-ai-mcp-inspector PATCH] Persistent history connection id (#121).
+  connectionId?: string;
 }
 
 export function useConnection({
@@ -130,6 +138,8 @@ export function useConnection({
   getRoots,
   defaultLoggingLevel,
   metadata = {},
+  // [spring-ai-mcp-inspector PATCH] Persistent history (#121).
+  connectionId = "ephemeral",
 }: UseConnectionOptions) {
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
@@ -199,14 +209,23 @@ export function useConnection({
     saveScopeToSessionStorage(sseUrl, oauthScope);
   }, [oauthScope, sseUrl]);
 
+  // [spring-ai-mcp-inspector PATCH] Load persistent history on connection change (#121).
+  useEffect(() => {
+    setRequestHistory(loadHistory(connectionId));
+  }, [connectionId]);
+
   const pushHistory = (request: object, response?: object) => {
-    setRequestHistory((prev) => [
-      ...prev,
-      {
-        request: JSON.stringify(request),
-        response: response !== undefined ? JSON.stringify(response) : undefined,
-      },
-    ]);
+    const entry = {
+      request: JSON.stringify(request),
+      response: response !== undefined ? JSON.stringify(response) : undefined,
+    };
+    setRequestHistory((prev) => [...prev, entry]);
+    // Persist to localStorage
+    appendHistory(connectionId, {
+      request: entry.request,
+      response: entry.response,
+      at: Date.now(),
+    });
   };
 
   const makeRequest = async <T extends AnySchema>(
@@ -1271,6 +1290,8 @@ export function useConnection({
   const clearRequestHistory = () => {
     setRequestHistory([]);
     setServerImplementation(null);
+    // [spring-ai-mcp-inspector PATCH] Clear persistent history (#121).
+    clearHistory(connectionId);
   };
 
   return {

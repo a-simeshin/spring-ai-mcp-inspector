@@ -415,6 +415,14 @@ const App = () => {
     selectedTaskRef.current = selectedTask;
   }, [selectedTask]);
 
+  // [spring-ai-mcp-inspector PATCH] Saved connections state (#121).
+  const [savedConnections, setSavedConnections] = useState<SavedConnection[]>(
+    () => loadSavedConnections(),
+  );
+  const [activeConnectionId, setActiveConnectionId] = useState<
+    string | undefined
+  >(undefined);
+
   const {
     connectionStatus,
     connectionError,
@@ -443,6 +451,8 @@ const App = () => {
     oauthScope,
     config,
     connectionType,
+    // [spring-ai-mcp-inspector PATCH] Persistent history connection id (#121).
+    connectionId: activeConnectionId ?? "ephemeral",
     onNotification: (notification) => {
       setNotifications((prev) => [...prev, notification as ServerNotification]);
 
@@ -520,14 +530,6 @@ const App = () => {
     defaultLoggingLevel: logLevel,
     metadata,
   });
-
-  // [spring-ai-mcp-inspector PATCH] Saved connections state (#121).
-  const [savedConnections, setSavedConnections] = useState<SavedConnection[]>(
-    () => loadSavedConnections(),
-  );
-  const [activeConnectionId, setActiveConnectionId] = useState<
-    string | undefined
-  >(undefined);
 
   const handleSaveConnection = useCallback(
     (name: string) => {
