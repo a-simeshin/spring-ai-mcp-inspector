@@ -114,6 +114,8 @@ function evictGlobal(store: HistoryStoreV1): void {
 /**
  * Load history entries for a specific connection.
  * Returns empty array if no history exists for that connection.
+ * Validates each entry before returning: rejects null, malformed
+ * request/response, and missing/invalid at fields.
  */
 export function loadHistory(connectionId: string): HistoryEntry[] {
   const store = readStore();
@@ -121,7 +123,24 @@ export function loadHistory(connectionId: string): HistoryEntry[] {
   if (!Array.isArray(bucket)) {
     return [];
   }
-  return bucket;
+  return bucket.filter(isValidEntry);
+}
+
+function isValidEntry(entry: unknown): entry is HistoryEntry {
+  if (entry === null || typeof entry !== "object") {
+    return false;
+  }
+  const e = entry as Record<string, unknown>;
+  if (typeof e.request !== "string") {
+    return false;
+  }
+  if (e.response !== undefined && typeof e.response !== "string") {
+    return false;
+  }
+  if (typeof e.at !== "number" || isNaN(e.at)) {
+    return false;
+  }
+  return true;
 }
 
 /**

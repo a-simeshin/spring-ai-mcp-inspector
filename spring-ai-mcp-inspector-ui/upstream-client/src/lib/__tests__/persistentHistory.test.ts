@@ -189,4 +189,132 @@ describe("persistentHistory", () => {
       expect(loadHistory("conn-1")).toHaveLength(1);
     });
   });
+
+  describe("malformed localStorage", () => {
+    it("rejects entries with null values", () => {
+      localStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify({
+          schemaVersion: 1,
+          byConnection: { "conn-1": [null] },
+        }),
+      );
+      expect(loadHistory("conn-1")).toHaveLength(0);
+    });
+
+    it("rejects entries with missing request", () => {
+      localStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify({
+          schemaVersion: 1,
+          byConnection: {
+            "conn-1": [{ response: JSON.stringify({}), at: 100 }],
+          },
+        }),
+      );
+      expect(loadHistory("conn-1")).toHaveLength(0);
+    });
+
+    it("rejects entries with non-string request", () => {
+      localStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify({
+          schemaVersion: 1,
+          byConnection: {
+            "conn-1": [{ request: 42, at: 100 }],
+          },
+        }),
+      );
+      expect(loadHistory("conn-1")).toHaveLength(0);
+    });
+
+    it("rejects entries with non-number at", () => {
+      localStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify({
+          schemaVersion: 1,
+          byConnection: {
+            "conn-1": [
+              { request: JSON.stringify({}), at: "not-a-number" },
+            ],
+          },
+        }),
+      );
+      expect(loadHistory("conn-1")).toHaveLength(0);
+    });
+
+    it("rejects entries with NaN at", () => {
+      localStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify({
+          schemaVersion: 1,
+          byConnection: {
+            "conn-1": [{ request: JSON.stringify({}), at: NaN }],
+          },
+        }),
+      );
+      expect(loadHistory("conn-1")).toHaveLength(0);
+    });
+
+    it("rejects entries with non-string response", () => {
+      localStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify({
+          schemaVersion: 1,
+          byConnection: {
+            "conn-1": [
+              { request: JSON.stringify({}), response: 42, at: 100 },
+            ],
+          },
+        }),
+      );
+      expect(loadHistory("conn-1")).toHaveLength(0);
+    });
+
+    it("filters out invalid entries but keeps valid ones in the same bucket", () => {
+      localStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify({
+          schemaVersion: 1,
+          byConnection: {
+            "conn-1": [
+              null,
+              { request: JSON.stringify({}), at: 100 },
+              { request: JSON.stringify({}), response: "ok", at: 200 },
+            ],
+          },
+        }),
+      );
+      expect(loadHistory("conn-1")).toHaveLength(2);
+    });
+
+    it("returns empty array when bucket is not an array", () => {
+      localStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify({
+          schemaVersion: 1,
+          byConnection: { "conn-1": "not-an-array" },
+        }),
+      );
+      expect(loadHistory("conn-1")).toHaveLength(0);
+    });
+
+    it("preserves valid entries from other connections when one bucket is malformed", () => {
+      appendHistory("conn-2", makeEntry({ at: 300 }));
+      localStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify({
+          schemaVersion: 1,
+          byConnection: {
+            "conn-1": [null],
+            "conn-2": JSON.parse(
+              localStorage.getItem(HISTORY_KEY)!
+            ).byConnection["conn-2"],
+          },
+        }),
+      );
+      expect(loadHistory("conn-1")).toHaveLength(0);
+      expect(loadHistory("conn-2")).toHaveLength(1);
+    });
+  });
 });

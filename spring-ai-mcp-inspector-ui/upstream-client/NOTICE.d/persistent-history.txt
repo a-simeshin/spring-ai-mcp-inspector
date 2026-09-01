@@ -8,8 +8,11 @@ src/lib/types/historyEntry.ts + src/lib/persistentHistory.ts +
  limits are exceeded. The Clear button in the History panel clears both
  in-memory and persistent storage for the current connection. Entries
  for different saved connections are stored in separate buckets and do
- not mix. Unsaved sessions use the bucket key "ephemeral". Upstream had
+ not mix. Unsaved sessions use the bucket key "ephemeral". loadHistory
+ validates each entry before returning to React: rejects null, non-string
+ request/response, and non-number/NaN at fields. Upstream had
  no persistent history at all: every page reload lost all recorded
  requests and responses. Covered by
- `src/lib/__tests__/persistentHistory.test.ts` (15 unit tests:
- serialization, eviction, per-connection isolation, global limit).
+ `src/lib/__tests__/persistentHistory.test.ts` (24 unit tests:
+ serialization, eviction, per-connection isolation, global limit,
+ malformed localStorage validation).

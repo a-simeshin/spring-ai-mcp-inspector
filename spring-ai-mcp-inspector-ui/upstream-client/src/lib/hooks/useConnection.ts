@@ -893,6 +893,12 @@ export function useConnection({
             }
             return prev;
           });
+          // Bump the reconnect trigger so the auto-retry effect re-fires
+          // even when the status value does not change (already
+          // disconnected-remote from a previous attempt).
+          if (reconnectAutoRef.current) {
+            setReconnectTrigger((n) => n + 1);
+          }
         };
         const sdkOnClose = transport.onclose;
         transport.onclose = () => {
