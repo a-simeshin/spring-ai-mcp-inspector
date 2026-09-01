@@ -84,7 +84,7 @@ forming a theory about a test.
 ## Vendored UI code
 
 `spring-ai-mcp-inspector-ui/upstream-client/` is a vendored copy of the upstream
-inspector client. Two rules, only one of which CI can currently catch:
+inspector client. Two rules, both enforced by the `notice registry` job:
 
 1. **Register the patch.** Add one file per patch under
    `upstream-client/NOTICE.d/` describing what it does. Do not append to a
@@ -92,11 +92,9 @@ inspector client. Two rules, only one of which CI can currently catch:
    during conflict resolution breaks references from the code. The
    `notice registry` job enforces this for changes under `upstream-client/src/`.
 2. **Mark the patch in place.** Put a comment containing
-   `[spring-ai-mcp-inspector PATCH]` at every local change. **No CI job checks
-   this today.** It holds by convention, and it matters most exactly where
-   nothing is watching: an unmarked change is invisible to whoever raises the
-   upstream version next, and it disappears silently on re-vendor. Treat a
-   missing marker as a defect even though the build stays green.
+   `[spring-ai-mcp-inspector PATCH]` at every local change. The `notice registry`
+   job enforces this too: a file changed under `upstream-client/` without a
+   matching marker fails the build.
 
 Editing inside an already-marked block needs no new marker: extend the comment
 on the existing one.
