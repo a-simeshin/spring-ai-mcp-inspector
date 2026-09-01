@@ -158,13 +158,14 @@ export function saveConnection(
     lastUsedAt: now_,
   };
 
-  connections.push(connection);
-
-  // Evict oldest if over cap
-  if (connections.length > MAX_CONNECTIONS) {
+  // Evict oldest if at cap BEFORE adding the new connection,
+  // so the just-created entry always survives the truncation.
+  if (connections.length >= MAX_CONNECTIONS) {
     connections.sort((a, b) => b.lastUsedAt - a.lastUsedAt);
-    connections.length = MAX_CONNECTIONS;
+    connections.length = MAX_CONNECTIONS - 1;
   }
+
+  connections.push(connection);
 
   persistConnections(connections);
   return connection;
