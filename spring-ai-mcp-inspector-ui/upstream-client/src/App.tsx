@@ -115,6 +115,7 @@ import {
   loadSavedConnections,
   saveConnection,
   deleteSavedConnection,
+  findConnectionByName,
 } from "./lib/savedConnections";
 import MetadataTab from "./components/MetadataTab";
 
@@ -530,7 +531,7 @@ const App = () => {
   >(undefined);
 
   const handleSaveConnection = useCallback(
-    (name: string) => {
+    (name: string): SavedConnection | undefined => {
       const draft = {
         name,
         transport: transportType,
@@ -541,7 +542,22 @@ const App = () => {
         env: transportType === "stdio" ? env : undefined,
         customHeaders,
       };
-      const saved = saveConnection(draft, activeConnectionId);
+      // [spring-ai-mcp-inspector PATCH] Check for duplicate name before
+      // saving. The caller expects SavedConnection | undefined and
+      // keeps the save dialog open when undefined is returned.
+      const existing = findConnectionByName(name);
+      let targetId = activeConnectionId;
+      if (existing && !activeConnectionId) {
+        if (
+          !window.confirm(
+            `Connection "${name}" already exists. Overwrite?`,
+          )
+        ) {
+          return undefined;
+        }
+        targetId = existing.id;
+      }
+      const saved = saveConnection(draft, targetId);
       setActiveConnectionId(saved.id);
       setSavedConnections(loadSavedConnections());
       return saved;

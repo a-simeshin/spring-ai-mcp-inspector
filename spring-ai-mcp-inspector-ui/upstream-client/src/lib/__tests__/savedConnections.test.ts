@@ -8,6 +8,9 @@ import {
   deleteSavedConnection,
   touchSavedConnection,
   migrateSavedConnections,
+  findConnectionByName,
+  isValidConnection,
+  filterValidConnections,
 } from "../savedConnections";
 import type { SavedConnection } from "../types/savedConnection";
 
@@ -33,6 +36,14 @@ const mockStdioDraft = () => ({
   customHeaders: [],
 });
 
+const mockConnection = (overrides?: Partial<SavedConnection>): SavedConnection => ({
+  ...mockDraft(),
+  id: "test-id",
+  createdAt: 1000,
+  lastUsedAt: 2000,
+  ...overrides,
+});
+
 describe("savedConnections", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -52,12 +63,7 @@ describe("savedConnections", () => {
     });
 
     it("loads stored connections", () => {
-      const conn: SavedConnection = {
-        ...mockDraft(),
-        id: "test-id",
-        createdAt: 1000,
-        lastUsedAt: 2000,
-      };
+      const conn = mockConnection();
       localStorage.setItem(
         SAVED_CONNECTIONS_KEY,
         JSON.stringify({ schemaVersion: 1, connections: [conn] }),
@@ -66,6 +72,20 @@ describe("savedConnections", () => {
       expect(loaded).toHaveLength(1);
       expect(loaded[0].name).toBe("My Server");
       expect(loaded[0].id).toBe("test-id");
+    });
+
+    it("filters out null entries from stored data", () => {
+      const conn = mockConnection();
+      localStorage.setItem(
+        SAVED_CONNECTIONS_KEY,
+        JSON.stringify({ schemaVersion: 1, connections: [null, conn] }),
+      );
+      const consoleWarn = jest.spyOn(console, "warn").mockImplementation();
+      const loaded = loadSavedConnections();
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0].id).toBe("test-id");
+      expect(consoleWarn).toHaveBeenCalled();
+      consoleWarn.mockRestore();
     });
   });
 
@@ -98,18 +118,17 @@ describe("savedConnections", () => {
       expect(loaded[0].name).toBe("Renamed Server");
     });
 
-    it("overwrites connection with same name (case-insensitive)", () => {
+    it("creates separate entry for duplicate name (no longer silently overwrites)", () => {
       const first = saveConnection(mockDraft());
       const second = saveConnection({
         ...mockDraft(),
         name: "my server", // same name, different case
         url: "http://other-url/sse",
       });
-      // second should have overwritten first
-      expect(second.id).toBe(first.id);
+      // second should be a NEW entry with a different id
+      expect(second.id).not.toBe(first.id);
       const loaded = loadSavedConnections();
-      expect(loaded).toHaveLength(1);
-      expect(loaded[0].url).toBe("http://other-url/sse");
+      expect(loaded).toHaveLength(2);
     });
 
     it("saves stdio connections with env", () => {
@@ -142,6 +161,90 @@ describe("savedConnections", () => {
       expect(loaded).toHaveLength(20);
       // The 21st should be in the list
       expect(loaded.some((c) => c.id === last.id)).toBeTruthy();
+    });
+  });
+
+  describe("findConnectionByName", () => {
+    it("finds a connection by name (case-insensitive)", () => {
+      saveConnection(mockDraft());
+      const found = findConnectionByName("my server");
+      expect(found).toBeDefined();
+      expect(found!.name).toBe("My Server");
+    });
+
+    it("returns undefined for non-existent name", () => {
+      saveConnection(mockDraft());
+      expect(findConnectionByName("nope")).toBeUndefined();
+    });
+
+    it("returns undefined when no connections exist", () => {
+      expect(findConnectionByName("anything")).toBeUndefined();
+    });
+  });
+
+  describe("isValidConnection", () => {
+    it("returns true for a valid connection object", () => {
+      expect(isValidConnection(mockConnection())).toBe(true);
+    });
+
+    it("returns false for null", () => {
+      expect(isValidConnection(null)).toBe(false);
+    });
+
+    it("returns false for undefined", () => {
+      expect(isValidConnection(undefined)).toBe(false);
+    });
+
+    it("returns false for a plain object missing fields", () => {
+      expect(isValidConnection({})).toBe(false);
+    });
+
+    it("returns false when id is missing", () => {
+      const rest = { ...mockConnection() };
+      delete (rest as Record<string, unknown>).id;
+      expect(isValidConnection(rest)).toBe(false);
+    });
+
+    it("returns false when id is empty string", () => {
+      expect(isValidConnection(mockConnection({ id: "" }))).toBe(false);
+    });
+
+    it("returns false when name is empty string", () => {
+      expect(isValidConnection(mockConnection({ name: "" }))).toBe(false);
+    });
+
+    it("returns false for invalid transport type", () => {
+      expect(
+        isValidConnection(
+          mockConnection({ transport: "invalid" as "sse" }),
+        ),
+      ).toBe(false);
+    });
+
+    it("returns false when customHeaders is not an array", () => {
+      expect(
+        isValidConnection(
+          mockConnection({ customHeaders: undefined as unknown as [] }),
+        ),
+      ).toBe(false);
+    });
+  });
+
+  describe("filterValidConnections", () => {
+    it("filters out null entries", () => {
+      const conn = mockConnection();
+      const result = filterValidConnections([null, conn, undefined]);
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe("test-id");
+    });
+
+    it("returns empty array when all entries are invalid", () => {
+      expect(filterValidConnections([null, undefined, {}])).toEqual([]);
+    });
+
+    it("returns all entries when all are valid", () => {
+      const conns = [mockConnection({ id: "a" }), mockConnection({ id: "b" })];
+      expect(filterValidConnections(conns)).toHaveLength(2);
     });
   });
 
@@ -192,7 +295,7 @@ describe("savedConnections", () => {
     it("parses v1 store correctly", () => {
       const store = {
         schemaVersion: 1,
-        connections: [mockDraft()],
+        connections: [mockConnection()],
       };
       const result = migrateSavedConnections(JSON.stringify(store));
       expect(result.schemaVersion).toBe(1);
@@ -202,7 +305,7 @@ describe("savedConnections", () => {
     it("handles unknown schemaVersion by returning empty", () => {
       const store = {
         schemaVersion: 0,
-        connections: [mockDraft()],
+        connections: [mockConnection()],
       };
       const result = migrateSavedConnections(JSON.stringify(store));
       // Should still work if connections array is present
@@ -212,6 +315,20 @@ describe("savedConnections", () => {
     it("handles completely invalid data", () => {
       const result = migrateSavedConnections(JSON.stringify({ foo: "bar" }));
       expect(result.connections).toEqual([]);
+    });
+
+    it("filters out null entries during migration", () => {
+      const conn = mockConnection();
+      const store = {
+        schemaVersion: 1,
+        connections: [null, conn],
+      };
+      const consoleWarn = jest.spyOn(console, "warn").mockImplementation();
+      const result = migrateSavedConnections(JSON.stringify(store));
+      expect(result.connections).toHaveLength(1);
+      expect(result.connections[0].id).toBe("test-id");
+      expect(consoleWarn).toHaveBeenCalled();
+      consoleWarn.mockRestore();
     });
   });
 });

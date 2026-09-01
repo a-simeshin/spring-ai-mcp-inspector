@@ -15,5 +15,20 @@ src/lib/types/savedConnection.ts + src/lib/savedConnections.ts +
  and `migrateSavedConnections` for schema versioning; the Sidebar
  renders a collapsible "Saved Connections" section with a "Save
  Current" button and click-to-fill entries; App.tsx wires the state.
- Covered by `src/lib/__tests__/savedConnections.test.ts` (17 unit
- tests: CRUD, eviction, duplicate name, migration, edge cases).
+ Covered by `src/lib/__tests__/savedConnections.test.ts` (34 unit
+ tests: CRUD, eviction, duplicate name, findConnectionByName,
+ isValidConnection, filterValidConnections, corrupt-data migration,
+ edge cases).
+
+REVIEW FIXES (PR #149 review findings):
+- `saveConnection` no longer silently overwrites duplicate-name
+  entries. Added `findConnectionByName(name)` for the UI layer to
+  check before saving. App.tsx's `handleSaveConnection` now prompts
+  with `window.confirm` for overwrite-or-cancel when the name is
+  taken. Sidebar.tsx handles the `undefined` return (cancel) by
+  keeping the save dialog open.
+- Added `isValidConnection(c)` runtime type guard and
+  `filterValidConnections(entries)` to filter out corrupt persisted
+  entries (null, missing fields, wrong types) during migration
+  and load. Previously `connections:[null]` would pass through
+  `as SavedConnection[]` and break the UI on render.

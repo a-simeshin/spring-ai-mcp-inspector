@@ -26,6 +26,53 @@ function now(): number {
 }
 
 /**
+ * Runtime type guard: returns true if `c` is a structurally valid
+ * SavedConnection. This protects against corrupt persisted data
+ * (null entries, wrong types, missing fields) that would otherwise
+ * break the UI on render.
+ */
+export function isValidConnection(c: unknown): c is SavedConnection {
+  if (c === null || c === undefined || typeof c !== "object") {
+    return false;
+  }
+  const obj = c as Record<string, unknown>;
+  if (typeof obj.id !== "string" || !obj.id) return false;
+  if (typeof obj.name !== "string" || !obj.name) return false;
+  if (typeof obj.transport !== "string") return false;
+  if (!["stdio", "sse", "streamable-http"].includes(obj.transport as string)) {
+    return false;
+  }
+  if (typeof obj.connectionType !== "string") return false;
+  if (!["proxy", "direct"].includes(obj.connectionType as string)) return false;
+  if (typeof obj.createdAt !== "number") return false;
+  if (typeof obj.lastUsedAt !== "number") return false;
+  if (!Array.isArray(obj.customHeaders)) return false;
+  return true;
+}
+
+/**
+ * Filter an array of unknown entries to only structurally valid
+ * SavedConnection objects. Silently drops corrupt entries and
+ * console.warns when entries are dropped.
+ */
+export function filterValidConnections(
+  entries: unknown[],
+): SavedConnection[] {
+  const valid: SavedConnection[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    if (isValidConnection(entries[i])) {
+      valid.push(entries[i] as SavedConnection);
+    } else {
+      console.warn(
+        `[savedConnections] Dropping corrupt connection at index ${i}:`,
+        entries[i],
+      );
+    }
+  }
+  return valid;
+}
+
+/**
  * Parse and validate saved connections from localStorage.
  * Corrupt JSON -> returns [] and console.warns.
  */
@@ -58,10 +105,28 @@ function persistConnections(connections: SavedConnection[]): void {
 }
 
 /**
+ * Find a saved connection by name (case-insensitive).
+ * Returns undefined if no match.
+ */
+export function findConnectionByName(
+  name: string,
+): SavedConnection | undefined {
+  const connections = loadSavedConnections();
+  return connections.find(
+    (c) => c.name.toLowerCase() === name.toLowerCase(),
+  );
+}
+
+/**
  * Upsert a saved connection. If `existingId` is provided, update that
  * entry; otherwise create a new one. Updates lastUsedAt to now.
  * Beyond 20 connections, evicts the lowest lastUsedAt.
  * Returns the saved connection (with id/createdAt/lastUsedAt filled).
+ *
+ * NOTE: This function does NOT check for duplicate names. The caller
+ * (UI layer) must check with `findConnectionByName` first and
+ * prompt the user for overwrite-or-rename before calling with
+ * the existing id. See App.tsx handleSaveConnection.
  */
 export function saveConnection(
   draft: SavedConnectionDraft,
@@ -83,22 +148,6 @@ export function saveConnection(
       return connections[idx];
     }
     // Fall through: id not found, create new
-  }
-
-  // Check for duplicate name (case-insensitive)
-  const sameName = connections.findIndex(
-    (c) => c.name.toLowerCase() === draft.name.toLowerCase(),
-  );
-  if (sameName !== -1) {
-    // Overwrite the existing connection with the same name
-    connections[sameName] = {
-      ...connections[sameName],
-      ...draft,
-      lastUsedAt: now_,
-      createdAt: connections[sameName].createdAt,
-    };
-    persistConnections(connections);
-    return connections[sameName];
   }
 
   // Create new connection
@@ -147,6 +196,7 @@ export function touchSavedConnection(id: string): void {
 /**
  * Migrate raw localStorage content to SavedConnectionsV1.
  * Handles schema version upgrades and legacy format.
+ * Validates all connections at runtime to filter out corrupt entries.
  */
 export function migrateSavedConnections(raw: string | null): SavedConnectionsV1 {
   if (!raw) {
@@ -154,21 +204,26 @@ export function migrateSavedConnections(raw: string | null): SavedConnectionsV1 
   }
   const parsed = JSON.parse(raw) as Partial<SavedConnectionsV1>;
 
+  let connections: unknown[] = [];
+
   // Already v1
   if (parsed.schemaVersion === 1 && Array.isArray(parsed.connections)) {
-    return parsed as SavedConnectionsV1;
+    connections = parsed.connections;
+  } else if (Array.isArray(parsed.connections)) {
+    // Unknown or missing schemaVersion: try to extract connections
+    connections = parsed.connections;
+  } else if (Array.isArray(parsed)) {
+    // Might be a legacy "Last session" migration
+    connections = parsed;
   }
 
-  // Unknown or missing schemaVersion: try to extract connections from legacy
-  // or treat as empty
-  if (Array.isArray(parsed.connections)) {
-    return { schemaVersion: 1, connections: parsed.connections };
+  // Filter out corrupt entries at runtime
+  const valid = filterValidConnections(connections);
+  if (valid.length < connections.length) {
+    console.warn(
+      `[savedConnections] Filtered out ${connections.length - valid.length} corrupt connection(s) during migration`,
+    );
   }
 
-  // Might be a legacy "Last session" migration: an array of connections directly
-  if (Array.isArray(parsed)) {
-    return { schemaVersion: 1, connections: parsed as SavedConnection[] };
-  }
-
-  return { schemaVersion: 1, connections: [] };
+  return { schemaVersion: 1, connections: valid };
 }
