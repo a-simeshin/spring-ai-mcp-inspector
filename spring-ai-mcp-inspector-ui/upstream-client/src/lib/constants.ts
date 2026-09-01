@@ -33,7 +33,8 @@ export type ConnectionStatus =
   | "disconnected"
   | "connected"
   | "error"
-  | "error-connecting-to-proxy";
+  | "error-connecting-to-proxy"
+  | "disconnected-remote";
 
 export const DEFAULT_MCP_PROXY_LISTEN_PORT = "6277";
 

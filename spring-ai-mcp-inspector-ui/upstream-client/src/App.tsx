@@ -439,6 +439,8 @@ const App = () => {
     completionsSupported,
     connect: connectMcpServer,
     disconnect: disconnectMcpServer,
+    // [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+    setAutoReconnect,
   } = useConnection({
     transportType,
     command,
@@ -1532,6 +1534,8 @@ const App = () => {
           onSaveConnection={handleSaveConnection}
           onDeleteConnection={handleDeleteConnection}
           onSelectConnection={handleSelectConnection}
+          // [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+          setAutoReconnect={setAutoReconnect}
         />
         {!isCompactLayout && (
           <div

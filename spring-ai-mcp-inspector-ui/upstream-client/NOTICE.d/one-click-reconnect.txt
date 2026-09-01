@@ -1,0 +1,25 @@
+# One-click reconnect after MCP server restart (issue #121)
+
+## PATCH marker
+Every file changed in this feature carries the comment:
+`// [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).`
+
+## Files changed
+
+### New files
+- `src/lib/__tests__/reconnect.test.tsx` -- unit tests for reconnect state machine
+
+### Modified files
+- `src/lib/constants.ts` -- added `"disconnected-remote"` to ConnectionStatus union type
+- `src/lib/hooks/useConnection.ts` -- added transport.onclose/onerror hooks to detect
+  remote disconnection, exponential backoff auto-retry (1s-16s, max 5 attempts),
+  disconnect cleanup to cancel auto-retry
+- `src/components/Sidebar.tsx` -- added reconnect banner with "Server disconnected" alert,
+  Reconnect button, and "Reconnect automatically" toggle; status indicator shows amber
+  dot and "Server Disconnected" text
+- `src/App.tsx` -- wired setAutoReconnect prop to Sidebar
+
+## Purpose
+Detect transport disconnection (server restart, network drop) and allow the user to
+reconnect with one click using the saved connection configuration. Optional auto-retry
+with exponential backoff (1s, 2s, 4s, 8s, 16s, max 5 attempts) stops on auth errors.

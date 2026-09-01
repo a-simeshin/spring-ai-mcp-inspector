@@ -96,6 +96,8 @@ interface SidebarProps {
   onSaveConnection: (name: string) => SavedConnection;
   onDeleteConnection: (id: string) => void;
   onSelectConnection: (connection: SavedConnection) => void;
+  // [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+  setAutoReconnect: (enabled: boolean) => void;
 }
 
 const Sidebar = ({
@@ -134,6 +136,7 @@ const Sidebar = ({
   onSaveConnection,
   onDeleteConnection,
   onSelectConnection,
+  setAutoReconnect,
 }: SidebarProps) => {
   const [theme, setTheme] = useTheme();
   const [showEnvVars, setShowEnvVars] = useState(false);
@@ -148,6 +151,8 @@ const Sidebar = ({
   const [showSavedConnections, setShowSavedConnections] = useState(true);
   const [saveName, setSaveName] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  // [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+  const [autoReconnectEnabled, setAutoReconnectEnabled] = useState(false);
 
   const connectionTypeTip =
     "Connect to server directly (requires CORS config on server) or via MCP Inspector Proxy";
@@ -986,6 +991,48 @@ const Sidebar = ({
             );
           })()}
 
+          {/* [spring-ai-mcp-inspector PATCH] One-click reconnect banner (#121). */}
+          {connectionStatus === "disconnected-remote" && (
+            <div
+              role="alert"
+              className="bg-amber-50 dark:bg-amber-950 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 rounded-lg p-3 mb-4"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <Server className="w-4 h-4 flex-shrink-0" />
+                <span className="text-sm font-medium">
+                  Server disconnected
+                </span>
+              </div>
+              <p className="text-xs mb-2">
+                The MCP server closed the connection. Click Reconnect to restore
+                the session with the same configuration.
+              </p>
+              <Button
+                data-testid="reconnect-button"
+                size="sm"
+                variant="outline"
+                className="w-full mb-2"
+                onClick={onConnect}
+              >
+                <RotateCcw className="w-4 h-4 mr-2" />
+                Reconnect
+              </Button>
+              <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={autoReconnectEnabled}
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    setAutoReconnectEnabled(enabled);
+                    setAutoReconnect(enabled);
+                  }}
+                  className="rounded border-gray-300 dark:border-gray-600"
+                />
+                Reconnect automatically
+              </label>
+            </div>
+          )}
+
           <div className="space-y-2">
             {connectionStatus === "connected" && (
               <div className="grid grid-cols-2 gap-4">
@@ -1022,6 +1069,8 @@ const Sidebar = ({
                       return "bg-red-500";
                     case "error-connecting-to-proxy":
                       return "bg-red-500";
+                    case "disconnected-remote":
+                      return "bg-amber-500";
                     default:
                       return "bg-gray-500";
                   }
@@ -1041,6 +1090,8 @@ const Sidebar = ({
                     }
                     case "error-connecting-to-proxy":
                       return "Error Connecting to MCP Inspector Proxy - Check Console logs";
+                    case "disconnected-remote":
+                      return "Server Disconnected";
                     default:
                       return "Disconnected";
                   }

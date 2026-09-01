@@ -92,6 +92,10 @@ import {
   loadHistory,
 } from "../persistentHistory";
 
+// [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+const MAX_AUTO_RETRY_ATTEMPTS = 5;
+const AUTO_RETRY_DELAYS = [1000, 2000, 4000, 8000, 16000];
+
 interface UseConnectionOptions {
   transportType: "stdio" | "sse" | "streamable-http";
   command: string;
@@ -163,6 +167,12 @@ export function useConnection({
   );
   const [serverImplementation, setServerImplementation] =
     useState<Implementation | null>(null);
+
+  // [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectAutoRef = useRef(false);
+  const reconnectAbortRef = useRef(false);
 
   type ReceiverTaskRecord = {
     task: Task;
@@ -861,6 +871,31 @@ export function useConnection({
 
         setClientTransport(transport);
 
+        // [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+        // Detect remote disconnection via transport.onclose/onerror,
+        // switching to disconnected-remote status so the UI shows the
+        // reconnect banner. Auto-retry is handled by the setTimeout
+        // chain in the reconnect effect.
+        const handleDisconnect = () => {
+          setConnectionStatus((prev) => {
+            if (prev === "connected" || prev === "disconnected-remote") {
+              return "disconnected-remote";
+            }
+            return prev;
+          });
+        };
+        transport.onclose = handleDisconnect;
+        transport.onerror = () => {
+          handleDisconnect();
+        };
+        // Cancel any pending auto-retry on a successful reconnect
+        if (reconnectTimerRef.current !== null) {
+          clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = null;
+        }
+        reconnectAttemptRef.current = 0;
+        reconnectAbortRef.current = false;
+
         capabilities = client.getServerCapabilities();
         const serverInfo = client.getServerVersion();
         setServerImplementation(serverInfo || null);
@@ -1242,6 +1277,35 @@ export function useConnection({
     }
   };
 
+  // [spring-ai-mcp-inspector PATCH] Auto-retry reconnect with exponential backoff
+  // when the server disconnects remotely and auto-retry is enabled (#121).
+  useEffect(() => {
+    if (connectionStatus !== "disconnected-remote" || !reconnectAutoRef.current) {
+      return;
+    }
+    // Don't start a new chain if one is already pending
+    if (reconnectTimerRef.current !== null) {
+      return;
+    }
+    const attempt = reconnectAttemptRef.current;
+    if (attempt >= MAX_AUTO_RETRY_ATTEMPTS || reconnectAbortRef.current) {
+      return;
+    }
+    const delay = AUTO_RETRY_DELAYS[attempt] ?? AUTO_RETRY_DELAYS[AUTO_RETRY_DELAYS.length - 1];
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null;
+      reconnectAttemptRef.current++;
+      void connect();
+    }, delay);
+    return () => {
+      if (reconnectTimerRef.current !== null) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionStatus]);
+
   const cancelTask = async (taskId: string) => {
     return makeRequest(
       {
@@ -1263,6 +1327,21 @@ export function useConnection({
   };
 
   const disconnect = async () => {
+    // [spring-ai-mcp-inspector PATCH] Cancel any pending auto-retry (#121).
+    if (reconnectTimerRef.current !== null) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    reconnectAbortRef.current = true;
+    reconnectAutoRef.current = false;
+    reconnectAttemptRef.current = 0;
+    // Remove transport close/error hooks so the intentional disconnect
+    // does not trigger disconnected-remote.
+    if (clientTransport) {
+      clientTransport.onclose = undefined;
+      clientTransport.onerror = undefined;
+    }
+
     // Clear any receiver-side tasks + cleanup timers
     receiverTasksRef.current.forEach((record) => {
       if (record.cleanupTimeoutId) {
@@ -1308,6 +1387,17 @@ export function useConnection({
     sendNotification,
     handleCompletion,
     completionsSupported,
+    // [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+    setAutoReconnect: (enabled: boolean) => {
+      reconnectAutoRef.current = enabled;
+      if (!enabled) {
+        reconnectAttemptRef.current = 0;
+        if (reconnectTimerRef.current !== null) {
+          clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = null;
+        }
+      }
+    },
     connect,
     disconnect,
   };
