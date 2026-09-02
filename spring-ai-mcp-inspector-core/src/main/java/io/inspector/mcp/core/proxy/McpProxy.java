@@ -123,7 +123,7 @@ public final class McpProxy {
 			// streamable-request timeout. But the SDK also re-surfaces protocol-level
 			// replies from a LIVE server (e.g. a 404 "session not found") through this
 			// same pump, so only transport-level failures (refused / dns / timeout)
-			// justify tearing the session down — anything unrecognized is logged and
+			// justify tearing the session down - anything unrecognized is logged and
 			// the relay keeps forwarding. failUpstream is idempotent, so the first
 			// terminal signal wins.
 			if (failure.reason() != ProxyConnectFailure.Reason.UNKNOWN) {
@@ -154,7 +154,20 @@ public final class McpProxy {
 		// The inbound flux's terminal signals are surfaced too: an upstream
 		// disconnect that completes/errors the inbound stream is propagated via
 		// failUpstream so awaiters and the SSE subscriber are released promptly.
+		//
+		// Internal liveness-probe responses are detected by their JSON-RPC id
+		// (registered via session.registerProbeId) and filtered out - they must
+		// never reach the browser.
 		return session.targetTransport().connect((inbound) -> inbound.flatMap((message) -> {
+			// Skip internal probe responses - they are not real MCP messages
+			// and must not be forwarded to the browser.
+			if (message instanceof io.modelcontextprotocol.spec.McpSchema.JSONRPCResponse response) {
+				final Object id = response.id();
+				if (id instanceof Number numId && session.isProbeId(numId.intValue())) {
+					session.touch();
+					return Mono.<JSONRPCMessage>empty();
+				}
+			}
 			final JsonNode body = toJsonNode(message);
 			if (body != null) {
 				recordInbound(session, message, body);
