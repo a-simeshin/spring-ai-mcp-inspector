@@ -2,3 +2,8 @@ TimelineTab.tsx, App.tsx, __tests__/TimelineTab.test.tsx — new TimelineTab com
 and renders a color-coded, expandable chronological event log for MCP traffic and
 application logs. No upstream equivalent exists; this is a Spring AI MCP Inspector
 extension. Tab icon: Bell (lucide-react, already a project dependency).
+Updated: protocol-version negotiation badge on initialize response rows (#129, #130).
+Reads _protocolNegotiation enrichment from McpTrafficRecorder and renders a
+severity-colored badge plus an expanded detail block with summary, affectedMethods,
+and a footer link to issue #129. OK severity is silent-positive (badge only, no
+expanded block). Badge text and colors follow the decision record (t_9315a78c).
