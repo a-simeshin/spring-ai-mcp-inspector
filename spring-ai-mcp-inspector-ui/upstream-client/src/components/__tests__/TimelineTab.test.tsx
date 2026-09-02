@@ -192,7 +192,7 @@ describe("TimelineTab", () => {
     );
     fireEvent.click(screen.getByText("tools/list"));
     await waitFor(() =>
-      expect(screen.getByText(/\"method\": \"tools\/list\"/)).toBeInTheDocument(),
+      expect(screen.getByText(/"method": "tools\/list"/)).toBeInTheDocument(),
     );
   });
 
