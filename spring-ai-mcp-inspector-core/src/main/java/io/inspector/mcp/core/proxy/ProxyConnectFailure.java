@@ -20,6 +20,7 @@ import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.net.http.HttpTimeoutException;
+import java.nio.channels.UnresolvedAddressException;
 import java.util.concurrent.TimeoutException;
 
 import io.modelcontextprotocol.spec.McpTransportException;
@@ -29,8 +30,8 @@ import io.modelcontextprotocol.spec.McpTransportException;
  *
  * <p>
  * The proxy controllers previously collapsed every connect failure into a flat message
- * and lost the cause. This record keeps the two facts the browser actually needs — a
- * machine-readable {@link Reason} and a human-readable message — and lets the HTTP layer
+ * and lost the cause. This record keeps the two facts the browser actually needs - a
+ * machine-readable {@link Reason} and a human-readable message - and lets the HTTP layer
  * map the reason onto a status code (504 for {@link Reason#TIMEOUT}, 502 otherwise) and a
  * structured {@code MCP_CONNECT_FAILED} JSON payload.
  *
@@ -77,21 +78,27 @@ public record ProxyConnectFailure(Reason reason, String message) {
 
 	}
 
-	/**
-	 * Classifies an arbitrary connect-time exception by walking its cause chain and
-	 * matching the first recognizable network failure. Never throws and never returns
-	 * {@code null} — everything unrecognized maps to {@link Reason#UNKNOWN}.
-	 * @param error the exception observed while connecting to the upstream (must not be
-	 * {@code null})
-	 * @return the classified failure with a reason-specific human-readable message
-	 */
 	public static ProxyConnectFailure classify(final Throwable error) {
 		Throwable current = error;
 		while (current != null) {
-			if (current instanceof UnknownHostException) {
+			if (current instanceof UnknownHostException || current instanceof UnresolvedAddressException) {
 				return new ProxyConnectFailure(Reason.DNS, "could not resolve the MCP server host name");
 			}
 			if (current instanceof ConnectException) {
+				// The MCP SDK (StreamableHttpClientTransport) wraps DNS failures
+				// into ConnectException before the proxy sees the cause chain.
+				// The Java HTTP client surfaces unresolved hosts as
+				// UnresolvedAddressException (NIO path), while classic socket
+				// code surfaces them as UnknownHostException. Descend into the
+				// ConnectException cause chain to check for either DNS marker;
+				// only if none is found do we classify as connection refused.
+				Throwable cause = current.getCause();
+				while (cause != null) {
+					if (cause instanceof UnknownHostException || cause instanceof UnresolvedAddressException) {
+						return new ProxyConnectFailure(Reason.DNS, "could not resolve the MCP server host name");
+					}
+					cause = cause.getCause();
+				}
 				return new ProxyConnectFailure(Reason.CONNECTION_REFUSED, "connection to the MCP server was refused");
 			}
 			if (current instanceof SocketTimeoutException || current instanceof HttpTimeoutException
