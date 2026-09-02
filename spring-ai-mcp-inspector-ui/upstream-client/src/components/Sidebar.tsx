@@ -51,7 +51,7 @@ import CustomHeaders from "./CustomHeaders";
 import { CustomHeaders as CustomHeadersType } from "@/lib/types/customHeaders";
 import { useToast } from "../lib/hooks/useToast";
 import IconDisplay, { WithIcons } from "./IconDisplay";
-import { validateRedirectUrl } from "@/utils/urlValidation";
+import { validateRedirectUrl, validateServerUrl } from "@/utils/urlValidation";
 
 interface SidebarProps {
   connectionStatus: ConnectionStatus;
@@ -129,6 +129,8 @@ const Sidebar = ({
   const [showClientSecret, setShowClientSecret] = useState(false);
   const [copiedServerEntry, setCopiedServerEntry] = useState(false);
   const [copiedServerFile, setCopiedServerFile] = useState(false);
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [urlTouched, setUrlTouched] = useState(false);
   const { toast } = useToast();
 
   const connectionTypeTip =
@@ -143,6 +145,30 @@ const Sidebar = ({
       });
     },
     [toast],
+  );
+
+  const handleUrlChange = useCallback(
+    (value: string) => {
+      setSseUrl(value);
+      // On input: clear error when valid, set when still invalid (soft)
+      const result = validateServerUrl(value);
+      if (result.isValid) {
+        setUrlError(null);
+      } else if (urlTouched) {
+        setUrlError(result.errorMessage);
+      }
+    },
+    [setSseUrl, urlTouched],
+  );
+
+  const handleUrlBlur = useCallback(
+    (value: string) => {
+      setUrlTouched(true);
+      const result = validateServerUrl(value);
+      setUrlError(result.isValid ? null : result.errorMessage);
+      setSseUrl(value.trim());
+    },
+    [setSseUrl],
   );
 
   // Shared utility function to generate server config
@@ -326,8 +352,9 @@ const Sidebar = ({
                         id="sse-url-input"
                         placeholder="URL"
                         value={sseUrl}
-                        onChange={(e) => setSseUrl(e.target.value)}
-                        className="font-mono"
+                        onChange={(e) => handleUrlChange(e.target.value)}
+                        onBlur={(e) => handleUrlBlur(e.target.value)}
+                        className={`font-mono ${urlError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
                       />
                     </TooltipTrigger>
                     <TooltipContent>{sseUrl}</TooltipContent>
@@ -337,9 +364,15 @@ const Sidebar = ({
                     id="sse-url-input"
                     placeholder="URL"
                     value={sseUrl}
-                    onChange={(e) => setSseUrl(e.target.value)}
-                    className="font-mono"
+                    onChange={(e) => handleUrlChange(e.target.value)}
+                    onBlur={(e) => handleUrlBlur(e.target.value)}
+                    className={`font-mono ${urlError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
                   />
+                )}
+                {urlError && (
+                  <p className="text-xs text-red-500 mt-1" role="alert">
+                    {urlError}
+                  </p>
                 )}
               </div>
 
@@ -831,7 +864,21 @@ const Sidebar = ({
               </div>
             )}
             {connectionStatus !== "connected" && (
-              <Button className="w-full" onClick={onConnect}>
+              <Button
+                className="w-full"
+                onClick={() => {
+                  // Mark URL as touched on first connect attempt
+                  if (transportType !== "stdio") {
+                    setUrlTouched(true);
+                    const result = validateServerUrl(sseUrl);
+                    if (!result.isValid) {
+                      setUrlError(result.errorMessage);
+                    }
+                  }
+                  onConnect();
+                }}
+                disabled={transportType !== "stdio" && !!urlError}
+              >
                 <Play className="w-4 h-4 mr-2" />
                 Connect
               </Button>
