@@ -166,6 +166,9 @@ export function useConnection({
   // (e.g. `sampling/createMessage` and `elicitation/create` with `params.task`).
   const receiverTasksRef = useRef<Map<string, ReceiverTaskRecord>>(new Map());
 
+  // Guards against concurrent connect attempts (double-clicks).
+  const connectingRef = useRef(false);
+
   useEffect(() => {
     if (!oauthClientId) {
       clearClientInformationFromSessionStorage({
@@ -459,10 +462,48 @@ export function useConnection({
   };
 
   const connect = async (_e?: unknown, retryCount: number = 0) => {
+    // Guard against double-clicks from the UI (not recursive calls from OAuth retry).
+    if (retryCount === 0 && connectingRef.current) {
+      return;
+    }
+    if (retryCount === 0) {
+      connectingRef.current = true;
+    }
+
+    // Full cleanup of stale state before connecting fresh.
+    // [spring-ai-mcp-inspector PATCH] Reconnect after silent SSE drop:
+    // close the old client/transport and clear stale session ID so the
+    // new handshake starts from a clean slate.  Without this, the stale
+    // mcp-session-id header causes -32001 on every reconnect attempt.
+    // Refs #157.
+    if (transportType === "streamable-http") {
+      await (clientTransport as StreamableHTTPClientTransport)?.terminateSession().catch(() => {});
+    }
+    await mcpClient?.close().catch(() => {});
+
+    receiverTasksRef.current.forEach((record) => {
+      if (record.cleanupTimeoutId) {
+        clearTimeout(record.cleanupTimeoutId);
+      }
+    });
+    receiverTasksRef.current.clear();
+
+    const authProvider = new InspectorOAuthClientProvider(sseUrl);
+    authProvider.clear();
+
+    setMcpClient(null);
+    setClientTransport(null);
+    setMcpSessionId(null);
+    setMcpProtocolVersion(null);
+    setCompletionsSupported(false);
+    setServerCapabilities(null);
+    setServerImplementation(null);
+
     // Clear any previous failure so a new attempt starts fresh.
     setConnectionError(null);
 
-    const clientCapabilities = {
+    try {
+      const clientCapabilities = {
       capabilities: {
         sampling: {},
         elicitation: {
@@ -592,8 +633,17 @@ export function useConnection({
         serverUrl = new URL(toAbsoluteServerUrl(sseUrl));
 
         const requestHeaders = { ...headers };
-        if (mcpSessionId) {
-          requestHeaders["mcp-session-id"] = mcpSessionId;
+        // Don't reuse a stale session ID from a previous connection.  After
+        // cleanup at the start of connect(), the session ID is always null
+        // for a fresh connect.  The closure variable mcpSessionId may still
+        // hold a stale value from a silently dropped session, which would
+        // cause the server to reject the handshake with -32001.  The server
+        // assigns a new session ID in its response headers, captured by
+        // captureResponseHeaders below.
+        // [spring-ai-mcp-inspector PATCH] Refs #157: stale closure value.
+        const sessionId = null;
+        if (sessionId) {
+          requestHeaders["mcp-session-id"] = sessionId;
         }
         switch (transportType) {
           case "sse":
@@ -1224,6 +1274,12 @@ export function useConnection({
       }
       console.error(e);
       setConnectionStatus("error");
+    }
+
+    } finally {
+      if (retryCount === 0) {
+        connectingRef.current = false;
+      }
     }
   };
 
