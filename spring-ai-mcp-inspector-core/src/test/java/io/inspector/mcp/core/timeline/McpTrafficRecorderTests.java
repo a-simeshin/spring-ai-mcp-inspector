@@ -155,7 +155,7 @@ class McpTrafficRecorderTests {
 			// when
 			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", typed, rawFrame);
 
-			// then — MDC should NOT be set after the method returns because
+			// then: MDC should NOT be set after the method returns because
 			// MDCCloseable auto-closes
 			assertThat(MDC.get(McpTrafficRecorder.MDC_CORRELATION_ID)).isNull();
 			// but the event has the correlationId
@@ -172,7 +172,7 @@ class McpTrafficRecorderTests {
 		@Test
 		@DisplayName("records a response with matching correlationId")
 		void recordsResponseWithMatchingCorrelation() throws Exception {
-			// given — first record a request
+			// given: first record a request
 			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
 				.put("jsonrpc", "2.0")
 				.put("id", 42)
@@ -185,7 +185,7 @@ class McpTrafficRecorderTests {
 				.get(0)
 				.correlationId();
 
-			// when — record the matching response
+			// when: record the matching response
 			final ObjectNode resFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
 				.put("jsonrpc", "2.0")
 				.put("id", 42)
@@ -209,7 +209,7 @@ class McpTrafficRecorderTests {
 		@Test
 		@DisplayName("records response with fresh correlationId when no request recorded")
 		void recordsResponseWithoutMatchingRequest() throws Exception {
-			// given — a response without a prior request
+			// given: a response without a prior request
 			final ObjectNode resFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
 				.put("jsonrpc", "2.0")
 				.put("id", 99)
@@ -312,7 +312,7 @@ class McpTrafficRecorderTests {
 			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", t1, req1);
 			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", t2, req2);
 
-			// then — 2 pending correlations
+			// then: 2 pending correlations
 			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(2);
 
 			// record both responses (in reverse order)
@@ -471,14 +471,14 @@ class McpTrafficRecorderTests {
 			// when
 			McpTrafficRecorderTests.this.recorder.clearSession(null);
 
-			// then — no exception
+			// then: no exception
 			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isZero();
 		}
 
 		@Test
 		@DisplayName("removes pending correlations for the given session")
 		void removesPendingForSession() throws Exception {
-			// given — record a request in session-a
+			// given: record a request in session-a
 			final ObjectNode req = McpTrafficRecorderTests.this.mapper.createObjectNode()
 				.put("jsonrpc", "2.0")
 				.put("id", 1)
@@ -493,7 +493,7 @@ class McpTrafficRecorderTests {
 			// when
 			McpTrafficRecorderTests.this.recorder.clearSession("session-a");
 
-			// then — only session-b remains
+			// then: only session-b remains
 			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(1);
 		}
 
@@ -542,7 +542,7 @@ class McpTrafficRecorderTests {
 				// when
 				McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", typed, reqFrame);
 
-				// then — MDC is restored
+				// then: MDC is restored
 				assertThat(MDC.get(McpTrafficRecorder.MDC_CORRELATION_ID)).isEqualTo("outer-context");
 			}
 			finally {
@@ -553,7 +553,7 @@ class McpTrafficRecorderTests {
 		@Test
 		@DisplayName("restores prior MDC correlationId after inbound response")
 		void restoresPriorMdcAfterInbound() throws Exception {
-			// given — record a request first
+			// given: record a request first
 			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
 				.put("jsonrpc", "2.0")
 				.put("id", 42)
@@ -576,7 +576,7 @@ class McpTrafficRecorderTests {
 				// when
 				McpTrafficRecorderTests.this.recorder.recordInbound("s-1", resTyped, resFrame);
 
-				// then — MDC is restored
+				// then: MDC is restored
 				assertThat(MDC.get(McpTrafficRecorder.MDC_CORRELATION_ID)).isEqualTo("outer-context");
 			}
 			finally {
@@ -700,7 +700,7 @@ class McpTrafficRecorderTests {
 		@Test
 		@DisplayName("routes notifications/progress through recordStreamEvent")
 		void routesProgressNotification() throws Exception {
-			// given — a request with a progress token
+			// given: a request with a progress token
 			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
 				.put("jsonrpc", "2.0")
 				.put("id", 10)
@@ -710,7 +710,7 @@ class McpTrafficRecorderTests {
 					reqFrame.toString());
 			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", reqTyped, reqFrame);
 
-			// when — an inbound progress notification
+			// when: an inbound progress notification
 			final ObjectNode progressFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
 				.put("jsonrpc", "2.0")
 				.put("method", "notifications/progress");
@@ -719,7 +719,7 @@ class McpTrafficRecorderTests {
 					progressFrame.toString());
 			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", progressTyped, progressFrame);
 
-			// then — it's recorded as a stream event, not a notification
+			// then: it's recorded as a stream event, not a notification
 			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
 			final TimelineEvent progressEvent = events.stream()
 				.filter((e) -> e.type() == TimelineEventType.MCP_STREAM_EVENT)
@@ -858,7 +858,7 @@ class McpTrafficRecorderTests {
 				.put("method", "tools/list");
 			final JSONRPCMessage reqTyped = deserialize(reqFrame);
 
-			// when: a response outbound and a request inbound — neither is expected
+			// when: a response outbound and a request inbound: neither is expected
 			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", resTyped, resFrame);
 			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", reqTyped, reqFrame);
 
@@ -893,7 +893,7 @@ class McpTrafficRecorderTests {
 		@Test
 		@DisplayName("drops oldest events when ring buffer is full")
 		void dropsOldestWhenFull() {
-			// given — fill the buffer with events
+			// given: fill the buffer with events
 			final BoundedTimelineService bts = new BoundedTimelineService();
 			final String sessionId = "s-1";
 			for (int i = 0; i < BoundedTimelineService.MAX_EVENTS + 10; i++) {
@@ -901,7 +901,7 @@ class McpTrafficRecorderTests {
 						TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), null));
 			}
 
-			// then — only max events remain
+			// then: only max events remain
 			assertThat(bts.size()).isEqualTo(BoundedTimelineService.MAX_EVENTS);
 		}
 
@@ -928,6 +928,251 @@ class McpTrafficRecorderTests {
 			svc.clear();
 
 			assertThat(svc.query(TimelineQuery.all())).isEmpty();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("protocol version negotiation enrichment")
+	class ProtocolNegotiationEnrichment {
+
+		@Test
+		@DisplayName("enriches initialize response with _protocolNegotiation on downgrade")
+		void enrichesInitializeResponseWithNegotiation() throws Exception {
+			// given: an initialize request with a newer protocol version
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.put("method", "initialize");
+			reqFrame.putObject("params").put("protocolVersion", "2026-07-28");
+			final JSONRPCMessage reqTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					reqFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", reqTyped, reqFrame);
+
+			// when: the server responds with an older version (downgrade)
+			final ObjectNode resFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1);
+			resFrame.putObject("result").put("protocolVersion", "2025-11-25");
+			final JSONRPCMessage resTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					resFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", resTyped, resFrame);
+
+			// then: the response event payload is enriched
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			final TimelineEvent responseEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.findFirst()
+				.orElseThrow();
+			final JsonNode negotiation = responseEvent.payload().get("_protocolNegotiation");
+			assertThat(negotiation).as("_protocolNegotiation present").isNotNull();
+			assertThat(negotiation.get("requested").asText()).isEqualTo("2026-07-28");
+			assertThat(negotiation.get("negotiated").asText()).isEqualTo("2025-11-25");
+			assertThat(negotiation.get("severity").asText()).isEqualTo("DOWNGRADE");
+			assertThat(negotiation.get("summary").asText()).contains("2026-07-28").contains("2025-11-25");
+		}
+
+		@Test
+		@DisplayName("enriches with OK severity on matching versions")
+		void enrichesWithOkOnMatchingVersions() throws Exception {
+			// given: matching protocol versions
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 2)
+				.put("method", "initialize");
+			reqFrame.putObject("params").put("protocolVersion", "2025-11-25");
+			final JSONRPCMessage reqTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					reqFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", reqTyped, reqFrame);
+
+			// when
+			final ObjectNode resFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 2);
+			resFrame.putObject("result").put("protocolVersion", "2025-11-25");
+			final JSONRPCMessage resTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					resFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", resTyped, resFrame);
+
+			// then: OK enrichment with silent-positive badge data
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			final TimelineEvent responseEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.findFirst()
+				.orElseThrow();
+			final JsonNode negotiation = responseEvent.payload().get("_protocolNegotiation");
+			assertThat(negotiation).isNotNull();
+			assertThat(negotiation.get("severity").asText()).isEqualTo("OK");
+		}
+
+		@Test
+		@DisplayName("enriches with INCOMPATIBLE severity and affected methods")
+		void enrichesWithIncompatibleAndAffectedMethods() throws Exception {
+			// given: client requests older, server negotiates newer
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 3)
+				.put("method", "initialize");
+			reqFrame.putObject("params").put("protocolVersion", "2025-11-25");
+			final JSONRPCMessage reqTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					reqFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", reqTyped, reqFrame);
+
+			// when: server negotiates 2026-07-28 (removed methods)
+			final ObjectNode resFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 3);
+			resFrame.putObject("result").put("protocolVersion", "2026-07-28");
+			final JSONRPCMessage resTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					resFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", resTyped, resFrame);
+
+			// then: INCOMPATIBLE with affected methods listed
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			final TimelineEvent responseEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.findFirst()
+				.orElseThrow();
+			final JsonNode negotiation = responseEvent.payload().get("_protocolNegotiation");
+			assertThat(negotiation).isNotNull();
+			assertThat(negotiation.get("severity").asText()).isEqualTo("INCOMPATIBLE");
+			final JsonNode affected = negotiation.get("affectedMethods");
+			assertThat(affected.isArray()).isTrue();
+			assertThat(affected.size()).isGreaterThan(0);
+			assertThat(negotiation.get("summary").asText()).contains("MethodNotFound");
+		}
+
+		@Test
+		@DisplayName("does not enrich non-initialize responses")
+		void doesNotEnrichNonInitializeResponses() throws Exception {
+			// given: a tools/list request (no protocolVersion param)
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 4)
+				.put("method", "tools/list");
+			final JSONRPCMessage reqTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					reqFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", reqTyped, reqFrame);
+
+			// when
+			final ObjectNode resFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 4)
+				.set("result", McpTrafficRecorderTests.this.mapper.createObjectNode().put("ok", true));
+			final JSONRPCMessage resTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					resFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", resTyped, resFrame);
+
+			// then: no _protocolNegotiation enrichment
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			final TimelineEvent responseEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.findFirst()
+				.orElseThrow();
+			assertThat(responseEvent.payload().get("_protocolNegotiation")).isNull();
+		}
+
+		@Test
+		@DisplayName("does not enrich tools/call response even with protocolVersion fields")
+		void doesNotEnrichToolsCallWithProtocolVersionField() throws Exception {
+			// given: a tools/call request with params.protocolVersion (regression: the
+			// enrichment must check method=initialize, not just the presence of the
+			// field)
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 5)
+				.put("method", "tools/call");
+			reqFrame.putObject("params").put("protocolVersion", "2026-07-28");
+			final JSONRPCMessage reqTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					reqFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", reqTyped, reqFrame);
+
+			// when: response with result.protocolVersion
+			final ObjectNode resFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 5);
+			resFrame.putObject("result").put("protocolVersion", "2025-11-25");
+			final JSONRPCMessage resTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					resFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", resTyped, resFrame);
+
+			// then: no _protocolNegotiation enrichment (non-initialize method)
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			final TimelineEvent responseEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.findFirst()
+				.orElseThrow();
+			assertThat(responseEvent.payload().get("_protocolNegotiation")).isNull();
+		}
+
+		@Test
+		@DisplayName("enriches with UNKNOWN severity for unrecognised versions")
+		void enrichesWithUnknownForUnrecognisedVersions() throws Exception {
+			// given: an initialize request with an unknown protocol version
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 6)
+				.put("method", "initialize");
+			reqFrame.putObject("params").put("protocolVersion", "2024-11-05");
+			final JSONRPCMessage reqTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					reqFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", reqTyped, reqFrame);
+
+			// when: server responds with another unknown version
+			final ObjectNode resFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 6);
+			resFrame.putObject("result").put("protocolVersion", "2024-11-05");
+			final JSONRPCMessage resTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					resFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", resTyped, resFrame);
+
+			// then: UNKNOWN severity
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			final TimelineEvent responseEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.findFirst()
+				.orElseThrow();
+			final JsonNode negotiation = responseEvent.payload().get("_protocolNegotiation");
+			assertThat(negotiation).as("_protocolNegotiation present").isNotNull();
+			assertThat(negotiation.get("severity").asText()).isEqualTo("UNKNOWN");
+			assertThat(negotiation.get("summary").asText()).contains("Both revisions are unknown");
+		}
+
+		@Test
+		@DisplayName("does not enrich when no matching request was recorded")
+		void doesNotEnrichWithoutMatchingRequest() throws Exception {
+			// given: a response without a prior request
+			final ObjectNode resFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 99);
+			resFrame.putObject("result").put("protocolVersion", "2025-11-25");
+			final JSONRPCMessage resTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					resFrame.toString());
+
+			// when
+			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", resTyped, resFrame);
+
+			// then: no enrichment, no crash
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			final TimelineEvent responseEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.findFirst()
+				.orElseThrow();
+			assertThat(responseEvent.payload().get("_protocolNegotiation")).isNull();
 		}
 
 	}
