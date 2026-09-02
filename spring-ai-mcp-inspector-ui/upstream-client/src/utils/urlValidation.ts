@@ -23,6 +23,7 @@ export function validateRedirectUrl(url: string | URL): void {
   }
 }
 
+// [spring-ai-mcp-inspector PATCH] validateServerUrl: client-side URL format validation for the Connect field (see NOTICE.d/url-validation.txt).
 const ALLOWED_SCHEMES = ["http:", "https:", "ws:", "wss:"];
 
 export interface UrlValidationResult {
