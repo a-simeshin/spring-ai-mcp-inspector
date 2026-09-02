@@ -1,0 +1,8 @@
+src/components/ToolsTab.tsx: guard against null `inputSchema.properties`
+from the MCP SDK. The `??` operator only catches `undefined`, not
+`null`. When the server's tools/list response includes `"properties": null`,
+Object.entries(null) throws a TypeError in the render phase. Without an
+error boundary, React 18 unmounts the entire App tree and re-mounts with
+stale localStorage state (connection drop + transport/URL revert).
+Fix: use `!= null` before calling Object.entries, at both the effect
+(params computation) and the rendering path.
