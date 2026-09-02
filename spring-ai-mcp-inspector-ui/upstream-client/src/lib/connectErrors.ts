@@ -17,6 +17,7 @@ export type ConnectFailureReason =
   | "connection_refused"
   | "dns"
   | "unauthorized"
+  | "not_found"
   | "unknown";
 
 export interface ConnectFailure {
@@ -33,6 +34,7 @@ const CONNECT_FAILURE_REASONS: readonly ConnectFailureReason[] = [
   "connection_refused",
   "dns",
   "unauthorized",
+  "not_found",
   "unknown",
 ];
 
@@ -159,14 +161,18 @@ export function connectionFailureFromError(error: unknown): ConnectFailure {
 export function humanReadableReason(reason: ConnectFailureReason): string {
   switch (reason) {
     case "timeout":
-      return "Connection timed out (timeout)";
+      return "Connection timed out";
     case "connection_refused":
-      return "Connection refused (connection_refused)";
+      return "Connection refused";
     case "dns":
-      return "Could not resolve the host (DNS)";
+      return "Cannot resolve host";
     case "unauthorized":
-      return "Authentication required (unauthorized)";
+      return "Authentication required";
+    case "not_found":
+      return "Server responded 404: check the URL path";
     case "unknown":
-      return "Unknown error (unknown)";
+      return "";
+    default:
+      return "";
   }
 }

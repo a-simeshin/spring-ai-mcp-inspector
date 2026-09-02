@@ -354,7 +354,7 @@ class ConnectFailureIT {
 		// reason carrying the machine-readable code, and a Retry button (PR #70).
 		alert().shouldBe(visible, Duration.ofSeconds(30));
 		alert().shouldHave(text("Failed to connect to the MCP server"));
-		alert().shouldHave(text("Connection refused (connection_refused)"));
+		alert().shouldHave(text("Connection refused"));
 		$("[data-testid=retry-connect-button]").shouldBe(visible).shouldHave(text("Retry"));
 		// The pre-connect Connect button stays available too.
 		connectButton().shouldBe(visible);
@@ -371,7 +371,7 @@ class ConnectFailureIT {
 		openWithUnreachableServer();
 		connectButton().click();
 		alert().shouldBe(visible, Duration.ofSeconds(30));
-		alert().shouldHave(text("Connection refused (connection_refused)"));
+		alert().shouldHave(text("Connection refused"));
 
 		// when — Retry invokes connect() again.
 		$("[data-testid=retry-connect-button]").shouldBe(visible).click();
@@ -388,7 +388,7 @@ class ConnectFailureIT {
 		// demo E2E webmvc). That the click really re-invokes connect() is covered
 		// without a race by the Sidebar.connectFailureAlert unit test.
 		alert().shouldBe(visible, Duration.ofSeconds(30));
-		alert().shouldHave(text("Connection refused (connection_refused)"));
+		alert().shouldHave(text("Connection refused"));
 		$("[data-testid=retry-connect-button]").shouldBe(visible);
 	}
 

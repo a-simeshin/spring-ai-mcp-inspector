@@ -22,6 +22,7 @@ import java.net.UnknownHostException;
 import java.net.http.HttpTimeoutException;
 import java.util.concurrent.TimeoutException;
 
+import io.modelcontextprotocol.spec.McpTransportException;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -99,6 +100,24 @@ class ProxyConnectFailureTests {
 
 		@Test
 		@Story("Classification")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("An McpTransportException with 'Server Not Found' is classified as not_found")
+		void classify_mcpTransportExceptionWithServerNotFound_returnsNotFound() {
+			// given - the SDK throws McpTransportException when the upstream
+			// server responds with 404 (wrong URL path, e.g. /api instead of /mcp)
+			final McpTransportException notFound = new McpTransportException(
+					"Server Not Found. Status code:404 GET http://localhost:9999/api");
+
+			// when
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(notFound);
+
+			// then
+			assertThat(failure.reason()).isEqualTo(ProxyConnectFailure.Reason.NOT_FOUND);
+			assertThat(failure.message()).isNotBlank();
+		}
+
+		@Test
+		@Story("Classification")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("A protocol-level reply from a live server (404 session not found) is unknown, not a transport failure — the pump must not tear the session down for it")
 		void classify_sessionNotFoundFromLiveServer_returnsUnknown() {
@@ -160,6 +179,7 @@ class ProxyConnectFailureTests {
 			assertThat(ProxyConnectFailure.Reason.TIMEOUT.wire()).isEqualTo("timeout");
 			assertThat(ProxyConnectFailure.Reason.CONNECTION_REFUSED.wire()).isEqualTo("connection_refused");
 			assertThat(ProxyConnectFailure.Reason.DNS.wire()).isEqualTo("dns");
+			assertThat(ProxyConnectFailure.Reason.NOT_FOUND.wire()).isEqualTo("not_found");
 			assertThat(ProxyConnectFailure.Reason.UNKNOWN.wire()).isEqualTo("unknown");
 		}
 

@@ -22,6 +22,8 @@ import java.net.UnknownHostException;
 import java.net.http.HttpTimeoutException;
 import java.util.concurrent.TimeoutException;
 
+import io.modelcontextprotocol.spec.McpTransportException;
+
 /**
  * Classified outcome of a failed connection attempt to an upstream MCP server.
  *
@@ -52,6 +54,9 @@ public record ProxyConnectFailure(Reason reason, String message) {
 
 		/** The upstream host name could not be resolved. */
 		DNS("dns"),
+
+		/** The upstream server responded with 404 Not Found. */
+		NOT_FOUND("not_found"),
 
 		/** Any other failure that cannot be classified. */
 		UNKNOWN("unknown");
@@ -92,6 +97,10 @@ public record ProxyConnectFailure(Reason reason, String message) {
 			if (current instanceof SocketTimeoutException || current instanceof HttpTimeoutException
 					|| current instanceof TimeoutException) {
 				return new ProxyConnectFailure(Reason.TIMEOUT, "connection to the MCP server timed out");
+			}
+			if (current instanceof McpTransportException && current.getMessage() != null
+					&& current.getMessage().contains("Server Not Found")) {
+				return new ProxyConnectFailure(Reason.NOT_FOUND, "server responded with 404: check the URL");
 			}
 			current = current.getCause();
 		}
