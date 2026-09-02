@@ -253,10 +253,14 @@ const ToolsTab = ({
     return errors;
   };
 
+  // [spring-ai-mcp-inspector PATCH] Guard against null `inputSchema.properties`
+  // when the MCP server's tools/list response includes `"properties": null`.
+  // The `?? []` operator only catches `undefined`, not `null`, causing a
+  // TypeError in Object.entries that unmounts the entire App tree.
   useEffect(() => {
-    const params = Object.entries(
-      selectedTool?.inputSchema.properties ?? [],
-    ).map(([key, value]) => {
+    const schemaProps = selectedTool?.inputSchema?.properties;
+    const params = (schemaProps != null ? Object.entries(schemaProps) : []).map(
+      ([key, value]) => {
       // First resolve any $ref references
       const resolvedValue = resolveRef(
         value as JsonSchemaType,
@@ -399,7 +403,10 @@ const ToolsTab = ({
                   }
                   declared={hasAnnotations(selectedTool)}
                 />
-                {Object.entries(selectedTool.inputSchema.properties ?? []).map(
+                {/* [spring-ai-mcp-inspector PATCH] Same null guard for the
+                    rendering path: `inputSchema.properties` from the SDK can be
+                    `null`, and `?? []` does not catch it. */}
+                {(selectedTool.inputSchema.properties != null ? Object.entries(selectedTool.inputSchema.properties) : []).map(
                   ([key, value]) => {
                     // First resolve any $ref references
                     const resolvedValue = resolveRef(
