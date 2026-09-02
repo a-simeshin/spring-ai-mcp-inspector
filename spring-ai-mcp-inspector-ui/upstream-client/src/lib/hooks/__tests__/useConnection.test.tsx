@@ -6,6 +6,7 @@ import {
   CreateTaskResultSchema,
   JSONRPCMessage,
   McpError,
+  ServerCapabilities,
 } from "@modelcontextprotocol/sdk/types.js";
 import type {
   AnySchema,
@@ -1860,6 +1861,57 @@ describe("useConnection", () => {
         expect.objectContaining({
           reason: "unknown",
           message: "connection to the MCP server was refused",
+        }),
+      );
+    });
+
+    test("a failed connect does NOT show a toast (the sidebar alert replaces it)", async () => {
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(mockToast).not.toHaveBeenCalled();
+    });
+
+    test("a post-connect error shows a toast with the normalized message, not Error: Error: duplication", async () => {
+      // Make connect succeed so the code reaches the outer catch
+      mockClient.connect.mockResolvedValue(undefined);
+      // Make getServerCapabilities return logging=true so the code tries
+      // client.setLoggingLevel, which is undefined on the mock and throws.
+      mockClient.getServerCapabilities.mockReturnValue({
+        logging: {},
+      } as ServerCapabilities);
+
+      const propsWithLogging = {
+        ...defaultProps,
+        config: {
+          ...DEFAULT_INSPECTOR_CONFIG,
+          MCP_SERVER_REQUEST_TIMEOUT: {
+            ...DEFAULT_INSPECTOR_CONFIG.MCP_SERVER_REQUEST_TIMEOUT,
+            value: 5000,
+          },
+        },
+        defaultLoggingLevel: "debug" as const,
+      };
+
+      const { result } = renderHook(() => useConnection(propsWithLogging));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(mockToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Connection error",
+          description:
+            "Connection failed: client.setLoggingLevel is not a function",
+          variant: "destructive",
         }),
       );
     });

@@ -13,3 +13,9 @@ src/lib/connectErrors.ts + src/lib/hooks/useConnection.ts +
  reason and a Retry button that repeats connect. Covered by
  src/lib/__tests__/connectErrors.test.ts and
  src/components/__tests__/Sidebar.connectFailureAlert.test.tsx.
+
+Additional fix on top of the connect-failure alert:
+- Sidebar.tsx status text depends on connectionError?.reason instead
+  of unconditionally mentioning the proxy token: connection_refused
+  and dns show "URL is reachable", timeout shows "not responding",
+  unknown/fallback shows "MCP server is running".
