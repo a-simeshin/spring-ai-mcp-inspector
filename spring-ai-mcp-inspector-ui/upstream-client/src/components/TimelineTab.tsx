@@ -250,10 +250,7 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
           {negotiation && <ProtocolNegotiationBlock negotiation={negotiation} />}
           {Object.keys(payload).length > 0 ? (
             <div className="mb-1">
-              {JSON.stringify(payload, (key, value) => {
-                // Mask sensitive fields in the detail view.
-                return maskSensitiveValue(key, value);
-              }, 2)}
+              {JSON.stringify(payload, null, 2)}
             </div>
           ) : (
             <div className="opacity-50">no payload</div>
@@ -290,12 +287,6 @@ const TimelineTab = () => {
     try {
       const params = new URLSearchParams();
       params.set("limit", "200");
-      if (directionFilter) {
-        params.set("direction", directionFilter);
-      }
-      if (clientNameFilter) {
-        params.set("clientName", clientNameFilter);
-      }
       const res = await fetch(`${apiBase}/api/timeline?${params.toString()}`, { headers });
       if (res.ok) {
         const data = (await res.json()) as TimelineEvent[];
@@ -304,7 +295,7 @@ const TimelineTab = () => {
     } catch {
       // Silently ignore fetch errors
     }
-  }, [directionFilter, clientNameFilter]);
+  }, []);
 
   useEffect(() => {
     void fetchTimeline();
@@ -338,9 +329,8 @@ const TimelineTab = () => {
     ),
   ].sort();
 
-  // Filter by client name and direction on the client side as well (the API
-  // already filters, but this catches rapid polling updates).
-  const filteredEvents = events.filter((e) => {
+  // Filter by client name and direction on the client side.
+    const filteredEvents = events.filter((e) => {
     const p = e.payload ?? {};
     if (directionFilter && p.direction !== directionFilter) return false;
     if (clientNameFilter && p.clientName !== clientNameFilter) return false;

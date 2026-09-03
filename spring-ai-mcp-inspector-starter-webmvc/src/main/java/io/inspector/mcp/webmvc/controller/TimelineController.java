@@ -93,7 +93,11 @@ public class TimelineController {
 	 */
 	@GetMapping(path = "/diagnostics", produces = MediaType.APPLICATION_JSON_VALUE)
 	public List<TimelineEvent> diagnostics() {
-		return this.timelineService.query(TimelineQuery.all());
+		return this.timelineService.query(TimelineQuery.all())
+			.stream()
+			.filter((e) -> e.payload() != null && e.payload().has("endpoint")
+					&& "client-diagnostics".equals(e.payload().get("endpoint").asText()))
+			.toList();
 	}
 
 	/**
