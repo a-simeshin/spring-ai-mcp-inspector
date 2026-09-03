@@ -1204,26 +1204,26 @@ class InspectorUiIT {
 		@Test
 		@Story("Resource preview")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("Clicking demo-logo exposes a download/open control for the binary resource bytes.")
-		@DisplayName("resourcePreview_downloadControlPresent — demo-logo exposes a download/open control")
+		@Description("Clicking demo-logo renders a download link with the correct data:image/png MIME and logo.png filename.")
+		@DisplayName("resourcePreview_downloadControlPresent — demo-logo exposes download with exact data URL and filename")
 		void resourcePreview_downloadControlPresent() {
 			// given & when
 			selectRow("demo-logo");
 
 			// then
-			// Wait for the resource read to materialize the right-panel header (the
-			// selected resource name) regardless of render implementation.
-			activePanel().$$("h3").findBy(exactText("demo-logo")).shouldBe(visible, Duration.ofSeconds(15));
-			// Binary resource preview must expose a download/open affordance (per the
-			// shared MediaContentView recommendation: <a download href=data:...> for
-			// binary/*). Red against current behavior (no download control exists),
-			// green after the implementation. `exists()` on the composed selector so
-			// any one of the affordance shapes satisfies the check.
-			Assertions.assertTrue(
-					!activePanel().$$("a[download]").isEmpty()
-							|| !activePanel().$$("button").filterBy(exactText("Download")).isEmpty()
-							|| !activePanel().$$("button").filterBy(exactText("Open")).isEmpty(),
-					"Expected a download/open control in the resource preview pane after clicking demo-logo");
+			// Wait for the resource content to render (the <img> proves the
+			// ReadResourceResult was parsed and MediaContentView rendered it).
+			activePanel().$("img[src^='data:image/png;base64,']").shouldBe(visible, Duration.ofSeconds(15));
+			// The download link must have the correct href (data:image/png;base64,...)
+			// and download attribute matching the resource filename from the URI.
+			// The expected filename is "logo.png" (from "demo://logo.png").
+			SelenideElement downloadLink = activePanel().$("a[download='logo.png']");
+			downloadLink.shouldBe(visible, Duration.ofSeconds(5));
+			String href = downloadLink.getAttribute("href");
+			Assertions.assertNotNull(href, "Download link must have an href");
+			Assertions.assertTrue(href.startsWith("data:image/png;base64,iVBORw0KGgo"),
+					"Download href should be a data:image/png;base64 URL starting with the PNG magic bytes, got: "
+							+ href);
 		}
 
 		@Test
@@ -1236,6 +1236,9 @@ class InspectorUiIT {
 			selectRow("demo-logo");
 
 			// then
+			// First wait for the resource content to render (the <img> proves the
+			// ReadResourceResult was parsed and MediaContentView rendered it).
+			activePanel().$("img[src^='data:image/png;base64,']").shouldBe(visible, Duration.ofSeconds(15));
 			// The base64 blob content should NOT be visible as raw text in the panel.
 			// The TINY_PNG_BASE64 from DemoAdvancedResourcesProvider starts with this
 			// known prefix. This will FAIL against current behavior (base64 is visible
