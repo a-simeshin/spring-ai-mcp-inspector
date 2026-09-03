@@ -33,9 +33,11 @@ if grep -qx "$ui/NOTICE.txt" <<< "$changed"; then
   fi
 fi
 
-# Правило 2: любая правка в upstream-client/ (кроме NOTICE.d/ и NOTICE.txt)
-# требует записи в NOTICE.d/
-vendored_files="$(grep -E "^$ui/" <<< "$existing" | grep -vE "^$ui/(NOTICE\.d/|NOTICE\.txt$)" || true)"
+# Правило 2: любая правка в upstream-client/ (кроме NOTICE.d/, NOTICE.txt,
+# package-lock.json, LICENSE, README.md) требует записи в NOTICE.d/
+# Исключения: package-lock.json/LICENSE/README.md генерируются или копируются
+# при пере-вендоризации и не являются локальными патчами.
+vendored_files="$(grep -E "^$ui/" <<< "$existing" | grep -vE "^$ui/(NOTICE\.d/|NOTICE\.txt$|package-lock\.json$|LICENSE$|README\.md$)" || true)"
 if [[ -n "$vendored_files" ]]; then
   if ! grep -qE "^$ui/NOTICE\.d/" <<< "$changed"; then
     echo "FAIL: тронут вендоренный код ($ui/), но ни один файл в $ui/NOTICE.d/ не добавлен и не изменён."
@@ -47,11 +49,38 @@ if [[ -n "$vendored_files" ]]; then
   fi
 fi
 
-# Правило 3: правка под src/ требует маркера PATCH в теле каждого файла
+# Правило 3: правка под src/ требует маркера PATCH в теле каждого файла.
+# Исключение: файлы, перечисленные в NOTICE.d/.revendoring-exemptions (по одному
+# относительному пути на строку), не проверяются на наличие маркера. Файл
+# используется при пере-вендоризации (например #113), когда ~96 файлов под src/
+# не имеют маркера, и не должен присутствовать в обычных PR.
+exemption_file="$ui/NOTICE.d/.revendoring-exemptions"
+exemptions=()
+if [[ -f "$exemption_file" ]]; then
+  while IFS= read -r line; do
+    # Пропускаем пустые строки и комментарии
+    line="${line%%#*}"
+    line="${line//[[:space:]]/}"
+    [[ -z "$line" ]] && continue
+    exemptions+=("$line")
+  done < "$exemption_file"
+  echo "INFO: $exemption_file найден, ${#exemptions[@]} файлов исключены из правила 3."
+fi
 src_files="$(grep -E "^$ui/src/" <<< "$existing" || true)"
 if [[ -n "$src_files" ]]; then
   missing_marker=""
   while IFS= read -r file; do
+    # Проверяем, не входит ли файл в список исключений
+    exempted=0
+    for e in "${exemptions[@]}"; do
+      if [[ "$file" == "$e" ]]; then
+        exempted=1
+        break
+      fi
+    done
+    if [[ $exempted -eq 1 ]]; then
+      continue
+    fi
     if ! grep -qE '\[spring-ai-mcp-inspector PATCH\]' "$file" 2>/dev/null; then
       missing_marker+="$file"$'\n'
     fi
@@ -60,6 +89,8 @@ if [[ -n "$src_files" ]]; then
     echo "FAIL: файлы под $ui/src/ не содержат обязательный маркер [spring-ai-mcp-inspector PATCH]:"
     sed 's/^/        /' <<< "$missing_marker"
     echo "      Без маркера правка будет молча перезаписана при следующей пере-вендоризации."
+    echo "      Чтобы исключить файлы из проверки, добавьте их в $exemption_file"
+    echo "      (по одному относительному пути на строку)."
     fail=1
   fi
 fi

@@ -216,6 +216,33 @@ test_deleted_vendored_file() {
 }
 
 # ----- main ------------------------------------------------------------------
+# ----- Scenario: OK - src change without PATCH marker but WITH exemption file -----
+test_revendoring_exemption() {
+  cd "$TMPDIR"
+  git checkout -q -b test-revendoring-exemption "$base_rev"
+
+  # Create a new src file WITHOUT PATCH marker
+  cat > spring-ai-mcp-inspector-ui/upstream-client/src/components/NewFile.tsx <<'EOF'
+export const NewFile = () => <div>new</div>;
+EOF
+  # List it in the exemption file AND add a NOTICE.d entry
+  echo "spring-ai-mcp-inspector-ui/upstream-client/src/components/NewFile.tsx" \
+    > spring-ai-mcp-inspector-ui/upstream-client/NOTICE.d/.revendoring-exemptions
+  cat > spring-ai-mcp-inspector-ui/upstream-client/NOTICE.d/new-file.txt <<'EOF'
+File: src/components/NewFile.tsx
+What: New file without marker (exempted under revendoring)
+EOF
+  git add -A
+  git commit -q -m "add new src file without PATCH marker, with exemption"
+
+  if output=$("$GATE" "origin/HEAD" 2>&1); then
+    pass "src change without PATCH marker (exempted via .revendoring-exemptions): exit 0"
+  else
+    fail "src change without PATCH marker (exempted): expected exit 0, got $?"
+    echo "    $output"
+  fi
+}
+
 echo "=== check-notice-registry.sh self-test ==="
 base_rev="$(setup_repo)"
 echo "Base commit: ${base_rev:0:7}"
@@ -231,6 +258,7 @@ test_notice_txt_numbered
 test_src_with_marker_and_notice
 test_notice_d_only
 test_deleted_vendored_file
+test_revendoring_exemption
 
 echo "---"
 if [[ $failures -eq 0 ]]; then
