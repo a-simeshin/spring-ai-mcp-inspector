@@ -51,7 +51,7 @@
         <maven-surefire-plugin.version>3.5.0</maven-surefire-plugin.version>
         <maven-failsafe-plugin.version>3.5.0</maven-failsafe-plugin.version>
         <spring-javaformat-maven-plugin.version>0.0.47</spring-javaformat-maven-plugin.version>
-        <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
+        <jacoco-maven-plugin.version>0.8.15</jacoco-maven-plugin.version>
 
         <!-- Maven Central release tooling (activated by the `release` profile).
              Versions kept in lockstep with the sibling spring-ai-ragas release setup. -->
@@ -70,8 +70,8 @@
              verify phase (needs compiled bytecode). spotbugs.version pins the core
              engine to the same train as the plugin wrapper. demo/ui opt out via
              <spotbugs.skip>true</spotbugs.skip>. -->
-        <spotbugs-maven-plugin.version>4.9.3.0</spotbugs-maven-plugin.version>
-        <spotbugs.version>4.9.3</spotbugs.version>
+        <spotbugs-maven-plugin.version>4.10.4.0</spotbugs-maven-plugin.version>
+        <spotbugs.version>4.10.4</spotbugs.version>
         <spotbugs.skip>false</spotbugs.skip>
 
         <!-- Allure test reporting. allure.version: latest stable Allure 2.x (known-good
@@ -80,14 +80,14 @@
              surefire/failsafe argLine resolves to a real jar in the local repository. -->
         <allure.version>2.29.1</allure.version>
         <aspectj.version>1.9.25.1</aspectj.version>
-        <allure-maven-plugin.version>2.15.2</allure-maven-plugin.version>
+        <allure-maven-plugin.version>3.0.3</allure-maven-plugin.version>
 
         <!-- Browser automation for the Selenide UI tests. Declared here because the
              demo split put them on three classpaths at once (demo-app, demo-webmvc,
              demo-webflux); a single pair of properties keeps the browser stack from
              drifting apart between the stack modules. -->
-        <selenide.version>7.6.1</selenide.version>
-        <webdrivermanager.version>6.1.0</webdrivermanager.version>
+        <selenide.version>7.18.1</selenide.version>
+        <webdrivermanager.version>6.3.4</webdrivermanager.version>
 
         <!-- JaCoCo coverage gate (Surefire only — IT/E2E run under Failsafe
              and do not contribute). Override per-module to relax or skip. -->
