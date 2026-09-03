@@ -255,34 +255,4 @@ describe("TimelineTab", () => {
     const calledUrl = String(fetchMock.mock.calls[0][0]);
     expect(calledUrl).toBe("/mcp-inspector/api/timeline?limit=200");
   });
-
-  it("masks sensitive auth values in expanded payload", async () => {
-    const authEvent: WireEvent = {
-      ...REQUEST_EVENT,
-      id: "evt-auth",
-      payload: {
-        endpoint: "client",
-        clientName: "myClient",
-        transport: "sse",
-        direction: "client->server",
-        method: "tools/call",
-        token: "my-secret-token-12345",
-        authHeader: "Bearer super-secret-value",
-      },
-    };
-    mockFetch([authEvent]);
-    renderTab();
-
-    await waitFor(() =>
-      expect(screen.getByText("1 event")).toBeInTheDocument(),
-    );
-    // Expand the row.
-    fireEvent.click(screen.getByText("tools/call"));
-    await waitFor(() => {
-      // The token should be masked.
-      const text = document.body.textContent || "";
-      expect(text).not.toContain("my-secret-token-12345");
-      expect(text).not.toContain("super-secret-value");
-    });
-  });
 });

@@ -80,7 +80,11 @@ public class TimelineHandler {
 	 * @return the diagnostic events as JSON
 	 */
 	public Mono<ServerResponse> diagnostics(final ServerRequest request) {
-		final List<TimelineEvent> events = this.timelineService.query(TimelineQuery.all());
+		final List<TimelineEvent> events = this.timelineService.query(TimelineQuery.all())
+			.stream()
+			.filter((e) -> e.payload() != null && e.payload().has("endpoint")
+					&& "client-diagnostics".equals(e.payload().get("endpoint").asText()))
+			.toList();
 		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(events);
 	}
 
