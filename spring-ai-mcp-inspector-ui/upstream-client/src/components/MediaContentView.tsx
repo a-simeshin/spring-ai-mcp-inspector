@@ -1,8 +1,12 @@
 // [spring-ai-mcp-inspector PATCH] Shared mimeType-aware content renderer for
-// resource previews (#108). Replaces hardcoded type-switches in ToolResults.tsx
-// and raw JSON.stringify rendering in ResourcesTab.tsx/ResourceLinkView.tsx.
-// Supports image/* -> <img>, audio/* -> <audio>, other binary -> <a download>,
-// text/* -> JsonView fallback.
+// resource previews (#108, #59 follow-up). Replaces hardcoded type-switches
+// in ToolResults.tsx and raw JSON.stringify rendering in ResourcesTab.tsx/
+// ResourceLinkView.tsx.
+// Supports image/* → <img>, audio/* → <audio>, other binary → <a download>,
+// text/* → JsonView fallback.
+// Security: "Open in new tab" is restricted to inert MIME types only
+// (text/plain, image/*, audio/*, video/*, application/pdf) to prevent
+// execution of attacker-controlled HTML/JS via data: URIs.
 import JsonView from "./JsonView";
 
 interface MediaContentViewProps {
@@ -28,13 +32,37 @@ interface MediaContentViewProps {
 }
 
 /**
+ * MIME types that are safe to open via data: URI in a new tab.
+ * Active content types (text/html, image/svg+xml, application/xml, etc.)
+ * are excluded to prevent XSS via attacker-controlled BlobResourceContents.
+ */
+const INERT_MIME_TYPES: ReadonlySet<string> = new Set([
+  "text/plain",
+  "application/pdf",
+  "application/json",
+  "application/octet-stream",
+]);
+
+/** Check whether a MIME type is safe to open via data: URI in a new tab. */
+const isInertMimeType = (mt: string): boolean => {
+  const lower = mt.toLowerCase();
+  return (
+    INERT_MIME_TYPES.has(lower) ||
+    lower.startsWith("image/") ||
+    lower.startsWith("audio/") ||
+    lower.startsWith("video/")
+  );
+};
+
+/**
  * Shared mimeType-aware content renderer.
  *
  * Dispatch:
- * - `image/*` (with base64Data)  -> `<img>` with data URI
- * - `audio/*` (with base64Data)  -> `<audio controls>` with data URI
- * - binary/* or other non-text mimeTypes with base64Data -> `<a download>`
- * - text/* or no base64Data      -> `<JsonView>` (preserves existing rendering)
+ * - `image/*` (with base64Data)  → `<img>` with data URI
+ * - `audio/*` (with base64Data)  → `<audio controls>` with data URI
+ * - binary/* or other non-text mimeTypes with base64Data → `<a download>`
+ *   (+ "Open in new tab" only for inert MIME types)
+ * - text/* or no base64Data      → `<JsonView>` (preserves existing rendering)
  */
 const MediaContentView = ({
   mimeType,
@@ -44,9 +72,11 @@ const MediaContentView = ({
   alt,
   filename,
 }: MediaContentViewProps) => {
-  const hasBinary = typeof base64Data === "string" && base64Data.length > 0;
+  // Normalise mimeType to lowercase for case-insensitive dispatch
+  const normalisedMimeType = mimeType?.toLowerCase();
+  const hasBinary = typeof base64Data === "string";
 
-  /** MIME type badge shown above content for all resource types. */
+  /** MIME type badge shown above content for all resource types (shows original). */
   const mimeTypeBadge = mimeType ? (
     <span className="inline-block bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs px-2 py-0.5 rounded mb-2 font-mono">
       {mimeType}
@@ -54,8 +84,8 @@ const MediaContentView = ({
   ) : null;
 
   // Image content -- render as <img>
-  if (hasBinary && mimeType?.startsWith("image/")) {
-    const dataUri = `data:${mimeType};base64,${base64Data}`;
+  if (hasBinary && normalisedMimeType?.startsWith("image/")) {
+    const dataUri = `data:${normalisedMimeType};base64,${base64Data}`;
     const downloadName = filename || "image";
     return (
       <div className={className}>
@@ -83,8 +113,8 @@ const MediaContentView = ({
   }
 
   // Audio content -- render as <audio controls>
-  if (hasBinary && mimeType?.startsWith("audio/")) {
-    const dataUri = `data:${mimeType};base64,${base64Data}`;
+  if (hasBinary && normalisedMimeType?.startsWith("audio/")) {
+    const dataUri = `data:${normalisedMimeType};base64,${base64Data}`;
     const downloadName = filename || "audio";
     return (
       <div className={className}>
@@ -115,7 +145,7 @@ const MediaContentView = ({
 
   // Other binary content -- render download/open affordance
   if (hasBinary) {
-    const href = `data:${mimeType || "application/octet-stream"};base64,${base64Data}`;
+    const href = `data:${normalisedMimeType || "application/octet-stream"};base64,${base64Data}`;
     const downloadName = filename || "download";
     return (
       <div className={`flex flex-col gap-2 ${className || ""}`.trim()}>
@@ -133,7 +163,9 @@ const MediaContentView = ({
           <DownloadIcon />
           Download{filename ? ` ${filename}` : ""}
         </a>
-        {filename && (
+        {/* "Open in new tab" restricted to inert MIME types only --
+            avoids executing attacker-controlled HTML/JS via data: URIs. */}
+        {filename && normalisedMimeType && isInertMimeType(normalisedMimeType) && (
           <a
             href={href}
             target="_blank"

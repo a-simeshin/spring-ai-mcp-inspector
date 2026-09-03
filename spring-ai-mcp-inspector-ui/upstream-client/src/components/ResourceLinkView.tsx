@@ -1,3 +1,9 @@
+// [spring-ai-mcp-inspector PATCH] ResourceLinkView with MediaContentView integration
+// for resource previews (#108, #59 follow-up). Instead of raw JsonView, the
+// expanded content renders through MediaContentView for mimeType-aware display
+// (image, audio, binary download, text). Supports multi-item ReadResourceResult
+// by rendering only the first content item (full contents array support is a
+// future enhancement).
 import { useState, useCallback, useMemo, memo } from "react";
 import JsonView from "./JsonView";
 import MediaContentView from "./MediaContentView";

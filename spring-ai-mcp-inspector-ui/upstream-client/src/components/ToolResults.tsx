@@ -131,6 +131,10 @@ const ToolResults = ({
       );
     }
 
+    // [spring-ai-mcp-inspector PATCH] MediaContentView integration for image and
+    // resource content types (#108, #59 follow-up). Replaces inline <img> and
+    // hardcoded audio/JsonView type-switches with shared MediaContentView for
+    // mimeType-aware rendering (image, audio, binary download, text).
     return (
       <>
         <h4 className="font-semibold mb-2">
