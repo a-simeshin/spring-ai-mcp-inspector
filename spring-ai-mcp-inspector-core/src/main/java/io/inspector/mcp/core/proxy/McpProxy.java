@@ -164,7 +164,10 @@ public final class McpProxy {
 			if (message instanceof io.modelcontextprotocol.spec.McpSchema.JSONRPCResponse response) {
 				final Object id = response.id();
 				if (id instanceof Number numId && session.isProbeId(numId.intValue())) {
-					session.touch();
+					// Probe responses are internal traffic - they must not count as
+					// activity for session reaping, and the probe id must be removed
+					// to prevent unbounded growth of the probeIds set.
+					session.removeProbeId(numId.intValue());
 					return Mono.<JSONRPCMessage>empty();
 				}
 			}

@@ -43,8 +43,8 @@ import io.inspector.mcp.core.config.McpInspectorProperties;
  * {@link McpProxy#start(ProxySession)}.
  *
  * <p>
- * Only SSE sessions are probed - sessions using other transport types (streamable-HTTP,
- * stdio) are skipped.
+ * Every active session is probed regardless of transport type (SSE, streamable-HTTP,
+ * stdio).
  *
  * @author Artem Simeshin
  */

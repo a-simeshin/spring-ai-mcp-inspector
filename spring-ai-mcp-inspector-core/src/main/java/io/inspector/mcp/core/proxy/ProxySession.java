@@ -266,6 +266,15 @@ public final class ProxySession {
 	}
 
 	/**
+	 * Removes a previously registered probe ID from the set. Called after the matching
+	 * probe response has been filtered out, preventing unbounded growth of the set.
+	 * @param id the probe id to remove
+	 */
+	public void removeProbeId(final int id) {
+		this.probeIds.remove(id);
+	}
+
+	/**
 	 * Generates the next unique probe request ID. The ID is automatically registered so
 	 * its response will be filtered from the browser stream.
 	 * @return a unique negative probe ID
