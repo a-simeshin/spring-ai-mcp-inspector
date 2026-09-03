@@ -169,6 +169,12 @@ export function useConnection({
   // Guards against concurrent connect attempts (double-clicks).
   const connectingRef = useRef(false);
 
+  // Monotonically increasing generation counter for connect attempts.
+  // Each connect() call increments the counter; stale completions (from
+  // a previous attempt still resolving) check this ref and skip their
+  // state updates when a newer generation has already started.
+  const connectAttemptRef = useRef(0);
+
   useEffect(() => {
     if (!oauthClientId) {
       clearClientInformationFromSessionStorage({
@@ -470,6 +476,10 @@ export function useConnection({
       connectingRef.current = true;
     }
 
+    // Bump the generation counter so earlier (stale) connect attempts that
+    // resolve later will skip their state updates.
+    const generation = ++connectAttemptRef.current;
+
     // Full cleanup of stale state before connecting fresh.
     // [spring-ai-mcp-inspector PATCH] Reconnect after silent SSE drop:
     // close the old client/transport and clear stale session ID so the
@@ -485,6 +495,7 @@ export function useConnection({
       if (record.cleanupTimeoutId) {
         clearTimeout(record.cleanupTimeoutId);
       }
+      record.rejectPayload(new McpError(ErrorCode.InternalError, "Connection reset"));
     });
     receiverTasksRef.current.clear();
 
@@ -925,7 +936,8 @@ export function useConnection({
 
         const shouldRetry = await handleAuthError(error);
         if (shouldRetry) {
-          return connect(undefined, retryCount + 1);
+          await connect(undefined, retryCount + 1);
+          return;
         }
         if (isConnectionAuthError(error)) {
           // [spring-ai-mcp-inspector PATCH] OAuth already failed
@@ -1134,6 +1146,10 @@ export function useConnection({
               const payload = await new Promise((resolve, reject) => {
                 onPendingRequest(request, resolve, reject);
               });
+              // If the receiver task was cleared during cleanup, skip mutation.
+              if (!receiverTasksRef.current.has(record.task.taskId)) {
+                return;
+              }
               record.resolvePayload(payload as ClientResult);
               const updated: Task = {
                 ...record.task,
@@ -1147,6 +1163,10 @@ export function useConnection({
               await upsertReceiverTask(updated);
             } catch (e) {
               record.rejectPayload(e);
+              // If the receiver task was cleared during cleanup, skip mutation.
+              if (!receiverTasksRef.current.has(record.task.taskId)) {
+                return;
+              }
               const updated: Task = {
                 ...record.task,
                 status: "failed",
@@ -1198,6 +1218,10 @@ export function useConnection({
               const payload = await new Promise((resolve) => {
                 onElicitationRequest(request, resolve);
               });
+              // If the receiver task was cleared during cleanup, skip mutation.
+              if (!receiverTasksRef.current.has(record.task.taskId)) {
+                return;
+              }
               record.resolvePayload(payload as ClientResult);
               const updated: Task = {
                 ...record.task,
@@ -1211,6 +1235,10 @@ export function useConnection({
               await upsertReceiverTask(updated);
             } catch (e) {
               record.rejectPayload(e);
+              // If the receiver task was cleared during cleanup, skip mutation.
+              if (!receiverTasksRef.current.has(record.task.taskId)) {
+                return;
+              }
               const updated: Task = {
                 ...record.task,
                 status: "failed",
@@ -1248,9 +1276,20 @@ export function useConnection({
         lastRequest = "";
       }
 
+      // If a newer connect attempt has already started, ignore this
+      // stale completion so it cannot overwrite the active session.
+      if (generation !== connectAttemptRef.current) {
+        return;
+      }
+
       setMcpClient(client);
       setConnectionStatus("connected");
     } catch (e) {
+      // If a newer connect attempt has already started, ignore this
+      // stale completion so it cannot overwrite the active session.
+      if (generation !== connectAttemptRef.current) {
+        return;
+      }
       if (
         lastRequest === "logging/setLevel" &&
         e instanceof McpError &&
@@ -1309,6 +1348,7 @@ export function useConnection({
       if (record.cleanupTimeoutId) {
         clearTimeout(record.cleanupTimeoutId);
       }
+      record.rejectPayload(new McpError(ErrorCode.InternalError, "Connection reset"));
     });
     receiverTasksRef.current.clear();
 
@@ -1333,6 +1373,55 @@ export function useConnection({
     setServerImplementation(null);
   };
 
+  /**
+   * Force-tear-down any lingering session state and immediately retry the
+   * connection.  Unlike a normal Retry (which calls connect() anew), this
+   * fires-and-forgets the old transport close so it never hangs on a stuck
+   * handshake, clears the state synchronously, and bypasses the connectingRef
+   * guard so it always attempts a fresh connect even if a previous attempt is
+   * wedged.  Designed for the "Reset session" / "Force reconnect" button shown
+   * on timeout errors.
+   */
+  const resetSessionAndConnect = async () => {
+    // Fire-and-forget: close old transport without waiting for a stuck close.
+    mcpClient?.close().catch(() => {});
+    if (transportType === "streamable-http") {
+      (clientTransport as StreamableHTTPClientTransport)
+        ?.terminateSession()
+        .catch(() => {});
+    }
+
+    // Clear receiver tasks and auth state immediately.
+    receiverTasksRef.current.forEach((record) => {
+      if (record.cleanupTimeoutId) {
+        clearTimeout(record.cleanupTimeoutId);
+      }
+      record.rejectPayload(new McpError(ErrorCode.InternalError, "Connection reset"));
+    });
+    receiverTasksRef.current.clear();
+
+    const authProvider = new InspectorOAuthClientProvider(sseUrl);
+    authProvider.clear();
+
+    setMcpClient(null);
+    setClientTransport(null);
+    setMcpSessionId(null);
+    setMcpProtocolVersion(null);
+    setCompletionsSupported(false);
+    setServerCapabilities(null);
+    setServerImplementation(null);
+    setConnectionError(null);
+
+    // Bump generation so any in-flight connect attempt is treated as stale.
+    ++connectAttemptRef.current;
+
+    // Bypass the connectingRef guard so we always attempt a fresh connect.
+    connectingRef.current = false;
+
+    // Now connect fresh.
+    await connect();
+  };
+
   return {
     connectionStatus,
     connectionError,
@@ -1349,5 +1438,6 @@ export function useConnection({
     completionsSupported,
     connect,
     disconnect,
+    resetSessionAndConnect,
   };
 }

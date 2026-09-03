@@ -8,6 +8,7 @@ import {
   parseConnectFailureResponse,
   type ConnectFailure,
 } from "../connectErrors";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
 /** Minimal Response-shaped object; the parser only touches clone().json(). */
 const responseWithBody = (body: unknown): Response => {
@@ -168,7 +169,7 @@ describe("isHttp401Error", () => {
   });
 });
 
-describe("connectionFailureFromError — unauthorized detection", () => {
+describe("connectionFailureFromError - unauthorized detection", () => {
   it("maps SDK-level errors with code 401 to unauthorized reason", () => {
     const sdk401 = new Error("HTTP 401 Unauthorized");
     (sdk401 as unknown as Record<string, unknown>).code = 401;
@@ -190,5 +191,21 @@ describe("connectionFailureFromError — unauthorized detection", () => {
       retryable: true,
     };
     expect(connectionFailureFromError(new ConnectFailedError(unauthorized))).toEqual(unauthorized);
+  });
+});
+
+describe("connectionFailureFromError -32001 timeout", () => {
+  it("maps McpError with code -32001 to timeout reason", () => {
+    const timeoutError = new McpError(ErrorCode.RequestTimeout, "Request timed out");
+    const failure = connectionFailureFromError(timeoutError);
+    expect(failure.reason).toBe("timeout");
+    expect(failure.message).toContain("Request timed out");
+    expect(failure.retryable).toBe(true);
+  });
+
+  it("keeps unknown reason for other McpError codes", () => {
+    const otherError = new McpError(ErrorCode.InternalError, "Internal error");
+    const failure = connectionFailureFromError(otherError);
+    expect(failure.reason).toBe("unknown");
   });
 });

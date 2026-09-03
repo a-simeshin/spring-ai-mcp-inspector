@@ -1,0 +1,9 @@
+src/components/Sidebar.tsx: show a toast notification when a connection
+error is set, and dismiss it when the error clears (on retry or successful
+connect). The toast uses the existing @radix-ui/react-toast system with
+destructive variant, ensuring the error is immediately visible without
+scrolling, complementing the inline role=alert in the sidebar. Also moved
+the inline alert from the bottom of the sidebar config pane to the top,
+right after the Transport Type selector, so both the toast and the inline
+alert are visible at the top of the viewport on any screen size. Covered
+by src/components/__tests__/Sidebar.connectFailureAlert.test.tsx.

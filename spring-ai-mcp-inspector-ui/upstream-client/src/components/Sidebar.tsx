@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Play,
   ChevronDown,
@@ -11,6 +11,7 @@ import {
   RotateCcw,
   Settings,
   HelpCircle,
+  RefreshCw,
   RefreshCwOff,
   Copy,
   CheckCheck,
@@ -78,6 +79,7 @@ interface SidebarProps {
   setOauthScope: (scope: string) => void;
   onConnect: () => void;
   onDisconnect: () => void;
+  onResetSession: () => void;
   logLevel: LoggingLevel;
   sendLogLevelRequest: (level: LoggingLevel) => void;
   loggingSupported: boolean;
@@ -113,6 +115,7 @@ const Sidebar = ({
   setOauthScope,
   onConnect,
   onDisconnect,
+  onResetSession,
   logLevel,
   sendLogLevelRequest,
   loggingSupported,
@@ -134,6 +137,31 @@ const Sidebar = ({
   const [urlError, setUrlError] = useState<string | null>(null);
   const [urlTouched, setUrlTouched] = useState(false);
   const { toast } = useToast();
+
+  // [spring-ai-mcp-inspector PATCH] Show a toast notification when a
+  // connection error occurs, and dismiss it when the error clears
+  // (on retry or successful connect). The toast ensures the error is
+  // immediately visible without scrolling, complementing the inline alert.
+  // See NOTICE.d/connect-error-toast.txt.
+  const dismissToastRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (connectionError) {
+      if (dismissToastRef.current) {
+        dismissToastRef.current();
+      }
+      const { dismiss } = toast({
+        title: "Connection Failed",
+        description: `${humanReadableReason(connectionError.reason)}${connectionError.message ? `: ${connectionError.message}` : ""}`,
+        variant: "destructive",
+      });
+      dismissToastRef.current = dismiss;
+    } else {
+      if (dismissToastRef.current) {
+        dismissToastRef.current();
+        dismissToastRef.current = null;
+      }
+    }
+  }, [connectionError, toast]);
 
   const connectionTypeTip =
     "Connect to server directly (requires CORS config on server) or via MCP Inspector Proxy";
@@ -309,6 +337,110 @@ const Sidebar = ({
               </SelectContent>
             </Select>
           </div>
+
+          {/* [spring-ai-mcp-inspector PATCH] Render connection failure
+              alerts at the TOP of the config pane, above the URL/command
+              inputs, so they are immediately visible without scrolling
+              (see NOTICE.d/connect-error-alert.txt and
+              NOTICE.d/connect-error-toast.txt). */}
+          {connectionError && (() => {
+            if (connectionError.reason === "unauthorized") {
+              return (
+                <div
+                  role="alert"
+                  className="bg-amber-50 dark:bg-amber-950 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 rounded-lg p-3 mb-4"
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <Lock className="w-4 h-4 flex-shrink-0" />
+                    <span className="text-sm font-medium">
+                      Authentication Required
+                    </span>
+                  </div>
+                  <p className="text-xs mb-2">
+                    The inspector server requires authentication via the{" "}
+                    <code className="text-xs bg-amber-100 dark:bg-amber-900 px-1 rounded">
+                      X-MCP-Inspector-Auth
+                    </code>{" "}
+                    header. The auth token is generated at server start.
+                    <br />
+                    Find it in the server log or configuration, then add it as a
+                    custom header in the Configuration panel below.
+                    {connectionError.message && (
+                      <>
+                        <br />
+                        {connectionError.message}
+                      </>
+                    )}
+                  </p>
+                  <Button
+                    data-testid="retry-connect-button"
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={onConnect}
+                  >
+                    <RotateCcw className="w-4 h-4 mr-2" />
+                    Retry
+                  </Button>
+                </div>
+              );
+            }
+            return (
+              <div
+                role="alert"
+                className="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200 rounded-lg p-3 mb-4"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span className="text-sm font-medium">
+                    Failed to connect to the MCP server
+                  </span>
+                </div>
+                <p className="text-xs mb-2">
+                  {humanReadableReason(connectionError.reason)}
+                  {connectionError.message && (
+                    <>
+                      <br />
+                      {connectionError.message}
+                    </>
+                  )}
+                </p>
+                {connectionError.reason === "timeout" ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      data-testid="retry-connect-button"
+                      size="sm"
+                      variant="outline"
+                      onClick={onConnect}
+                    >
+                      <RotateCcw className="w-4 h-4 mr-2" />
+                      Retry
+                    </Button>
+                    <Button
+                      data-testid="reset-session-button"
+                      size="sm"
+                      variant="default"
+                      onClick={onResetSession}
+                    >
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Reset session
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    data-testid="retry-connect-button"
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={onConnect}
+                  >
+                    <RotateCcw className="w-4 h-4 mr-2" />
+                    Retry
+                  </Button>
+                )}
+              </div>
+            );
+          })()}
 
           {transportType === "stdio" ? (
             <>
@@ -769,92 +901,16 @@ const Sidebar = ({
             )}
           </div>
 
-          {/* [spring-ai-mcp-inspector PATCH] Surface connect failures with a
-              human-readable reason and a Retry button instead of only
-              logging them (see NOTICE.d/connect-error-alert.txt). */}
-          {connectionError && (() => {
-            if (connectionError.reason === "unauthorized") {
-              return (
-                <div
-                  role="alert"
-                  className="bg-amber-50 dark:bg-amber-950 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 rounded-lg p-3 mb-4"
-                >
-                  <div className="flex items-center gap-2 mb-1">
-                    <Lock className="w-4 h-4 flex-shrink-0" />
-                    <span className="text-sm font-medium">
-                      Authentication Required
-                    </span>
-                  </div>
-                  <p className="text-xs mb-2">
-                    The inspector server requires authentication via the{" "}
-                    <code className="text-xs bg-amber-100 dark:bg-amber-900 px-1 rounded">
-                      X-MCP-Inspector-Auth
-                    </code>{" "}
-                    header. The auth token is generated at server start.
-                    <br />
-                    Find it in the server log or configuration, then add it as a
-                    custom header in the Configuration panel below.
-                    {connectionError.message && (
-                      <>
-                        <br />
-                        {connectionError.message}
-                      </>
-                    )}
-                  </p>
-                  <Button
-                    data-testid="retry-connect-button"
-                    size="sm"
-                    variant="outline"
-                    className="w-full"
-                    onClick={onConnect}
-                  >
-                    <RotateCcw className="w-4 h-4 mr-2" />
-                    Retry
-                  </Button>
-                </div>
-              );
-            }
-            return (
-              <div
-                role="alert"
-                className="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200 rounded-lg p-3 mb-4"
-              >
-                <div className="flex items-center gap-2 mb-1">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                  <span className="text-sm font-medium">
-                    Failed to connect to the MCP server
-                  </span>
-                </div>
-                <p className="text-xs mb-2">
-                  {humanReadableReason(connectionError.reason)}
-                  {connectionError.message && (
-                    <>
-                      <br />
-                      {connectionError.message}
-                    </>
-                  )}
-                </p>
-                <Button
-                  data-testid="retry-connect-button"
-                  size="sm"
-                  variant="outline"
-                  className="w-full"
-                  onClick={onConnect}
-                >
-                  <RotateCcw className="w-4 h-4 mr-2" />
-                  Retry
-                </Button>
-              </div>
-            );
-          })()}
+          {/* Connection error alert is rendered at the top of the config
+              pane below (see NOTICE.d/connect-error-alert.txt). */}
 
           <div className="space-y-2">
             {connectionStatus === "connected" && (
               <div className="grid grid-cols-2 gap-4">
                 <Button
                   data-testid="connect-button"
-                  onClick={() => {
-                    onDisconnect();
+                  onClick={async () => {
+                    await onDisconnect();
                     onConnect();
                   }}
                 >
