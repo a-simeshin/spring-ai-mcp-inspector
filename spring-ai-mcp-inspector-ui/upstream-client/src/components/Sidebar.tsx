@@ -813,12 +813,19 @@ const Sidebar = ({
                   switch (connectionStatus) {
                     case "connected":
                       return "Connected";
+                    // [spring-ai-mcp-inspector PATCH] Reason-dependent status
+                    // text: connection_refused/dns shows "URL is reachable",
+                    // timeout shows "not responding", unknown shows
+                    // "MCP server is running". Refs #134/#135.
                     case "error": {
-                      const hasProxyToken = config.MCP_PROXY_AUTH_TOKEN?.value;
-                      if (!hasProxyToken) {
-                        return "Connection Error - Did you add the proxy session token in Configuration?";
+                      const reason = connectionError?.reason;
+                      if (reason === "connection_refused" || reason === "dns") {
+                        return "Connection Error - Check if your MCP server is running and the URL is reachable";
                       }
-                      return "Connection Error - Check if your MCP server is running and proxy token is correct";
+                      if (reason === "timeout") {
+                        return "Connection Error - The server is not responding";
+                      }
+                      return "Connection Error - Check if your MCP server is running";
                     }
                     case "error-connecting-to-proxy":
                       return "Error Connecting to MCP Inspector Proxy - Check Console logs";

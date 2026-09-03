@@ -1181,9 +1181,13 @@ export function useConnection({
           variant: "destructive",
         });
       } else {
+        // [spring-ai-mcp-inspector PATCH] Normalize the error message via
+        // connectionFailureFromError so the toast shows a single clean
+        // message without duplicated "Error:" prefixes (the raw ${e}
+        // interpolation calls Error.toString() which prepends "Error: ").
         toast({
           title: "Connection error",
-          description: `Connection failed: "${e}"`,
+          description: `Connection failed: ${connectionFailureFromError(e).message}`,
           variant: "destructive",
         });
       }
