@@ -5,7 +5,7 @@
  * POST /mcp-inspector-api/mcp handler answers with a non-2xx status and a
  * JSON body of the shape:
  *
- *   {"error":{"code":"MCP_CONNECT_FAILED","reason":"<timeout|connection_refused|dns|unknown>","message":"<human-readable>","retryable":true}}
+ *   {"error":{"code":"MCP_CONNECT_FAILED","reason":"<timeout|connection_refused|dns|unauthorized|not_found|unknown>","message":"<human-readable>","retryable":true}}
  *
  * This module parses that body out of transport responses, carries it as an
  * error through the SDK transport layer, and maps arbitrary connect failures
@@ -170,8 +170,6 @@ export function humanReadableReason(reason: ConnectFailureReason): string {
       return "Authentication required";
     case "not_found":
       return "Server responded 404: check the URL path";
-    case "unknown":
-      return "";
     default:
       return "";
   }

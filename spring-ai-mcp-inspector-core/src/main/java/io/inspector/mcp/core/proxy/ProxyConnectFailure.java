@@ -78,6 +78,14 @@ public record ProxyConnectFailure(Reason reason, String message) {
 
 	}
 
+	/**
+	 * Classifies an arbitrary connect-time exception by walking its cause chain and
+	 * matching the first recognizable network failure. Never throws and never returns
+	 * {@code null} - everything unrecognized maps to {@link Reason#UNKNOWN}.
+	 * @param error the exception observed while connecting to the upstream (must not be
+	 * {@code null})
+	 * @return the classified failure with a reason-specific human-readable message
+	 */
 	public static ProxyConnectFailure classify(final Throwable error) {
 		Throwable current = error;
 		while (current != null) {

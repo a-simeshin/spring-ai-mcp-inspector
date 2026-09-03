@@ -317,7 +317,7 @@ public class StreamableHttpProxyController {
 			.filter((frame) -> matchesId(frame, idNode))
 			.next()
 			.timeout(requestTimeout)
-			.subscribe(awaiterSink::tryEmitValue, awaiterSink::tryEmitError);
+			.subscribe(awaiterSink::tryEmitValue, awaiterSink::tryEmitError, () -> awaiterSink.tryEmitEmpty());
 		final Mono<JsonNode> awaiter = awaiterSink.asMono();
 		final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
 		if (emitResult.isFailure()) {

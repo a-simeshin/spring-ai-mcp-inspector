@@ -456,6 +456,31 @@ class StreamableHttpProxyControllerTests {
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
 		}
 
+		@Test
+		@Story("Existing session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() when session closes while awaiting the upstream response, responds without hanging")
+		void postMcp_sessionClosesWhileAwaiting_respondsWithoutHanging() throws Exception {
+			// given - a session whose targetToBrowser is completed before the POST
+			final ProxySession session = newSession("s-close-await", mock(McpClientTransport.class));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s-close-await")).willReturn(session);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+			// close the session's targetToBrowser before the await subscribes
+			session.targetToBrowser().tryEmitComplete();
+
+			// when
+			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller
+				.postMcp("s-close-await", null, body);
+
+			// then - the response completes (does not hang); the onComplete runnable
+			// calls tryEmitEmpty on the Sinks.One, which completes the await Mono,
+			// and block() returns null which is accepted as the response body
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(entity.getBody()).isNull();
+		}
+
 	}
 
 	@Nested

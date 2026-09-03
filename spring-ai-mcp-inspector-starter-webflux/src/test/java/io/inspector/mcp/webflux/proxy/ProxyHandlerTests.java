@@ -926,6 +926,38 @@ class ProxyHandlerTests {
 			verify(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 		}
 
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() when session closes while awaiting the upstream response, the response completes without hanging")
+		void postMcp_sessionClosesWhileAwaiting_completesWithoutHanging() {
+			// given - a known session
+			final ProxySession session = newSession("s-close-await");
+			given(ProxyHandlerTests.this.registry.get("s-close-await")).willReturn(session);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s-close-await")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+
+			// when - session closes (targetToBrowser completes) while the POST is
+			// awaiting
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request)
+				.doOnSubscribe((s) -> new Thread(() -> {
+					try {
+						Thread.sleep(50);
+					}
+					catch (final InterruptedException ignored) {
+						Thread.currentThread().interrupt();
+					}
+					session.targetToBrowser().tryEmitComplete();
+				}).start())
+				.block();
+
+			// then - the response completes (does not hang); the onComplete runnable
+			// calls tryEmitEmpty on the Sinks.One, so the Mono completes empty
+			assertThat(response).isNull();
+		}
+
 	}
 
 	@Nested
