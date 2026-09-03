@@ -93,7 +93,7 @@ interface SidebarProps {
   // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
   savedConnections: SavedConnection[];
   activeConnectionId?: string;
-  onSaveConnection: (name: string) => SavedConnection;
+  onSaveConnection: (name: string) => SavedConnection | undefined;
   onDeleteConnection: (id: string) => void;
   onSelectConnection: (connection: SavedConnection) => void;
   // [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
@@ -389,9 +389,11 @@ const Sidebar = ({
                       data-testid="save-connection-name-input"
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && saveName.trim()) {
-                          onSaveConnection(saveName.trim());
-                          setSaveName("");
-                          setIsSaving(false);
+                          const result = onSaveConnection(saveName.trim());
+                          if (result) {
+                            setSaveName("");
+                            setIsSaving(false);
+                          }
                         }
                         if (e.key === "Escape") {
                           setSaveName("");
@@ -406,9 +408,11 @@ const Sidebar = ({
                       disabled={!saveName.trim()}
                       onClick={() => {
                         if (saveName.trim()) {
-                          onSaveConnection(saveName.trim());
-                          setSaveName("");
-                          setIsSaving(false);
+                          const result = onSaveConnection(saveName.trim());
+                          if (result) {
+                            setSaveName("");
+                            setIsSaving(false);
+                          }
                         }
                       }}
                       data-testid="confirm-save-connection"
