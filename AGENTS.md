@@ -84,17 +84,21 @@ forming a theory about a test.
 ## Vendored UI code
 
 `spring-ai-mcp-inspector-ui/upstream-client/` is a vendored copy of the upstream
-inspector client. Two rules, both enforced by the `notice registry` job:
+inspector client. Two rules, both checked by the `notice registry` job (see
+PR #145 for the gate implementation):
 
 1. **Register the patch.** Add one file per patch under
    `upstream-client/NOTICE.d/` describing what it does. Do not append to a
    single shared list: parallel pull requests conflict on it, and renumbering
    during conflict resolution breaks references from the code. The
-   `notice registry` job enforces this for changes under `upstream-client/src/`.
+   `notice registry` job enforces this for all changed files under
+   `upstream-client/` (including configuration files such as `package.json`),
+   excluding `NOTICE.d/`, `NOTICE.txt`, `package-lock.json`, `LICENSE`, and
+   `README.md`.
 2. **Mark the patch in place.** Put a comment containing
    `[spring-ai-mcp-inspector PATCH]` at every local change. The `notice registry`
-   job enforces this too: a file changed under `upstream-client/` without a
-   matching marker fails the build.
+   job enforces this for changed files under `upstream-client/src/`: a file
+   changed there without a matching marker fails the build.
 
 Editing inside an already-marked block needs no new marker: extend the comment
 on the existing one.
