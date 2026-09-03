@@ -1,0 +1,12 @@
+src/components/ToolResults.tsx -- make full tool result available without
+truncation, add Copy button, contain scrollbar inside card. The upstream
+ToolResults component rendered tool output via JsonView, which truncates
+long strings at 100 chars and shows a horizontal scrollbar that can
+overlap the History panel header below. Local fix: wrap the result
+content in a scrollable container (overflow-auto max-h-[60vh]) so the
+horizontal scrollbar stays inside the card and long output scrolls
+internally; add a Copy button in the header row that copies the full
+parsed tool result as formatted JSON to clipboard. The Copy button uses
+the same useCopy hook pattern as the existing Copy Input button in
+ToolsTab. Covered by existing UI tests (561 pass, including
+App.toolsAppsPrefill and ToolsTab).
