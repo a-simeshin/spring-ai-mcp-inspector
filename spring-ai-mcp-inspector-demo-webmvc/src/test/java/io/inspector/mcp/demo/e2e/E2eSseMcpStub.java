@@ -72,9 +72,9 @@ final class E2eSseMcpStub implements AutoCloseable {
 	/**
 	 * Response queue of the most recently opened SSE stream. Each stream gets its own
 	 * queue and a message POST hands its response to the queue that is active at that
-	 * moment, so the preflight's abandoned stream can never take a response meant for
-	 * the delegate's real stream (a shared queue lets the abandoned stream consume it
-	 * while parked inside {@code poll}).
+	 * moment, so the preflight's abandoned stream can never take a response meant for the
+	 * delegate's real stream (a shared queue lets the abandoned stream consume it while
+	 * parked inside {@code poll}).
 	 */
 	private final AtomicReference<BlockingQueue<String>> activeStream = new AtomicReference<>();
 
