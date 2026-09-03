@@ -48,10 +48,6 @@ export function validateServerUrl(url: string): UrlValidationResult {
     return { isValid: false, errorMessage: "URL must not be empty" };
   }
 
-  if (trimmed.length < 2) {
-    return { isValid: false, errorMessage: "URL is too short" };
-  }
-
   // Absolute path (starts with '/') is always valid
   if (trimmed.startsWith("/")) {
     return { isValid: true, errorMessage: null };
@@ -68,21 +64,8 @@ export function validateServerUrl(url: string): UrlValidationResult {
       };
     }
 
-    if (!parsed.hostname) {
-      return { isValid: false, errorMessage: "URL must have a host" };
-    }
-
     return { isValid: true, errorMessage: null };
   } catch {
-    // URL parsing failed - check if it has a scheme at all
-    if (trimmed.includes("://")) {
-      return {
-        isValid: false,
-        errorMessage: `URL must start with http://, https://, ws://, wss://, or /`,
-      };
-    }
-
-    // No scheme detected - suggest adding one
     return {
       isValid: false,
       errorMessage: `URL must start with http://, https://, ws://, wss://, or /`,

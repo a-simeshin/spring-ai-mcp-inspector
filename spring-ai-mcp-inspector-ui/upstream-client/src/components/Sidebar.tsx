@@ -169,9 +169,8 @@ const Sidebar = ({
       setUrlTouched(true);
       const result = validateServerUrl(value);
       setUrlError(result.isValid ? null : result.errorMessage);
-      setSseUrl(value.trim());
     },
-    [setSseUrl],
+    [],
   );
 
   // Shared utility function to generate server config
@@ -868,7 +867,7 @@ const Sidebar = ({
                 </Button>
               </div>
             )}
-            {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). */}
+            {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). Block onConnect when invalid. */}
             {connectionStatus !== "connected" && (
               <Button
                 className="w-full"
@@ -879,6 +878,7 @@ const Sidebar = ({
                     const result = validateServerUrl(sseUrl);
                     if (!result.isValid) {
                       setUrlError(result.errorMessage);
+                      return;
                     }
                   }
                   onConnect();

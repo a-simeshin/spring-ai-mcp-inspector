@@ -7,4 +7,5 @@ Local fix: adds `validateServerUrl()` which checks for allowed schemes
 path starting with '/'; the sidebar shows a red border + inline error
 message on blur and input, and disables the Connect button while the
 value is invalid. Covered by
-src/utils/__tests__/urlValidation.test.ts (validateServerUrl suite).
+src/utils/__tests__/urlValidation.test.ts (validateServerUrl suite) and
+src/components/__tests__/Sidebar.urlValidation.test.tsx (UI test suite).

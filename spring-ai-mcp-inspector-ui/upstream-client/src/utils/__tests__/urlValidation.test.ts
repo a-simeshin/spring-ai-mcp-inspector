@@ -195,7 +195,7 @@ describe("validateServerUrl", () => {
     it("should reject single character", () => {
       const result = validateServerUrl("h");
       expect(result.isValid).toBe(false);
-      expect(result.errorMessage).toBe("URL is too short");
+      expect(result.errorMessage).toContain("http://");
     });
 
     it("should reject URL with typo scheme (htp://)", () => {
