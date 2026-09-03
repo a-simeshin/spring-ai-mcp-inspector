@@ -956,10 +956,12 @@ export function useConnection({
         if (isConnectionAuthError(error)) {
           // [spring-ai-mcp-inspector PATCH] OAuth already failed
           // (handleAuthError returned false above). Don't return silently
-          // — set the connection error so the UI shows an unauthorized
+          // set the connection error so the UI shows an unauthorized
           // banner instead of a blank disconnected state, giving the user
           // a path forward (custom auth header, token from server log).
           // See NOTICE.d/connect-401-banner.txt.
+          // Also abort the auto-retry chain: auth errors are non-retriable.
+          reconnectAbortRef.current = true;
           setConnectionError(connectionFailureFromError(error));
           setConnectionStatus("error");
           return;
@@ -1321,10 +1323,19 @@ export function useConnection({
         // After the connect attempt completes, continue the retry chain
         // if the connection is still not established and auto-retry is
         // still active and we haven't exhausted all attempts.
+        // Auth errors set reconnectAbortRef.current = true which is
+        // checked by the effect at line 1313 to stop further retries.
         if (reconnectAutoRef.current && !reconnectAbortRef.current &&
             attempt < MAX_AUTO_RETRY_ATTEMPTS) {
           setConnectionStatus((prev) => {
             if (prev === "connected") return prev;
+            // Bump reconnectTrigger so the effect re-arms even when
+            // the connectionStatus value did not change (connect()
+            // caught its own error, set status to 'error', then this
+            // functional update sets it back to 'disconnected-remote'
+            // in the same React batch, leaving the net dependency
+            // value unchanged).
+            setReconnectTrigger((n) => n + 1);
             return "disconnected-remote";
           });
         }

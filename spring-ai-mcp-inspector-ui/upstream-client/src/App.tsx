@@ -534,15 +534,7 @@ const App = () => {
     metadata,
   });
 
-// [spring-ai-mcp-inspector PATCH] Saved connections state (#121).
-  const [savedConnections, setSavedConnections] = useState<SavedConnection[]>(
-    () => loadSavedConnections(),
-  );
-  const [activeConnectionId, setActiveConnectionId] = useState<
-    string | undefined
-  >(undefined);
-
-  const handleSaveConnection = useCallback(
+const handleSaveConnection = useCallback(
     (name: string): SavedConnection | undefined => {
       const draft = {
         name,

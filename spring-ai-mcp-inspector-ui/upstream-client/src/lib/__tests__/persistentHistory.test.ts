@@ -279,8 +279,8 @@ describe("persistentHistory", () => {
           byConnection: {
             "conn-1": [
               null,
-              { request: JSON.stringify({}), at: 100 },
-              { request: JSON.stringify({}), response: "ok", at: 200 },
+              { request: JSON.stringify({ method: "ping" }), at: 100 },
+              { request: JSON.stringify({ method: "ping" }), response: JSON.stringify({ ok: true }), at: 200 },
             ],
           },
         }),
@@ -315,6 +315,73 @@ describe("persistentHistory", () => {
       );
       expect(loadHistory("conn-1")).toHaveLength(0);
       expect(loadHistory("conn-2")).toHaveLength(1);
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Regression: reject entries whose
+    // request string is not valid JSON (prevents HistoryAndNotifications
+    // crash on JSON.parse) (#121).
+    it("rejects entries with non-JSON request string", () => {
+      localStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify({
+          schemaVersion: 1,
+          byConnection: {
+            "conn-1": [{ request: "not-json", at: 100 }],
+          },
+        }),
+      );
+      expect(loadHistory("conn-1")).toHaveLength(0);
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Regression: reject entries with
+    // non-JSON response string (#121).
+    it("rejects entries with non-JSON response string", () => {
+      localStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify({
+          schemaVersion: 1,
+          byConnection: {
+            "conn-1": [
+              {
+                request: JSON.stringify({ method: "ping" }),
+                response: "not-json",
+                at: 100,
+              },
+            ],
+          },
+        }),
+      );
+      expect(loadHistory("conn-1")).toHaveLength(0);
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Regression: non-array bucket at
+    // the store level is silently dropped (prevents TypeError in
+    // evictGlobal and appendHistory) (#121).
+    it("silently drops non-array buckets at store level", () => {
+      localStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify({
+          schemaVersion: 1,
+          byConnection: { "conn-1": {} },
+        }),
+      );
+      // loadHistory should return empty; the store should have been
+      // cleaned up by readStore validation
+      const result = loadHistory("conn-1");
+      expect(result).toEqual([]);
+      // Verify the malformed bucket was dropped from the re-serialized
+      // store (appendHistory will re-write via readStore validation)
+      localStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify({
+          schemaVersion: 1,
+          byConnection: { "conn-1": {} },
+        }),
+      );
+      appendHistory("conn-2", makeEntry({ at: 100 }));
+      const raw = JSON.parse(localStorage.getItem(HISTORY_KEY)!);
+      expect(raw.byConnection["conn-1"]).toBeUndefined();
+      expect(raw.byConnection["conn-2"]).toBeDefined();
     });
   });
 });

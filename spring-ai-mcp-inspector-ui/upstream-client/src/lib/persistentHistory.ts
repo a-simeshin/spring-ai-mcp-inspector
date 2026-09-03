@@ -22,7 +22,29 @@ function readStore(): HistoryStoreV1 {
   try {
     const parsed = JSON.parse(raw) as Partial<HistoryStoreV1>;
     if (parsed.schemaVersion === 1 && typeof parsed.byConnection === "object" && parsed.byConnection !== null) {
-      return parsed as HistoryStoreV1;
+      // Validate every bucket is an array and every entry passes
+      // isValidEntry; drop invalid buckets/entries with console.warn.
+      const validated: Record<string, HistoryEntry[]> = {};
+      for (const [connId, bucket] of Object.entries(
+        parsed.byConnection as Record<string, unknown>,
+      )) {
+        if (!Array.isArray(bucket)) {
+          console.warn(
+            `[persistentHistory] Dropping non-array bucket for connection "${connId}"`,
+          );
+          continue;
+        }
+        const validEntries = bucket.filter(isValidEntry);
+        if (validEntries.length !== bucket.length) {
+          console.warn(
+            `[persistentHistory] Dropped ${bucket.length - validEntries.length} invalid entries from connection "${connId}"`,
+          );
+        }
+        if (validEntries.length > 0) {
+          validated[connId] = validEntries;
+        }
+      }
+      return { schemaVersion: 1, byConnection: validated };
     }
     return { schemaVersion: 1, byConnection: {} };
   } catch {
@@ -92,8 +114,8 @@ function evictGlobal(store: HistoryStoreV1): void {
 
     for (const id of connectionIds) {
       const bucket = store.byConnection[id];
-      if (bucket.length === 0) {
-        // Empty bucket, remove it
+      if (!Array.isArray(bucket) || bucket.length === 0) {
+        // Non-array or empty bucket, remove it
         delete store.byConnection[id];
         continue;
       }
@@ -134,8 +156,20 @@ function isValidEntry(entry: unknown): entry is HistoryEntry {
   if (typeof e.request !== "string") {
     return false;
   }
+  try {
+    JSON.parse(e.request);
+  } catch {
+    return false;
+  }
   if (e.response !== undefined && typeof e.response !== "string") {
     return false;
+  }
+  if (e.response !== undefined) {
+    try {
+      JSON.parse(e.response);
+    } catch {
+      return false;
+    }
   }
   if (typeof e.at !== "number" || isNaN(e.at)) {
     return false;

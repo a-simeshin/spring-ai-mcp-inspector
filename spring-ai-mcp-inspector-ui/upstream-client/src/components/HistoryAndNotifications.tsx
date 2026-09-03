@@ -65,7 +65,13 @@ const HistoryAndNotifications = ({
                   >
                     <span className="font-mono">
                       {requestHistory.length - index}.{" "}
-                      {JSON.parse(request.request).method}
+                      {(() => {
+                        try {
+                          return JSON.parse(request.request).method;
+                        } catch {
+                          return "(invalid request)";
+                        }
+                      })()}
                     </span>
                     <span>
                       {expandedRequests[requestHistory.length - 1 - index]
