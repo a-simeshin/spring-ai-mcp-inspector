@@ -62,7 +62,7 @@ import static com.codeborne.selenide.Selenide.open;
  * {@code MCP_CONNECT_FAILED} contract from {@code POST /mcp-inspector-api/mcp}) and PR
  * #70 (the vendored client's fetch wrapper parses that contract and the sidebar renders
  * the alert). Both fixes live on separate branches and are merged into the branch this
- * test ships on — the test is the regression lock for the whole path.
+ * test ships on - the test is the regression lock for the whole path.
  *
  * <p>
  * Browser / boot helpers mirror {@link InspectorUiIT} verbatim: version-pinned
@@ -86,7 +86,7 @@ class ConnectFailureIT {
 	private ConfigurableApplicationContext app;
 
 	// ---------------------------------------------------------------------
-	// Browser setup / teardown — mirrors InspectorUiIT.
+	// Browser setup / teardown - mirrors InspectorUiIT.
 	// ---------------------------------------------------------------------
 
 	@BeforeAll
@@ -269,12 +269,12 @@ class ConnectFailureIT {
 		Configuration.baseUrl = "http://localhost:" + port;
 	}
 
-	/** Sidebar wrapper — the {@code bg-card border-r border-border} flex column. */
+	/** Sidebar wrapper - the {@code bg-card border-r border-border} flex column. */
 	private static SelenideElement sidebar() {
 		return $(".bg-card.border-r");
 	}
 
-	/** Sidebar Connect button (first-time; has no testid — match by visible text). */
+	/** Sidebar Connect button (first-time; has no testid - match by visible text). */
 	private static SelenideElement connectButton() {
 		return sidebar().$(byText("Connect"));
 	}
@@ -287,7 +287,7 @@ class ConnectFailureIT {
 	/**
 	 * Sets the value of a React-controlled {@code <input>} reliably by invoking the
 	 * native HTMLInputElement setter and then dispatching a synthetic {@code input} event
-	 * — same helper as {@code InspectorUiIT#setReactInputValue}. Selenide's stock
+	 * - same helper as {@code InspectorUiIT#setReactInputValue}. Selenide's stock
 	 * {@code setValue} interacts poorly with {@code Sidebar.tsx}'s
 	 * {@code sseUrl ? <Tooltip>...</Tooltip> : <Input/>} ternary that swaps the DOM node
 	 * whenever the controlled value flips between empty and non-empty.
@@ -308,7 +308,7 @@ class ConnectFailureIT {
 	 * first connect attempt is refused.
 	 */
 	private void openWithUnreachableServer() {
-		// A loopback port that nothing listens on — the very first connect attempt is
+		// A loopback port that nothing listens on - the very first connect attempt is
 		// refused (same trick as WebMvcAutoConfigurationIT).
 		final int deadPort;
 		try (ServerSocket socket = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
@@ -323,13 +323,34 @@ class ConnectFailureIT {
 		connectButton().shouldBe(visible, Duration.ofSeconds(15));
 
 		// Streamable HTTP is the proxy branch whose fetch wrapper parses the structured
-		// MCP_CONNECT_FAILED contract (PR #70) — SSE/STDIO surface failures differently.
+		// MCP_CONNECT_FAILED contract (PR #70) - SSE/STDIO surface failures differently.
 		$("#transport-type-select").shouldBe(visible).click();
 		$$("[role=option]").findBy(text("Streamable HTTP")).shouldBe(visible).click();
 		$("#sse-url-input").shouldBe(visible);
 
 		String deadUrl = "http://127.0.0.1:" + deadPort + "/mcp";
 		setReactInputValue("#sse-url-input", deadUrl);
+	}
+
+	/**
+	 * Opens the inspector page and arms it against a host name that cannot resolve:
+	 * switches the transport to Streamable HTTP and points the URL input at an
+	 * {@code .invalid} TLD host (RFC 2606 guarantees it never resolves), so the proxy's
+	 * connect attempt fails with an UnknownHostException that the MCP SDK wraps in a
+	 * ConnectException - the scenario that classify() must still map to {@code dns} /
+	 * "Cannot resolve host".
+	 */
+	private void openWithUnresolvableHost() {
+		open("/mcp-inspector/index.html");
+		connectButton().shouldBe(visible, Duration.ofSeconds(15));
+
+		$("#transport-type-select").shouldBe(visible).click();
+		$$("[role=option]").findBy(text("Streamable HTTP")).shouldBe(visible).click();
+		$("#sse-url-input").shouldBe(visible);
+
+		// RFC 2606 reserves .invalid - the name is guaranteed to never resolve.
+		final String unresolvableUrl = "http://this-host-does-not-exist.invalid:9999/mcp";
+		setReactInputValue("#sse-url-input", unresolvableUrl);
 	}
 
 	// =====================================================================
@@ -340,21 +361,21 @@ class ConnectFailureIT {
 	@Story("Connect failure")
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Connecting to an unreachable MCP server surfaces a role=alert with the failure reason and a Retry button.")
-	@DisplayName("connectToUnreachableServer — alert with reason and Retry instead of silent Disconnected")
+	@DisplayName("connectToUnreachableServer - alert with reason and Retry instead of silent Disconnected")
 	void connectToUnreachableServer_showsAlertWithReasonAndRetry() {
 		// given
 		startApp();
 		openWithUnreachableServer();
 
-		// when — the Connect click POSTs initialize through the proxy, which answers
+		// when - the Connect click POSTs initialize through the proxy, which answers
 		// 502 MCP_CONNECT_FAILED / connection_refused (PR #71).
 		connectButton().click();
 
-		// then — the sidebar renders the failure as role=alert: heading, human-readable
+		// then - the sidebar renders the failure as role=alert: heading, human-readable
 		// reason carrying the machine-readable code, and a Retry button (PR #70).
 		alert().shouldBe(visible, Duration.ofSeconds(30));
 		alert().shouldHave(text("Failed to connect to the MCP server"));
-		alert().shouldHave(text("Connection refused (connection_refused)"));
+		alert().shouldHave(text("Connection refused"));
 		$("[data-testid=retry-connect-button]").shouldBe(visible).shouldHave(text("Retry"));
 		// The pre-connect Connect button stays available too.
 		connectButton().shouldBe(visible);
@@ -366,17 +387,17 @@ class ConnectFailureIT {
 	@Description("Clicking Retry re-runs connect: the re-post fails the same way and the alert still names the reason.")
 	@DisplayName("retryReposts: Retry re-posts and the alert still names the reason")
 	void retry_repostsAndShowsAlertAgain() {
-		// given — the same unreachable-server setup, alert already visible.
+		// given - the same unreachable-server setup, alert already visible.
 		startApp();
 		openWithUnreachableServer();
 		connectButton().click();
 		alert().shouldBe(visible, Duration.ofSeconds(30));
-		alert().shouldHave(text("Connection refused (connection_refused)"));
+		alert().shouldHave(text("Connection refused"));
 
-		// when — Retry invokes connect() again.
+		// when - Retry invokes connect() again.
 		$("[data-testid=retry-connect-button]").shouldBe(visible).click();
 
-		// then — the re-post fails the same way and the alert still names the same
+		// then - the re-post fails the same way and the alert still names the same
 		// reason, with Retry still available for another attempt.
 		//
 		// The in-flight gap is deliberately NOT asserted. connect() clears the
@@ -388,8 +409,31 @@ class ConnectFailureIT {
 		// demo E2E webmvc). That the click really re-invokes connect() is covered
 		// without a race by the Sidebar.connectFailureAlert unit test.
 		alert().shouldBe(visible, Duration.ofSeconds(30));
-		alert().shouldHave(text("Connection refused (connection_refused)"));
+		alert().shouldHave(text("Connection refused"));
 		$("[data-testid=retry-connect-button]").shouldBe(visible);
+	}
+
+	@Test
+	@Story("Connect failure")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("Connecting to a host name that cannot resolve surfaces an alert with the dns reason: 'Cannot resolve host'.")
+	@DisplayName("connectToUnresolvableHost - alert with DNS reason 'Cannot resolve host'")
+	void connectToUnresolvableHost_showsAlertWithDnsReason() {
+		// given - RFC 2606 .invalid TLD never resolves; the SDK wraps the
+		// UnknownHostException in ConnectException, so classify() must descend
+		// into the cause chain to classify as dns, not connection_refused.
+		startApp();
+		openWithUnresolvableHost();
+
+		// when
+		connectButton().click();
+
+		// then - the sidebar renders the failure as role=alert with the DNS
+		// reason: humanReadableReason("dns") = "Cannot resolve host".
+		alert().shouldBe(visible, Duration.ofSeconds(30));
+		alert().shouldHave(text("Failed to connect to the MCP server"));
+		alert().shouldHave(text("Cannot resolve host"));
+		$("[data-testid=retry-connect-button]").shouldBe(visible).shouldHave(text("Retry"));
 	}
 
 }
