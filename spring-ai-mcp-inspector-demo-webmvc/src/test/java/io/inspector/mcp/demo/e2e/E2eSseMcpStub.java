@@ -53,15 +53,15 @@ import tools.jackson.databind.json.JsonMapper;
  * {@code message} events on the held-open stream.
  *
  * <p>
- * <strong>Active stream tracking.</strong> The proxy's {@code SsePreflightTransport}
- * sends its own {@code GET /sse} before the SDK's real connect, and that preflight stream
- * is abandoned immediately (header-only body handler). Without tracking, the preflight's
- * abandoned {@code handleSse} loop would steal queued responses from the delegate's real
- * stream via the shared {@code responses} queue. To prevent this, the stub tracks the
- * <em>most recently opened</em> SSE stream as the active stream; only the active stream
- * polls the shared queue. The preflight's stream opens first, becomes active, then the
- * delegate's stream opens second and replaces it. The preflight's loop exits because it
- * is no longer the active stream.
+ * <strong>One queue per stream.</strong> The proxy's {@code SsePreflightTransport} sends
+ * its own {@code GET /sse} before the SDK's real connect, and that preflight stream is
+ * abandoned immediately (header-only body handler). With a single shared response queue
+ * the abandoned {@code handleSse} loop steals the delegate's responses: it is already
+ * parked inside {@code poll} when the response is queued, so checking "am I still the
+ * active stream" before polling comes too late and the response is written into the dead
+ * connection. Each stream therefore gets a queue of its own, a message POST hands its
+ * response to the queue that is active when it arrives, and the superseded stream leaves
+ * its loop without ever seeing it.
  */
 final class E2eSseMcpStub implements AutoCloseable {
 
@@ -69,24 +69,20 @@ final class E2eSseMcpStub implements AutoCloseable {
 
 	private final HttpServer server;
 
-	/** JSON-RPC responses to push over the held-open SSE stream, in order. */
-	private final BlockingQueue<String> responses = new LinkedBlockingQueue<>();
-
 	/**
-	 * The most recently opened SSE stream's id. Only the stream matching this id polls
-	 * the shared {@code responses} queue, so the preflight's abandoned stream cannot
-	 * steal responses from the delegate's real stream.
+	 * Response queue of the most recently opened SSE stream. Each stream gets its own
+	 * queue and a message POST hands its response to the queue that is active at that
+	 * moment, so the preflight's abandoned stream can never take a response meant for
+	 * the delegate's real stream (a shared queue lets the abandoned stream consume it
+	 * while parked inside {@code poll}).
 	 */
-	private final AtomicReference<Integer> activeStreamId = new AtomicReference<>();
+	private final AtomicReference<BlockingQueue<String>> activeStream = new AtomicReference<>();
 
 	/** {@code Authorization} header of every message POST, in arrival order. */
 	private final List<String> authorizations = new CopyOnWriteArrayList<>();
 
 	/** Message POST sequence. */
 	private final AtomicInteger postCount = new AtomicInteger();
-
-	/** SSE stream sequence (for active stream tracking). */
-	private final AtomicInteger streamSeq = new AtomicInteger();
 
 	/** How many of the first message POSTs answer {@code 401}. */
 	private volatile int rejectPosts;
@@ -136,20 +132,17 @@ final class E2eSseMcpStub implements AutoCloseable {
 			exchange.close();
 			return;
 		}
-		final int myStreamId = this.streamSeq.incrementAndGet();
-		this.activeStreamId.set(myStreamId);
+		final BlockingQueue<String> mine = new LinkedBlockingQueue<>();
+		this.activeStream.set(mine);
 		exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
 		exchange.sendResponseHeaders(200, 0);
 		try (OutputStream out = exchange.getResponseBody()) {
 			out.write("event: endpoint\ndata: /message\n\n".getBytes(StandardCharsets.UTF_8));
 			out.flush();
-			while (!this.stopped.get()) {
-				// Only the active stream polls the queue. The preflight's abandoned
-				// stream (replaced by the delegate's stream) exits here immediately.
-				if (this.activeStreamId.get() != null && this.activeStreamId.get() != myStreamId) {
-					break;
-				}
-				final String response = this.responses.poll(200, TimeUnit.MILLISECONDS);
+			// The preflight's abandoned stream leaves the loop as soon as the
+			// delegate's stream replaces it, and never sees a response meanwhile.
+			while (!this.stopped.get() && this.activeStream.get() == mine) {
+				final String response = mine.poll(200, TimeUnit.MILLISECONDS);
 				if (response != null) {
 					out.write(("event: message\ndata: " + response + "\n\n").getBytes(StandardCharsets.UTF_8));
 					out.flush();
@@ -180,10 +173,13 @@ final class E2eSseMcpStub implements AutoCloseable {
 		final String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
 		final String id = extractId(body);
 		if (id != null) {
+			final BlockingQueue<String> stream = this.activeStream.get();
 			final String response = """
 					{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25",\
 					"capabilities":{},"serverInfo":{"name":"e2e-stub-mcp","version":"1.0.0"}}}""".formatted(id);
-			this.responses.offer(response);
+			if (stream != null) {
+				stream.offer(response);
+			}
 		}
 		exchange.sendResponseHeaders(202, -1);
 		exchange.close();
