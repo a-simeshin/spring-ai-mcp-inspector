@@ -432,8 +432,8 @@ class InspectorUiIT {
 	/**
 	 * History column inside the bottom {@code HistoryAndNotifications} panel. The
 	 * upstream component renders the left column as
-	 * {@code <div class="flex-1 overflow-y-auto p-4 border-r">} -- the {@code border-r} is
-	 * unique to the left (History) side; the right (Server Notifications) side has no
+	 * {@code <div class="flex-1 overflow-y-auto p-4 border-r">} -- the {@code border-r}
+	 * is unique to the left (History) side; the right (Server Notifications) side has no
 	 * right border. Use {@code .flex-1.border-r} as a stable anchor.
 	 */
 	private static SelenideElement historyColumn() {
@@ -482,8 +482,8 @@ class InspectorUiIT {
 	 * {@code setValue}/{@code clear}+{@code sendKeys} interacts poorly with conditional
 	 * re-renders (e.g. {@code Sidebar.tsx}'s {@code sseUrl ? <Tooltip>...</Tooltip>
 	 * : <Input/>} ternary that swaps the DOM node whenever the controlled value flips
-	 * between empty and non-empty) -- characters get lost and the field ends up with stray
-	 * content like a single "h".
+	 * between empty and non-empty) -- characters get lost and the field ends up with
+	 * stray content like a single "h".
 	 */
 	private static void setReactInputValue(String cssSelector, String value) {
 		org.openqa.selenium.JavascriptExecutor js = (org.openqa.selenium.JavascriptExecutor) com.codeborne.selenide.WebDriverRunner
@@ -1103,7 +1103,8 @@ class InspectorUiIT {
 			// actually reflects the cleared state in React.
 			clearAllSearchInputs();
 			// ListPane "List Resources" is disabled once a list is already populated and
-			// has no nextCursor -- so we can't refresh by clicking it again. Click "Clear"
+			// has no nextCursor -- so we can't refresh by clicking it again. Click
+			// "Clear"
 			// first to reset the list, then "List Resources" to re-fetch from the server.
 			// This sidesteps any per-test selection / search state that the upstream
 			// ListPane keeps in component-local state.
@@ -2321,7 +2322,8 @@ class InspectorUiIT {
 			// gap) -- flag as informational rather than fail.
 			int after = notifications.$$("li").size();
 			// BUG-CANDIDATE: when after == before the demo server has not negotiated the
-			// logging subscription with the upstream client -- log it but don't hard-fail.
+			// logging subscription with the upstream client -- log it but don't
+			// hard-fail.
 			if (after == before) {
 				System.err.println("[notificationsPaneAccumulatesLogs] no new Server Notifications entry -- "
 						+ "logging capability likely not negotiated end-to-end");
