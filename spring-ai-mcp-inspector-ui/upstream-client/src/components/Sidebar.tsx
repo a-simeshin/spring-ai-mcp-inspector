@@ -52,6 +52,9 @@ import { CustomHeaders as CustomHeadersType } from "@/lib/types/customHeaders";
 import { useToast } from "../lib/hooks/useToast";
 import IconDisplay, { WithIcons } from "./IconDisplay";
 import { validateRedirectUrl } from "@/utils/urlValidation";
+// [spring-ai-mcp-inspector PATCH] Version badge — negotiated MCP protocol
+// version in the connect zone with compatibility notice.
+import VersionBadge from "./VersionBadge";
 
 interface SidebarProps {
   connectionStatus: ConnectionStatus;
@@ -87,6 +90,8 @@ interface SidebarProps {
   serverImplementation?:
     | (WithIcons & { name?: string; version?: string; websiteUrl?: string })
     | null;
+  // [spring-ai-mcp-inspector PATCH] Session ID for fetching initialize snapshot.
+  mcpSessionId?: string | null;
 }
 
 const Sidebar = ({
@@ -120,6 +125,7 @@ const Sidebar = ({
   connectionType,
   setConnectionType,
   serverImplementation,
+  mcpSessionId,
 }: SidebarProps) => {
   const [theme, setTheme] = useTheme();
   const [showEnvVars, setShowEnvVars] = useState(false);
@@ -872,6 +878,18 @@ const Sidebar = ({
                 })()}
               </span>
             </div>
+
+            {/* [spring-ai-mcp-inspector PATCH] Version badge — negotiated MCP
+                protocol version with compatibility notice. */}
+            {connectionStatus === "connected" && (
+              <VersionBadge
+                mcpSessionId={mcpSessionId ?? null}
+                config={config}
+                connected={true}
+                serverName={serverImplementation?.name ?? null}
+                serverVersion={serverImplementation?.version ?? null}
+              />
+            )}
 
             {connectionStatus === "connected" &&
               serverImplementation &&

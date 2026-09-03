@@ -1,0 +1,11 @@
+File: src/components/VersionBadge.tsx
+What: New component showing the negotiated MCP protocol version as a badge
+  in the connect zone, with expandable server info (name/version),
+  capabilities list, and a visible compatibility notice when the client
+  requested a different revision than the server negotiated.
+Why: The inspector did not surface the agreed protocol version after
+  connect, making it invisible when a downgrade occurred (client requested
+  a newer revision than the server supports). The notice lists the
+  affected methods that will return MethodNotFound.
+Covered by: npm test (existing Sidebar tests pass, no regressions);
+  npm run build (tsc + vite build pass).

@@ -1291,6 +1291,8 @@ export function useConnection({
     sendNotification,
     handleCompletion,
     completionsSupported,
+    mcpSessionId,
+    mcpProtocolVersion,
     connect,
     disconnect,
   };

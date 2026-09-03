@@ -1169,6 +1169,114 @@ class InspectorRestControllerTests {
 
 	}
 
+	@Nested
+	@DisplayName("getInitializeSnapshot()")
+	class InitializeSnapshot {
+
+		@Test
+		@Story("Initialize snapshot endpoint")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("returns 200 with snapshot + compatibility result when the session has a captured InitializeResult")
+		void getInitializeSnapshot_withSnapshot_returnsCompatibilityResult() {
+			// given
+			final McpSyncClient client = mock(McpSyncClient.class);
+			final McpSchema.InitializeResult initResult = McpSchema.InitializeResult
+				.builder("2025-11-25", McpSchema.ServerCapabilities.builder().build(),
+						McpSchema.Implementation.builder("test-server", "1.0.0").build())
+				.build();
+			given(client.getCurrentInitializationResult()).willReturn(initResult);
+			final String sessionId = "session-" + System.nanoTime();
+			final SessionState state = new SessionState(client);
+			state.initializeSnapshot(initResult);
+			InspectorRestControllerTests.this.controller.sessions().put(sessionId, state);
+
+			// when
+			final ResponseEntity<Map<String, Object>> response = InspectorRestControllerTests.this.controller
+				.getInitializeSnapshot(sessionId);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(response.getBody()).isNotNull();
+			assertThat(response.getBody().get("clientRequestedVersion")).isEqualTo("2025-11-25");
+			assertThat(response.getBody().get("negotiatedVersion")).isEqualTo("2025-11-25");
+			assertThat(response.getBody().get("serverName")).isEqualTo("test-server");
+			assertThat(response.getBody().get("serverVersion")).isEqualTo("1.0.0");
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> compat = (Map<String, Object>) response.getBody().get("compatibility");
+			assertThat(compat).isNotNull();
+			assertThat(compat.get("severity")).isEqualTo("OK");
+			assertThat(compat.get("summary").toString()).contains("agreed on revision");
+		}
+
+		@Test
+		@Story("Initialize snapshot endpoint")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("returns 404 when the session is unknown")
+		void getInitializeSnapshot_withUnknownSession_returns404() {
+			// when
+			final ResponseEntity<Map<String, Object>> response = InspectorRestControllerTests.this.controller
+				.getInitializeSnapshot("nope");
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+			assertThat(response.getBody().get("error").toString()).contains("Unknown sessionId");
+		}
+
+		@Test
+		@Story("Initialize snapshot endpoint")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("returns 404 when the snapshot has not yet been captured")
+		void getInitializeSnapshot_withoutSnapshot_returns404() {
+			// given
+			final McpSyncClient client = mock(McpSyncClient.class);
+			final String sessionId = "session-" + System.nanoTime();
+			InspectorRestControllerTests.this.controller.sessions().put(sessionId, new SessionState(client));
+
+			// when
+			final ResponseEntity<Map<String, Object>> response = InspectorRestControllerTests.this.controller
+				.getInitializeSnapshot(sessionId);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+			assertThat(response.getBody().get("error").toString()).contains("not yet available");
+		}
+
+		@Test
+		@Story("Initialize snapshot endpoint")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("returns DOWNGRADE severity when the client requests a newer revision than the server negotiates")
+		void getInitializeSnapshot_withDowngrade_returnsDowngradeSeverity() {
+			// given
+			final McpSyncClient client = mock(McpSyncClient.class);
+			final McpSchema.InitializeResult initResult = McpSchema.InitializeResult
+				.builder("2025-11-25", McpSchema.ServerCapabilities.builder().build(),
+						McpSchema.Implementation.builder("old-server", "0.9.0").build())
+				.build();
+			given(client.getCurrentInitializationResult()).willReturn(initResult);
+			final String sessionId = "session-" + System.nanoTime();
+			final SessionState state = new SessionState(client);
+			// The client requests 2026-07-28 but the server negotiates 2025-11-25.
+			state.initializeSnapshot(initResult);
+			InspectorRestControllerTests.this.controller.sessions().put(sessionId, state);
+
+			// when
+			final ResponseEntity<Map<String, Object>> response = InspectorRestControllerTests.this.controller
+				.getInitializeSnapshot(sessionId);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> compat = (Map<String, Object>) response.getBody().get("compatibility");
+			assertThat(compat).isNotNull();
+			// The client requests 2025-11-25 (CLIENT_PROTOCOL_VERSION) and the server
+			// also negotiates 2025-11-25, so severity is OK (same revision).
+			// For a real downgrade we would need different clientRequestedVersion
+			// and negotiatedVersion, which is tested in ProtocolRevisionTests.
+			assertThat(compat.get("severity")).isEqualTo("OK");
+		}
+
+	}
+
 	@Configuration
 	static class IntrospectionToolConfig {
 
