@@ -3723,7 +3723,7 @@ class InspectorUiIT {
 		@Test
 		@Story("Tool call form")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("Clicking a tool row opens the call form in the right pane, preserves the Connected state, and keeps the Transport Type and URL unchanged. Repeating on a second tool row exercises the regression path where inputSchema.properties was null and the React tree crashed on rendering.")
+		@Description("Clicking a tool row opens the call form in the right pane, preserves the Connected state, and keeps the Transport Type and URL unchanged. Repeating on a second tool row verifies that switching between tools does not regress the connection or transport state.")
 		@DisplayName("toolRowClickPreservesState - clicking echo then sum preserves Connected, Transport, and URL")
 		void toolRowClick_onEchoThenSum_preservesConnectedStateTransportAndUrl() {
 			// given
