@@ -19,6 +19,9 @@ package io.inspector.mcp.webmvc.proxy;
 import java.net.URI;
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
@@ -461,24 +464,44 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("postMcp() when session closes while awaiting the upstream response, responds without hanging")
 		void postMcp_sessionClosesWhileAwaiting_respondsWithoutHanging() throws Exception {
-			// given - a session whose targetToBrowser is completed before the POST
-			final ProxySession session = newSession("s-close-await", mock(McpClientTransport.class));
+			// given - a session with a mock transport; no upstream answer will arrive,
+			// so the POST would block for the full request timeout if the session
+			// close path did not terminate the awaiter.
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(target.closeGracefully()).willReturn(Mono.empty());
+			final ProxySession session = newSession("s-close-await", target);
 			given(StreamableHttpProxyControllerTests.this.registry.get("s-close-await")).willReturn(session);
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
 
-			// close the session's targetToBrowser before the await subscribes
+			// when - run postMcp on a worker thread so the test thread can
+			// close the session while the POST is awaiting the upstream response.
+			final CountDownLatch subscribed = new CountDownLatch(1);
+			final AtomicReference<ResponseEntity<Object>> holder = new AtomicReference<>();
+			final Thread poster = new Thread(() -> {
+				// Signal that the worker has started, then call postMcp which
+				// subscribes the awaiter synchronously inside relayWithSessionHeader.
+				subscribed.countDown();
+				final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller
+					.postMcp("s-close-await", null, body);
+				holder.set(entity);
+			});
+			poster.setDaemon(true);
+			poster.start();
+			// Wait until the worker has started, then give it a moment to subscribe
+			// the awaiter before completing the targetToBrowser sink (the same signal
+			// ProxySession.close() sends internally at ProxySession.java:272).
+			subscribed.await(2, TimeUnit.SECONDS);
+			Thread.sleep(50);
 			session.targetToBrowser().tryEmitComplete();
+			poster.join(5_000);
 
-			// when
-			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller
-				.postMcp("s-close-await", null, body);
-
-			// then - the response completes (does not hang); the onComplete runnable
-			// calls tryEmitEmpty on the Sinks.One, which completes the await Mono,
-			// and block() returns null which is accepted as the response body
-			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
-			assertThat(entity.getBody()).isNull();
+			// then - the response completes (does not hang); the onComplete handler
+			// calls tryEmitEmpty on the Sinks.One, completing the await Mono empty,
+			// so block() returns null which is accepted as the response body.
+			assertThat(holder.get()).as("postMcp should have completed within 5s").isNotNull();
+			assertThat(holder.get().getStatusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(holder.get().getBody()).isNull();
 		}
 
 	}

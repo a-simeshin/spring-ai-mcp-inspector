@@ -17,6 +17,7 @@
 package io.inspector.mcp.webflux.proxy;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -931,7 +932,13 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("postMcp() when session closes while awaiting the upstream response, the response completes without hanging")
 		void postMcp_sessionClosesWhileAwaiting_completesWithoutHanging() {
-			// given - a known session
+			// given - a known session; a short streamable-request timeout so the
+			// test cannot hang CI for the full 30s default even if the fix regresses.
+			final McpInspectorProperties fastProps = new McpInspectorProperties();
+			fastProps.getTimeouts().setStreamableRequest(Duration.ofMillis(200));
+			final ProxyHandler fastHandler = new ProxyHandler(ProxyHandlerTests.this.registry,
+					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
+					ProxyHandlerTests.this.transportDetector, ProxyHandlerTests.this.objectMapper, fastProps);
 			final ProxySession session = newSession("s-close-await");
 			given(ProxyHandlerTests.this.registry.get("s-close-await")).willReturn(session);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
@@ -939,19 +946,20 @@ class ProxyHandlerTests {
 				.contentType(MediaType.APPLICATION_JSON)
 				.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
 
-			// when - session closes (targetToBrowser completes) while the POST is
-			// awaiting
-			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request)
-				.doOnSubscribe((s) -> new Thread(() -> {
-					try {
-						Thread.sleep(50);
-					}
-					catch (final InterruptedException ignored) {
-						Thread.currentThread().interrupt();
-					}
-					session.targetToBrowser().tryEmitComplete();
-				}).start())
-				.block();
+			// when - targetToBrowser completes while the POST is awaiting the
+			// upstream response. This is what ProxySession.close() does internally
+			// (ProxySession.java:272). The completion triggers the onComplete handler
+			// that calls tryEmitEmpty on the Sinks.One, so the await Mono completes
+			// empty.
+			final ServerResponse response = fastHandler.postMcp(request).doOnSubscribe((s) -> new Thread(() -> {
+				try {
+					Thread.sleep(50);
+				}
+				catch (final InterruptedException ignored) {
+					Thread.currentThread().interrupt();
+				}
+				session.targetToBrowser().tryEmitComplete();
+			}).start()).block(Duration.ofSeconds(5));
 
 			// then - the response completes (does not hang); the onComplete runnable
 			// calls tryEmitEmpty on the Sinks.One, so the Mono completes empty
