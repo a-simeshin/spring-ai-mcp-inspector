@@ -476,24 +476,33 @@ class StreamableHttpProxyControllerTests {
 
 			// when - run postMcp on a worker thread so the test thread can
 			// close the session while the POST is awaiting the upstream response.
-			final CountDownLatch subscribed = new CountDownLatch(1);
+			//
+			// Subscribe to browserToTarget to detect when the body has been emitted.
+			// relayWithSessionHeader emits the body AFTER subscribing the awaiter,
+			// so this is a deterministic signal that the awaiter is ready.
+			final CountDownLatch awaiterSubscribed = new CountDownLatch(1);
+			session.browserToTarget()
+				.asFlux()
+				.subscribe((frame) -> awaiterSubscribed.countDown(), (error) -> awaiterSubscribed.countDown(),
+						() -> awaiterSubscribed.countDown());
 			final AtomicReference<ResponseEntity<Object>> holder = new AtomicReference<>();
 			final Thread poster = new Thread(() -> {
-				// Signal that the worker has started, then call postMcp which
-				// subscribes the awaiter synchronously inside relayWithSessionHeader.
-				subscribed.countDown();
 				final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller
 					.postMcp("s-close-await", null, body);
 				holder.set(entity);
 			});
 			poster.setDaemon(true);
 			poster.start();
-			// Wait until the worker has started, then give it a moment to subscribe
-			// the awaiter before completing the targetToBrowser sink (the same signal
-			// ProxySession.close() sends internally at ProxySession.java:272).
-			subscribed.await(2, TimeUnit.SECONDS);
-			Thread.sleep(50);
-			session.targetToBrowser().tryEmitComplete();
+			// Wait for the deterministic signal: the body was emitted to
+			// browserToTarget, which means the awaiter is subscribed and
+			// postMcp is now blocking on the await Mono.
+			assertThat(awaiterSubscribed.await(2, TimeUnit.SECONDS))
+				.as("awaiter should subscribe to targetToBrowser before block()")
+				.isTrue();
+			// Close the session via the real close-path (ProxySession.close()).
+			// This completes targetToBrowser, which triggers the onComplete handler
+			// that calls tryEmitEmpty on the Sinks.One, unblocking the awaiter.
+			session.close();
 			poster.join(5_000);
 
 			// then - the response completes (does not hang); the onComplete handler
