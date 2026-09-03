@@ -3715,9 +3715,40 @@ class InspectorUiIT {
 	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 	class ToolRowClickStatePreservation {
 
-		@AfterEach
-		void tearDown() {
+		/**
+		 * Boot once per @Nested group, matching the neighbouring Tools/Resources/Prompts
+		 * groups.
+		 */
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+			final int port = ((WebServerApplicationContext) app).getWebServer().getPort();
+			// Set Transport = SSE (default, but ensure the UI is on it)
+			$("#transport-type-select").shouldBe(visible);
+			// URL is auto-populated; force-set it to a known value via React-controlled
+			// input pathway (see setReactInputValue javadoc).
+			$("#sse-url-input").shouldBe(visible);
+			setReactInputValue("#sse-url-input", "http://localhost:" + port + "/sse");
+			$("#sse-url-input").shouldHave(Condition.value("http://localhost:" + port + "/sse"));
+			// Connect
+			connectButton().click();
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+		}
+
+		@AfterAll
+		void shutdown() {
 			stopApp();
+		}
+
+		@BeforeEach
+		void goToToolsTabAndListTools() {
+			clickTab("tools");
+			final SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$(".cursor-pointer").shouldHave(CollectionCondition.sizeGreaterThan(0));
 		}
 
 		@Test
@@ -3726,30 +3757,7 @@ class InspectorUiIT {
 		@Description("Clicking a tool row opens the call form in the right pane, preserves the Connected state, and keeps the Transport Type and URL unchanged. Repeating on a second tool row verifies that switching between tools does not regress the connection or transport state.")
 		@DisplayName("toolRowClickPreservesState - clicking echo then sum preserves Connected, Transport, and URL")
 		void toolRowClick_onEchoThenSum_preservesConnectedStateTransportAndUrl() {
-			// given
-			startApp(new Combo("sse"));
-			open("/mcp-inspector/index.html");
 			final int port = ((WebServerApplicationContext) app).getWebServer().getPort();
-
-			// Set Transport = SSE (default, but ensure the UI is on it)
-			$("#transport-type-select").shouldBe(visible);
-			// URL is auto-populated; force-set it to a known value via React-controlled
-			// input pathway (see setReactInputValue javadoc).
-			$("#sse-url-input").shouldBe(visible);
-			setReactInputValue("#sse-url-input", "http://localhost:" + port + "/sse");
-			$("#sse-url-input").shouldHave(Condition.value("http://localhost:" + port + "/sse"));
-
-			// when: Connect
-			connectButton().click();
-			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
-
-			// Navigate to Tools tab and list tools
-			clickTab("tools");
-			final SelenideElement listTools = activePanel().$(byText("List Tools"));
-			if (listTools.exists() && listTools.isEnabled()) {
-				listTools.click();
-			}
-			activePanel().$$(".cursor-pointer").shouldHave(CollectionCondition.sizeGreaterThan(0));
 
 			// --- First tool row click (echo) ---
 			selectRow("echo");
@@ -3757,7 +3765,7 @@ class InspectorUiIT {
 			// then: tool call form appears in the right pane
 			$("[data-testid=tools-detail-pane]").shouldBe(visible, Duration.ofMillis(500));
 			$("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofMillis(500));
-			// The echo tool has a single text parameter -- its input renders
+			// The echo tool has a single text parameter, its input renders
 			$("#text").shouldBe(visible, Duration.ofMillis(500));
 
 			// Connection indicator still shows 'Connected'
@@ -3771,14 +3779,14 @@ class InspectorUiIT {
 			$("#sse-url-input").shouldBe(visible);
 			$("#sse-url-input").shouldHave(Condition.value("http://localhost:" + port + "/sse"));
 
-			// --- Second tool row click (sum) -- the original bug manifested on second
+			// --- Second tool row click (sum): the original bug manifested on second
 			// click ---
 			selectRow("sum");
 
 			// then: tool call form reappears in the right pane
 			$("[data-testid=tools-detail-pane]").shouldBe(visible, Duration.ofMillis(500));
 			$("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofMillis(500));
-			// The sum tool has two parameters (a, b) -- their inputs render
+			// The sum tool has two parameters (a, b), their inputs render
 			$("#a").shouldBe(visible, Duration.ofMillis(500));
 			$("#b").shouldBe(visible, Duration.ofMillis(500));
 
