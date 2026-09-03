@@ -853,6 +853,10 @@ const Sidebar = ({
                 })()}`}
               />
               <span className="text-sm text-gray-600 dark:text-gray-400">
+                {/* [spring-ai-mcp-inspector PATCH] Status text depends on error reason
+                    instead of proxy token presence: unauthorized shows token hint,
+                    connection_refused/dns show reachability hint, timeout shows
+                    server-not-responding (see NOTICE.d/connect-error-alert.txt). */}
                 {(() => {
                   switch (connectionStatus) {
                     case "connected":
