@@ -19,6 +19,7 @@ package io.inspector.mcp.core.proxy;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -212,6 +213,14 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	 */
 	public int size() {
 		return this.sessions.size();
+	}
+
+	/**
+	 * Returns a snapshot of all active session IDs — intended for tests.
+	 * @return set of session IDs at the time of the call
+	 */
+	public Set<String> sessionIds() {
+		return this.sessions.keySet();
 	}
 
 	/**

@@ -6,4 +6,6 @@ handshake with -32001.  Local fix: at the start of every connect() call, close
 the old client/transport, clear the stale session ID, and use null explicitly
 instead of the stale closure variable for the mcp-session-id request header.
 Also adds a connectingRef guard to prevent concurrent connect attempts from
-double-clicks.  Refs #157.
+double-clicks, and generation checks before every state mutation (transport,
+server info, capabilities, error status, response headers) so a stale handshake
+cannot overwrite the active session.  Refs #157.

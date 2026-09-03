@@ -9,11 +9,16 @@
  */
 package io.inspector.mcp.demo.ui;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
+import java.util.Set;
 
 import com.codeborne.selenide.Configuration;
 import com.codeborne.selenide.Selenide;
@@ -21,6 +26,7 @@ import com.codeborne.selenide.SelenideElement;
 import io.github.bonigarcia.wdm.WebDriverManager;
 import io.inspector.mcp.demo.e2e.E2ePreconditions;
 import io.inspector.mcp.demo.proxy.ProxyAppHarness;
+import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -61,6 +67,11 @@ import static com.codeborne.selenide.Selenide.open;
 @Epic("MCP Inspector UI")
 @Feature("Silent-drop reconnect")
 class SilentDropReconnectIT {
+
+	private static final HttpClient HTTP = HttpClient.newBuilder()
+		.version(HttpClient.Version.HTTP_1_1)
+		.connectTimeout(Duration.ofSeconds(10))
+		.build();
 
 	private ConfigurableApplicationContext app;
 
@@ -109,13 +120,15 @@ class SilentDropReconnectIT {
 	}
 
 	@Test
-	@DisplayName("reconnectAfterDrop - Reconnect button reaches connected state without stale session")
+	@DisplayName("forcedSilentDrop - proxy session killed without UI disconnect, then Connect recovers")
 	@Story("Reconnect after silent drop")
 	@Severity(SeverityLevel.CRITICAL)
-	@Description("Connects to the MCP server, clicks Reconnect (which calls disconnect+connect), and asserts "
-			+ "the sidebar shows the server info again - proving the stale mcp-session-id was cleared "
-			+ "and a fresh handshake succeeded. Without the fix, the stale session header causes -32001.")
-	void reconnect_afterDrop_reachesConnectedState() {
+	@Description("Connects to the MCP server via the UI, then force-closes the proxy session "
+			+ "via HTTP DELETE (simulating a silent transport drop without the UI knowing). "
+			+ "Clicking Connect again should recover: the stale-session guard in connect() "
+			+ "clears the old session state and establishes a fresh handshake. "
+			+ "Without the fix, the stale session causes -32001 on every reconnect attempt.")
+	void forcedSilentDrop_whenSessionKilled_reconnectsSuccessfully() {
 		// given - boot the demo on a random port
 		app = ProxyAppHarness.start("STREAMABLE", false, null);
 		final int port = ProxyAppHarness.port(app);
@@ -129,17 +142,43 @@ class SilentDropReconnectIT {
 		$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
 		sidebar().shouldHave(text("mcp-inspector-demo"), Duration.ofSeconds(10));
 
-		// when - click Reconnect (exercises disconnect+connect serialization,
-		// generation counter, and stale state cleanup). Without the fix,
-		// the stale mcp-session-id header causes -32001 on the second connect.
+		// when - force-close the proxy session behind the UI's back (silent drop).
+		// The UI does not go through the normal disconnect path, so it still holds
+		// stale client/transport/session-id state.
+		final ProxySessionRegistry registry = app.getBean(ProxySessionRegistry.class);
+		final Set<String> sessionIds = registry.sessionIds();
+		final String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
+		for (String sid : sessionIds) {
+			deleteSession(proxyBase, sid);
+		}
+
+		// then - the UI should still show the connect-button (it doesn't know the
+		// session was dropped)
+		$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(10));
+
+		// when - click Connect again (this exercises the stale-session guard:
+		// connect() must detect the old state, clean up, and establish a fresh
+		// handshake)
 		$("[data-testid=connect-button]").click();
 
-		// then - the disconnect+connect cycle completes and the connected
-		// state is re-established. The connect-button testid disappears
-		// briefly during disconnect, then reappears when the new connect
-		// succeeds.
+		// then - the reconnect succeeds and the connected state is re-established
 		$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
 		sidebar().shouldHave(text("mcp-inspector-demo"), Duration.ofSeconds(10));
+	}
+
+	/** DELETEs a proxy session by id. */
+	private static void deleteSession(String proxyBase, String sessionId) {
+		try {
+			HttpRequest request = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
+				.timeout(Duration.ofSeconds(10))
+				.header("mcp-session-id", sessionId)
+				.DELETE()
+				.build();
+			HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+		}
+		catch (Exception ignored) {
+			/* best-effort */
+		}
 	}
 
 	/** Sidebar wrapper - the bg-card border-r border-border flex column. */

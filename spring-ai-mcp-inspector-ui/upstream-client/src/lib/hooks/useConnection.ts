@@ -456,9 +456,16 @@ export function useConnection({
     return false;
   };
 
-  const captureResponseHeaders = (response: Response): void => {
+  const captureResponseHeaders = (response: Response, generation: number): void => {
     const sessionId = response.headers.get("mcp-session-id");
     const protocolVersion = response.headers.get("mcp-protocol-version");
+    // [spring-ai-mcp-inspector PATCH] Skip stale response header capture:
+    // if a newer connect attempt has already started, ignore these headers
+    // so a stale handshake cannot overwrite the new session's session-id or
+    // protocol-version with its own values. Refs #157.
+    if (generation !== connectAttemptRef.current) {
+      return;
+    }
     if (sessionId && sessionId !== mcpSessionId) {
       setMcpSessionId(sessionId);
     }
@@ -672,7 +679,7 @@ export function useConnection({
                 });
 
                 // Capture protocol-related headers from response
-                captureResponseHeaders(response);
+                captureResponseHeaders(response, generation);
                 return response;
               },
               requestInit: {
@@ -697,7 +704,7 @@ export function useConnection({
                 });
 
                 // Capture protocol-related headers from response
-                captureResponseHeaders(response);
+                captureResponseHeaders(response, generation);
 
                 return response;
               },
@@ -903,6 +910,14 @@ export function useConnection({
 
         setClientTransport(transport);
 
+        // [spring-ai-mcp-inspector PATCH] Guard against stale handshake: if a
+        // newer connect attempt has already started, skip setting the transport
+        // and server info so the old handshake cannot overwrite the active
+        // session's state. Refs #157.
+        if (generation !== connectAttemptRef.current) {
+          return;
+        }
+
         capabilities = client.getServerCapabilities();
         const serverInfo = client.getServerVersion();
         setServerImplementation(serverInfo || null);
@@ -921,6 +936,13 @@ export function useConnection({
             : `Failed to connect to MCP Server via the MCP Inspector Proxy: ${serverUrl}:`,
           error,
         );
+
+        // [spring-ai-mcp-inspector PATCH] If a newer connect attempt has
+        // already started, ignore this stale error so it cannot overwrite the
+        // active session's connection status or error. Refs #157.
+        if (generation !== connectAttemptRef.current) {
+          return;
+        }
 
         // Check if it's a proxy auth error
         if (isProxyAuthError(error)) {
@@ -961,6 +983,13 @@ export function useConnection({
         // alert now carries the reason in place.
         setConnectionError(connectionFailureFromError(error));
         setConnectionStatus("error");
+        return;
+      }
+      // [spring-ai-mcp-inspector PATCH] Guard against stale handshake: if a
+      // newer connect attempt has already started, skip setting capabilities
+      // and completions so the old handshake cannot overwrite the active
+      // session's state. Refs #157.
+      if (generation !== connectAttemptRef.current) {
         return;
       }
       setServerCapabilities(capabilities ?? null);
