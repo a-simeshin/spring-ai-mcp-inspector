@@ -764,17 +764,12 @@ class InspectorUiIT {
 			// carries the '(default)' marker its tooltip must disclose that the value
 			// comes from the spec, not the server (title embeds newlines → DOTALL).
 			SelenideElement defaultReadOnly = defaultBadges.$(byText("Read-only")).shouldBe(visible);
-			defaultReadOnly.shouldHave(text("✗ Read-only"));
-			if (defaultReadOnly.getText().contains("(default)")) {
-				defaultReadOnly.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
-			}
+			defaultReadOnly.shouldHave(text("✗ Read-only (default)"));
+			defaultReadOnly.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
 			// Destructive: same honesty contract on the spec-default true (✓).
 			SelenideElement defaultDestructive = defaultBadges.$(byText("Destructive")).shouldBe(visible);
-			defaultDestructive.shouldHave(text("✓ Destructive"));
-			if (defaultDestructive.getText().contains("(default)")) {
-				defaultDestructive
-					.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
-			}
+			defaultDestructive.shouldHave(text("✓ Destructive (default)"));
+			defaultDestructive.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
 
 			// --- sweep: every destructive=true claim is disclosed or accounted for ---
 			for (String name : ALL_DEMO_TOOLS) {
@@ -788,14 +783,14 @@ class InspectorUiIT {
 					destructive.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
 				}
 				else if (chipText.contains("✓")) {
-					// Declared destructive=true is only tolerable on the annotation-less
-					// slowEcho, and only while spring-ai synthesizes annotations for it;
-					// any other tool hitting this branch means a demo tool really
-					// declares destructive=true — that is a regression.
-					Assertions.assertEquals("slowEcho", name,
-							"Tool renders a server-declared destructive=true chip; only the "
-									+ "annotation-less slowEcho may do so while spring-ai synthesizes "
-									+ "its annotations");
+					// No tool should show a declared destructive=true chip without a
+					// (default) disclosure marker. If we reach this branch the
+					// annotation-synthesis workaround has regressed or a new tool with
+					// explicit destructive=true annotations was added.
+					Assertions.fail("Tool \"" + name + "\" renders a server-declared destructive=true chip "
+							+ "without (default) disclosure marker. Either the annotation-synthesis "
+							+ "workaround has regressed or a new tool with explicit destructive=true "
+							+ "annotations was added.");
 				}
 				else {
 					// Declared path: the only honest value is destructive=false.
