@@ -2038,6 +2038,67 @@ describe("useConnection", () => {
       expect(mockClient.connect).not.toHaveBeenCalled();
     });
 
+    // [spring-ai-mcp-inspector PATCH] Regression: proxy auth errors must
+    // stop the auto-retry chain, just like SseError auth errors. The
+    // isProxyAuthError branch sets reconnectAbortRef.current = true, so
+    // the retry effect must not schedule another attempt (#121).
+    it("stops retrying on proxy auth error and does not continue backoff", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // Initial connect succeeds
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      act(() => {
+        result.current.setAutoReconnect(true);
+      });
+
+      await act(async () => {
+        mockSSETransport.onclose?.();
+      });
+
+      expect(result.current.connectionStatus).toBe("disconnected-remote");
+
+      // The retry connect will fail with a proxy auth error
+      mockClient.connect.mockClear();
+      mockClient.connect.mockRejectedValueOnce(
+        new Error(
+          "Authentication required. Use the session token from the proxy server console",
+        ),
+      );
+
+      // First retry fires after 1s
+      await act(async () => {
+        jest.advanceTimersByTime(1000);
+      });
+      // Flush all microtasks from the async connect()
+      await act(async () => {
+        await jest.requireActual("timers").setImmediate(() => {});
+      });
+
+      // Proxy auth error path sets status to "error" (not
+      // disconnected-remote), so the reconnect effect should not schedule
+      // another timer. Verify no further connect calls happen after
+      // advancing timers.
+      mockClient.connect.mockClear();
+      await act(async () => {
+        jest.advanceTimersByTime(2000);
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(4000);
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(8000);
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(16000);
+      });
+
+      expect(mockClient.connect).not.toHaveBeenCalled();
+    });
+
     // [spring-ai-mcp-inspector PATCH] Regression: a failed non-auth
     // connect attempt must continue the backoff chain, not stop after
     // the first attempt (#121).
