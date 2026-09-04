@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] Tests for the structured connect-failure contract.
 import {
   ConnectFailedError,
   CONNECT_FAILED_ERROR_CODE,
