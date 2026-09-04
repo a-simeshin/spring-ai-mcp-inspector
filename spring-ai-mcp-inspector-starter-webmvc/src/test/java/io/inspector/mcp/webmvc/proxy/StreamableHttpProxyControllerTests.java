@@ -584,6 +584,8 @@ class StreamableHttpProxyControllerTests {
 		@Description("deleteMcp() returns 200 when the registry removed an existing session")
 		void deleteMcp_whenRemoved_returns200() {
 			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 			given(StreamableHttpProxyControllerTests.this.registry.removeAndClose("s1")).willReturn(true);
 
 			// when
