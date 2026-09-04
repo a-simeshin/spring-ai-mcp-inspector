@@ -56,6 +56,7 @@ import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyConnectFailure;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
 import io.inspector.mcp.core.proxy.ProxyErrorMapper;
 import io.inspector.mcp.core.proxy.ProxySession;
@@ -694,8 +695,13 @@ public class ProxyHandler {
 					: openStreamableWithInboundHeaders(resolved, authorization, customHeaders);
 		}
 		catch (final Exception ex) {
-			return ServerResponse.status(HttpStatus.BAD_GATEWAY)
-				.bodyValue(Map.of("error", "upstream connect failed: " + ex.getMessage()));
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
+			LOG.warn("proxy[{}] upstream connect failed ({}): {}", sessionId, failure.reason().wire(), ex.toString());
+			final HttpStatus status = (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT)
+					? HttpStatus.GATEWAY_TIMEOUT : HttpStatus.BAD_GATEWAY;
+			return ServerResponse.status(status)
+				.bodyValue(Map.of("error", Map.of("code", "MCP_CONNECT_FAILED", "reason", failure.reason().wire(),
+						"message", failure.message(), "retryable", Boolean.TRUE)));
 		}
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
@@ -749,14 +755,21 @@ public class ProxyHandler {
 			}
 			return accepted.build();
 		}
-		// Pre-create the awaiter Mono first so the replay subscription registers
-		// (or has a buffer ready) before we push the request frame.
+		// Eagerly subscribe to targetToBrowser via Sinks.One so the upstream
+		// transport's connect() error (ECONNREFUSED/DNS/timeout) is captured
+		// even when the relay Mono is subscribed to later by the WebFlux
+		// framework. Without this the replay sink may not carry the error to
+		// a late subscriber, and the awaiter would block for the full
+		// streamable-request timeout instead of failing fast.
 		final Duration requestTimeout = this.timeouts.getStreamableRequest();
-		final Mono<JsonNode> awaiter = session.targetToBrowser()
+		final Sinks.One<JsonNode> awaiterSink = Sinks.one();
+		session.targetToBrowser()
 			.asFlux()
 			.filter((frame) -> matchesId(frame, idNode))
 			.next()
-			.timeout(requestTimeout);
+			.timeout(requestTimeout)
+			.subscribe(awaiterSink::tryEmitValue, awaiterSink::tryEmitError, () -> awaiterSink.tryEmitEmpty());
+		final Mono<JsonNode> awaiter = awaiterSink.asMono();
 		final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
 		if (emitResult.isFailure()) {
 			return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -776,7 +789,7 @@ public class ProxyHandler {
 			final ProxyErrorDto dto = ProxyErrorMapper.map(ex, TransportKind.STREAMABLE);
 			if (dto != null) {
 				// D3: a failed first streamable POST (the initialize) never returned a
-				// session id to the client, so the registered/bound session is orphaned —
+				// session id to the client, so the registered/bound session is orphaned -
 				// tear it down instead of leaking it. The D5-redacted upstream url is
 				// attached so the browser sees scheme/host/path without any secret.
 				// Also clean up when the session has a bound auth profile (D3/D5: no
@@ -789,12 +802,15 @@ public class ProxyHandler {
 					.bodyValue(dto.withUrl(ProxyErrorDto.redactUrl(session.targetUri())));
 			}
 			// A failed first POST (the initialize) never returned a session id to the
-			// client, so the session is orphaned — tear it down instead of leaking it.
+			// client, so the session is orphaned - tear it down instead of leaking it.
 			if (includeSessionHeader) {
 				this.registry.removeAndClose(session.sessionId());
 			}
-			return ServerResponse.status(HttpStatus.GATEWAY_TIMEOUT)
-				.bodyValue(Map.of("error", "upstream did not respond within " + requestTimeout.toSeconds() + "s"));
+			final HttpStatus status = (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT)
+					? HttpStatus.GATEWAY_TIMEOUT : HttpStatus.BAD_GATEWAY;
+			return ServerResponse.status(status)
+				.bodyValue(Map.of("error", Map.of("code", "MCP_CONNECT_FAILED", "reason", failure.reason().wire(),
+						"message", failure.message(), "retryable", Boolean.TRUE)));
 		});
 	}
 

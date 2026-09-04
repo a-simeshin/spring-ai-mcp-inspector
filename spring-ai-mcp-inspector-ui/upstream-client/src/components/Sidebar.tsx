@@ -51,7 +51,7 @@ import CustomHeaders from "./CustomHeaders";
 import { CustomHeaders as CustomHeadersType } from "@/lib/types/customHeaders";
 import { useToast } from "../lib/hooks/useToast";
 import IconDisplay, { WithIcons } from "./IconDisplay";
-import { validateRedirectUrl } from "@/utils/urlValidation";
+import { validateRedirectUrl, validateServerUrl } from "@/utils/urlValidation";
 // [spring-ai-mcp-inspector PATCH] Named auth profiles + D3 error banner
 // (issue #54).
 import AuthProfiles from "./AuthProfiles";
@@ -148,6 +148,9 @@ const Sidebar = ({
   const [showClientSecret, setShowClientSecret] = useState(false);
   const [copiedServerEntry, setCopiedServerEntry] = useState(false);
   const [copiedServerFile, setCopiedServerFile] = useState(false);
+  // [spring-ai-mcp-inspector PATCH] URL validation state: error message and touched flag.
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [urlTouched, setUrlTouched] = useState(false);
   const { toast } = useToast();
 
   const connectionTypeTip =
@@ -162,6 +165,30 @@ const Sidebar = ({
       });
     },
     [toast],
+  );
+
+  // [spring-ai-mcp-inspector PATCH] URL validation handlers: validate on input and blur, show inline error.
+  const handleUrlChange = useCallback(
+    (value: string) => {
+      setSseUrl(value);
+      // On input: clear error when valid, set when still invalid (soft)
+      const result = validateServerUrl(value);
+      if (result.isValid) {
+        setUrlError(null);
+      } else if (urlTouched) {
+        setUrlError(result.errorMessage);
+      }
+    },
+    [setSseUrl, urlTouched],
+  );
+
+  const handleUrlBlur = useCallback(
+    (value: string) => {
+      setUrlTouched(true);
+      const result = validateServerUrl(value);
+      setUrlError(result.isValid ? null : result.errorMessage);
+    },
+    [],
   );
 
   // Shared utility function to generate server config
@@ -338,6 +365,7 @@ const Sidebar = ({
                 <label className="text-sm font-medium" htmlFor="sse-url-input">
                   URL
                 </label>
+                {/* [spring-ai-mcp-inspector PATCH] URL validation: onChange/onBlur/className on both Input elements (see NOTICE.d/url-validation.txt). */}
                 {sseUrl ? (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -345,8 +373,9 @@ const Sidebar = ({
                         id="sse-url-input"
                         placeholder="URL"
                         value={sseUrl}
-                        onChange={(e) => setSseUrl(e.target.value)}
-                        className="font-mono"
+                        onChange={(e) => handleUrlChange(e.target.value)}
+                        onBlur={(e) => handleUrlBlur(e.target.value)}
+                        className={`font-mono ${urlError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
                       />
                     </TooltipTrigger>
                     <TooltipContent>{sseUrl}</TooltipContent>
@@ -356,9 +385,16 @@ const Sidebar = ({
                     id="sse-url-input"
                     placeholder="URL"
                     value={sseUrl}
-                    onChange={(e) => setSseUrl(e.target.value)}
-                    className="font-mono"
+                    onChange={(e) => handleUrlChange(e.target.value)}
+                    onBlur={(e) => handleUrlBlur(e.target.value)}
+                    className={`font-mono ${urlError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
                   />
+                )}
+                {/* [spring-ai-mcp-inspector PATCH] Render URL validation error below input. */}
+                {urlError && (
+                  <p className="text-xs text-red-500 mt-1" role="alert">
+                    {urlError}
+                  </p>
                 )}
               </div>
 
@@ -864,8 +900,24 @@ const Sidebar = ({
                 </Button>
               </div>
             )}
+            {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). Block onConnect when invalid. */}
             {connectionStatus !== "connected" && (
-              <Button className="w-full" onClick={onConnect}>
+              <Button
+                className="w-full"
+                onClick={() => {
+                  // Mark URL as touched on first connect attempt
+                  if (transportType !== "stdio") {
+                    setUrlTouched(true);
+                    const result = validateServerUrl(sseUrl);
+                    if (!result.isValid) {
+                      setUrlError(result.errorMessage);
+                      return;
+                    }
+                  }
+                  onConnect();
+                }}
+                disabled={transportType !== "stdio" && !!urlError}
+              >
                 <Play className="w-4 h-4 mr-2" />
                 Connect
               </Button>

@@ -73,6 +73,16 @@ export function mcpProxyTransportErrorDataIndicatesUnauthorized(
  * StreamableHTTPError carry the HTTP status in `code`; UnauthorizedError is
  * identified by its class name; McpError (transport envelope) carries the
  * proxy's `upstream401`/`httpStatus` snapshot in `data`.
+ *
+ * When the MCP Inspector Proxy cannot reach the upstream MCP server, the
+ * POST /mcp-inspector-api/mcp handler answers with a non-2xx status and a
+ * JSON body of the shape:
+ *
+ *   {"error":{"code":"MCP_CONNECT_FAILED","reason":"<timeout|connection_refused|dns|unauthorized|not_found|unknown>","message":"<human-readable>","retryable":true}}
+ *
+ * This module parses that body out of transport responses, carries it as an
+ * error through the SDK transport layer, and maps arbitrary connect failures
+ * to the same shape so the UI can always show a reason + Retry.
  */
 export function isConnectionAuthError(error: unknown): boolean {
   if (
@@ -113,6 +123,7 @@ export type ConnectFailureReason =
   | "connection_refused"
   | "dns"
   | "unauthorized"
+  | "not_found"
   | "unknown";
 
 export interface ConnectFailure {
@@ -129,6 +140,7 @@ const CONNECT_FAILURE_REASONS: readonly ConnectFailureReason[] = [
   "connection_refused",
   "dns",
   "unauthorized",
+  "not_found",
   "unknown",
 ];
 
@@ -251,14 +263,16 @@ export function connectionFailureFromError(error: unknown): ConnectFailure {
 export function humanReadableReason(reason: ConnectFailureReason): string {
   switch (reason) {
     case "timeout":
-      return "Connection timed out (timeout)";
+      return "Connection timed out";
     case "connection_refused":
-      return "Connection refused (connection_refused)";
+      return "Connection refused";
     case "dns":
-      return "Could not resolve the host (DNS)";
+      return "Cannot resolve host";
     case "unauthorized":
-      return "Authentication required (unauthorized)";
-    case "unknown":
-      return "Unknown error (unknown)";
+      return "Authentication required";
+    case "not_found":
+      return "Server responded 404: check the URL path";
+    default:
+      return "";
   }
 }

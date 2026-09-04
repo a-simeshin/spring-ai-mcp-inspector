@@ -165,3 +165,6 @@ jobs:
 
       - name: Check the local-patch registry
         run: .github/scripts/check-notice-registry.sh "origin/${{ github.base_ref }}"
+
+      - name: Self-test the gate script
+        run: .github/scripts/test-check-notice-registry.sh
