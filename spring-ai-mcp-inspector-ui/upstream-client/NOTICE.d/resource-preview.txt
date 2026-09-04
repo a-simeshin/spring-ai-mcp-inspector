@@ -1,9 +1,21 @@
 src/App.tsx#readResource + src/components/MediaContentView.tsx (new) +
 src/components/ResourcesTab.tsx + src/components/ResourceLinkView.tsx +
-src/components/ToolResults.tsx — Render MCP resource content by mimeType
+src/components/ToolResults.tsx - Render MCP resource content by mimeType
 instead of dumping raw JSON-stringified ReadResourceResult. New shared
 component MediaContentView dispatches on mimeType: image/* → <img>,
 audio/* → <audio>, other binary → <a download>, text/* → JsonView.
 App.tsx now stores the parsed ReadResourceResult object (not the stringified
 version) so mimeType survives to the renderer. Upstream would benefit from
 a first-class mimeType-aware rendering pipeline for BlobResourceContents.
+
+Follow-up fixes (#59):
+- Security: "Open in new tab" restricted to inert MIME types only
+  (text/plain, image/*, audio/*, video/*, application/pdf) to prevent
+  execution of attacker-controlled HTML/JS via data: URIs.
+- Empty blob (blob: "") now gets binary download affordance instead of
+  falling through to empty JsonView.
+- MIME type dispatch is now case-insensitive (normalised to lowercase).
+- ResourceLinkView renders all items from multi-item ReadResourceResult
+  instead of silently dropping contents[1..n].
+- Unit tests added for MediaContentView (image, audio, binary, empty blob,
+  unsafe MIME, case-insensitive dispatch).

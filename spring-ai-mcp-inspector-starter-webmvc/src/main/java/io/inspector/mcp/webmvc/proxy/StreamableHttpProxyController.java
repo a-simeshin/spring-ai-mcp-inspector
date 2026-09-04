@@ -65,17 +65,17 @@ import io.inspector.mcp.webmvc.InspectorServerPortHolder;
  * "https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http">spec</a>):
  *
  * <ul>
- * <li>{@code POST /mcp-inspector-api/mcp} without {@code mcp-session-id} header —
+ * <li>{@code POST /mcp-inspector-api/mcp} without {@code mcp-session-id} header -
  * initiates a new session, forwards the (request) frame to the upstream, returns 200 with
  * the matching JSON-RPC response body and the generated session id in the
  * {@code mcp-session-id} response header.</li>
- * <li>{@code POST /mcp-inspector-api/mcp} with {@code mcp-session-id} — if the frame is a
+ * <li>{@code POST /mcp-inspector-api/mcp} with {@code mcp-session-id} - if the frame is a
  * JSON-RPC <em>request</em> (has an {@code id}), waits up to 30s for the matching
  * response from the upstream and returns it as {@code application/json}; otherwise
- * (notification/response — no {@code id}) returns 202 Accepted with no body.</li>
- * <li>{@code GET  /mcp-inspector-api/mcp} with {@code mcp-session-id} — returns an SSE
+ * (notification/response - no {@code id}) returns 202 Accepted with no body.</li>
+ * <li>{@code GET  /mcp-inspector-api/mcp} with {@code mcp-session-id} - returns an SSE
  * stream of target→browser frames.</li>
- * <li>{@code DELETE /mcp-inspector-api/mcp} with {@code mcp-session-id} — tears down the
+ * <li>{@code DELETE /mcp-inspector-api/mcp} with {@code mcp-session-id} - tears down the
  * session.</li>
  * </ul>
  *
@@ -190,7 +190,7 @@ public class StreamableHttpProxyController {
 	 * @return the HTTP response entity
 	 */
 	private ResponseEntity<Object> openSessionAndForward(final String url, final JsonNode body) {
-		// A blank/relative url is the WAF-safe same-origin default — the proxy resolves
+		// A blank/relative url is the WAF-safe same-origin default - the proxy resolves
 		// it
 		// to the loopback MCP endpoint server-side (see ProxyTargetResolver). Only an
 		// explicit absolute url targets a non-loopback server.
@@ -286,7 +286,7 @@ public class StreamableHttpProxyController {
 	private ResponseEntity<Object> relayWithSessionHeader(final ProxySession session, final JsonNode body,
 			final boolean includeSessionHeader) {
 		final JsonNode idNode = extractRequestId(body);
-		// Notification / response — no answer expected from upstream → 202 Accepted.
+		// Notification / response - no answer expected from upstream → 202 Accepted.
 		if (idNode == null) {
 			final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
 			if (emitResult.isFailure()) {
@@ -300,16 +300,25 @@ public class StreamableHttpProxyController {
 			}
 			return builder.build();
 		}
-		// Request — pre-create the awaiter Mono (replay sink buffers, so even
+		// Request - pre-create the awaiter Mono (replay sink buffers, so even
 		// if the upstream answer lands before .block() registers a subscriber,
 		// the replay buffer still hands it over). We still emit AFTER preparing
 		// the await pipeline so the read-side wiring exists first.
+		// Eagerly subscribe to targetToBrowser via Sinks.One so the upstream
+		// transport's connect() error (ECONNREFUSED/DNS/timeout) is captured
+		// even when the await pipeline is subscribed to later by block().
+		// Without this the replay sink may not carry the error to a late
+		// subscriber, and the awaiter would block for the full
+		// streamable-request timeout instead of failing fast.
 		final Duration requestTimeout = resolveTimeouts().getStreamableRequest();
-		final Mono<JsonNode> awaiter = session.targetToBrowser()
+		final Sinks.One<JsonNode> awaiterSink = Sinks.one();
+		session.targetToBrowser()
 			.asFlux()
 			.filter((frame) -> matchesId(frame, idNode))
 			.next()
-			.timeout(requestTimeout);
+			.timeout(requestTimeout)
+			.subscribe(awaiterSink::tryEmitValue, awaiterSink::tryEmitError, () -> awaiterSink.tryEmitEmpty());
+		final Mono<JsonNode> awaiter = awaiterSink.asMono();
 		final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
 		if (emitResult.isFailure()) {
 			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("emit failed: " + emitResult.name());
@@ -328,7 +337,7 @@ public class StreamableHttpProxyController {
 			LOG.warn("proxy[{}] await response failed ({}): {}", session.sessionId(), failure.reason().wire(),
 					ex.toString());
 			// A failed first POST (the initialize) never returned a session id to the
-			// client, so the session is orphaned — tear it down instead of leaking it.
+			// client, so the session is orphaned - tear it down instead of leaking it.
 			if (includeSessionHeader) {
 				this.registry.removeAndClose(session.sessionId());
 			}
@@ -370,7 +379,7 @@ public class StreamableHttpProxyController {
 	}
 
 	/**
-	 * Extracts {@code id} from a JSON-RPC frame iff the frame is a <em>request</em> —
+	 * Extracts {@code id} from a JSON-RPC frame iff the frame is a <em>request</em> -
 	 * i.e. it carries both a {@code method} and an {@code id}.
 	 *
 	 * <p>

@@ -81,19 +81,19 @@ import static com.codeborne.selenide.Selenide.open;
  * Layout:
  *
  * <ul>
- * <li>{@link Connect} — connect / disconnect / transport-switch happy paths.</li>
- * <li>{@link Metadata} — connects over SSE and asserts the sidebar server-info panel
+ * <li>{@link Connect} - connect / disconnect / transport-switch happy paths.</li>
+ * <li>{@link Metadata} - connects over SSE and asserts the sidebar server-info panel
  * shows the demo's server name + version.</li>
- * <li>{@link Tools} — list, search, and call every demo tool over SSE.</li>
- * <li>{@link Resources} — list, read, template binding.</li>
- * <li>{@link Prompts} — list, render greeting / multiTurn / optionalDescription.</li>
- * <li>{@link Ping} — single ping and history accumulation.</li>
- * <li>{@link Auth} — pre-connect "Open Auth Settings" entry into AuthDebugger.</li>
- * <li>{@link HistoryAndNotifications} — history populates and clears.</li>
- * <li>{@link SidebarAndTheme} — collapsibles, custom header add/remove, theme
+ * <li>{@link Tools} - list, search, and call every demo tool over SSE.</li>
+ * <li>{@link Resources} - list, read, template binding.</li>
+ * <li>{@link Prompts} - list, render greeting / multiTurn / optionalDescription.</li>
+ * <li>{@link Ping} - single ping and history accumulation.</li>
+ * <li>{@link Auth} - pre-connect "Open Auth Settings" entry into AuthDebugger.</li>
+ * <li>{@link HistoryAndNotifications} - history populates and clears.</li>
+ * <li>{@link SidebarAndTheme} - collapsibles, custom header add/remove, theme
  * switch.</li>
- * <li>{@link TabsAvailability} — verifies the rendered tab list against expected.</li>
- * <li>{@link ResponsiveTabBar} — CI regression for the <640px wrap patch (375px /
+ * <li>{@link TabsAvailability} - verifies the rendered tab list against expected.</li>
+ * <li>{@link ResponsiveTabBar} - CI regression for the <640px wrap patch (375px /
  * sm-boundary / 1024px control).</li>
  * <li>{@link ResponsiveHistoryLayout}: CI regression for the <1024px compact layout patch
  * (History pane never overlaps tab content; elementFromPoint at 780x437 with both drag
@@ -105,7 +105,7 @@ import static com.codeborne.selenide.Selenide.open;
  * Boot / cleanup helpers ({@link #detectChromeBinary()},
  * {@link #parseMajorVersionFromPath(String)}, {@link #startApp(Combo)},
  * {@link #stopApp()}) mirror the patterns from the original {@code InspectorE2ETest}
- * verbatim — version-pinned WebDriverManager, Puppeteer-cache scan,
+ * verbatim - version-pinned WebDriverManager, Puppeteer-cache scan,
  * {@link E2ePreconditions#requireChromeOrSkip(String)} when Chrome isn't installed (skip
  * locally, hard failure in CI), and command-line {@code --server.port=0} so we never
  * collide with {@code 8080}.
@@ -133,9 +133,9 @@ class InspectorUiIT {
 
 	/**
 	 * Connect matrix actually exposed by the upstream UI: only the three transport
-	 * flavours the {@code Sidebar.tsx} transport-type Select renders — {@code STDIO},
+	 * flavours the {@code Sidebar.tsx} transport-type Select renders - {@code STDIO},
 	 * {@code SSE}, {@code Streamable HTTP}. The UI does NOT distinguish stateless from
-	 * streamable (both share the {@code streamable-http} value — see
+	 * streamable (both share the {@code streamable-http} value - see
 	 * {@code InspectorIndexController#mapTransportName}), so {@code STREAMABLE} and
 	 * {@code STATELESS} from the server's perspective both surface as the same option in
 	 * the sidebar. We still exercise both server-side protocols here to prove the proxy
@@ -181,7 +181,7 @@ class InspectorUiIT {
 		options.addArguments("--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--remote-allow-origins=*");
 		// Enable Chrome browser log capture so {@link BrowserConsole} can assert no
 		// SEVERE
-		// entries during the session — catches accidental UI breakage from selectors or
+		// entries during the session - catches accidental UI breakage from selectors or
 		// shape changes between upstream releases. Selenium 4 requires both the
 		// goog:loggingPrefs
 		// capability AND the parallel LoggingPreferences capability for the Chrome
@@ -318,7 +318,7 @@ class InspectorUiIT {
 	 * share a boot across all their methods).
 	 *
 	 * <p>
-	 * This is deliberately NOT a {@code @AfterEach} on the outer class — that would
+	 * This is deliberately NOT a {@code @AfterEach} on the outer class - that would
 	 * destroy the WebDriver/app between methods of the share-the-boot groups and leave
 	 * them with {@code "No webdriver is bound to current thread"} errors.
 	 */
@@ -373,16 +373,16 @@ class InspectorUiIT {
 	}
 
 	// ---------------------------------------------------------------------
-	// Shared DOM helpers — every one of these maps 1:1 onto a row in
+	// Shared DOM helpers - every one of these maps 1:1 onto a row in
 	// UPSTREAM_DOM_MAP.md. Keep these tiny; complex assertions live in tests.
 	// ---------------------------------------------------------------------
 
-	/** Sidebar wrapper — the {@code bg-card border-r border-border} flex column. */
+	/** Sidebar wrapper - the {@code bg-card border-r border-border} flex column. */
 	private static SelenideElement sidebar() {
 		return $(".bg-card.border-r");
 	}
 
-	/** Sidebar Connect button (first-time; has no testid — match by visible text). */
+	/** Sidebar Connect button (first-time; has no testid - match by visible text). */
 	private static SelenideElement connectButton() {
 		return sidebar().$(byText("Connect"));
 	}
@@ -395,7 +395,7 @@ class InspectorUiIT {
 	/**
 	 * Selects a row from the active ListPane by its exact visible name. The name lives in
 	 * a {@code <span class="truncate">} inside the clickable row (see ListPane row
-	 * markup), and {@code findBy(text(...))} matches substrings — so asking for "echo"
+	 * markup), and {@code findBy(text(...))} matches substrings - so asking for "echo"
 	 * resolved to the "slowEcho" row whenever it rendered first. Match the name span with
 	 * {@code exactText} instead; the click bubbles up to the row.
 	 */
@@ -420,7 +420,7 @@ class InspectorUiIT {
 			}
 			// Press End to put the caret at the end, then backspace as many times as the
 			// current value length. Plain Cmd/Ctrl-A select-all is unreliable in headless
-			// Chromium on macOS — sometimes the platform keyboard mapping doesn't honor
+			// Chromium on macOS - sometimes the platform keyboard mapping doesn't honor
 			// the chord and we only delete one character.
 			search.click();
 			search.sendKeys(org.openqa.selenium.Keys.END);
@@ -437,7 +437,7 @@ class InspectorUiIT {
 	/**
 	 * History column inside the bottom {@code HistoryAndNotifications} panel. The
 	 * upstream component renders the left column as
-	 * {@code <div class="flex-1 overflow-y-auto p-4 border-r">} — the {@code border-r} is
+	 * {@code <div class="flex-1 overflow-y-auto p-4 border-r">} - the {@code border-r} is
 	 * unique to the left (History) side; the right (Server Notifications) side has no
 	 * right border. Use {@code .flex-1.border-r} as a stable anchor.
 	 */
@@ -447,12 +447,12 @@ class InspectorUiIT {
 
 	/**
 	 * Click the tab trigger with the given Radix value. Waits up to 15 s for the Tabs
-	 * container to materialise — it isn't mounted until {@code mcpClient} resolves after
+	 * container to materialise - it isn't mounted until {@code mcpClient} resolves after
 	 * a successful connect.
 	 *
 	 * <p>
 	 * Radix's {@code TabsTrigger} does NOT reflect its {@code value} prop as a DOM
-	 * attribute — only as the suffix of the rendered {@code id} (e.g.
+	 * attribute - only as the suffix of the rendered {@code id} (e.g.
 	 * {@code radix-:rg:-trigger-tools}). We therefore match on
 	 * {@code [id$="-trigger-${value}"]}.
 	 */
@@ -466,7 +466,7 @@ class InspectorUiIT {
 
 	/**
 	 * Open the page, click Connect, and wait for a Connected indicator. We assert the
-	 * {@code [data-testid=connect-button]} (Restart/Reconnect) appears — this testid is
+	 * {@code [data-testid=connect-button]} (Restart/Reconnect) appears - this testid is
 	 * only mounted in the post-connect branch (see UPSTREAM_DOM_MAP.md, Section 2.6), so
 	 * its presence is an unambiguous "connected" signal that doesn't suffer the
 	 * "Disconnected" / "Connected" substring overlap problem of plain text checks.
@@ -487,7 +487,7 @@ class InspectorUiIT {
 	 * {@code setValue}/{@code clear}+{@code sendKeys} interacts poorly with conditional
 	 * re-renders (e.g. {@code Sidebar.tsx}'s {@code sseUrl ? <Tooltip>...</Tooltip>
 	 * : <Input/>} ternary that swaps the DOM node whenever the controlled value flips
-	 * between empty and non-empty) — characters get lost and the field ends up with stray
+	 * between empty and non-empty) - characters get lost and the field ends up with stray
 	 * content like a single "h".
 	 */
 	private static void setReactInputValue(String cssSelector, String value) {
@@ -508,7 +508,7 @@ class InspectorUiIT {
 	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 	class Connect {
 
-		/** Each Connect test boots a fresh app — clean up after every method. */
+		/** Each Connect test boots a fresh app - clean up after every method. */
 		@AfterEach
 		void tearDown() {
 			stopApp();
@@ -518,7 +518,7 @@ class InspectorUiIT {
 		@Story("Connect")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("Connecting with the default SSE transport transitions the sidebar into the connected branch.")
-		@DisplayName("connectsViaSseDefault — Connect button transitions to the connected branch")
+		@DisplayName("connectsViaSseDefault - Connect button transitions to the connected branch")
 		void connect_withSseDefault_transitionsToConnectedBranch() {
 			// given
 			// SSE is the most reliable proxy path right now; the streamable-http proxy
@@ -532,7 +532,7 @@ class InspectorUiIT {
 			// Pre-connect: Connect button is visible inside the sidebar.
 			connectButton().shouldBe(visible);
 
-			// The [data-testid=connect-button] (Restart/Reconnect) is NOT yet mounted —
+			// The [data-testid=connect-button] (Restart/Reconnect) is NOT yet mounted -
 			// see UPSTREAM_DOM_MAP.md Section 2.6 ("only present in the connected
 			// branch").
 			$("[data-testid=connect-button]").shouldNotBe(visible);
@@ -550,7 +550,7 @@ class InspectorUiIT {
 		@Story("Transport switch")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Switching the transport dropdown to SSE reveals the URL input and connects successfully.")
-		@DisplayName("switchesTransportToSse — picking SSE shows URL input and connects")
+		@DisplayName("switchesTransportToSse - picking SSE shows URL input and connects")
 		void transportSwitch_toSse_showsUrlInputAndConnects() {
 			// given
 			startApp(new Combo("sse"));
@@ -576,7 +576,7 @@ class InspectorUiIT {
 		@Story("Transport switch")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Switching the transport dropdown to STDIO surfaces Command/Args inputs and the env-vars button.")
-		@DisplayName("switchesTransportToStdio — STDIO surfaces Command/Args inputs and env-vars-button")
+		@DisplayName("switchesTransportToStdio - STDIO surfaces Command/Args inputs and env-vars-button")
 		void transportSwitch_toStdio_showsCommandArgsAndEnvInputs() {
 			// given
 			startApp(new Combo("sse"));
@@ -600,7 +600,7 @@ class InspectorUiIT {
 		@Story("Disconnect")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Clicking Disconnect after a successful connect returns the sidebar to the pre-connect Connect button.")
-		@DisplayName("disconnects — clicking Disconnect returns to the pre-connect Connect button")
+		@DisplayName("disconnects - clicking Disconnect returns to the pre-connect Connect button")
 		void disconnect_afterConnected_returnsToConnectButton() {
 			// given
 			startApp(new Combo("sse"));
@@ -621,7 +621,7 @@ class InspectorUiIT {
 	// B. Sidebar server-info panel.
 	//
 	// The upstream "Metadata" tab is actually a per-request metadata editor
-	// (see MetadataTab.tsx — it just maps keys → request _meta), NOT a server
+	// (see MetadataTab.tsx - it just maps keys → request _meta), NOT a server
 	// info display. The server info table lives in the SIDEBAR as the
 	// `serverImplementation` block (Section 2.6 of UPSTREAM_DOM_MAP.md). We
 	// assert the demo's `mcp-inspector-demo` server name + version `0.1.0`
@@ -633,7 +633,7 @@ class InspectorUiIT {
 	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 	class Metadata {
 
-		/** This test boots a fresh app — clean up after it. */
+		/** This test boots a fresh app - clean up after it. */
 		@AfterEach
 		void tearDown() {
 			stopApp();
@@ -674,7 +674,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// C. ToolsTab — list, search, call multiple tools (one representative combo).
+	// C. ToolsTab - list, search, call multiple tools (one representative combo).
 	// =====================================================================
 
 	@Nested
@@ -682,7 +682,7 @@ class InspectorUiIT {
 	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 	class Tools {
 
-		/** Boot once per @Nested group — every method just navigates back to Tools. */
+		/** Boot once per @Nested group - every method just navigates back to Tools. */
 		@BeforeAll
 		void bootAndConnect() {
 			startApp(new Combo("sse"));
@@ -701,7 +701,7 @@ class InspectorUiIT {
 			// next assertion.
 			clearAllSearchInputs();
 			// List Tools triggers `tools/list`. Idempotent when the list is non-empty
-			// (button becomes disabled — see ListPane.isButtonDisabled).
+			// (button becomes disabled - see ListPane.isButtonDisabled).
 			SelenideElement listTools = activePanel().$(byText("List Tools"));
 			if (listTools.exists() && listTools.isEnabled()) {
 				listTools.click();
@@ -714,7 +714,7 @@ class InspectorUiIT {
 		@Story("Tool list")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("After listing tools, every one of the 22 demo tools is present in the tool list.")
-		@DisplayName("toolsListShowsAll22Tools — every demo tool appears in the list")
+		@DisplayName("toolsListShowsAll22Tools - every demo tool appears in the list")
 		void toolsList_afterListTools_showsAll22Tools() {
 			// given
 			String[] expected = ALL_DEMO_TOOLS;
@@ -732,17 +732,17 @@ class InspectorUiIT {
 				+ "echo shows plain Read-only/Destructive chips, and every chip that claims destructive=true "
 				+ "is either disclosed as a spec default ('(default)' + 'Spec default, not declared by server' "
 				+ "tooltip) or is the known spring-ai synthesis gap on the annotation-less slowEcho.")
-		@DisplayName("connectListToolsHonestChips — explicit vs spec-default hint chips and no silent declared destructive")
+		@DisplayName("connectListToolsHonestChips - explicit vs spec-default hint chips and no silent declared destructive")
 		void connectListToolsHonestChips_explicitAndSpecDefaultChips_noDeclaredDestructive() {
 
 			// --- echo: server-declared annotations render as plain chips -------------
 			selectRow("echo");
 			SelenideElement badges = activePanel().$(".gap-1.mt-2").shouldBe(visible, Duration.ofSeconds(10));
-			// Read-only chip is active (✓) with no (default) marker — annotations are
+			// Read-only chip is active (✓) with no (default) marker - annotations are
 			// explicit.
 			badges.$(byText("Read-only")).shouldHave(text("✓ Read-only"));
 			badges.$(byText("Read-only")).shouldNotHave(text("(default)"));
-			// Destructive chip is NOT shown as declared true — value is false (✗), plain
+			// Destructive chip is NOT shown as declared true - value is false (✗), plain
 			// chip.
 			badges.$(byText("Destructive")).shouldHave(text("✗ Destructive"));
 			badges.$(byText("Destructive")).shouldNotHave(text("(default)"));
@@ -764,17 +764,12 @@ class InspectorUiIT {
 			// carries the '(default)' marker its tooltip must disclose that the value
 			// comes from the spec, not the server (title embeds newlines → DOTALL).
 			SelenideElement defaultReadOnly = defaultBadges.$(byText("Read-only")).shouldBe(visible);
-			defaultReadOnly.shouldHave(text("✗ Read-only"));
-			if (defaultReadOnly.getText().contains("(default)")) {
-				defaultReadOnly.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
-			}
+			defaultReadOnly.shouldHave(text("✗ Read-only (default)"));
+			defaultReadOnly.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
 			// Destructive: same honesty contract on the spec-default true (✓).
 			SelenideElement defaultDestructive = defaultBadges.$(byText("Destructive")).shouldBe(visible);
-			defaultDestructive.shouldHave(text("✓ Destructive"));
-			if (defaultDestructive.getText().contains("(default)")) {
-				defaultDestructive
-					.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
-			}
+			defaultDestructive.shouldHave(text("✓ Destructive (default)"));
+			defaultDestructive.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
 
 			// --- sweep: every destructive=true claim is disclosed or accounted for ---
 			for (String name : ALL_DEMO_TOOLS) {
@@ -788,14 +783,14 @@ class InspectorUiIT {
 					destructive.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
 				}
 				else if (chipText.contains("✓")) {
-					// Declared destructive=true is only tolerable on the annotation-less
-					// slowEcho, and only while spring-ai synthesizes annotations for it;
-					// any other tool hitting this branch means a demo tool really
-					// declares destructive=true — that is a regression.
-					Assertions.assertEquals("slowEcho", name,
-							"Tool renders a server-declared destructive=true chip; only the "
-									+ "annotation-less slowEcho may do so while spring-ai synthesizes "
-									+ "its annotations");
+					// No tool should show a declared destructive=true chip without a
+					// (default) disclosure marker. If we reach this branch the
+					// annotation-synthesis workaround has regressed or a new tool with
+					// explicit destructive=true annotations was added.
+					Assertions.fail("Tool \"" + name + "\" renders a server-declared destructive=true chip "
+							+ "without (default) disclosure marker. Either the annotation-synthesis "
+							+ "workaround has regressed or a new tool with explicit destructive=true "
+							+ "annotations was added.");
 				}
 				else {
 					// Declared path: the only honest value is destructive=false.
@@ -812,7 +807,7 @@ class InspectorUiIT {
 		@Story("Tool search")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Typing a query into the tool search input narrows the visible rows and clearing restores them.")
-		@DisplayName("toolsSearchFiltersList — typing in the search input narrows the visible rows")
+		@DisplayName("toolsSearchFiltersList - typing in the search input narrows the visible rows")
 		void toolsSearch_withQuery_filtersList() {
 			// given
 			activePanel().$("[aria-label=Search]").click();
@@ -850,7 +845,7 @@ class InspectorUiIT {
 		@Story("Tool call")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("Calling the sum tool with 7 and 8 produces a result block containing 15.")
-		@DisplayName("callsSumTool — 7 + 8 → result block contains 15")
+		@DisplayName("callsSumTool - 7 + 8 → result block contains 15")
 		void callTool_sumWith7And8_resultContains15() {
 			// given
 			selectRow("sum");
@@ -866,7 +861,7 @@ class InspectorUiIT {
 			activePanel().$(byText("Run Tool")).click();
 
 			// then
-			// ToolResults block prints the result somewhere — assert visible text "15".
+			// ToolResults block prints the result somewhere - assert visible text "15".
 			activePanel().shouldHave(text("15"), Duration.ofSeconds(15));
 		}
 
@@ -874,7 +869,7 @@ class InspectorUiIT {
 		@Story("Tool call")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("Calling the echo tool with text returns a result containing the same text.")
-		@DisplayName("callsEchoTool — text=hello world → result contains 'hello world'")
+		@DisplayName("callsEchoTool - text=hello world → result contains 'hello world'")
 		void callTool_echoWithText_resultContainsText() {
 			// given
 			selectRow("echo");
@@ -892,7 +887,7 @@ class InspectorUiIT {
 		@Story("Tool call")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Ticking the boolean checkbox widget and running toggleFlag returns 'flag is ON'.")
-		@DisplayName("callsToggleFlagBooleanWidget — ticking the checkbox returns 'flag is ON'")
+		@DisplayName("callsToggleFlagBooleanWidget - ticking the checkbox returns 'flag is ON'")
 		void callTool_toggleFlagChecked_returnsFlagIsOn() {
 			// given
 			selectRow("toggleFlag");
@@ -912,7 +907,7 @@ class InspectorUiIT {
 		@Story("Tool call")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Selecting GREEN in the Radix enum Select and running chooseColor returns 'green'.")
-		@DisplayName("callsChooseColorEnum — Radix Select picks GREEN")
+		@DisplayName("callsChooseColorEnum - Radix Select picks GREEN")
 		void callTool_chooseColorGreen_returnsGreen() {
 			// given
 			selectRow("chooseColor");
@@ -932,7 +927,7 @@ class InspectorUiIT {
 		@Story("Tool call")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Submitting a nested object payload in JSON mode to lookupUser returns the user name.")
-		@DisplayName("callsLookupUserNestedObject — JsonEditor JSON mode accepts a nested object payload")
+		@DisplayName("callsLookupUserNestedObject - JsonEditor JSON mode accepts a nested object payload")
 		void callTool_lookupUserNestedObject_returnsName() {
 			// given
 			selectRow("lookupUser");
@@ -960,7 +955,7 @@ class InspectorUiIT {
 		@Story("Tool call")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Running the errorTool surfaces an error state in the ToolResults block.")
-		@DisplayName("callsErrorToolShowsErrorBadge — ToolResults surfaces an error state")
+		@DisplayName("callsErrorToolShowsErrorBadge - ToolResults surfaces an error state")
 		void callTool_errorTool_surfacesErrorState() {
 			// given
 			selectRow("errorTool");
@@ -981,11 +976,11 @@ class InspectorUiIT {
 		@Story("Tool call")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Running largeOutput with a bounded size keeps the UI responsive enough to navigate to another tab.")
-		@DisplayName("callsLargeOutputDoesNotHangUi — UI remains responsive after running largeOutput")
+		@DisplayName("callsLargeOutputDoesNotHangUi - UI remains responsive after running largeOutput")
 		void callTool_largeOutput_doesNotHangUi() {
 			// given
 			selectRow("largeOutput");
-			// Default `sizeKb` is 1024 KiB — too slow for an e2e budget; explicitly use
+			// Default `sizeKb` is 1024 KiB - too slow for an e2e budget; explicitly use
 			// 64.
 			// Schema property name = declared Java parameter name (sizeKb).
 			SelenideElement sizeKb = $("#sizeKb");
@@ -1002,14 +997,14 @@ class InspectorUiIT {
 			// then assert we can still navigate.
 			activePanel().$(byText("Run Tool")).shouldBe(visible, Duration.ofSeconds(60));
 			clickTab("ping");
-			// clickTab already asserts the active state — no further check needed.
+			// clickTab already asserts the active state - no further check needed.
 		}
 
 		@Test
 		@Story("Tool call")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Running structuredOutput renders the structured content via JsonView.")
-		@DisplayName("callsStructuredOutputShowsStructuredContent — structuredContent field is rendered")
+		@DisplayName("callsStructuredOutputShowsStructuredContent - structuredContent field is rendered")
 		void callTool_structuredOutput_rendersStructuredContent() {
 			// given
 			selectRow("structuredOutput");
@@ -1019,7 +1014,7 @@ class InspectorUiIT {
 
 			// then
 			// The structured CallToolResult is rendered with JsonView; assert *some*
-			// structured key surfaces (we don't pin the exact shape — see
+			// structured key surfaces (we don't pin the exact shape - see
 			// DemoAdvancedToolsProvider).
 			activePanel().shouldHave(
 					Condition.or("structured output rendered", text("structuredContent"), text("text"), text("result")),
@@ -1030,7 +1025,7 @@ class InspectorUiIT {
 		@Story("Tool call")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Running multiContent renders the combined text, image and resource-link payload.")
-		@DisplayName("callsMultiContentRendersTextAndImage — text + image + resource link are all rendered")
+		@DisplayName("callsMultiContentRendersTextAndImage - text + image + resource link are all rendered")
 		void callTool_multiContent_rendersTextAndImage() {
 			// given
 			selectRow("multiContent");
@@ -1054,7 +1049,7 @@ class InspectorUiIT {
 		@Story("Tool call")
 		@Severity(SeverityLevel.MINOR)
 		@Description("Running slowEcho flips Run Tool to a Running... state while pending and then surfaces the result.")
-		@DisplayName("callsSlowEchoShowsLoading — Run Tool flips to Running... while the call is pending")
+		@DisplayName("callsSlowEchoShowsLoading - Run Tool flips to Running... while the call is pending")
 		void callTool_slowEcho_showsRunningThenResult() {
 			// given
 			selectRow("slowEcho");
@@ -1065,7 +1060,7 @@ class InspectorUiIT {
 			activePanel().$(byText("Run Tool")).click();
 
 			// then
-			// While pending, button text becomes "Running..." — flaky but a strong
+			// While pending, button text becomes "Running..." - flaky but a strong
 			// signal.
 			// Use a short timeout and fall back to checking the result if we miss the
 			// spinner.
@@ -1078,7 +1073,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// D. ResourcesTab — list, click-to-read, template binding.
+	// D. ResourcesTab - list, click-to-read, template binding.
 	// =====================================================================
 
 	@Nested
@@ -1104,11 +1099,11 @@ class InspectorUiIT {
 			// The ListPane's search state is held in component-local React state;
 			// navigating
 			// tabs doesn't reset it. Selenide's setValue("") doesn't always fire React's
-			// onChange — issue a Ctrl/Cmd-A + Backspace combo so the controlled input
+			// onChange - issue a Ctrl/Cmd-A + Backspace combo so the controlled input
 			// actually reflects the cleared state in React.
 			clearAllSearchInputs();
 			// ListPane "List Resources" is disabled once a list is already populated and
-			// has no nextCursor — so we can't refresh by clicking it again. Click "Clear"
+			// has no nextCursor - so we can't refresh by clicking it again. Click "Clear"
 			// first to reset the list, then "List Resources" to re-fetch from the server.
 			// This sidesteps any per-test selection / search state that the upstream
 			// ListPane keeps in component-local state.
@@ -1131,7 +1126,7 @@ class InspectorUiIT {
 		@Story("Resource list")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("After listing resources and templates, the 5 static names and 2 template names are all visible.")
-		@DisplayName("resourcesListShowsStaticAndTemplates — 5 static names + 2 template names visible")
+		@DisplayName("resourcesListShowsStaticAndTemplates - 5 static names + 2 template names visible")
 		void resourcesList_afterList_showsStaticAndTemplates() {
 			// given & when
 			// (resources + templates were listed in @BeforeEach goToResourcesTab)
@@ -1153,12 +1148,12 @@ class InspectorUiIT {
 		@Story("Resource read")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("Clicking the demo-greeting resource reads it and shows 'Hello from MCP demo'.")
-		@DisplayName("readsGreetingResource — clicking demo-greeting reads and shows 'Hello from MCP demo'")
+		@DisplayName("readsGreetingResource - clicking demo-greeting reads and shows 'Hello from MCP demo'")
 		void readResource_greeting_showsHelloFromMcpDemo() {
 			// given & when
 			// Clicking a resource row triggers readResource(uri) automatically (no
 			// separate
-			// Read button — see ResourcesTab.setSelectedItem).
+			// Read button - see ResourcesTab.setSelectedItem).
 			selectRow("demo-greeting");
 
 			// then
@@ -1169,7 +1164,7 @@ class InspectorUiIT {
 		@Story("Resource read")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Reading the demo-readme resource renders markdown content with a text/markdown mime type.")
-		@DisplayName("readsMarkdownResource — demo-readme content includes markdown text")
+		@DisplayName("readsMarkdownResource - demo-readme content includes markdown text")
 		void readResource_markdown_showsMarkdownMimeType() {
 			// given & when
 			selectRow("demo-readme");
@@ -1189,7 +1184,7 @@ class InspectorUiIT {
 		@Story("Resource preview")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("Clicking demo-logo renders an <img> element with the PNG data URI in the resource preview pane.")
-		@DisplayName("resourcePreview_imageResource_showsImg — demo-logo renders as <img> with data:image/png;base64,...")
+		@DisplayName("resourcePreview_imageResource_showsImg - demo-logo renders as <img> with data:image/png;base64,...")
 		void resourcePreview_imageResource_showsImg() {
 			// given & when
 			selectRow("demo-logo");
@@ -1209,38 +1204,41 @@ class InspectorUiIT {
 		@Test
 		@Story("Resource preview")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("Clicking demo-logo exposes a download/open control for the binary resource bytes.")
-		@DisplayName("resourcePreview_downloadControlPresent — demo-logo exposes a download/open control")
+		@Description("Clicking demo-logo renders a download link with the correct data:image/png MIME and logo.png filename.")
+		@DisplayName("resourcePreview_downloadControlPresent - demo-logo exposes download with exact data URL and filename")
 		void resourcePreview_downloadControlPresent() {
 			// given & when
 			selectRow("demo-logo");
 
 			// then
-			// Wait for the resource read to materialize the right-panel header (the
-			// selected resource name) regardless of render implementation.
-			activePanel().$$("h3").findBy(exactText("demo-logo")).shouldBe(visible, Duration.ofSeconds(15));
-			// Binary resource preview must expose a download/open affordance (per the
-			// shared MediaContentView recommendation: <a download href=data:...> for
-			// binary/*). Red against current behavior (no download control exists),
-			// green after the implementation. `exists()` on the composed selector so
-			// any one of the affordance shapes satisfies the check.
-			Assertions.assertTrue(
-					!activePanel().$$("a[download]").isEmpty()
-							|| !activePanel().$$("button").filterBy(exactText("Download")).isEmpty()
-							|| !activePanel().$$("button").filterBy(exactText("Open")).isEmpty(),
-					"Expected a download/open control in the resource preview pane after clicking demo-logo");
+			// Wait for the resource content to render (the <img> proves the
+			// ReadResourceResult was parsed and MediaContentView rendered it).
+			activePanel().$("img[src^='data:image/png;base64,']").shouldBe(visible, Duration.ofSeconds(15));
+			// The download link must have the correct href (data:image/png;base64,...)
+			// and download attribute matching the resource filename from the URI.
+			// The expected filename is "logo.png" (from "demo://logo.png").
+			SelenideElement downloadLink = activePanel().$("a[download='logo.png']");
+			downloadLink.shouldBe(visible, Duration.ofSeconds(5));
+			String href = downloadLink.getAttribute("href");
+			Assertions.assertNotNull(href, "Download link must have an href");
+			Assertions.assertTrue(href.startsWith("data:image/png;base64,iVBORw0KGgo"),
+					"Download href should be a data:image/png;base64 URL starting with the PNG magic bytes, got: "
+							+ href);
 		}
 
 		@Test
 		@Story("Resource preview")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("After clicking demo-logo, the raw base64 blob content is not displayed by default (collapsed).")
-		@DisplayName("resourcePreview_base64CollapsedByDefault — raw base64 not visible after clicking demo-logo")
+		@DisplayName("resourcePreview_base64CollapsedByDefault - raw base64 not visible after clicking demo-logo")
 		void resourcePreview_base64CollapsedByDefault() {
 			// given & when
 			selectRow("demo-logo");
 
 			// then
+			// First wait for the resource content to render (the <img> proves the
+			// ReadResourceResult was parsed and MediaContentView rendered it).
+			activePanel().$("img[src^='data:image/png;base64,']").shouldBe(visible, Duration.ofSeconds(15));
 			// The base64 blob content should NOT be visible as raw text in the panel.
 			// The TINY_PNG_BASE64 from DemoAdvancedResourcesProvider starts with this
 			// known prefix. This will FAIL against current behavior (base64 is visible
@@ -1253,7 +1251,7 @@ class InspectorUiIT {
 		@Story("Resource preview")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Reading the demo-greeting text resource still renders content via JsonView (unchanged after fix).")
-		@DisplayName("resourcePreview_textResourceUnchanged — text resource still renders via JsonView")
+		@DisplayName("resourcePreview_textResourceUnchanged - text resource still renders via JsonView")
 		void resourcePreview_textResourceUnchanged() {
 			// given & when
 			selectRow("demo-greeting");
@@ -1268,7 +1266,7 @@ class InspectorUiIT {
 		@Story("Resource read")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Reading the large demo-large-text resource renders without crashing the UI.")
-		@DisplayName("readsLargeTextResource — demo-large-text body renders without crashing")
+		@DisplayName("readsLargeTextResource - demo-large-text body renders without crashing")
 		void readResource_largeText_rendersWithoutCrashing() {
 			// given & when
 			selectRow("demo-large-text");
@@ -1284,13 +1282,13 @@ class InspectorUiIT {
 		@Story("Resource template")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Binding the demo-item template variable id=7 expands the URI template and reads the resource.")
-		@DisplayName("readsTemplateResourceWithVariable — demo-item with id=7 expands and reads")
+		@DisplayName("readsTemplateResourceWithVariable - demo-item with id=7 expands and reads")
 		void readResource_templateWithVariable_expandsAndReads() {
 			// given
 			selectRow("demo-item");
 
 			// when
-			// Template variable input is a `Combobox` — a Radix Popover whose trigger is
+			// Template variable input is a `Combobox` - a Radix Popover whose trigger is
 			// <button role="combobox" aria-controls="${key}">. Clicking opens a popover
 			// with a CommandInput where we type the value.
 			activePanel().$("button[role=combobox][aria-controls=id]").shouldBe(visible).click();
@@ -1311,7 +1309,7 @@ class InspectorUiIT {
 		@Story("Resource search")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Searching the resources pane for 'config' narrows the list to demo-config.")
-		@DisplayName("searchFiltersResourcesList — search 'config' narrows to demo-config")
+		@DisplayName("searchFiltersResourcesList - search 'config' narrows to demo-config")
 		void resourcesSearch_withConfig_narrowsToDemoConfig() {
 			// given
 			// Resources pane is the LEFT ListPane (the first one inside the active
@@ -1333,7 +1331,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// E. PromptsTab — list, render greeting / multiTurn / optionalDescription.
+	// E. PromptsTab - list, render greeting / multiTurn / optionalDescription.
 	// =====================================================================
 
 	@Nested
@@ -1366,7 +1364,7 @@ class InspectorUiIT {
 		@Story("Prompt list")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("After listing prompts, greeting, multiTurn and optionalDescription all appear.")
-		@DisplayName("promptsListShowsThree — greeting, multiTurn, optionalDescription appear")
+		@DisplayName("promptsListShowsThree - greeting, multiTurn, optionalDescription appear")
 		void promptsList_afterList_showsThreePrompts() {
 			// given & when
 			// (prompts were listed in @BeforeEach goToPromptsTab)
@@ -1388,7 +1386,7 @@ class InspectorUiIT {
 		 * <p>
 		 * Returns {@code true} when at least one Combobox trigger
 		 * ({@code button[role=combobox]}) is present in the active panel after selecting
-		 * the prompt — i.e., the upstream renderer received a non-empty
+		 * the prompt - i.e., the upstream renderer received a non-empty
 		 * {@code prompt.arguments} array.
 		 */
 		private boolean promptArgsRendered() {
@@ -1403,7 +1401,7 @@ class InspectorUiIT {
 		private static void fillPromptArg(String argName, String value) {
 			activePanel().$("button[role=combobox][aria-controls='" + argName + "']").shouldBe(visible).click();
 			$("input[placeholder='Enter " + argName + "']").shouldBe(visible, Duration.ofSeconds(5)).setValue(value);
-			// Close the popover by pressing Escape — otherwise the next interaction may
+			// Close the popover by pressing Escape - otherwise the next interaction may
 			// accidentally click an option in the floating list.
 			$("input[placeholder='Enter " + argName + "']").pressEscape();
 		}
@@ -1412,12 +1410,12 @@ class InspectorUiIT {
 		@Story("Prompt render")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("Rendering the greeting prompt with name=World produces a result containing the greeting payload.")
-		@DisplayName("rendersGreetingPrompt — name=World → 'Hello, World!'")
+		@DisplayName("rendersGreetingPrompt - name=World → 'Hello, World!'")
 		void renderPrompt_greetingWithName_showsHelloWorld() {
 			// given
 			selectRow("greeting");
 			Assertions.assertTrue(promptArgsRendered(),
-					"prompts/list returned no argument schemas for `greeting` — server-side "
+					"prompts/list returned no argument schemas for `greeting` - server-side "
 							+ "Spring AI MCP @McpArg propagation is incomplete; skipping render assertion");
 
 			// when
@@ -1439,7 +1437,7 @@ class InspectorUiIT {
 		@Story("Prompt render")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Rendering the multiTurn prompt with topic=weather returns three messages mentioning the topic.")
-		@DisplayName("rendersMultiTurnPrompt — three messages with weather topic")
+		@DisplayName("rendersMultiTurnPrompt - three messages with weather topic")
 		void renderPrompt_multiTurnWithTopic_showsThreeMessages() {
 			// given
 			selectRow("multiTurn");
@@ -1461,7 +1459,7 @@ class InspectorUiIT {
 		@Story("Prompt render")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Rendering optionalDescription with only the required title argument succeeds.")
-		@DisplayName("rendersOptionalDescriptionWithOnlyRequired — title-only call succeeds")
+		@DisplayName("rendersOptionalDescriptionWithOnlyRequired - title-only call succeeds")
 		void renderPrompt_optionalDescriptionRequiredOnly_succeeds() {
 			// given
 			selectRow("optionalDescription");
@@ -1481,7 +1479,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// F. PingTab — single ping + history accumulation.
+	// F. PingTab - single ping + history accumulation.
 	// =====================================================================
 
 	@Nested
@@ -1504,11 +1502,11 @@ class InspectorUiIT {
 		@Story("Ping")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("Clicking Ping Server fires a ping request that is logged as a new history entry.")
-		@DisplayName("pingRespondsOk — clicking Ping Server fires `ping` (logged in history)")
+		@DisplayName("pingRespondsOk - clicking Ping Server fires `ping` (logged in history)")
 		void ping_clickPingServer_addsHistoryEntry() {
 			// given
 			clickTab("ping");
-			// History count baseline — `initialize` is always logged on connect.
+			// History count baseline - `initialize` is always logged on connect.
 			int before = historyColumn().$$("li").size();
 
 			// when
@@ -1523,7 +1521,7 @@ class InspectorUiIT {
 		@Story("Ping")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Firing three pings accumulates at least three entries in the history pane.")
-		@DisplayName("multiplePingsAccumulateHistory — three pings add three history entries")
+		@DisplayName("multiplePingsAccumulateHistory - three pings add three history entries")
 		void ping_threeTimes_accumulatesThreeHistoryEntries() {
 			// given
 			clickTab("ping");
@@ -1546,7 +1544,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// G. Auth — pre-connect "Open Auth Settings" mounts AuthDebugger.
+	// G. Auth - pre-connect "Open Auth Settings" mounts AuthDebugger.
 	// =====================================================================
 
 	@Nested
@@ -1554,7 +1552,7 @@ class InspectorUiIT {
 	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 	class Auth {
 
-		/** This test boots a fresh app — clean up after each method. */
+		/** This test boots a fresh app - clean up after each method. */
 		@AfterEach
 		void tearDown() {
 			stopApp();
@@ -1564,7 +1562,7 @@ class InspectorUiIT {
 		@Story("Auth debugger")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("From the empty pre-connect landing page, Open Auth Settings reveals the AuthDebugger and OAuth flow.")
-		@DisplayName("opensAuthDebuggerFromEmptyState — landing page exposes the auth flow")
+		@DisplayName("opensAuthDebuggerFromEmptyState - landing page exposes the auth flow")
 		void authDebugger_fromEmptyState_exposesOAuthFlow() {
 			// given
 			startApp(new Combo("sse"));
@@ -1585,7 +1583,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// H. History / Notifications — populated and cleared.
+	// H. History / Notifications - populated and cleared.
 	// =====================================================================
 
 	@Nested
@@ -1608,7 +1606,7 @@ class InspectorUiIT {
 		@Story("History")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Running a tool adds a request entry to the history pane alongside the initialize entry.")
-		@DisplayName("historyLogsRequests — running a tool adds an entry alongside initialize")
+		@DisplayName("historyLogsRequests - running a tool adds an entry alongside initialize")
 		void history_afterRunningTool_logsRequestEntry() {
 			// given
 			clickTab("tools");
@@ -1627,7 +1625,7 @@ class InspectorUiIT {
 		@Story("History")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Clicking Clear empties the history pane and restores the 'No history yet' placeholder.")
-		@DisplayName("clearHistoryEmptiesPanel — Clear → 'No history yet' reappears")
+		@DisplayName("clearHistoryEmptiesPanel - Clear → 'No history yet' reappears")
 		void history_afterClear_showsNoHistoryYet() {
 			// given
 			clickTab("ping");
@@ -1644,7 +1642,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// I. Sidebar — collapsibles, custom headers, theme switch.
+	// I. Sidebar - collapsibles, custom headers, theme switch.
 	// =====================================================================
 
 	@Nested
@@ -1670,7 +1668,7 @@ class InspectorUiIT {
 		@Story("Sidebar blocks")
 		@Severity(SeverityLevel.MINOR)
 		@Description("Toggling the auth-button shows and hides the OAuth Client ID input.")
-		@DisplayName("togglesAuthenticationBlock — auth-button shows/hides OAuth Client ID input")
+		@DisplayName("togglesAuthenticationBlock - auth-button shows/hides OAuth Client ID input")
 		void authBlock_toggle_showsAndHidesOAuthClientIdInput() {
 			// given
 			// A sibling test (custom headers) lives inside the auth block and may leave
@@ -1696,7 +1694,7 @@ class InspectorUiIT {
 		@Story("Sidebar blocks")
 		@Severity(SeverityLevel.MINOR)
 		@Description("Opening the config-button block reveals the inspector configuration keys.")
-		@DisplayName("togglesConfigurationBlock — config-button reveals the 6 config keys")
+		@DisplayName("togglesConfigurationBlock - config-button reveals the 6 config keys")
 		void configBlock_toggle_revealsConfigKeys() {
 			// given & when
 			$("[data-testid=config-button]").shouldBe(visible).click();
@@ -1711,7 +1709,7 @@ class InspectorUiIT {
 		@Story("Custom headers")
 		@Severity(SeverityLevel.MINOR)
 		@Description("Clicking add-header-button creates an indexed custom-header row that accepts a name and value.")
-		@DisplayName("addsAndRemovesCustomHeader — add-header-button creates an indexed row")
+		@DisplayName("addsAndRemovesCustomHeader - add-header-button creates an indexed row")
 		void customHeader_add_createsIndexedRow() {
 			// given
 			// Open the Authentication panel which hosts CustomHeaders.
@@ -1735,7 +1733,7 @@ class InspectorUiIT {
 		@Story("Theme switch")
 		@Severity(SeverityLevel.MINOR)
 		@Description("Picking Dark in the theme switcher adds the 'dark' class to <html>; picking Light removes it.")
-		@DisplayName("themeSwitcherChangesClass — picking Dark adds 'dark' class to <html>")
+		@DisplayName("themeSwitcherChangesClass - picking Dark adds 'dark' class to <html>")
 		void themeSwitcher_pickDark_addsDarkClassToHtml() {
 			// given & when
 			$("#theme-select").shouldBe(visible).click();
@@ -1752,7 +1750,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// J. Tabs availability — verify the active tab list matches the demo server's
+	// J. Tabs availability - verify the active tab list matches the demo server's
 	// declared capabilities. The demo advertises resources / prompts / tools.
 	// Apps / Ping / Sampling / Elicitations / Roots / Auth / Metadata are
 	// always-on (see UPSTREAM_DOM_MAP.md, Section 3). Tasks is gated by the
@@ -1779,14 +1777,14 @@ class InspectorUiIT {
 		@Story("Tab visibility")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("After connecting, all always-on tabs are rendered for the demo server capabilities.")
-		@DisplayName("expectedTabsVisible — the always-on tabs are rendered")
+		@DisplayName("expectedTabsVisible - the always-on tabs are rendered")
 		void tabs_afterConnect_alwaysOnTabsVisible() {
 			// given & then
 			// The always-on tabs (per Section 3 of UPSTREAM_DOM_MAP.md):
 			// resources, prompts, tools, apps, ping, sampling, elicitations,
 			// roots, auth, metadata. Tasks is gated by serverCapabilities.tasks
 			// which the demo does NOT advertise. Radix doesn't reflect the `value`
-			// prop as a DOM attribute — match on the trigger's id suffix.
+			// prop as a DOM attribute - match on the trigger's id suffix.
 			for (String value : new String[] { "resources", "prompts", "tools", "apps", "ping", "sampling",
 					"elicitations", "roots", "auth", "metadata" }) {
 				$("[role=tab][id$='-trigger-" + value + "']").shouldBe(visible);
@@ -1796,13 +1794,13 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// K. Connect matrix — Streamable HTTP + Stateless (now that T26 fixed the
+	// K. Connect matrix - Streamable HTTP + Stateless (now that T26 fixed the
 	// proxy POST). Each parametrized invocation boots a fresh app on the given
 	// server-side protocol; the UI side picks the matching transport-type
 	// option in the sidebar Select.
 	//
 	// STREAMABLE and STATELESS map to the same UI option ("Streamable HTTP" /
-	// value=streamable-http) — see InspectorIndexController#mapTransportName.
+	// value=streamable-http) - see InspectorIndexController#mapTransportName.
 	// We don't introduce a synthetic "stateless" UI flavour just to satisfy
 	// the brief; the UI honestly doesn't differentiate them, and that's fine.
 	// =====================================================================
@@ -1822,7 +1820,7 @@ class InspectorUiIT {
 		@Story("Streamable HTTP connect")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("Connecting via the Streamable HTTP transport (streamable + stateless server protocols) reaches the Tools list.")
-		@DisplayName("connectsViaStreamableHttpFull — Streamable HTTP transport reaches the Tools list")
+		@DisplayName("connectsViaStreamableHttpFull - Streamable HTTP transport reaches the Tools list")
 		void connect_viaStreamableHttp_reachesToolsList(Combo combo) {
 			// given
 			// Server boots with protocol=STREAMABLE or STATELESS (both surface as
@@ -1831,7 +1829,7 @@ class InspectorUiIT {
 			open("/mcp-inspector/index.html");
 
 			// when
-			// Set the transport-type Select to "Streamable HTTP" — UPSTREAM_DOM_MAP.md
+			// Set the transport-type Select to "Streamable HTTP" - UPSTREAM_DOM_MAP.md
 			// §2.1.
 			$("#transport-type-select").shouldBe(visible).click();
 			$$("[role=option]").findBy(text("Streamable HTTP")).click();
@@ -1846,7 +1844,7 @@ class InspectorUiIT {
 			// <Input/>}
 			// ternary that re-mounts the DOM node whenever the value flips between empty
 			// and
-			// non-empty — Selenide's clear+sendKeys path interacts badly with that swap
+			// non-empty - Selenide's clear+sendKeys path interacts badly with that swap
 			// in
 			// headless Chrome and leaves the field with stray characters.
 			int port = ((WebServerApplicationContext) app).getWebServer().getPort();
@@ -1854,7 +1852,7 @@ class InspectorUiIT {
 			setReactInputValue("#sse-url-input", "http://localhost:" + port + "/mcp");
 			$("#sse-url-input").shouldHave(Condition.value("http://localhost:" + port + "/mcp"));
 
-			// Connect (first-time button has no testid — match by visible text).
+			// Connect (first-time button has no testid - match by visible text).
 			connectButton().click();
 			// Restart/Reconnect testid is only mounted in the connected branch.
 			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
@@ -1874,10 +1872,10 @@ class InspectorUiIT {
 		@Story("Connection type")
 		@Severity(SeverityLevel.MINOR)
 		@Description("On a Streamable HTTP transport the Connection Type select exposes only Via Proxy and Direct, never Stateless.")
-		@DisplayName("connectionTypeSelectExposesViaProxyAndDirect — UI Connection Type is the only sub-flavour")
+		@DisplayName("connectionTypeSelectExposesViaProxyAndDirect - UI Connection Type is the only sub-flavour")
 		void connectionTypeSelect_streamableHttp_exposesViaProxyAndDirect() {
 			// given
-			// Stateless is NOT a UI-level option in the sidebar — Sidebar.tsx only
+			// Stateless is NOT a UI-level option in the sidebar - Sidebar.tsx only
 			// exposes
 			// STDIO / SSE / Streamable HTTP. The "Connection Type" Select (Via Proxy /
 			// Direct) is the only sub-flavour the UI distinguishes on a non-STDIO
@@ -1904,7 +1902,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// L. STDIO connect — switch transport to STDIO, point at the demo's exec
+	// L. STDIO connect - switch transport to STDIO, point at the demo's exec
 	// jar, run echo through the inspector. Gated on the exec jar existing,
 	// which the failsafe `verify` lifecycle guarantees (package phase runs
 	// before integration-test). If the jar isn't there (manual run from IDE
@@ -1948,7 +1946,7 @@ class InspectorUiIT {
 		@Story("STDIO connect")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("Connecting via STDIO to an external demo jar lists tools and calls echo end-to-end through the stdio framing.")
-		@DisplayName("connectsViaStdioToExternalJar — STDIO -> tools list -> call echo")
+		@DisplayName("connectsViaStdioToExternalJar - STDIO -> tools list -> call echo")
 		void connect_viaStdioToExternalJar_listsToolsAndCallsEcho() {
 			// given
 			Path jar = resolveDemoExecJar();
@@ -1959,12 +1957,12 @@ class InspectorUiIT {
 			// bundle;
 			// we then redirect the connection through STDIO to a separate child process
 			// launching the same demo jar in stdio mode. This is the supported way to use
-			// STDIO via the upstream inspector — it spawns the command in a subprocess.
+			// STDIO via the upstream inspector - it spawns the command in a subprocess.
 			startApp(new Combo("sse"));
 			open("/mcp-inspector/index.html");
 
 			// when
-			// Switch transport to STDIO — UPSTREAM_DOM_MAP.md §2.1.
+			// Switch transport to STDIO - UPSTREAM_DOM_MAP.md §2.1.
 			$("#transport-type-select").shouldBe(visible).click();
 			$$("[role=option]").findBy(text("STDIO")).click();
 
@@ -1984,7 +1982,7 @@ class InspectorUiIT {
 
 			connectButton().click();
 			// Connected branch mounts the [data-testid=connect-button] (Restart) control.
-			// STDIO subprocess spawn is slower than a same-host HTTP connect — give it a
+			// STDIO subprocess spawn is slower than a same-host HTTP connect - give it a
 			// generous 60 s budget.
 			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(60));
 
@@ -2004,7 +2002,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// M. AppsTab — assert empty state (no app tools registered by demo).
+	// M. AppsTab - assert empty state (no app tools registered by demo).
 	// Per the demo's capability matrix none of the demo tools carry
 	// _meta.ui.resourceUri, so the AppsTab empty-state copy is the expected
 	// outcome (UPSTREAM_DOM_MAP.md §9.2).
@@ -2030,13 +2028,13 @@ class InspectorUiIT {
 		@Story("Apps tab")
 		@Severity(SeverityLevel.MINOR)
 		@Description("With no app tools registered, the Apps tab renders the empty-state 'No MCP Apps available' message.")
-		@DisplayName("appsTabRendersAtLeastEmptyState — empty MCP Apps message visible")
+		@DisplayName("appsTabRendersAtLeastEmptyState - empty MCP Apps message visible")
 		void appsTab_noAppTools_rendersEmptyState() {
 			// given & when
 			clickTab("apps");
 
 			// then
-			// Refresh Apps trigger must be visible — proves the list pane rendered.
+			// Refresh Apps trigger must be visible - proves the list pane rendered.
 			activePanel().$(byText("Refresh Apps")).shouldBe(visible, Duration.ofSeconds(10));
 			// Demo registers 22 tools but none with _meta.ui.resourceUri, so the right
 			// pane shows the "No MCP Apps available..." copy. We match a stable substring
@@ -2048,11 +2046,11 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// N. TasksTab — the demo server does NOT advertise the `tasks` capability
+	// N. TasksTab - the demo server does NOT advertise the `tasks` capability
 	// (see TabsAvailability and the omission from `spring-ai-mcp-inspector-demo`
 	// server config), so the tasks tab trigger is rendered as disabled. We
 	// document the contract here and skip the active/cancelled scenarios via
-	// Assumptions when the capability is missing — flipping these tests on
+	// Assumptions when the capability is missing - flipping these tests on
 	// requires server-side `serverCapabilities.tasks` plumbing first.
 	// =====================================================================
 
@@ -2077,7 +2075,7 @@ class InspectorUiIT {
 			if (!trigger.exists()) {
 				return false;
 			}
-			// App.tsx sets `disabled={!serverCapabilities?.tasks}` on the TabsTrigger —
+			// App.tsx sets `disabled={!serverCapabilities?.tasks}` on the TabsTrigger -
 			// Radix reflects disabled state on data-disabled / aria-disabled and the
 			// underlying <button disabled> attribute.
 			String disabled = trigger.getAttribute("disabled");
@@ -2089,11 +2087,11 @@ class InspectorUiIT {
 		@Story("Tasks tab")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Running slowEcho as a task surfaces an active task row that eventually transitions to completed.")
-		@DisplayName("tasksTabShowsActiveAndCompletedTasks — slowEcho appears as task row")
+		@DisplayName("tasksTabShowsActiveAndCompletedTasks - slowEcho appears as task row")
 		void tasksTab_runSlowEchoAsTask_showsActiveAndCompleted() {
 			// given
 			Assumptions.assumeTrue(tasksCapabilityAdvertised(),
-					"demo server does not advertise the `tasks` capability — TasksTab trigger is "
+					"demo server does not advertise the `tasks` capability - TasksTab trigger is "
 							+ "disabled (UPSTREAM_DOM_MAP.md §3). Skip until server-side capability is wired.");
 
 			// when
@@ -2115,7 +2113,7 @@ class InspectorUiIT {
 			clickTab("tasks");
 			activePanel().$$(".cursor-pointer")
 				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(20));
-			// Eventually the task transitions to completed (CheckCircle2 icon) — assert
+			// Eventually the task transitions to completed (CheckCircle2 icon) - assert
 			// by
 			// selecting the row and waiting for the status text.
 			activePanel().$$(".cursor-pointer").first().click();
@@ -2127,7 +2125,7 @@ class InspectorUiIT {
 		@Story("Tasks tab")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Cancelling a long-running task via the Cancel button transitions it to a cancelled state.")
-		@DisplayName("cancelLongRunningTask — Cancel button transitions task to cancelled")
+		@DisplayName("cancelLongRunningTask - Cancel button transitions task to cancelled")
 		void tasksTab_cancelLongRunningTask_transitionsToCancelled() {
 			// given
 			Assumptions.assumeTrue(tasksCapabilityAdvertised(),
@@ -2152,7 +2150,7 @@ class InspectorUiIT {
 				.click();
 
 			// Cancel button is a destructive Button with aria-label="Cancel task
-			// ${taskId}" —
+			// ${taskId}" -
 			// we match by the aria-label prefix.
 			SelenideElement cancelBtn = $("button[aria-label^='Cancel task ']").shouldBe(visible,
 					Duration.ofSeconds(10));
@@ -2166,7 +2164,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// O. "Console" — the upstream ConsoleTab.tsx is a stub that never gets
+	// O. "Console" - the upstream ConsoleTab.tsx is a stub that never gets
 	// mounted as a real Tabs panel (the import is dead code in App.tsx). The
 	// actual destination for `notifications/message` from `largeOutput` is
 	// the right-hand "Server Notifications" pane of HistoryAndNotifications.
@@ -2189,7 +2187,7 @@ class InspectorUiIT {
 			stopApp();
 		}
 
-		/** Right-hand "Server Notifications" pane — sibling of historyColumn(). */
+		/** Right-hand "Server Notifications" pane - sibling of historyColumn(). */
 		private static SelenideElement notificationsColumn() {
 			// History pane has border-r; notifications pane is the other flex-1 column.
 			return $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications"));
@@ -2199,11 +2197,11 @@ class InspectorUiIT {
 		@Story("Server notifications")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Calling largeOutput emits a notifications/message that surfaces in the Server Notifications pane.")
-		@DisplayName("consoleShowsLoggingMessageNotifications — largeOutput emits notifications/message")
+		@DisplayName("consoleShowsLoggingMessageNotifications - largeOutput emits notifications/message")
 		void serverNotifications_largeOutput_emitsLoggingMessage() {
 			// given
 			// Step 1: subscribe to notifications/message via the sidebar logging-level
-			// Select. UPSTREAM_DOM_MAP.md §2.7 — this control is only rendered when the
+			// Select. UPSTREAM_DOM_MAP.md §2.7 - this control is only rendered when the
 			// server advertises the `logging` capability; if it's not visible we skip
 			// the subscription step and just rely on the SDK's default delivery.
 			SelenideElement loggingLevel = $("#logging-level-select");
@@ -2232,7 +2230,7 @@ class InspectorUiIT {
 			// Step 3: Server Notifications pane shows at least one entry. If the demo
 			// server only emits when an explicit logging/setLevel subscription is active
 			// and we couldn't issue one (capability not advertised), the SDK drops the
-			// notification — in that case the test is informational, not blocking.
+			// notification - in that case the test is informational, not blocking.
 			// BUG: server may need to set capabilities.logging=true for upstream
 			// subscription
 			// path to work end-to-end; the SDK silently drops without it (see
@@ -2269,7 +2267,7 @@ class InspectorUiIT {
 		@Story("History expansion")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Expanding a history entry reveals the Request and Response JSON sections.")
-		@DisplayName("historyExpandShowsRequestAndResponseJson — clicking ▶ reveals Request/Response")
+		@DisplayName("historyExpandShowsRequestAndResponseJson - clicking ▶ reveals Request/Response")
 		void historyEntry_expand_revealsRequestAndResponseJson() {
 			// given
 			// Fire a ping so we have a non-initialize entry to expand.
@@ -2293,7 +2291,7 @@ class InspectorUiIT {
 		@Story("Server notifications")
 		@Severity(SeverityLevel.MINOR)
 		@Description("Running largeOutput grows the Server Notifications pane (informational when logging is not negotiated).")
-		@DisplayName("notificationsPaneAccumulatesLogs — largeOutput grows Server Notifications")
+		@DisplayName("notificationsPaneAccumulatesLogs - largeOutput grows Server Notifications")
 		void notificationsPane_largeOutput_accumulatesLogs() {
 			// given
 			// Server Notifications pane: the other .flex-1.overflow-y-auto.p-4 sibling
@@ -2321,12 +2319,12 @@ class InspectorUiIT {
 			// new
 			// entry. Otherwise the demo server didn't subscribe the client (logging
 			// capability
-			// gap) — flag as informational rather than fail.
+			// gap) - flag as informational rather than fail.
 			int after = notifications.$$("li").size();
 			// BUG-CANDIDATE: when after == before the demo server has not negotiated the
-			// logging subscription with the upstream client — log it but don't hard-fail.
+			// logging subscription with the upstream client - log it but don't hard-fail.
 			if (after == before) {
-				System.err.println("[notificationsPaneAccumulatesLogs] no new Server Notifications entry — "
+				System.err.println("[notificationsPaneAccumulatesLogs] no new Server Notifications entry - "
 						+ "logging capability likely not negotiated end-to-end");
 			}
 		}
@@ -2334,13 +2332,13 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// Q. Browser console errors — capture SEVERE-level Chrome browser logs
+	// Q. Browser console errors - capture SEVERE-level Chrome browser logs
 	// during a happy-path Connect + Tools session, then assert none are
 	// raised. This catches silent UI regressions from selector / shape
 	// changes between upstream releases.
 	//
 	// Some noise is unavoidable in the Chrome DevTools log even on a clean
-	// session — e.g. 404 favicon, browser-internal deprecation notices — so
+	// session - e.g. 404 favicon, browser-internal deprecation notices - so
 	// we filter SEVERE entries to those originating from inspector code
 	// (URLs under the test base URL) and exclude well-known false positives.
 	// =====================================================================
@@ -2398,7 +2396,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// R. Sampling tab — server→client createMessage round-trip via askLlm.
+	// R. Sampling tab - server→client createMessage round-trip via askLlm.
 	//
 	// Flow: navigate to Tools, select askLlm, fill question, click Run Tool.
 	// The server blocks inside exchange.createMessage(...) waiting for the
@@ -2425,7 +2423,7 @@ class InspectorUiIT {
 		}
 
 		/**
-		 * Triggers {@code askLlm(question)} from the Tools tab and returns immediately —
+		 * Triggers {@code askLlm(question)} from the Tools tab and returns immediately -
 		 * the upstream client fires the tool call asynchronously, so we do not need a
 		 * separate thread. The blocked tool call lives on the server until the Sampling
 		 * card is resolved.
@@ -2445,14 +2443,14 @@ class InspectorUiIT {
 		@Story("Sampling approve")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("Approving a pending sampling request with canned reply text unblocks askLlm and returns that text.")
-		@DisplayName("approveSamplingRequest — fill reply, click Approve, tool returns the canned text")
+		@DisplayName("approveSamplingRequest - fill reply, click Approve, tool returns the canned text")
 		void samplingRequest_approve_toolReturnsCannedText() {
 			// given
-			// Fire the tool — the server side blocks on exchange.createMessage().
+			// Fire the tool - the server side blocks on exchange.createMessage().
 			fireAskLlm("hello world");
 
 			// when
-			// Switch to the Sampling tab — the pending request is rendered there.
+			// Switch to the Sampling tab - the pending request is rendered there.
 			clickTab("sampling");
 			SelenideElement card = $("[data-testid=sampling-request]").shouldBe(visible, Duration.ofSeconds(20));
 
@@ -2463,14 +2461,14 @@ class InspectorUiIT {
 			SelenideElement replyInput = card.$$("input[type=text]").filterBy(Condition.attribute("value", "")).first();
 			// Fallback: if the filter found nothing (form already has stub-model
 			// defaults),
-			// pick the last <input type=text> — that's the `text` field appended last to
+			// pick the last <input type=text> - that's the `text` field appended last to
 			// the schema (see SamplingRequest.tsx useMemo block).
 			if (!replyInput.exists()) {
 				replyInput = card.$$("input[type=text]").last();
 			}
 			replyInput.shouldBe(visible).setValue("canned-llm-reply");
 
-			// Approve the request — server unblocks with our canned text.
+			// Approve the request - server unblocks with our canned text.
 			card.$(byText("Approve")).click();
 
 			// then
@@ -2483,7 +2481,7 @@ class InspectorUiIT {
 		@Story("Sampling reject")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Rejecting a pending sampling request surfaces an error/failure on the askLlm tool result.")
-		@DisplayName("rejectSamplingRequest — clicking Reject surfaces an error/failure on the tool")
+		@DisplayName("rejectSamplingRequest - clicking Reject surfaces an error/failure on the tool")
 		void samplingRequest_reject_toolSurfacesFailure() {
 			// given
 			fireAskLlm("rejected question");
@@ -2494,7 +2492,7 @@ class InspectorUiIT {
 			card.$(byText("Reject")).click();
 
 			// then
-			// Back to Tools — askLlm catches the RuntimeException and returns the
+			// Back to Tools - askLlm catches the RuntimeException and returns the
 			// "sampling request failed: ..." guidance string, which surfaces as the
 			// CallToolResult text content.
 			clickTab("tools");
@@ -2505,7 +2503,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// S. Elicitation tab — server→client createElicitation round-trip via askUser.
+	// S. Elicitation tab - server→client createElicitation round-trip via askUser.
 	//
 	// Flow mirrors Sampling: trigger askUser(question), switch to elicitations
 	// tab, locate [data-testid=elicitation-request], fill the `answer` field,
@@ -2544,7 +2542,7 @@ class InspectorUiIT {
 		@Story("Elicitation submit")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("Submitting an elicitation answer of 'blue' unblocks askUser and the tool returns 'blue'.")
-		@DisplayName("submitElicitation — fill answer=blue, click Submit, tool returns 'blue'")
+		@DisplayName("submitElicitation - fill answer=blue, click Submit, tool returns 'blue'")
 		void elicitationRequest_submitAnswer_toolReturnsAnswer() {
 			// given
 			fireAskUser("What is your favourite color?");
@@ -2554,7 +2552,7 @@ class InspectorUiIT {
 			SelenideElement card = $("[data-testid=elicitation-request]").shouldBe(visible, Duration.ofSeconds(20));
 
 			// The schema is { answer: string } per DemoInteractiveToolsProvider.askUser.
-			// DynamicJsonForm renders the answer field as <Input type=text> with no id —
+			// DynamicJsonForm renders the answer field as <Input type=text> with no id -
 			// it's the only editable text input inside the response form column.
 			card.$$("input[type=text]").first().shouldBe(visible).setValue("blue");
 			card.$(byText("Submit")).click();
@@ -2568,7 +2566,7 @@ class InspectorUiIT {
 		@Story("Elicitation decline")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Declining an elicitation surfaces a 'user decline' guidance string on the askUser tool result.")
-		@DisplayName("declineElicitation — clicking Decline surfaces 'user decline' on the tool")
+		@DisplayName("declineElicitation - clicking Decline surfaces 'user decline' on the tool")
 		void elicitationRequest_decline_toolSurfacesUserDecline() {
 			// given
 			fireAskUser("decline-me?");
@@ -2589,7 +2587,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// S2. Elicitation tab — url-mode round-trip via authorizeViaUrl.
+	// S2. Elicitation tab - url-mode round-trip via authorizeViaUrl.
 	//
 	// Flow: trigger authorizeViaUrl(authUrl) from Tools, switch to
 	// elicitations tab, wait for [data-testid=elicitation-request], assert
@@ -2617,7 +2615,7 @@ class InspectorUiIT {
 
 		/**
 		 * Triggers {@code authorizeViaUrl(authUrl)} from the Tools tab and returns
-		 * immediately — the upstream client fires the tool call asynchronously, so the
+		 * immediately - the upstream client fires the tool call asynchronously, so the
 		 * blocked call lives on the server until the elicitation card is resolved.
 		 *
 		 * <p>
@@ -2645,15 +2643,15 @@ class InspectorUiIT {
 		@Story("Elicitation url-mode accept")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("Accepting a url-mode elicitation request unblocks authorizeViaUrl and the tool returns 'user accepted'.")
-		@DisplayName("urlModeElicitation_accept_toolReturnsUserAccepted — Open URL button visible, click Accept, tool returns 'user accepted'")
+		@DisplayName("urlModeElicitation_accept_toolReturnsUserAccepted - Open URL button visible, click Accept, tool returns 'user accepted'")
 		void elicitationUrlMode_accept_toolReturnsUserAccepted() {
 			// given
-			// Fire the tool — the server side blocks on
+			// Fire the tool - the server side blocks on
 			// exchange.createElicitation(ElicitUrlRequest).
 			fireAuthorizeViaUrl("https://oauth.example.com/authorize?code=demo");
 
 			// when
-			// Switch to the Elicitations tab — the pending url-mode request renders
+			// Switch to the Elicitations tab - the pending url-mode request renders
 			// there.
 			clickTab("elicitations");
 			SelenideElement card = $("[data-testid=elicitation-request]").shouldBe(visible, Duration.ofSeconds(20));
@@ -2681,11 +2679,11 @@ class InspectorUiIT {
 			openUrlButton.shouldBe(Condition.enabled);
 
 			// Click "Accept" to resolve the url-mode elicitation (no form data is
-			// returned by url-mode requests — the action alone unblocks the server call).
+			// returned by url-mode requests - the action alone unblocks the server call).
 			card.$(byText("Accept")).click();
 
 			// then
-			// Back to the Tools tab — authorizeViaUrl returns
+			// Back to the Tools tab - authorizeViaUrl returns
 			// "authorizeViaUrl: user accepted and returned from <url>" on ACCEPT.
 			clickTab("tools");
 			activePanel().shouldHave(text("user accepted"), Duration.ofSeconds(20));
@@ -2694,7 +2692,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// T. Roots tab — client-advertised roots queryable via listMyRoots.
+	// T. Roots tab - client-advertised roots queryable via listMyRoots.
 	//
 	// The Roots tab renders an "Add Root" button + per-row URI input + Save
 	// Changes. Add a single root, save, then call listMyRoots from Tools and
@@ -2721,7 +2719,7 @@ class InspectorUiIT {
 		@Story("Roots")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Adding a root and saving it, then calling listMyRoots returns the configured file:// URI (or a documented capability-gap guidance string).")
-		@DisplayName("addsRootAndListsViaTool — listMyRoots returns the configured file:// URI")
+		@DisplayName("addsRootAndListsViaTool - listMyRoots returns the configured file:// URI")
 		void addRoot_thenListMyRoots_returnsConfiguredUri() {
 			// given
 			clickTab("roots");
@@ -2757,7 +2755,7 @@ class InspectorUiIT {
 			// then
 			// Tool result should contain our root URI. If the client never advertised
 			// the `roots` capability (no listChanged subscription), listMyRoots returns
-			// a guidance string — accept either branch but assert at least one signal.
+			// a guidance string - accept either branch but assert at least one signal.
 			activePanel().shouldHave(Condition.or("roots-tool surfaced something",
 					text("file:///tmp/inspector-test-root"), text("does not advertise"), text("returned no roots")),
 					Duration.ofSeconds(20));
@@ -2766,7 +2764,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// U. Resource subscriptions — demo://clock emits notifications/resources/updated.
+	// U. Resource subscriptions - demo://clock emits notifications/resources/updated.
 	//
 	// Per the T27 caveat: SDK 0.18.2 does not wire resources/subscribe handlers
 	// on the server side, so the upstream client's Subscribe button is gated by
@@ -2796,7 +2794,7 @@ class InspectorUiIT {
 		@Story("Resource subscribe")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("The demo://clock resource auto-fires notifications/resources/updated, growing the Server Notifications pane even when the subscribe affordance is gated by the SDK capability gap.")
-		@DisplayName("clockResourceEmitsUpdates — Server Notifications grows with auto-fired clock ticks")
+		@DisplayName("clockResourceEmitsUpdates - Server Notifications grows with auto-fired clock ticks")
 		void clockResource_afterListing_emitsServerNotifications() {
 			// given
 			// Listing resources confirms demo-clock is registered. We don't strictly
@@ -2815,7 +2813,7 @@ class InspectorUiIT {
 			activePanel().shouldHave(text("demo-clock"), Duration.ofSeconds(15));
 
 			// when
-			// Try the Subscribe button — only rendered if the server advertised the
+			// Try the Subscribe button - only rendered if the server advertised the
 			// `resources.subscribe` capability. Click it if present; otherwise note
 			// the missing affordance and continue.
 			selectRow("demo-clock");
@@ -2831,7 +2829,7 @@ class InspectorUiIT {
 				// serverCapabilities?.resources?.subscribe in App.tsx). Auto-fired
 				// notifications still arrive via the SDK's default forwarding,
 				// which is what we assert below.
-				System.err.println("[ResourceSubscribe] Subscribe button absent — server does not advertise "
+				System.err.println("[ResourceSubscribe] Subscribe button absent - server does not advertise "
 						+ "resources.subscribe capability (SDK 0.18.2 limitation, T27 caveat).");
 			}
 
@@ -2846,7 +2844,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// V. OAuth flow — drives the inspector's AuthDebugger against the
+	// V. OAuth flow - drives the inspector's AuthDebugger against the
 	// in-process OAuthStubController. The full popup-based redirect flow is
 	// brittle through headless Chromium (Selenide cannot easily follow the
 	// window.open(...) into a new window + the inspector's same-origin
@@ -2872,7 +2870,7 @@ class InspectorUiIT {
 		@Story("Quick OAuth flow")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("Running Quick OAuth Flow against the in-process stub drives discovery, client registration, approval and the callback redirect, leaving the templated SPA mounted.")
-		@DisplayName("quickOAuthFlowPopulatesProgress — AuthDebugger shows Metadata Discovery + Client Registration steps")
+		@DisplayName("quickOAuthFlowPopulatesProgress - AuthDebugger shows Metadata Discovery + Client Registration steps")
 		void quickOAuthFlow_withStub_mountsSpaAfterCallback() {
 			// given
 			// Boot with oauth-stub so /.well-known/oauth-authorization-server is served.
@@ -2890,13 +2888,13 @@ class InspectorUiIT {
 			$(byText("Open Auth Settings")).shouldBe(visible, Duration.ofSeconds(10)).click();
 			$(byText("Authentication Settings")).shouldBe(visible, Duration.ofSeconds(10));
 
-			// Click Quick OAuth Flow — this kicks off discovery against the
+			// Click Quick OAuth Flow - this kicks off discovery against the
 			// /.well-known/oauth-authorization-server endpoint served by the stub,
 			// then Dynamic Client Registration, then redirects the main window via
 			// window.location.href to the stub's /oauth/authorize approve page.
 			// (Previously the flow stalled at the redirect step because the
 			// backend 404'd on /oauth/callback/debug, but T-OAUTH-CALLBACK fixed
-			// that — InspectorIndexController now serves the templated SPA on
+			// that - InspectorIndexController now serves the templated SPA on
 			// both the bare and the debug callback paths.)
 			$(byText("Quick OAuth Flow")).shouldBe(visible).click();
 
@@ -2911,7 +2909,7 @@ class InspectorUiIT {
 			// After the redirect lands on /oauth/callback/debug, App.tsx mounts
 			// the OAuthDebugCallback branch. We can't deterministically assert
 			// "Connected" because the OAuth debug flow doesn't auto-trigger an
-			// MCP connect — but the SPA DOM root must be present (proves the
+			// MCP connect - but the SPA DOM root must be present (proves the
 			// backend served the templated SPA rather than returning 404).
 			$("#root").shouldBe(visible, Duration.ofSeconds(15));
 		}
@@ -2920,10 +2918,10 @@ class InspectorUiIT {
 		@Story("OAuth callback routes")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Both /oauth/callback and /oauth/callback/debug serve the templated SPA (mounting #root) rather than returning 404, so the React pathname router can claim the URL after the IdP redirect.")
-		@DisplayName("oauthCallbackRoutesServeSpa — /oauth/callback and /oauth/callback/debug return the templated SPA, not 404")
+		@DisplayName("oauthCallbackRoutesServeSpa - /oauth/callback and /oauth/callback/debug return the templated SPA, not 404")
 		void oauthCallbackRoutes_whenOpened_serveTemplatedSpa() {
 			// given
-			// Pure backend assertion — the OAuth callback routes must serve the SPA
+			// Pure backend assertion - the OAuth callback routes must serve the SPA
 			// so the React client's pathname-based router (App.tsx checks
 			// pathname === "/oauth/callback" / "/oauth/callback/debug") can claim
 			// the URL after the IdP redirect. Without these routes the browser
@@ -2941,7 +2939,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// W. Completion popover — Prompts tab Combobox suggests completions from
+	// W. Completion popover - Prompts tab Combobox suggests completions from
 	// the @McpComplete handler. Typing "s" into multiTurn.topic should reveal
 	// "sports" (one of the canned suggestions in DemoAdvancedPromptsProvider).
 	// =====================================================================
@@ -2966,7 +2964,7 @@ class InspectorUiIT {
 		@Story("Completion popover")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Typing the prefix 's' into the multiTurn topic Combobox surfaces the @McpComplete-provided 'sports' suggestion and selecting it reflects the value on the trigger.")
-		@DisplayName("multiTurnTopicSuggestsSports — typing 's' into topic reveals 'sports' suggestion")
+		@DisplayName("multiTurnTopicSuggestsSports - typing 's' into topic reveals 'sports' suggestion")
 		void completionPopover_typePrefixS_suggestsSports() {
 			// given
 			clickTab("prompts");
@@ -2981,7 +2979,7 @@ class InspectorUiIT {
 			// Click it to open the Popover containing the CommandInput.
 			SelenideElement trigger = activePanel().$("button[role=combobox][aria-controls=topic]");
 			Assertions.assertTrue(trigger.exists(),
-					"prompts/list returned no argument schemas for multiTurn — completion popover unavailable");
+					"prompts/list returned no argument schemas for multiTurn - completion popover unavailable");
 			trigger.shouldBe(visible).click();
 
 			// CommandInput placeholder is "Enter topic" (matches PromptsTab + Combobox).
@@ -2991,7 +2989,7 @@ class InspectorUiIT {
 
 			// The completion handler returns sports / music / movies for prefix "s"
 			// (only "sports" actually starts with 's'; the others would not match a
-			// strict prefix filter — see DemoAdvancedPromptsProvider). The Combobox
+			// strict prefix filter - see DemoAdvancedPromptsProvider). The Combobox
 			// renders results as Command items inside the Popover; locate the
 			// "sports" entry and click it.
 			SelenideElement sportsOption = $$("[role=option], [cmdk-item]").findBy(text("sports"))
@@ -3007,7 +3005,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// X. Responsive tab bar — CI regression for the <sm wrap patch
+	// X. Responsive tab bar - CI regression for the <sm wrap patch
 	// (upstream-client/src/App.tsx TabsList, NOTICE.d/tab-bar-wrap.txt). The shared
 	// suite browser is fixed at 1366x900 (setupBrowser), so each scenario
 	// resizes the live headless window to its target viewport and restores it
@@ -3015,8 +3013,8 @@ class InspectorUiIT {
 	//
 	// Tailwind's `sm` breakpoint is `min-width: 640px` (inclusive): computed
 	// flex-wrap at exactly 640px is already `nowrap` (verified in a real
-	// browser), so the wrap side of the boundary is exercised at 639px — the
-	// widest viewport that still wraps — and the flip back to the single
+	// browser), so the wrap side of the boundary is exercised at 639px - the
+	// widest viewport that still wraps - and the flip back to the single
 	// upstream row is asserted at 640px as part of the desktop control.
 	// =====================================================================
 
@@ -3030,8 +3028,8 @@ class InspectorUiIT {
 				"ping", "sampling", "elicitations", "roots", "auth", "metadata");
 
 		/**
-		 * The 10 always-enabled triggers. {@code tasks} is rendered disabled by design —
-		 * the demo does not advertise the tasks capability (see #63) — so it is only
+		 * The 10 always-enabled triggers. {@code tasks} is rendered disabled by design -
+		 * the demo does not advertise the tasks capability (see #63) - so it is only
 		 * presence-checked, never clicked.
 		 */
 		private static final List<String> ENABLED_TAB_VALUES = List.of("resources", "prompts", "tools", "apps", "ping",
@@ -3059,7 +3057,7 @@ class InspectorUiIT {
 		}
 
 		/**
-		 * Computed {@code flex-wrap} of the TabsList — "wrap" below sm, "nowrap"
+		 * Computed {@code flex-wrap} of the TabsList - "wrap" below sm, "nowrap"
 		 * at/above.
 		 */
 		private static String tabsListFlexWrap() {
@@ -3085,8 +3083,8 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tab bar")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("At a 375px viewport the TabsList wraps (computed flex-wrap: wrap), keeps all 11 tab triggers in the DOM and causes no horizontal document overflow. Clickability/visibility of every tab at 375px is intentionally NOT asserted — the 320px sidebar still clips the inspector column there (separate card t_aa9b879f).")
-		@DisplayName("tabsAt375pxWrapKeepAllTriggersNoHScroll — mobile wrap")
+		@Description("At a 375px viewport the TabsList wraps (computed flex-wrap: wrap), keeps all 11 tab triggers in the DOM and causes no horizontal document overflow. Clickability/visibility of every tab at 375px is intentionally NOT asserted - the 320px sidebar still clips the inspector column there (separate card t_aa9b879f).")
+		@DisplayName("tabsAt375pxWrapKeepAllTriggersNoHScroll - mobile wrap")
 		void tabs_at375px_wrapKeepAllTriggersAndNoHorizontalOverflow() {
 			// given
 			ResponsiveTestHelpers.setViewport(375, 667);
@@ -3105,7 +3103,7 @@ class InspectorUiIT {
 		@Story("Responsive tab bar")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("At the widest wrapping viewport (639px, just below the inclusive Tailwind sm breakpoint) the TabsList still wraps, all 11 triggers fit inside the viewport (right edge <= viewport width) and the 10 enabled ones are clickable by real input; the disabled tasks trigger is only presence-checked.")
-		@DisplayName("tabsAt639pxWrapAllReachableClickableNoHScroll — sm boundary, wrap side")
+		@DisplayName("tabsAt639pxWrapAllReachableClickableNoHScroll - sm boundary, wrap side")
 		void tabs_at639px_wrapAllTriggersReachableClickableNoHorizontalOverflow() {
 			// given
 			ResponsiveTestHelpers.setViewport(639, 800);
@@ -3128,10 +3126,10 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tab bar")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("Control scenario: at 640px (Tailwind sm, min-width:640px — inclusive) and at 1024px the TabsList returns to the single upstream row — computed flex-wrap: nowrap and height ~36px (h-9) — so the wrap patch causes no desktop regression.")
-		@DisplayName("tabsAt640And1024ControlSingleRowNoWrap — desktop geometry intact")
+		@Description("Control scenario: at 640px (Tailwind sm, min-width:640px - inclusive) and at 1024px the TabsList returns to the single upstream row - computed flex-wrap: nowrap and height ~36px (h-9) - so the wrap patch causes no desktop regression.")
+		@DisplayName("tabsAt640And1024ControlSingleRowNoWrap - desktop geometry intact")
 		void tabs_at1024px_controlSingleRowNoWrap() {
-			// when & then — the exact sm flip point plus a wider desktop viewport
+			// when & then - the exact sm flip point plus a wider desktop viewport
 			for (int width : new int[] { 640, 1024 }) {
 				ResponsiveTestHelpers.setViewport(width, 800);
 				Assertions.assertEquals("nowrap", tabsListFlexWrap(),
@@ -3145,7 +3143,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// Y. Responsive history layout — CI regression for the <lg compact
+	// Y. Responsive history layout - CI regression for the <lg compact
 	// layout patch (upstream-client/src/App.tsx root container + bottom
 	// History pane, NOTICE.d/compact-layout.txt). The shared suite browser is
 	// fixed at 1366x900 (setupBrowser), so each scenario resizes the live
@@ -3158,7 +3156,7 @@ class InspectorUiIT {
 	// and can never overlay tab content. The bug this pins (#60): at
 	// 780x437 the fixed-height 300px pane left only ~137px for tab content,
 	// so the Tools tab's "List Tools" button sat geometrically under the
-	// pane header — elementFromPoint at its centre returned the History div
+	// pane header - elementFromPoint at its centre returned the History div
 	// and real clicks never reached the button.
 	// =====================================================================
 
@@ -3481,7 +3479,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// Responsive tools layout — mobile geometry of the config sidebar and the
+	// Responsive tools layout - mobile geometry of the config sidebar and the
 	// Tools list/detail grid (issue #58). Every scenario runs a fresh setup:
 	// startApp(new Combo("sse")) → openAndConnect() → clickTab("tools") →
 	// setViewport(...). The pane anchors are the [spring-ai-mcp-inspector
@@ -3494,7 +3492,7 @@ class InspectorUiIT {
 	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 	class ResponsiveLayout {
 
-		/** Each scenario boots a fresh app — clean up after every method. */
+		/** Each scenario boots a fresh app - clean up after every method. */
 		@AfterEach
 		void restoreToDesktopViewport() {
 			ResponsiveTestHelpers.setViewport(1366, 900);
@@ -3515,11 +3513,11 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tools layout")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("At the 375x667 mobile viewport the config sidebar and the Tools list/detail panes have pairwise disjoint bounding boxes (getBoundingClientRect), each pane is at most 375px wide, and the document has no horizontal overflow (scrollWidth <= clientWidth). Every pane rectangle lies fully inside the viewport (left/top >= 0, right/bottom <= viewport) at the accepted scrollY=0 state — in the empty state and after listing tools and selecting the sum row — and its rect is printed on failure. Below the sm breakpoint the panes are height-bounded with internal scrolling (see the PATCH markers), so the stacked layout fits the first 667px viewport instead of growing past the fold.")
-		@DisplayName("configPane_listPane_detailPane_disjoint_375x667 — mobile geometry at scrollY=0")
+		@Description("At the 375x667 mobile viewport the config sidebar and the Tools list/detail panes have pairwise disjoint bounding boxes (getBoundingClientRect), each pane is at most 375px wide, and the document has no horizontal overflow (scrollWidth <= clientWidth). Every pane rectangle lies fully inside the viewport (left/top >= 0, right/bottom <= viewport) at the accepted scrollY=0 state - in the empty state and after listing tools and selecting the sum row - and its rect is printed on failure. Below the sm breakpoint the panes are height-bounded with internal scrolling (see the PATCH markers), so the stacked layout fits the first 667px viewport instead of growing past the fold.")
+		@DisplayName("configPane_listPane_detailPane_disjoint_375x667 - mobile geometry at scrollY=0")
 		void configPane_listPane_detailPane_disjoint_375x667() {
 			// given: the exact inner mobile viewport, measured at the top of the
-			// document — the accepted contract state.
+			// document - the accepted contract state.
 			ResponsiveTestHelpers.setViewportExactly(375, 667);
 			ResponsiveTestHelpers.scrollToTop();
 			Assertions.assertEquals(0, ResponsiveTestHelpers.scrollY(),
@@ -3549,11 +3547,11 @@ class InspectorUiIT {
 
 			// and: every pane lies fully inside the 375x667 viewport at scrollY=0,
 			// in the empty state. A pane clipped by an ancestor or extending past
-			// the fold fails here with its rect printed — no scroll-into-view is
+			// the fold fails here with its rect printed - no scroll-into-view is
 			// involved, the document is at the top.
 			assertPanesInsideViewportAtScrollTop("empty state");
 
-			// when: the tools are listed and the sum row is selected — the pane
+			// when: the tools are listed and the sum row is selected - the pane
 			// content grows, the worst case for the inside-viewport contract.
 			SelenideElement listTools = activePanel().$(byText("List Tools"));
 			if (listTools.exists() && listTools.isEnabled()) {
@@ -3595,7 +3593,7 @@ class InspectorUiIT {
 		@Story("Responsive tools layout")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("The Tools list/detail grid flips from one column (grid-cols-1) to two (sm:grid-cols-2) exactly at the inclusive Tailwind sm breakpoint: 1 column at 639px, 2 columns at 640px.")
-		@DisplayName("sm_639x800_and_640x800_gridFlip — grid-cols-1 -> sm:grid-cols-2")
+		@DisplayName("sm_639x800_and_640x800_gridFlip - grid-cols-1 -> sm:grid-cols-2")
 		void sm_639x800_and_640x800_gridFlip() {
 			// given: just below the sm breakpoint
 			ResponsiveTestHelpers.setViewportExactly(639, 800);
@@ -3616,7 +3614,7 @@ class InspectorUiIT {
 		@Story("Responsive tools layout")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("At the inclusive lg breakpoint (1024px, min-width) the root container engages the desktop side-by-side layout without regression: at 1023px and at 1024px every pane stays inside the viewport, no two panes overlap, and the document does not overflow horizontally.")
-		@DisplayName("lg_1023x800_and_1024x800_rootBoundary — root stays inside the viewport")
+		@DisplayName("lg_1023x800_and_1024x800_rootBoundary - root stays inside the viewport")
 		void lg_1023x800_and_1024x800_rootBoundary() {
 			// given: the widest viewport below lg, then exactly lg
 			for (int width : new int[] { 1023, 1024 }) {
@@ -3645,8 +3643,8 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tools layout")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("Desktop regression control at 1280x800: the config sidebar and the Tools list/detail grid keep the desktop side-by-side geometry — every pane inside the viewport, no overlaps, two grid columns, no horizontal document overflow.")
-		@DisplayName("desktop_1280x800_noRegression — desktop geometry intact")
+		@Description("Desktop regression control at 1280x800: the config sidebar and the Tools list/detail grid keep the desktop side-by-side geometry - every pane inside the viewport, no overlaps, two grid columns, no horizontal document overflow.")
+		@DisplayName("desktop_1280x800_noRegression - desktop geometry intact")
 		void desktop_1280x800_noRegression() {
 			// given
 			ResponsiveTestHelpers.setViewportExactly(1280, 800);
@@ -3671,7 +3669,7 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// Responsive tools critical path — 375x667 clickability of the six
+	// Responsive tools critical path - 375x667 clickability of the six
 	// canonical List Tools controls (issue #58). The config/list/detail panes
 	// stack vertically below sm; every scenario proves with elementFromPoint
 	// at the control's bounding-box centre that nothing overlays it
@@ -3679,7 +3677,7 @@ class InspectorUiIT {
 	// the observable state. Tools scenarios use the fresh setup
 	// startApp(new Combo("sse")) → openAndConnect() → clickTab("tools") →
 	// setViewportExactly(375, 667) (the exact inner mobile viewport, not the
-	// outer-window setter — the critical-path geometry must really run at the
+	// outer-window setter - the critical-path geometry must really run at the
 	// named 375x667); the Connect scenario stays on the pre-connect
 	// page.
 	// =====================================================================
@@ -3689,7 +3687,7 @@ class InspectorUiIT {
 	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 	class ResponsiveToolsCriticalPath {
 
-		/** Each scenario boots a fresh app — clean up after every method. */
+		/** Each scenario boots a fresh app - clean up after every method. */
 		@AfterEach
 		void tearDown() {
 			stopApp();
@@ -3697,7 +3695,7 @@ class InspectorUiIT {
 
 		/**
 		 * True when {@code document.elementFromPoint} at the element's bounding-box
-		 * centre returns the element itself or a descendant — i.e. nothing overlays the
+		 * centre returns the element itself or a descendant - i.e. nothing overlays the
 		 * element's centre at the current scroll position.
 		 */
 		private static boolean elementAtCenter(final SelenideElement element) {
@@ -3710,7 +3708,7 @@ class InspectorUiIT {
 		/**
 		 * Scrolls the given element into view (its top aligned with the viewport) so an
 		 * {@code elementFromPoint} probe at its bounding-box centre really samples the
-		 * current viewport — Selenide's {@code shouldBe(visible)} only checks the
+		 * current viewport - Selenide's {@code shouldBe(visible)} only checks the
 		 * rendered state, not the scroll position.
 		 */
 		private static void scrollIntoView(final SelenideElement element) {
@@ -3720,8 +3718,8 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tools critical path")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("At the 375x667 mobile viewport the pre-connect Connect button inside the stacked config pane is clickable: elementFromPoint at its bounding-box centre returns the button itself (no overlaying subtree intercepts pointer events) and a real click transitions the sidebar into the connected branch — the [data-testid=connect-button] Restart/Reconnect control mounts.")
-		@DisplayName("connect_clickable_at375x667 — Connect reachable and clickable at 375x667")
+		@Description("At the 375x667 mobile viewport the pre-connect Connect button inside the stacked config pane is clickable: elementFromPoint at its bounding-box centre returns the button itself (no overlaying subtree intercepts pointer events) and a real click transitions the sidebar into the connected branch - the [data-testid=connect-button] Restart/Reconnect control mounts.")
+		@DisplayName("connect_clickable_at375x667 - Connect reachable and clickable at 375x667")
 		void connect_clickable_at375x667() {
 			// given
 			startApp(new Combo("sse"));
@@ -3730,7 +3728,7 @@ class InspectorUiIT {
 			SelenideElement connect = sidebar().$(byText("Connect")).shouldBe(visible, Duration.ofSeconds(15));
 
 			// then: the config pane is rendered in the mobile layout and nothing
-			// overlays the Connect button — elementFromPoint at its centre returns
+			// overlays the Connect button - elementFromPoint at its centre returns
 			// the button itself.
 			$("[data-testid=config-pane]").shouldBe(visible, Duration.ofSeconds(10));
 			scrollIntoView(connect);
@@ -3747,8 +3745,8 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tools critical path")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("At the 375x667 mobile viewport the List Tools button inside the stacked Tools list pane is clickable: after scrolling it into view, elementFromPoint at its centre returns the button itself — the exact condition the #58 report lacked (an overlaying subtree intercepted pointer events).")
-		@DisplayName("listTools_clickable_at375x667_elementFromPointReturnsButton — List Tools not intercepted at 375x667")
+		@Description("At the 375x667 mobile viewport the List Tools button inside the stacked Tools list pane is clickable: after scrolling it into view, elementFromPoint at its centre returns the button itself - the exact condition the #58 report lacked (an overlaying subtree intercepted pointer events).")
+		@DisplayName("listTools_clickable_at375x667_elementFromPointReturnsButton - List Tools not intercepted at 375x667")
 		void listTools_clickable_at375x667_elementFromPointReturnsButton() {
 			// given
 			startApp(new Combo("sse"));
@@ -3768,8 +3766,8 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tools critical path")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("At the 375x667 mobile viewport a real click on List Tools loads the tool rows into the stacked list pane, and a real click on the first row (tool-row-0) selects it — the detail pane then renders the Run Tool button.")
-		@DisplayName("listTools_realClick_listsToolsAndSelectsRow — real click lists tools and selects the first row")
+		@Description("At the 375x667 mobile viewport a real click on List Tools loads the tool rows into the stacked list pane, and a real click on the first row (tool-row-0) selects it - the detail pane then renders the Run Tool button.")
+		@DisplayName("listTools_realClick_listsToolsAndSelectsRow - real click lists tools and selects the first row")
 		void listTools_realClick_listsToolsAndSelectsRow() {
 			// given
 			startApp(new Combo("sse"));
@@ -3803,7 +3801,7 @@ class InspectorUiIT {
 		@Story("Responsive tools critical path")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("At the 375x667 mobile viewport the search controls of the stacked Tools list pane are reachable: the search button and the expanded search input are not intercepted (elementFromPoint at their centres returns the control), and typing a query filters the visible rows.")
-		@DisplayName("search_reachable_at375x667 — search button and input reachable, filter works")
+		@DisplayName("search_reachable_at375x667 - search button and input reachable, filter works")
 		void search_reachable_at375x667() {
 			// given
 			startApp(new Combo("sse"));
@@ -3841,7 +3839,7 @@ class InspectorUiIT {
 		@Story("Responsive tools critical path")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("At the 375x667 mobile viewport the Run Tool button of the stacked detail pane is clickable for the sum tool: elementFromPoint at its centre returns the button itself, and running 7 + 8 through the DynamicJsonForm inputs (id=a / id=b) produces the deterministic result text \"15\" with the result block reporting the success marker \"Tool Result: Success\".")
-		@DisplayName("runTool_sum_7_8_returns15 — Run Tool clickable at 375x667, sum 7+8 -> 15")
+		@DisplayName("runTool_sum_7_8_returns15 - Run Tool clickable at 375x667, sum 7+8 -> 15")
 		void runTool_sum_7_8_returns15() {
 			// given
 			startApp(new Combo("sse"));
@@ -3870,10 +3868,108 @@ class InspectorUiIT {
 			runTool.click();
 
 			// then: the deterministic sum result appears in the active panel, and the
-			// result block reports a successful execution — an error or failed
+			// result block reports a successful execution - an error or failed
 			// invocation must not satisfy the acceptance contract.
 			activePanel().shouldHave(text("15"), Duration.ofSeconds(15));
 			activePanel().$$("h4").findBy(text("Tool Result:")).shouldHave(text("Success"), Duration.ofSeconds(15));
+		}
+
+	}
+
+	// =====================================================================
+	// J. Tool row click state preservation (regression)
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Tool row click state preservation")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class ToolRowClickStatePreservation {
+
+		/**
+		 * Boot once per @Nested group, matching the neighbouring Tools/Resources/Prompts
+		 * groups.
+		 */
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+			final int port = ((WebServerApplicationContext) app).getWebServer().getPort();
+			// Set Transport = SSE (default, but ensure the UI is on it)
+			$("#transport-type-select").shouldBe(visible);
+			// URL is auto-populated; force-set it to a known value via React-controlled
+			// input pathway (see setReactInputValue javadoc).
+			$("#sse-url-input").shouldBe(visible);
+			setReactInputValue("#sse-url-input", "http://localhost:" + port + "/sse");
+			$("#sse-url-input").shouldHave(Condition.value("http://localhost:" + port + "/sse"));
+			// Connect
+			connectButton().click();
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@BeforeEach
+		void goToToolsTabAndListTools() {
+			clickTab("tools");
+			final SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$(".cursor-pointer").shouldHave(CollectionCondition.sizeGreaterThan(0));
+		}
+
+		@Test
+		@Story("Tool call form")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Clicking a tool row opens the call form in the right pane, preserves the Connected state, and keeps the Transport Type and URL unchanged. Repeating on a second tool row verifies that switching between tools does not regress the connection or transport state.")
+		@DisplayName("toolRowClickPreservesState - clicking echo then sum preserves Connected, Transport, and URL")
+		void toolRowClick_onEchoThenSum_preservesConnectedStateTransportAndUrl() {
+			final int port = ((WebServerApplicationContext) app).getWebServer().getPort();
+
+			// --- First tool row click (echo) ---
+			selectRow("echo");
+
+			// then: tool call form appears in the right pane
+			$("[data-testid=tools-detail-pane]").shouldBe(visible, Duration.ofMillis(500));
+			$("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofMillis(500));
+			// The echo tool has a single text parameter, its input renders
+			$("#text").shouldBe(visible, Duration.ofMillis(500));
+
+			// Connection indicator still shows 'Connected'
+			$("[data-testid=connect-button]").shouldBe(visible);
+
+			// Transport Type select still shows 'SSE'
+			$("#transport-type-select").shouldBe(visible);
+			$("#transport-type-select").shouldHave(text("SSE"));
+
+			// URL field still shows the user-entered value
+			$("#sse-url-input").shouldBe(visible);
+			$("#sse-url-input").shouldHave(Condition.value("http://localhost:" + port + "/sse"));
+
+			// --- Second tool row click (sum): the original bug manifested on second
+			// click ---
+			selectRow("sum");
+
+			// then: tool call form reappears in the right pane
+			$("[data-testid=tools-detail-pane]").shouldBe(visible, Duration.ofMillis(500));
+			$("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofMillis(500));
+			// The sum tool has two parameters (a, b), their inputs render
+			$("#a").shouldBe(visible, Duration.ofMillis(500));
+			$("#b").shouldBe(visible, Duration.ofMillis(500));
+
+			// Connection indicator still shows 'Connected'
+			$("[data-testid=connect-button]").shouldBe(visible);
+
+			// Transport Type select still shows 'SSE'
+			$("#transport-type-select").shouldBe(visible);
+			$("#transport-type-select").shouldHave(text("SSE"));
+
+			// URL field still shows the user-entered value
+			$("#sse-url-input").shouldBe(visible);
+			$("#sse-url-input").shouldHave(Condition.value("http://localhost:" + port + "/sse"));
 		}
 
 	}

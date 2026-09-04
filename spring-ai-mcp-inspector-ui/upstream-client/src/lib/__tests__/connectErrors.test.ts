@@ -134,11 +134,12 @@ describe("connectionFailureFromError", () => {
 
 describe("humanReadableReason", () => {
   it("maps every reason to a human-readable label", () => {
-    expect(humanReadableReason("timeout")).toContain("timed out");
-    expect(humanReadableReason("connection_refused")).toContain("refused");
-    expect(humanReadableReason("dns")).toContain("DNS");
-    expect(humanReadableReason("unauthorized")).toContain("Authentication");
-    expect(humanReadableReason("unknown")).toContain("Unknown");
+    expect(humanReadableReason("timeout")).toBe("Connection timed out");
+    expect(humanReadableReason("connection_refused")).toBe("Connection refused");
+    expect(humanReadableReason("dns")).toBe("Cannot resolve host");
+    expect(humanReadableReason("unauthorized")).toBe("Authentication required");
+    expect(humanReadableReason("not_found")).toBe("Server responded 404: check the URL path");
+    expect(humanReadableReason("unknown")).toBe("");
   });
 });
 
@@ -167,7 +168,7 @@ describe("isHttp401Error", () => {
   });
 });
 
-describe("connectionFailureFromError — unauthorized detection", () => {
+describe("connectionFailureFromError - unauthorized detection", () => {
   it("maps SDK-level errors with code 401 to unauthorized reason", () => {
     const sdk401 = new Error("HTTP 401 Unauthorized");
     (sdk401 as unknown as Record<string, unknown>).code = 401;

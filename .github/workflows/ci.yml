@@ -5,17 +5,17 @@ name: CI
 #
 # Three jobs, because the demo needs a browser and the rest of the reactor does
 # not, and because each web stack needs a classpath of its own:
-#   * `build`       — reactor minus both stack demo modules. The required check.
+#   * `build`       - reactor minus both stack demo modules. The required check.
 #                     It keeps `-demo-app` (no web stack, `skipITs`), so the
 #                     shared proxy ITs still compile there. Runs on both the
 #                     Java 17 baseline and the recommended Java 21.
-#   * `e2e-webmvc`  — reactor minus `-demo-webflux`: servlet stack only.
-#   * `e2e-webflux` — reactor minus `-demo-webmvc`: reactive stack only.
+#   * `e2e-webmvc`  - reactor minus `-demo-webflux`: servlet stack only.
+#   * `e2e-webflux` - reactor minus `-demo-webmvc`: reactive stack only.
 #
 # The two stacks must never meet on one classpath. With spring-boot-starter-web
 # present, Boot's ReactiveWebServerFactoryAutoConfiguration imports the embedded
 # Tomcat factory before the Netty one, so a module that can see both silently
-# runs every "reactive" row on Tomcat-reactive — the old single demo module did
+# runs every "reactive" row on Tomcat-reactive - the old single demo module did
 # exactly that, and no `spring.autoconfigure.exclude` list ever fixed it.
 # Separate modules make the classpath, not a property, decide the stack.
 #
@@ -24,7 +24,7 @@ name: CI
 # stack, via Failsafe's `dependenciesToScan`.
 #
 # The JDK matrix rides on `build` only. `maven.compiler.release` is 17 across
-# every module, so the 21 leg is a compatibility signal for the library code —
+# every module, so the 21 leg is a compatibility signal for the library code -
 # the browser E2E suite exercises Selenide and Chrome, not the JDK, and running
 # it twice would double the slowest job for no extra signal.
 #
@@ -74,7 +74,7 @@ jobs:
 
       # Unit + integration tests and the quality gates (spring-javaformat,
       # checkstyle, SpotBugs, JaCoCo coverage). Both stack demo modules are
-      # excluded — their browser E2E runs in the two `e2e-*` jobs below. No
+      # excluded - their browser E2E runs in the two `e2e-*` jobs below. No
       # Chrome step: nothing left in this reactor drives a browser.
       - name: Build, test and gates
         run: >-
@@ -165,3 +165,6 @@ jobs:
 
       - name: Check the local-patch registry
         run: .github/scripts/check-notice-registry.sh "origin/${{ github.base_ref }}"
+
+      - name: Self-test the gate script
+        run: .github/scripts/test-check-notice-registry.sh

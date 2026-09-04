@@ -19,6 +19,9 @@ package io.inspector.mcp.webmvc.proxy;
 import java.net.URI;
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
@@ -108,7 +111,7 @@ class StreamableHttpProxyControllerTests {
 	}
 
 	@Nested
-	@DisplayName("POST /mcp — new session")
+	@DisplayName("POST /mcp - new session")
 	class PostNewSession {
 
 		@Test
@@ -116,7 +119,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() without a session id and without url resolves to loopback and calls the transport factory")
 		void postMcp_withoutSessionAndUrl_resolvesToLoopbackAndOpensSession() throws Exception {
-			// given — null url is resolved to http://127.0.0.1:8080/mcp by
+			// given - null url is resolved to http://127.0.0.1:8080/mcp by
 			// ProxyTargetResolver;
 			// the factory is stubbed to return a transport so the session opens cleanly
 			final McpClientTransport target = mock(McpClientTransport.class);
@@ -132,12 +135,12 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
 
-			// when — no url: ProxyTargetResolver resolves blank to
+			// when - no url: ProxyTargetResolver resolves blank to
 			// http://127.0.0.1:8080/mcp
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
 					null, body);
 
-			// then — NOT 400; the factory is called with the loopback URI and a session
+			// then - NOT 400; the factory is called with the loopback URI and a session
 			// is
 			// opened
 			assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.BAD_REQUEST);
@@ -161,7 +164,7 @@ class StreamableHttpProxyControllerTests {
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
 					"http://target/mcp", body);
 
-			// then — non-2xx with the machine-readable error contract; stack details
+			// then - non-2xx with the machine-readable error contract; stack details
 			// stay out of the body
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
 			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(response.getBody())
@@ -252,7 +255,7 @@ class StreamableHttpProxyControllerTests {
 	}
 
 	@Nested
-	@DisplayName("POST /mcp — existing session")
+	@DisplayName("POST /mcp - existing session")
 	class PostExistingSession {
 
 		@Test
@@ -321,7 +324,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() request returns a structured 504 MCP_CONNECT_FAILED payload when no matching response arrives in time")
 		void postMcp_existingSessionRequest_timesOutReturns504() throws Exception {
-			// given — no response ever emitted on the sink
+			// given - no response ever emitted on the sink
 			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
@@ -331,7 +334,7 @@ class StreamableHttpProxyControllerTests {
 			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp("s1", null,
 					body);
 
-			// then — the timeout is surfaced as a machine-readable reason=timeout
+			// then - the timeout is surfaced as a machine-readable reason=timeout
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
 			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
 				.path("error");
@@ -345,7 +348,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("postMcp() request ignores non-matching frames (wrong id, null id, non-object) and returns the matching one")
 		void postMcp_existingSessionRequest_skipsNonMatchingFrames() throws Exception {
-			// given — the replay sink already holds noise frames before the real answer
+			// given - the replay sink already holds noise frames before the real answer
 			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 			session.targetToBrowser()
@@ -456,6 +459,60 @@ class StreamableHttpProxyControllerTests {
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
 		}
 
+		@Test
+		@Story("Existing session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() when session closes while awaiting the upstream response, responds without hanging")
+		void postMcp_sessionClosesWhileAwaiting_respondsWithoutHanging() throws Exception {
+			// given - a session with a mock transport; no upstream answer will arrive,
+			// so the POST would block for the full request timeout if the session
+			// close path did not terminate the awaiter.
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(target.closeGracefully()).willReturn(Mono.empty());
+			final ProxySession session = newSession("s-close-await", target);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s-close-await")).willReturn(session);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+			// when - run postMcp on a worker thread so the test thread can
+			// close the session while the POST is awaiting the upstream response.
+			//
+			// Subscribe to browserToTarget to detect when the body has been emitted.
+			// relayWithSessionHeader emits the body AFTER subscribing the awaiter,
+			// so this is a deterministic signal that the awaiter is ready.
+			final CountDownLatch awaiterSubscribed = new CountDownLatch(1);
+			session.browserToTarget()
+				.asFlux()
+				.subscribe((frame) -> awaiterSubscribed.countDown(), (error) -> awaiterSubscribed.countDown(),
+						() -> awaiterSubscribed.countDown());
+			final AtomicReference<ResponseEntity<Object>> holder = new AtomicReference<>();
+			final Thread poster = new Thread(() -> {
+				final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller
+					.postMcp("s-close-await", null, body);
+				holder.set(entity);
+			});
+			poster.setDaemon(true);
+			poster.start();
+			// Wait for the deterministic signal: the body was emitted to
+			// browserToTarget, which means the awaiter is subscribed and
+			// postMcp is now blocking on the await Mono.
+			assertThat(awaiterSubscribed.await(2, TimeUnit.SECONDS))
+				.as("awaiter should subscribe to targetToBrowser before block()")
+				.isTrue();
+			// Close the session via the real close-path (ProxySession.close()).
+			// This completes targetToBrowser, which triggers the onComplete handler
+			// that calls tryEmitEmpty on the Sinks.One, unblocking the awaiter.
+			session.close();
+			poster.join(5_000);
+
+			// then - the response completes (does not hang); the onComplete handler
+			// calls tryEmitEmpty on the Sinks.One, completing the await Mono empty,
+			// so block() returns null which is accepted as the response body.
+			assertThat(holder.get()).as("postMcp should have completed within 5s").isNotNull();
+			assertThat(holder.get().getStatusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(holder.get().getBody()).isNull();
+		}
+
 	}
 
 	@Nested
@@ -534,7 +591,7 @@ class StreamableHttpProxyControllerTests {
 	}
 
 	@Nested
-	@DisplayName("openSession() — inbound header forwarding")
+	@DisplayName("openSession() - inbound header forwarding")
 	class HeaderForwarding {
 
 		@Test
@@ -542,7 +599,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("openSession() with no request attributes uses the single-arg transport factory overload")
 		void openSession_withoutRequestAttributes_usesSingleArgOverload() throws Exception {
-			// given — no RequestContextHolder bound (tearDown clears it)
+			// given - no RequestContextHolder bound (tearDown clears it)
 			final McpClientTransport target = mock(McpClientTransport.class);
 			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
 				.willReturn(target);
@@ -591,7 +648,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("openSession() with request attributes but no relevant headers falls back to the single-arg overload")
 		void openSession_withRequestButNoHeaders_usesSingleArgOverload() throws Exception {
-			// given — a bound request that carries neither Authorization nor the
+			// given - a bound request that carries neither Authorization nor the
 			// custom-header list
 			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
@@ -640,7 +697,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("openSession() skips blank and absent custom header names from the x-custom-auth-headers list")
 		void openSession_skipsBlankAndAbsentCustomHeaderNames() throws Exception {
-			// given — empty token, a present header and a named-but-absent header
+			// given - empty token, a present header and a named-but-absent header
 			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
 			request.addHeader("x-custom-auth-headers", "X-Present, , X-Missing");
 			request.addHeader("X-Present", "yes");
@@ -654,7 +711,7 @@ class StreamableHttpProxyControllerTests {
 			// when
 			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", body);
 
-			// then — only the present header survives; null authorization is forwarded
+			// then - only the present header survives; null authorization is forwarded
 			verify(StreamableHttpProxyControllerTests.this.transportFactory)
 				.openStreamable(eq(URI.create("http://target/mcp")), eq(null), eq(Map.of("X-Present", "yes")));
 		}
@@ -670,7 +727,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() new-session request that times out tears down the orphaned session and returns a structured 504")
 		void postMcp_newSessionRequestTimesOut_closesSessionAndReturns504() throws Exception {
-			// given — a short request timeout so the await fails fast, and a transport
+			// given - a short request timeout so the await fails fast, and a transport
 			// that
 			// builds but whose proxy never emits a matching response
 			final McpInspectorProperties props = new McpInspectorProperties();
@@ -704,7 +761,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("postMcp() new-session request whose upstream dies with ConnectException fails fast with a structured 502 connection_refused")
 		void postMcp_newSessionUpstreamRefused_failsFastWithStructured502() throws Exception {
-			// given — the session opens, but the upstream transport errors immediately
+			// given - the session opens, but the upstream transport errors immediately
 			// (emulated connect refusal on the first send), releasing the awaiter
 			final McpClientTransport target = mock(McpClientTransport.class);
 			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
@@ -721,7 +778,7 @@ class StreamableHttpProxyControllerTests {
 			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
 					"http://target/mcp", body);
 
-			// then — the refusal is classified, not masked as a timeout
+			// then - the refusal is classified, not masked as a timeout
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
 			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
 				.path("error");
