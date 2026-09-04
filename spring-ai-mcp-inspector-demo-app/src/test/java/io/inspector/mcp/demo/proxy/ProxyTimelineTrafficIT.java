@@ -266,7 +266,6 @@ class ProxyTimelineTrafficIT {
 				"timeline event payload must carry _protocolNegotiation on %s", ProxyAppHarness.stack()).isNotNull();
 	}
 
-
 	private static ObjectNode initializeFrame() {
 		ObjectNode init = MAPPER.createObjectNode();
 		init.put("jsonrpc", "2.0");
