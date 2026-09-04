@@ -1816,6 +1816,52 @@ class StreamableHttpProxyControllerTests {
 				.valueToTree(entity.getBody());
 			assertThat(responseBody.has("error")).as("error response must pass through").isTrue();
 			assertThat(responseBody.path("error").path("code").asInt()).isEqualTo(-32603);
+
+	@DisplayName("D8 owner-check on delete")
+	class DeleteOwnerCheck {
+
+		@Test
+		@Story("Teardown")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("deleteMcp() returns 404 when the session owner differs from the caller")
+		void deleteMcp_foreignOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.bindProfile("owner-A", "profile-1");
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-B");
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final StreamableHttpProxyController wired = authController(store, resolver);
+
+			// when
+			final ResponseEntity<Void> response = wired.deleteMcp("s1");
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+			verify(StreamableHttpProxyControllerTests.this.registry, never()).removeAndClose(any());
+		}
+
+		@Test
+		@Story("Teardown")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("deleteMcp() returns 404 when the caller owner cannot be resolved")
+		void deleteMcp_nullCallerOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.bindProfile("owner-A", "profile-1");
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn(null);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final StreamableHttpProxyController wired = authController(store, resolver);
+
+			// when
+			final ResponseEntity<Void> response = wired.deleteMcp("s1");
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+			verify(StreamableHttpProxyControllerTests.this.registry, never()).removeAndClose(any());
 		}
 
 	}

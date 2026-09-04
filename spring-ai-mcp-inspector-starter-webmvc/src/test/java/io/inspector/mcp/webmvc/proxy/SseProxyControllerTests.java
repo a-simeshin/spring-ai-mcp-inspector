@@ -599,6 +599,103 @@ class SseProxyControllerTests {
 	}
 
 	@Nested
+	@DisplayName("D8 owner-check on existing session")
+	class OwnerCheck {
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMessage() returns 404 when the session owner differs from the caller")
+		void postMessage_foreignOwner_returns404() throws Exception {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.bindProfile("owner-A", "profile-1");
+			given(SseProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-B");
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final SseProxyController wired = wiredController(store, resolver);
+			final JsonNode body = SseProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+			// when
+			final ResponseEntity<Void> response = wired.postMessage("s1", body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMessage() returns 404 when the caller owner cannot be resolved")
+		void postMessage_nullCallerOwner_returns404() throws Exception {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.bindProfile("owner-A", "profile-1");
+			given(SseProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn(null);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final SseProxyController wired = wiredController(store, resolver);
+			final JsonNode body = SseProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+			// when
+			final ResponseEntity<Void> response = wired.postMessage("s1", body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMessage() allows access when session has no bound owner")
+		void postMessage_noBoundOwner_returns202() throws Exception {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			given(SseProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-A");
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final SseProxyController wired = wiredController(store, resolver);
+			final JsonNode body = SseProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+			// when
+			final ResponseEntity<Void> response = wired.postMessage("s1", body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMessage() allows access when session owner matches caller")
+		void postMessage_sameOwner_returns202() throws Exception {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.bindProfile("owner-A", "profile-1");
+			given(SseProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-A");
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final SseProxyController wired = wiredController(store, resolver);
+			final JsonNode body = SseProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+			// when
+			final ResponseEntity<Void> response = wired.postMessage("s1", body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+		}
+
+	}
+
+	@Nested
 	@DisplayName("constructor")
 	class Constructor {
 
