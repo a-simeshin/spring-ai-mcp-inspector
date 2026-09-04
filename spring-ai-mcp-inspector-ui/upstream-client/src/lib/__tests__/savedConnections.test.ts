@@ -384,7 +384,7 @@ describe("savedConnections", () => {
   });
 
   describe("stripSecrets", () => {
-    it("removes Authorization headers from the draft", () => {
+    it("clears all header values, keeping names and enabled state", () => {
       const draft = {
         ...mockDraft(),
         customHeaders: [
@@ -393,11 +393,15 @@ describe("savedConnections", () => {
         ],
       };
       const result = stripSecrets(draft);
-      expect(result.customHeaders).toHaveLength(1);
+      expect(result.customHeaders).toHaveLength(2);
       expect(result.customHeaders[0].name).toBe("X-Custom");
+      expect(result.customHeaders[0].value).toBe("");
+      expect(result.customHeaders[0].enabled).toBe(true);
+      expect(result.customHeaders[1].name).toBe("Authorization");
+      expect(result.customHeaders[1].value).toBe("");
     });
 
-    it("removes X-API-Key headers from the draft", () => {
+    it("clears X-API-Key header value", () => {
       const draft = {
         ...mockDraft(),
         customHeaders: [
@@ -406,11 +410,14 @@ describe("savedConnections", () => {
         ],
       };
       const result = stripSecrets(draft);
-      expect(result.customHeaders).toHaveLength(1);
+      expect(result.customHeaders).toHaveLength(2);
       expect(result.customHeaders[0].name).toBe("X-Custom");
+      expect(result.customHeaders[0].value).toBe("");
+      expect(result.customHeaders[1].name).toBe("X-API-Key");
+      expect(result.customHeaders[1].value).toBe("");
     });
 
-    it("removes Proxy-Authorization headers from the draft", () => {
+    it("clears Proxy-Authorization header value", () => {
       const draft = {
         ...mockDraft(),
         customHeaders: [
@@ -419,11 +426,12 @@ describe("savedConnections", () => {
         ],
       };
       const result = stripSecrets(draft);
-      expect(result.customHeaders).toHaveLength(1);
-      expect(result.customHeaders[0].name).toBe("X-Custom");
+      expect(result.customHeaders).toHaveLength(2);
+      expect(result.customHeaders[0].value).toBe("");
+      expect(result.customHeaders[1].value).toBe("");
     });
 
-    it("removes whitespace-padded Authorization headers from the draft", () => {
+    it("clears whitespace-padded Authorization header value", () => {
       const draft = {
         ...mockDraft(),
         customHeaders: [
@@ -432,11 +440,13 @@ describe("savedConnections", () => {
         ],
       };
       const result = stripSecrets(draft);
-      expect(result.customHeaders).toHaveLength(1);
-      expect(result.customHeaders[0].name).toBe("X-Custom");
+      expect(result.customHeaders).toHaveLength(2);
+      expect(result.customHeaders[0].value).toBe("");
+      expect(result.customHeaders[1].value).toBe("");
+      expect(result.customHeaders[1].name).toBe(" Authorization ");
     });
 
-    it("removes whitespace-padded X-API-Key headers from the draft", () => {
+    it("clears whitespace-padded X-API-Key header value", () => {
       const draft = {
         ...mockDraft(),
         customHeaders: [
@@ -445,11 +455,12 @@ describe("savedConnections", () => {
         ],
       };
       const result = stripSecrets(draft);
-      expect(result.customHeaders).toHaveLength(1);
-      expect(result.customHeaders[0].name).toBe("X-Custom");
+      expect(result.customHeaders).toHaveLength(2);
+      expect(result.customHeaders[0].value).toBe("");
+      expect(result.customHeaders[1].value).toBe("");
     });
 
-    it("removes all secret headers in one draft", () => {
+    it("clears all header values in one draft", () => {
       const draft = {
         ...mockDraft(),
         customHeaders: [
@@ -460,20 +471,47 @@ describe("savedConnections", () => {
         ],
       };
       const result = stripSecrets(draft);
-      expect(result.customHeaders).toHaveLength(1);
-      expect(result.customHeaders[0].name).toBe("X-Custom");
+      expect(result.customHeaders).toHaveLength(4);
+      result.customHeaders.forEach((h) => {
+        expect(h.value).toBe("");
+      });
     });
 
-    it("preserves non-secret headers", () => {
+    it("clears arbitrary header values like X-Token and Cookie", () => {
+      const draft = {
+        ...mockDraft(),
+        customHeaders: [
+          { name: "X-Token", value: "dummy-token", enabled: true },
+          { name: "Cookie", value: "dummy-cookie", enabled: true },
+          { name: "X-Session-Id", value: "sess-123", enabled: true },
+        ],
+      };
+      const result = stripSecrets(draft);
+      expect(result.customHeaders).toHaveLength(3);
+      result.customHeaders.forEach((h) => {
+        expect(h.value).toBe("");
+      });
+      expect(result.customHeaders[0].name).toBe("X-Token");
+      expect(result.customHeaders[1].name).toBe("Cookie");
+      expect(result.customHeaders[2].name).toBe("X-Session-Id");
+    });
+
+    it("preserves all headers with their names and enabled state", () => {
       const draft = {
         ...mockDraft(),
         customHeaders: [
           { name: "X-Custom", value: "ok", enabled: true },
-          { name: "X-Request-Id", value: "req-123", enabled: true },
+          { name: "X-Request-Id", value: "req-123", enabled: false },
         ],
       };
       const result = stripSecrets(draft);
       expect(result.customHeaders).toHaveLength(2);
+      expect(result.customHeaders[0].name).toBe("X-Custom");
+      expect(result.customHeaders[0].value).toBe("");
+      expect(result.customHeaders[0].enabled).toBe(true);
+      expect(result.customHeaders[1].name).toBe("X-Request-Id");
+      expect(result.customHeaders[1].value).toBe("");
+      expect(result.customHeaders[1].enabled).toBe(false);
     });
 
     it("clears env values while preserving keys", () => {
@@ -516,8 +554,6 @@ describe("savedConnections", () => {
     });
 
     it("verifies actual localStorage JSON contains no secret header values after save", () => {
-      // Simulate what App.tsx handleSaveConnection does:
-      // build draft with secrets, strip, save, read localStorage JSON.
       const draft = {
         ...mockDraft(),
         customHeaders: [
@@ -536,15 +572,17 @@ describe("savedConnections", () => {
           customHeaders: Array<{ name: string; value: string }>;
         }>;
       };
-      // Only X-Custom should remain; all secret headers must be absent.
+      // All headers are preserved, but all values are empty
       const headers = parsed.connections[0].customHeaders;
-      expect(headers).toHaveLength(1);
-      expect(headers[0].name).toBe("X-Custom");
-      expect(headers[0].value).toBe("safe-value");
-      // Double-check the raw JSON string contains none of the secret values.
+      expect(headers).toHaveLength(4);
+      headers.forEach((h) => {
+        expect(h.value).toBe("");
+      });
+      // The raw JSON string contains none of the original secret values
       expect(storedJson).not.toContain("live-token");
       expect(storedJson).not.toContain("live-api-key");
       expect(storedJson).not.toContain("Basic creds");
+      expect(storedJson).not.toContain("safe-value");
     });
 
     it("verifies restore does not return secret values", () => {
@@ -562,13 +600,16 @@ describe("savedConnections", () => {
       expect(loaded).toHaveLength(1);
       const conn = loaded[0];
       const headerNames = conn.customHeaders.map((h) => h.name);
-      expect(headerNames).not.toContain("Authorization");
-      expect(headerNames).not.toContain("X-API-Key");
+      // All headers preserved (names not removed)
+      expect(headerNames).toContain("Authorization");
+      expect(headerNames).toContain("X-API-Key");
       expect(headerNames).toContain("X-Custom");
       const headerValues = conn.customHeaders.map((h) => h.value);
+      // All values are empty after restore
       expect(headerValues).not.toContain("Bearer tok");
       expect(headerValues).not.toContain("key-abc");
-      expect(headerValues).toContain("visible");
+      expect(headerValues).not.toContain("visible");
+      expect(headerValues.every((v) => v === "")).toBe(true);
     });
   });
 });

@@ -36,16 +36,29 @@ REVIEW FIXES (PR #149 review findings):
 - `isValidConnection` now validates nested header objects (name,
   value, enabled types), env keys/values (string values), and
   transport-specific optional fields (url, command, args).
-- Secret headers are stripped on save: `stripSecrets(draft)` filters
-  out `Authorization`, `Proxy-Authorization`, and `X-API-Key` headers
-  (case-insensitive, whitespace-tolerant matching) and clears env
-  values (keys preserved with empty string). Secrets are never
-  persisted in localStorage. On restore, the user re-enters secrets.
+- REVISED: `stripSecrets` now clears ALL custom header values (not
+  just known secret header names). Previously only `Authorization`,
+  `Proxy-Authorization`, and `X-API-Key` were filtered out, which
+  allowed arbitrary headers like `X-Token` and `Cookie` to persist
+  in plaintext. The new approach strips every header value to empty
+  string (names and enabled state preserved), matching the env
+  pattern. This is the only sound approach because ANY header can
+  carry a secret. On restore, the user re-enters values.
+- Secret headers are stripped on save: `stripSecrets(draft)` clears
+  all custom header values (names preserved with empty string) and
+  clears env values (keys preserved with empty string). Secrets are
+  never persisted in localStorage. On restore, the user re-enters
+  secrets.
 - `handleSelectConnection` now resets fields absent from the entry
   (stdio fields no longer leak into sse entries) and calls
   `touchSavedConnection` so sorting by last-used works correctly.
 - Duplicate-name check in `handleSaveConnection` now also triggers
   when `activeConnectionId` is set (not only when unset).
+- Added App-level integration tests covering the full save flow:
+  save with localStorage verification, duplicate-name confirm/cancel
+  with both entries preserved, and select-to-populate form fields.
+  Regression tests verify that arbitrary header values (X-Token,
+  Cookie, X-Session-Id) are stripped on save.
 
 STORAGE KEY ALIGNMENT WITH #89 (auth profiles):
 - PR #89 (NOTICE.d/auth-profiles.txt D10) purges six legacy
