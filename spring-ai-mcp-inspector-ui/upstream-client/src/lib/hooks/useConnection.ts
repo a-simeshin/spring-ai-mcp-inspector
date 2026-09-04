@@ -945,6 +945,8 @@ export function useConnection({
               "Please enter the session token from the proxy server console in the Configuration settings.",
             variant: "destructive",
           });
+          // Abort the auto-retry chain: proxy auth errors are non-retriable.
+          reconnectAbortRef.current = true;
           setConnectionStatus("error");
           return;
         }

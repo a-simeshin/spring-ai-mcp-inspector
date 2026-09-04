@@ -9,6 +9,7 @@ export const HISTORY_KEY = "mcp-inspector.history.v1";
 
 const MAX_ENTRIES_PER_CONNECTION = 100;
 const MAX_STORE_SIZE_BYTES = 500 * 1024; // 500 KB
+const MAX_BODY_LENGTH = 10 * 1024; // 10 KB per request/response string
 
 /**
  * Read the full history store from localStorage.
@@ -180,6 +181,7 @@ function isValidEntry(entry: unknown): entry is HistoryEntry {
 /**
  * Append a history entry for a connection.
  * Respects per-connection cap (100 entries) and global store limit (500 KB).
+ * Truncates request and response strings to 10 KB before storage.
  * On localStorage quota error, entry is dropped with a console.warn.
  */
 export function appendHistory(
@@ -193,8 +195,17 @@ export function appendHistory(
     store.byConnection[connectionId] = [];
   }
 
+  // Truncate request and response to MAX_BODY_LENGTH
+  const truncated: HistoryEntry = {
+    request: entry.request.slice(0, MAX_BODY_LENGTH),
+    response: entry.response !== undefined
+      ? entry.response.slice(0, MAX_BODY_LENGTH)
+      : undefined,
+    at: entry.at,
+  };
+
   // Append entry
-  store.byConnection[connectionId].push(entry);
+  store.byConnection[connectionId].push(truncated);
 
   // Trim per-connection FIFO
   store.byConnection[connectionId] = trimBucket(
@@ -219,7 +230,6 @@ export function clearHistory(connectionId: string): void {
 
 /**
  * Clear all history across all connections.
- * Reserved for future global Clear button.
  */
 export function clearAllHistory(): void {
   localStorage.removeItem(HISTORY_KEY);

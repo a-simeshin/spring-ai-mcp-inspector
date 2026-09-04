@@ -1,18 +1,23 @@
 src/lib/types/historyEntry.ts + src/lib/persistentHistory.ts +
- src/lib/hooks/useConnection.ts + src/App.tsx - persist inspector
- request/response history in localStorage under a single schema-versioned
- key `mcp-inspector.history.v1`, bucketed by connection id. History
- entries (JSON-RPC requests, responses, errors, and timestamps) survive
- page reload. Each connection bucket caps at 100 entries; the global
- store caps at 500 KB, with FIFO eviction of the oldest entries when
- limits are exceeded. The Clear button in the History panel clears both
- in-memory and persistent storage for the current connection. Entries
- for different saved connections are stored in separate buckets and do
- not mix. Unsaved sessions use the bucket key "ephemeral". loadHistory
- validates each entry before returning to React: rejects null, non-string
- request/response, and non-number/NaN at fields. Upstream had
- no persistent history at all: every page reload lost all recorded
- requests and responses. Covered by
- `src/lib/__tests__/persistentHistory.test.ts` (24 unit tests:
- serialization, eviction, per-connection isolation, global limit,
- malformed localStorage validation).
+ src/lib/hooks/useConnection.ts + src/App.tsx +
+ src/components/HistoryAndNotifications.tsx - persist inspector
+request/response history in localStorage under a single schema-versioned
+key `mcp-inspector.history.v1`, bucketed by connection id. History
+entries (JSON-RPC requests, responses, errors, and timestamps) survive
+page reload. Each connection bucket caps at 100 entries; the global
+store caps at 500 KB, with FIFO eviction of the oldest entries when
+limits are exceeded. Request and response strings are truncated to
+10 KB before storage. The Clear button in the History panel clears both
+in-memory and persistent storage for the current connection. A Clear All
+button with confirmation clears all history across all connections.
+The History panel shows a warning that history may contain tool arguments
+and results in plain text. Entries for different saved connections are
+stored in separate buckets and do not mix. Unsaved sessions use the
+bucket key "ephemeral". loadHistory validates each entry before returning
+to React: rejects null, non-string request/response, and non-number/NaN
+at fields, plus JSON.parse round-trip for request and response content.
+Upstream had no persistent history at all: every page reload lost all
+recorded requests and responses. Covered by
+`src/lib/__tests__/persistentHistory.test.ts` (unit tests: serialization,
+eviction, per-connection isolation, global limit, malformed localStorage
+validation, JSON truncation, clear-all).

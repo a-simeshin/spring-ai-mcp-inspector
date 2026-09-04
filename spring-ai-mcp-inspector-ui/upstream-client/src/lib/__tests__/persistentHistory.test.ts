@@ -139,6 +139,62 @@ describe("persistentHistory", () => {
         appendHistory("conn-1", makeEntry({ request: hugeRequest }));
       }).not.toThrow();
     });
+
+    // [spring-ai-mcp-inspector PATCH] Truncation: request/response strings
+    // are truncated to 10 KB before storage (#121). Verify at the raw
+    // localStorage level because the truncated string may be invalid JSON
+    // and would be filtered out by isValidEntry on load.
+    it("truncates request and response strings to 10 KB", () => {
+      const longRequest = JSON.stringify({
+        method: "tools/call",
+        params: { data: "x".repeat(15 * 1024) },
+      });
+      const longResponse = JSON.stringify({
+        content: [{ type: "text", text: "y".repeat(15 * 1024) }],
+      });
+      // Both are longer than 10 KB
+      expect(longRequest.length).toBeGreaterThan(10 * 1024);
+      expect(longResponse.length).toBeGreaterThan(10 * 1024);
+
+      appendHistory("conn-1", makeEntry({ request: longRequest, response: longResponse, at: 100 }));
+      // Read raw localStorage to verify truncation at storage level
+      const raw = JSON.parse(localStorage.getItem(HISTORY_KEY)!);
+      const stored = raw.byConnection["conn-1"][0];
+      expect(stored.request.length).toBeLessThanOrEqual(10 * 1024);
+      expect(stored.request.length).toBe(10 * 1024);
+      expect(stored.response.length).toBeLessThanOrEqual(10 * 1024);
+      expect(stored.response.length).toBe(10 * 1024);
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Truncation: entries under 10 KB
+    // are stored unchanged (#121).
+    it("does not truncate entries under 10 KB", () => {
+      const shortRequest = JSON.stringify({ method: "ping" });
+      const shortResponse = JSON.stringify({ ok: true });
+      appendHistory("conn-1", makeEntry({ request: shortRequest, response: shortResponse, at: 100 }));
+      const entries = loadHistory("conn-1");
+      expect(entries).toHaveLength(1);
+      expect(entries[0].request).toBe(shortRequest);
+      expect(entries[0].response).toBe(shortResponse);
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Truncation: entries without response
+    // preserve undefined (#121). Verify at raw localStorage level.
+    it("preserves undefined response after truncation", () => {
+      const longRequest = JSON.stringify({
+        method: "tools/call",
+        params: { data: "x".repeat(15 * 1024) },
+      });
+      appendHistory("conn-1", makeEntry({ request: longRequest, response: undefined, at: 100 }));
+      // Read raw localStorage to verify undefined response is preserved
+      const raw = JSON.parse(localStorage.getItem(HISTORY_KEY)!);
+      const stored = raw.byConnection["conn-1"];
+      // Find the entry with the truncated request
+      expect(stored.length).toBeGreaterThanOrEqual(1);
+      const entry = stored.find((e: { request: string }) => e.request.length === 10 * 1024);
+      expect(entry).toBeDefined();
+      expect(entry.response).toBeUndefined();
+    });
   });
 
   describe("clearHistory", () => {

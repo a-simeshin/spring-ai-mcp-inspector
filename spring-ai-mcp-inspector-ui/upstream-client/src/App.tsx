@@ -45,6 +45,7 @@ import React, {
   useState,
 } from "react";
 import { useConnection } from "./lib/hooks/useConnection";
+import { clearAllHistory } from "./lib/persistentHistory";
 import {
   useDraggablePane,
   useDraggableSidebar,
@@ -2002,6 +2003,12 @@ const handleSaveConnection = useCallback(
               requestHistory={requestHistory}
               serverNotifications={notifications}
               onClearHistory={clearRequestHistory}
+              onClearAllHistory={() => {
+                if (window.confirm("Clear all history across all connections? This cannot be undone.")) {
+                  clearAllHistory();
+                  clearRequestHistory();
+                }
+              }}
               onClearNotifications={handleClearNotifications}
             />
           </div>
