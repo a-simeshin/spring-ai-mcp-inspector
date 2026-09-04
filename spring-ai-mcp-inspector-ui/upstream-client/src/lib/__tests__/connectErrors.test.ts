@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] em-dash replaced with hyphen for pre-commit gate.
 import {
   ConnectFailedError,
   CONNECT_FAILED_ERROR_CODE,

@@ -1,3 +1,5 @@
+// [spring-ai-mcp-inspector PATCH] Clear-all-history button, plain-text warning,
+// and em-dash replaced with hyphen for pre-commit gate (#121).
 import { ServerNotification } from "@modelcontextprotocol/sdk/types.js";
 import { useState } from "react";
 import JsonView from "./JsonView";
