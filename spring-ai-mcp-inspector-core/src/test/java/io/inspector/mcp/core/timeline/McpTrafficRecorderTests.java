@@ -1175,6 +1175,42 @@ class McpTrafficRecorderTests {
 			assertThat(responseEvent.payload().get("_protocolNegotiation")).isNull();
 		}
 
+		@Test
+		@DisplayName("does not mutate the original frame passed to recordInbound")
+		void doesNotMutateOriginalFrame() throws Exception {
+			// given: an initialize request with a newer protocol version
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 10)
+				.put("method", "initialize");
+			reqFrame.putObject("params").put("protocolVersion", "2026-07-28");
+			final JSONRPCMessage reqTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					reqFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", reqTyped, reqFrame);
+
+			// when: the server responds with an older version (downgrade)
+			final ObjectNode resFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 10);
+			resFrame.putObject("result").put("protocolVersion", "2025-11-25");
+			final JSONRPCMessage resTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					resFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", resTyped, resFrame);
+
+			// then: the forwarded frame (resFrame) is NOT mutated by enrichment
+			assertThat(resFrame.get("_protocolNegotiation")).as("forwarded frame must not carry _protocolNegotiation")
+				.isNull();
+			// the timeline event payload IS enriched (deep copy)
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			final TimelineEvent responseEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.findFirst()
+				.orElseThrow();
+			assertThat(responseEvent.payload().get("_protocolNegotiation")).isNotNull();
+		}
+
 	}
 
 }

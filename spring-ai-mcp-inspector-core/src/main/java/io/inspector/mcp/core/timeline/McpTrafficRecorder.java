@@ -334,13 +334,16 @@ public final class McpTrafficRecorder {
 	}
 
 	/**
-	 * Enriches a raw JSON-RPC response frame in place with a synthetic
+	 * Enriches a deep copy of a raw JSON-RPC response frame with a synthetic
 	 * {@code _protocolNegotiation} key when the response carries a negotiated protocol
 	 * version. The enrichment is additive and cannot collide with real JSON-RPC fields
-	 * (which never use the {@code _} prefix).
+	 * (which never use the {@code _} prefix). The original frame is never mutated: the
+	 * caller forwards the same {@code ObjectNode} to the browser, and the MCP SDK
+	 * validates responses with a strict schema that rejects unknown fields.
 	 * @param responseFrame the raw response frame (must be an {@code ObjectNode})
 	 * @param requestedVersion the protocol version the client requested
-	 * @return the same frame, enriched when applicable
+	 * @return a deep copy enriched when applicable, or the original when enrichment does
+	 * not apply
 	 */
 	private static ObjectNode enrichProtocolNegotiation(final ObjectNode responseFrame, final String requestedVersion) {
 		final JsonNode resultNode = responseFrame.get("result");
@@ -353,6 +356,7 @@ public final class McpTrafficRecorder {
 		}
 		final String negotiatedVersion = negotiatedNode.asText();
 		final CompatibilityResult compatibility = ProtocolRevision.check(requestedVersion, negotiatedVersion);
+		final ObjectNode copy = responseFrame.deepCopy();
 		final ObjectNode negotiation = JsonNodeFactory.instance.objectNode();
 		negotiation.put("requested", requestedVersion);
 		negotiation.put("negotiated", negotiatedVersion);
@@ -362,8 +366,8 @@ public final class McpTrafficRecorder {
 			affectedArray.add(method);
 		}
 		negotiation.put("summary", compatibility.summary());
-		responseFrame.set("_protocolNegotiation", negotiation);
-		return responseFrame;
+		copy.set("_protocolNegotiation", negotiation);
+		return copy;
 	}
 
 	/**
