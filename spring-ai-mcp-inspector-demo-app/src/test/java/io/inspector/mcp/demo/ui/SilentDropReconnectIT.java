@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
+import java.util.HashSet;
 import java.util.Set;
 
 import com.codeborne.selenide.Configuration;
@@ -45,6 +46,8 @@ import static com.codeborne.selenide.Condition.visible;
 import static com.codeborne.selenide.Selectors.byText;
 import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.open;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
  * Selenide regression for the silent-drop reconnect bug (issue #157, PR #166).
@@ -146,11 +149,15 @@ class SilentDropReconnectIT {
 		// The UI does not go through the normal disconnect path, so it still holds
 		// stale client/transport/session-id state.
 		final ProxySessionRegistry registry = app.getBean(ProxySessionRegistry.class);
-		final Set<String> sessionIds = registry.sessionIds();
+		final Set<String> sessionIds = new HashSet<>(registry.sessionIds());
+		assertFalse(sessionIds.isEmpty(), "Must have at least one active session to delete");
 		final String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
 		for (String sid : sessionIds) {
 			deleteSession(proxyBase, sid);
 		}
+		// Verify the session was actually removed from the registry.
+		assertFalse(registry.sessionIds().containsAll(sessionIds),
+				"Session should be removed from registry after DELETE");
 
 		// then - the UI should still show the connect-button (it doesn't know the
 		// session was dropped)
@@ -168,12 +175,15 @@ class SilentDropReconnectIT {
 		// The connect-error-alert testid scopes to the connection failure
 		// alert in the sidebar config pane, not the resource panel
 		// placeholder that also carries role=alert.
-		$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+		// Wait for either outcome without a connected-only gate.
+		$("[data-testid=connect-button], [data-testid=connect-error-alert]").shouldBe(visible, Duration.ofSeconds(30));
 		SelenideElement errorAlert = $("[data-testid=connect-error-alert]");
 		if (errorAlert.is(visible)) {
 			// An error was surfaced to the user instead of silently timing
-			// out with -32001. The alert must mention the POST /mcp attempt.
+			// out with -32001. The alert must mention the POST /mcp attempt
+			// and offer a Retry/Reset/reload action.
 			errorAlert.shouldHave(text("POST /mcp").or(text("mcp")), Duration.ofSeconds(5));
+			$("[data-testid=retry-connect-button]").shouldBe(visible, Duration.ofSeconds(5));
 		}
 		else {
 			// No error alert means the reconnect succeeded.
@@ -181,7 +191,7 @@ class SilentDropReconnectIT {
 		}
 	}
 
-	/** DELETEs a proxy session by id. */
+	/** DELETEs a proxy session by id and asserts the server accepted it. */
 	private static void deleteSession(String proxyBase, String sessionId) {
 		try {
 			HttpRequest request = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
@@ -189,10 +199,12 @@ class SilentDropReconnectIT {
 				.header("mcp-session-id", sessionId)
 				.DELETE()
 				.build();
-			HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+			HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+			int status = response.statusCode();
+			assertEquals(200, status, "DELETE /mcp for session " + sessionId + " should return 200");
 		}
-		catch (Exception ignored) {
-			/* best-effort */
+		catch (Exception e) {
+			throw new RuntimeException("DELETE /mcp failed for session " + sessionId, e);
 		}
 	}
 

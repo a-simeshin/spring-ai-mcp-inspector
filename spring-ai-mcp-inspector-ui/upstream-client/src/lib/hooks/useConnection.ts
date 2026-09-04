@@ -498,6 +498,14 @@ export function useConnection({
     }
     await mcpClient?.close().catch(() => {});
 
+    // [spring-ai-mcp-inspector PATCH] Guard against reset/retry race: if a
+    // newer connect attempt (e.g. from resetSessionAndConnect) has already
+    // started while we were waiting for terminateSession/close, skip the
+    // shared cleanup so we don't clobber the new session's state. Refs #157.
+    if (generation !== connectAttemptRef.current) {
+      return;
+    }
+
     receiverTasksRef.current.forEach((record) => {
       if (record.cleanupTimeoutId) {
         clearTimeout(record.cleanupTimeoutId);
