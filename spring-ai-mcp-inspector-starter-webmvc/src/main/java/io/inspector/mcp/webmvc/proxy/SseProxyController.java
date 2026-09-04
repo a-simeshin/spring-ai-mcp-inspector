@@ -269,7 +269,7 @@ public class SseProxyController {
 	public ResponseEntity<Void> postMessage(@RequestParam("sessionId") final String sessionId,
 			@RequestBody final JsonNode body) {
 		final ProxySession session = this.registry.get(sessionId);
-		if (session == null) {
+		if (session == null || !isOwnerOf(session)) {
 			return ResponseEntity.notFound().build();
 		}
 		final Sinks.EmitResult result = session.browserToTarget().tryEmitNext(body);
@@ -452,6 +452,22 @@ public class SseProxyController {
 			return null;
 		}
 		return this.sessionOwnerResolver.resolve(currentRequest(), currentResponse());
+	}
+
+	/**
+	 * Checks whether the current request's owner matches the session's bound owner.
+	 * Sessions without a bound profile (no ownerId) remain accessible to all callers,
+	 * matching the pre-auth-profile behaviour.
+	 * @param session the session to check
+	 * @return {@code true} when the caller owns the session or the session has no owner
+	 */
+	private boolean isOwnerOf(final ProxySession session) {
+		final String sessionOwner = session.ownerId();
+		if (sessionOwner == null) {
+			return true;
+		}
+		final String callerOwner = resolveOwner();
+		return callerOwner != null && callerOwner.equals(sessionOwner);
 	}
 
 	private static HttpServletResponse currentResponse() {
