@@ -368,121 +368,135 @@ class AuthOwnerScopeIT {
 	 * proxy request still mints an owner before the rejection.
 	 */
 	/**
-	 * Live session isolation (D8, finding #1): an owner opens a streamable session and
-	 * captures its {@code mcp-session-id}. A foreign owner (B) sends POST /message, POST
-	 * /mcp (existing), GET /mcp and DELETE /mcp against that session id; every attempt is
-	 * rejected with 404 without forwarding or closing the session. Owner A sends one more
-	 * frame and still gets 202: the session survived B's attempts.
+	 * Live session isolation (D8, finding #1): owner A registers a profile and opens a
+	 * streamable session bound to it. A foreign owner (B), holding a valid signed cookie
+	 * and valid proxy auth, sends POST /message, POST /mcp, GET /mcp and DELETE /mcp
+	 * against A's session id. Every attempt is rejected with 404 without forwarding a
+	 * frame to the upstream and without closing A's session. A then sends one more frame
+	 * and still gets 202: the session survived B's attempts.
 	 */
 	@Test
 	@DisplayName("cross-owner live session isolation: A opens, B rejected, A continues")
 	@Story("Cross-owner isolation")
 	@Severity(SeverityLevel.CRITICAL)
-	@Description("A opens a streamable session with a profile and captures the returned mcp-session-id. "
-			+ "B is rejected on POST /message, POST /mcp, GET /mcp and DELETE /mcp (no forwarding, no close). "
+	@Description("A opens a streamable session bound to a profile and captures the returned mcp-session-id. "
+			+ "B, with valid proxy auth and a valid signed cookie, is rejected on POST /message, POST /mcp, "
+			+ "GET /mcp and DELETE /mcp; the upstream stub sees no B frame and the session is not closed. "
 			+ "A continues to work after B's attempts.")
 	void crossOwnerIsolation_aliveSession_protected() throws Exception {
-		// given
+		// given: A registers a profile and opens a live streamable session bound to it
 		app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
+		final String apiBase = apiBase();
 		final String proxyBase = proxyBase();
-		final String targetUrl = "http://127.0.0.1:" + ProxyAppHarness.port(app) + "/mcp";
+		final Session ownerA = register(apiBase, bearerProfileBody("live-a", "live-tok-a"));
+		final Session ownerB = register(apiBase, bearerProfileBody("live-b", "live-tok-b"));
+		assertThat(ownerB.cookie()).as("distinct owner cookies on %s", ProxyAppHarness.stack())
+			.isNotEqualTo(ownerA.cookie());
 
-		// ---- 1. A opens a session ------------------------------------------
-		final ObjectNode init = initializeFrame();
-		final HttpRequest initRequest = HttpRequest
-			.newBuilder(URI.create(proxyBase + "/mcp?url=" + URLEncoder.encode(targetUrl, StandardCharsets.UTF_8)))
-			.timeout(BUDGET)
-			.header("Content-Type", "application/json")
-			.header("Accept", "application/json, text/event-stream")
-			.header(PROXY_AUTH_HEADER, "Bearer " + AUTH_TOKEN)
-			.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(init)))
-			.build();
-		final HttpResponse<String> initResponse = HTTP.send(initRequest, HttpResponse.BodyHandlers.ofString());
-		assertThat(initResponse.statusCode())
-			.as("A: initialize must be 200 on %s, body=%s", ProxyAppHarness.stack(), initResponse.body())
-			.isEqualTo(200);
-		final String sessionId = initResponse.headers().firstValue("mcp-session-id").orElse(null);
-		assertThat(sessionId).as("A: mcp-session-id must be present on %s", ProxyAppHarness.stack()).isNotBlank();
+		final RecordedHeaders recorded = new RecordedHeaders();
+		final HttpServer stub = startMcpStub(recorded);
+		try {
+			final String targetUrl = stubUrl(stub);
+			final HttpResponse<String> initResponse = initializeThroughProxy(proxyBase, targetUrl, ownerA.profileId(),
+					ownerA.cookie());
+			assertThat(initResponse.statusCode())
+				.as("A: initialize must be 200 on %s, body=%s", ProxyAppHarness.stack(), initResponse.body())
+				.isEqualTo(200);
+			final String sessionId = initResponse.headers().firstValue("mcp-session-id").orElse(null);
+			assertThat(sessionId).as("A: mcp-session-id must be present on %s", ProxyAppHarness.stack()).isNotBlank();
+			// The upstream stub received exactly A's initialize frame.
+			final int upstreamAfterInit = recorded.count();
+			assertThat(upstreamAfterInit).as("A: upstream saw the initialize frame on %s", ProxyAppHarness.stack())
+				.isEqualTo(1);
 
-		// Extract A's owner cookie
-		final String aCookie = initResponse.headers().firstValue("Set-Cookie").orElse(null);
+			final ObjectNode ping = MAPPER.createObjectNode();
+			ping.put("jsonrpc", "2.0");
+			ping.put("method", "ping");
+			ping.put("id", 2);
+			final String pingBody = MAPPER.writeValueAsString(ping);
 
-		// ---- 2. B tries POST /message - no cookie -> 404 --------------------
-		final ObjectNode ping = MAPPER.createObjectNode();
-		ping.put("jsonrpc", "2.0");
-		ping.put("method", "ping");
-		ping.put("id", 2);
+			// ---- 1. B tries POST /message (valid proxy auth + B's cookie) -> 404 ----
+			final HttpResponse<String> bPostMessage = send(proxyBase + "/message?sessionId=" + sessionId, "POST",
+					pingBody, null, "Bearer " + AUTH_TOKEN, ownerB.cookie());
+			assertThat(bPostMessage.statusCode())
+				.as("B: POST /message with valid auth and B's cookie must be 404 on %s, body=%s",
+						ProxyAppHarness.stack(), bPostMessage.body())
+				.isEqualTo(404);
 
-		final HttpRequest bPostMessage = HttpRequest
-			.newBuilder(URI.create(proxyBase + "/message?sessionId=" + sessionId))
-			.timeout(BUDGET)
-			.header("Content-Type", "application/json")
-			.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(ping)))
-			.build();
-		final HttpResponse<String> bPostMessageResponse = HTTP.send(bPostMessage, HttpResponse.BodyHandlers.ofString());
-		assertThat(bPostMessageResponse.statusCode())
-			.as("B: POST /message must be rejected (401 without auth token, 404 without owner cookie) on %s",
-					ProxyAppHarness.stack())
-			.isIn(401, 404);
+			// ---- 2. B tries POST /mcp (existing session) -> 404 --------------------
+			final HttpRequest bPostMcp = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
+				.timeout(BUDGET)
+				.header("Content-Type", "application/json")
+				.header(PROXY_AUTH_HEADER, "Bearer " + AUTH_TOKEN)
+				.header("Cookie", OWNER_COOKIE + "=" + ownerB.cookie())
+				.header("mcp-session-id", sessionId)
+				.POST(HttpRequest.BodyPublishers.ofString(pingBody))
+				.build();
+			final HttpResponse<String> bPostMcpResponse = HTTP.send(bPostMcp, HttpResponse.BodyHandlers.ofString());
+			assertThat(bPostMcpResponse.statusCode())
+				.as("B: POST /mcp (existing session) with valid auth and B's cookie must be 404 on %s, body=%s",
+						ProxyAppHarness.stack(), bPostMcpResponse.body())
+				.isEqualTo(404);
 
-		// ---- 3. B tries POST /mcp (existing session) - no cookie -> 404 -----
-		final HttpRequest bPostMcp = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
-			.timeout(BUDGET)
-			.header("Content-Type", "application/json")
-			.header("mcp-session-id", sessionId)
-			.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(ping)))
-			.build();
-		final HttpResponse<String> bPostMcpResponse = HTTP.send(bPostMcp, HttpResponse.BodyHandlers.ofString());
-		assertThat(bPostMcpResponse.statusCode())
-			.as("B: POST /mcp (existing session) must be rejected (401 without auth token, 404 without owner cookie) on %s",
-					ProxyAppHarness.stack())
-			.isIn(401, 404);
+			// ---- 3. B tries GET /mcp -> rejected: the SSE stream carries the
+			// unknown-session
+			// error event instead of A's stream (the production guard refuses the foreign
+			// caller without revealing the session).
+			final HttpRequest bGetMcp = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
+				.timeout(BUDGET)
+				.header(PROXY_AUTH_HEADER, "Bearer " + AUTH_TOKEN)
+				.header("Cookie", OWNER_COOKIE + "=" + ownerB.cookie())
+				.header("mcp-session-id", sessionId)
+				.GET()
+				.build();
+			final HttpResponse<String> bGetMcpResponse = HTTP.send(bGetMcp, HttpResponse.BodyHandlers.ofString());
+			assertThat(bGetMcpResponse.body())
+				.as("B: GET /mcp with valid auth and B's cookie must carry the unknown-session error on %s, body=%s",
+						ProxyAppHarness.stack(), bGetMcpResponse.body())
+				.contains("unknown mcp-session-id");
 
-		// ---- 4. B tries GET /mcp - no cookie -> 404 -------------------------
-		final HttpRequest bGetMcp = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
-			.timeout(BUDGET)
-			.header("mcp-session-id", sessionId)
-			.GET()
-			.build();
-		final HttpResponse<String> bGetMcpResponse = HTTP.send(bGetMcp, HttpResponse.BodyHandlers.ofString());
-		assertThat(bGetMcpResponse.statusCode())
-			.as("B: GET /mcp must be rejected (401 without auth token, 404 without owner cookie) on %s",
-					ProxyAppHarness.stack())
-			.isIn(401, 404);
+			// ---- 4. B tries DELETE /mcp -> 404 ---------------------------------------
+			final HttpRequest bDeleteMcp = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
+				.timeout(BUDGET)
+				.header(PROXY_AUTH_HEADER, "Bearer " + AUTH_TOKEN)
+				.header("Cookie", OWNER_COOKIE + "=" + ownerB.cookie())
+				.header("mcp-session-id", sessionId)
+				.DELETE()
+				.build();
+			final HttpResponse<String> bDeleteMcpResponse = HTTP.send(bDeleteMcp, HttpResponse.BodyHandlers.ofString());
+			assertThat(bDeleteMcpResponse.statusCode())
+				.as("B: DELETE /mcp with valid auth and B's cookie must be 404 on %s, body=%s", ProxyAppHarness.stack(),
+						bDeleteMcpResponse.body())
+				.isEqualTo(404);
 
-		// ---- 5. B tries DELETE /mcp - no cookie -> 404 ----------------------
-		final HttpRequest bDeleteMcp = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
-			.timeout(BUDGET)
-			.header("mcp-session-id", sessionId)
-			.DELETE()
-			.build();
-		final HttpResponse<String> bDeleteMcpResponse = HTTP.send(bDeleteMcp, HttpResponse.BodyHandlers.ofString());
-		assertThat(bDeleteMcpResponse.statusCode())
-			.as("B: DELETE /mcp must be rejected (401 without auth token, 404 without owner cookie) on %s",
-					ProxyAppHarness.stack())
-			.isIn(401, 404);
+			// ---- 5. The upstream saw no B frame and the session was not closed --------
+			assertThat(recorded.count())
+				.as("upstream must receive no B frame on %s (count must stay %d)", ProxyAppHarness.stack(),
+						upstreamAfterInit)
+				.isEqualTo(upstreamAfterInit);
 
-		// ---- 6. A continues to work - with cookie -> 202 --------------------
-		final ObjectNode initializedNotification = MAPPER.createObjectNode();
-		initializedNotification.put("jsonrpc", "2.0");
-		initializedNotification.put("method", "notifications/initialized");
-
-		final HttpRequest.Builder aPostBuilder = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
-			.timeout(BUDGET)
-			.header("Content-Type", "application/json")
-			.header("Accept", "application/json, text/event-stream")
-			.header("mcp-session-id", sessionId)
-			.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(initializedNotification)));
-		if (aCookie != null) {
-			aPostBuilder.header("Cookie", aCookie);
+			// ---- 6. A continues to work (valid auth + A's cookie) -> 202 --------------
+			final ObjectNode initializedNotification = MAPPER.createObjectNode();
+			initializedNotification.put("jsonrpc", "2.0");
+			initializedNotification.put("method", "notifications/initialized");
+			final HttpRequest aPost = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
+				.timeout(BUDGET)
+				.header("Content-Type", "application/json")
+				.header("Accept", "application/json, text/event-stream")
+				.header(PROXY_AUTH_HEADER, "Bearer " + AUTH_TOKEN)
+				.header("Cookie", OWNER_COOKIE + "=" + ownerA.cookie())
+				.header("mcp-session-id", sessionId)
+				.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(initializedNotification)))
+				.build();
+			final HttpResponse<String> aPostResponse = HTTP.send(aPost, HttpResponse.BodyHandlers.ofString());
+			assertThat(aPostResponse.statusCode())
+				.as("A: POST /mcp must still work on %s, body=%s, status=%s", ProxyAppHarness.stack(),
+						aPostResponse.body(), aPostResponse.statusCode())
+				.isIn(200, 202);
 		}
-		aPostBuilder.header(PROXY_AUTH_HEADER, "Bearer " + AUTH_TOKEN);
-		final HttpResponse<String> aPostResponse = HTTP.send(aPostBuilder.build(),
-				HttpResponse.BodyHandlers.ofString());
-		assertThat(aPostResponse.statusCode())
-			.as("A: POST /mcp must still work on %s, body=%s, status=%s", ProxyAppHarness.stack(), aPostResponse.body(),
-					aPostResponse.statusCode())
-			.isIn(200, 202);
+		finally {
+			stub.stop(0);
+		}
 	}
 
 	@Nested
@@ -791,6 +805,10 @@ class AuthOwnerScopeIT {
 
 		String authorization() {
 			return this.authorizations.isEmpty() ? null : this.authorizations.get(0);
+		}
+
+		int count() {
+			return this.all.size();
 		}
 
 		private static Map<String, List<String>> copy(final HttpExchange exchange) {
