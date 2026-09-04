@@ -226,11 +226,11 @@ class ProxyTimelineTrafficIT {
 	@DisplayName("timeline enabled: initialize response forwarded to browser is clean (no _protocolNegotiation)")
 	@Story("Forwarded frame is not mutated by enrichment")
 	@Severity(SeverityLevel.CRITICAL)
-	@Description("Verifies the MCP SDK receive a strict-schema-valid initialize response: the proxy " +
-		"response body (the frame forwarded to the browser) does NOT contain the synthetic " +
-		""_protocolNegotiation" field, while the timeline event DOES carry it. This is the " +
-		"contract of the McpTrafficRecorder deepCopy fix — without it, the SDK rejects the " +
-		"response with a .strict() validation error.")
+	@Description("Verifies the MCP SDK receive a strict-schema-valid initialize response: the proxy "
+			+ "response body (the frame forwarded to the browser) does NOT contain the synthetic "
+			+ "\"_protocolNegotiation\" field, while the timeline event DOES carry it. This is the "
+			+ "contract of the McpTrafficRecorder deepCopy fix - without it, the SDK rejects the "
+			+ "response with a .strict() validation error.")
 	void timelineEnabled_initializeResponseForwardedToBrowserIsClean() throws Exception {
 		// given
 		this.app = ProxyAppHarness.start("STREAMABLE", false, null, "--spring.ai.mcp.inspector.timeline.enabled=true");
@@ -244,17 +244,17 @@ class ProxyTimelineTrafficIT {
 
 		// then — the proxy response body (the wire frame forwarded to the browser) is a
 		// valid JSON-RPC response without enrichment artifacts
-		assertThat(initResponse.statusCode())
-			.as("initialize status on %s", ProxyAppHarness.stack())
-			.isEqualTo(200);
+		assertThat(initResponse.statusCode()).as("initialize status on %s", ProxyAppHarness.stack()).isEqualTo(200);
 		final JsonNode forwarded = MAPPER.readTree(initResponse.body());
 		// The forwarded frame must NOT carry _protocolNegotiation — the MCP SDK validates
 		// responses with a strict schema and rejects unknown fields.
-		assertThat(forwarded.get("_protocolNegotiation")).as(
-				"forwarded frame must not carry _protocolNegotiation on %s", ProxyAppHarness.stack()).isNull();
+		assertThat(forwarded.get("_protocolNegotiation"))
+			.as("forwarded frame must not carry _protocolNegotiation on %s", ProxyAppHarness.stack())
+			.isNull();
 		// The forwarded frame must be a valid initialize result with protocolVersion
-		assertThat(forwarded.path("result").path("protocolVersion").asText()).as(
-				"initialize result protocolVersion on %s", ProxyAppHarness.stack()).isNotEmpty();
+		assertThat(forwarded.path("result").path("protocolVersion").asText())
+			.as("initialize result protocolVersion on %s", ProxyAppHarness.stack())
+			.isNotEmpty();
 
 		// and — the timeline event DOES carry the enrichment
 		final String sessionId = initResponse.headers().firstValue("mcp-session-id").orElse("");
@@ -262,8 +262,9 @@ class ProxyTimelineTrafficIT {
 		final List<JsonNode> events = timelineEvents(port);
 		final JsonNode initEvent = findEvent(events, "MCP_JSONRPC_RESPONSE", sessionId, 1);
 		assertThat(initEvent).as("initialize RESPONSE on /api/timeline over %s", ProxyAppHarness.stack()).isNotNull();
-		assertThat(initEvent.path("payload").get("_protocolNegotiation")).as(
-				"timeline event payload must carry _protocolNegotiation on %s", ProxyAppHarness.stack()).isNotNull();
+		assertThat(initEvent.path("payload").get("_protocolNegotiation"))
+			.as("timeline event payload must carry _protocolNegotiation on %s", ProxyAppHarness.stack())
+			.isNotNull();
 	}
 
 	private static ObjectNode initializeFrame() {
