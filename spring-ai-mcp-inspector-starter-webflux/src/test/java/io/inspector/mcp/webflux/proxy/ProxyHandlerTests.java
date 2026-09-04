@@ -51,6 +51,9 @@ import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
@@ -60,6 +63,7 @@ import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.core.transport.TransportType;
+import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -1016,6 +1020,8 @@ class ProxyHandlerTests {
 		@Description("deleteMcp() removing a known session returns 200 ok")
 		void deleteMcp_whenSessionRemoved_returnsOk() {
 			// given
+			final ProxySession session = newSession("s4");
+			given(ProxyHandlerTests.this.registry.get("s4")).willReturn(session);
 			given(ProxyHandlerTests.this.registry.removeAndClose("s4")).willReturn(true);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.delete("/mcp-inspector-api/mcp")
 				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s4")
@@ -1041,6 +1047,118 @@ class ProxyHandlerTests {
 
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.deleteMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("D8 owner-check on existing session")
+	class OwnerCheck {
+
+		private ProxyHandler wiredHandler(final ReactiveSessionOwnerResolver resolver) {
+			return new ProxyHandler(ProxyHandlerTests.this.registry, ProxyHandlerTests.this.transportFactory,
+					ProxyHandlerTests.this.mcpProxy, ProxyHandlerTests.this.transportDetector,
+					ProxyHandlerTests.this.objectMapper, ProxyHandlerTests.this.properties, resolver,
+					mock(AuthProfileStore.class), mock(OAuth2ClientCredentialsTokenManager.class),
+					mock(OAuth2AuthCodeTokenExchanger.class));
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMessage() returns 404 when the session owner differs from the caller")
+		void postMessage_foreignOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s1");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn("owner-B");
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/message")
+				.queryParam("sessionId", "s1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+
+			// when
+			final ServerResponse response = wired.postMessage(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMessage() returns 404 when the caller owner cannot be resolved")
+		void postMessage_nullCallerOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s1");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn(null);
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/message")
+				.queryParam("sessionId", "s1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+
+			// when
+			final ServerResponse response = wired.postMessage(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("deleteMcp() returns 404 when the session owner differs from the caller")
+		void deleteMcp_foreignOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s4");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s4")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn("owner-B");
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.delete("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s4")
+				.build());
+
+			// when
+			final ServerResponse response = wired.deleteMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("deleteMcp() returns 404 when the caller owner cannot be resolved")
+		void deleteMcp_nullCallerOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s4");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s4")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn(null);
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.delete("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s4")
+				.build());
+
+			// when
+			final ServerResponse response = wired.deleteMcp(request).block();
 
 			// then
 			assertThat(response).isNotNull();
