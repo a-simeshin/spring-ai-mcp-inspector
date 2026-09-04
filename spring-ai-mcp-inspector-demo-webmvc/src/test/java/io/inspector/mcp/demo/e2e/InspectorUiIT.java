@@ -1902,6 +1902,70 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
+	// K2. Saved connections — connect, save, reload, restore, verify
+	// tools/list after restore.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Saved connections")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class SavedConnections {
+
+		@AfterEach
+		void tearDown() {
+			stopApp();
+		}
+
+		@Test
+		@Story("Saved connections")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Connect, save the connection, reload the page, restore from the saved entry, and verify tools/list still works.")
+		@DisplayName("connectSaveReloadRestore — tools/list works after restoring saved connection")
+		void connect_save_reload_restore_toolsListWorks() {
+			// given
+			startApp(new Combo("sse"));
+			openAndConnect();
+
+			// Verify tools/list works before saving
+			clickTab("tools");
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$(byText("sum")).shouldBe(visible, Duration.ofSeconds(15));
+
+			// Save the current connection via the UI
+			sidebar().$(byText("Save Current")).shouldBe(visible, Duration.ofSeconds(10)).click();
+			$("[data-testid=save-connection-name-input]").shouldBe(visible, Duration.ofSeconds(5));
+			$("[data-testid=save-connection-name-input]").setValue("test-restore");
+			$("[data-testid=confirm-save-connection]").shouldBe(visible).click();
+
+			// Verify the saved entry appears in the list
+			sidebar().$(byText("test-restore")).shouldBe(visible, Duration.ofSeconds(5));
+
+			// when: reload the page
+			open("/mcp-inspector/index.html");
+
+			// Wait for the sidebar to render, then restore the saved connection
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+			sidebar().$(byText("test-restore")).shouldBe(visible, Duration.ofSeconds(10)).click();
+
+			// Connect using the restored connection settings
+			connectButton().click();
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+
+			// then: tools/list must still work after restore
+			clickTab("tools");
+			SelenideElement listToolsAfter = activePanel().$(byText("List Tools"));
+			if (listToolsAfter.exists() && listToolsAfter.isEnabled()) {
+				listToolsAfter.click();
+			}
+			activePanel().$(byText("sum")).shouldBe(visible, Duration.ofSeconds(15));
+		}
+
+	}
+
+	// =====================================================================
 	// L. STDIO connect — switch transport to STDIO, point at the demo's exec
 	// jar, run echo through the inspector. Gated on the exec jar existing,
 	// which the failsafe `verify` lifecycle guarantees (package phase runs

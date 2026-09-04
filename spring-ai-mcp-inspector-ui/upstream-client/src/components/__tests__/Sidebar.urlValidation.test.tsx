@@ -56,6 +56,12 @@ const baseProps = {
   connectionType: "proxy" as const,
   setConnectionType: jest.fn(),
   serverImplementation: null,
+  // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+  savedConnections: [],
+  activeConnectionId: undefined as string | undefined,
+  onSaveConnection: jest.fn(),
+  onDeleteConnection: jest.fn(),
+  onSelectConnection: jest.fn(),
 };
 
 describe("Sidebar URL validation", () => {

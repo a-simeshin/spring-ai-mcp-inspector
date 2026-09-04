@@ -11,14 +11,22 @@ import type {
 export const SAVED_CONNECTIONS_KEY = "mcp-inspector.savedConnections.v1";
 
 // Header names whose values are treated as secrets and stripped on save.
-// Authorization is the primary case: it would persist bearer tokens in
-// plaintext localStorage. Env values are also stripped because stdio
-// servers commonly hold API keys there.
-const SECRET_HEADER_NAMES = new Set(["authorization"]);
+// Authorization, Proxy-Authorization, and X-API-Key are the primary cases:
+// they would persist bearer tokens and API keys in plaintext localStorage.
+// Env values are also stripped because stdio servers commonly hold API keys
+// there. Header name matching is case-insensitive and whitespace-tolerant
+// (trimmed) to catch padding tricks like " Authorization ".
+const SECRET_HEADER_NAMES = new Set([
+  "authorization",
+  "proxy-authorization",
+  "x-api-key",
+]);
 
 /**
  * Strip secret fields from a draft before persisting.
- * - Authorization headers are removed from customHeaders.
+ * - Secret headers (Authorization, Proxy-Authorization, X-API-Key) are
+ *   removed from customHeaders. Matching is case-insensitive and
+ *   whitespace-tolerant (trimmed).
  * - Env values are cleared (keys preserved with empty string).
  * Returns a new draft object; the original is not mutated.
  */
@@ -27,7 +35,7 @@ export function stripSecrets(draft: SavedConnectionDraft): SavedConnectionDraft 
     ...draft,
     customHeaders: draft.customHeaders
       ? draft.customHeaders.filter(
-          (h) => !SECRET_HEADER_NAMES.has(h.name.toLowerCase()),
+          (h) => !SECRET_HEADER_NAMES.has(h.name.trim().toLowerCase()),
         )
       : draft.customHeaders,
     env: draft.env

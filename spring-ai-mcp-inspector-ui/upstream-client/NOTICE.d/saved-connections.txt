@@ -36,10 +36,11 @@ REVIEW FIXES (PR #149 review findings):
 - `isValidConnection` now validates nested header objects (name,
   value, enabled types), env keys/values (string values), and
   transport-specific optional fields (url, command, args).
-- Authorization headers are stripped on save: `stripSecrets(draft)`
-  filters out headers with name "Authorization" and clears env values
-  (keys preserved with empty string). Secrets are never persisted in
-  localStorage. On restore, the user re-enters secrets.
+- Secret headers are stripped on save: `stripSecrets(draft)` filters
+  out `Authorization`, `Proxy-Authorization`, and `X-API-Key` headers
+  (case-insensitive, whitespace-tolerant matching) and clears env
+  values (keys preserved with empty string). Secrets are never
+  persisted in localStorage. On restore, the user re-enters secrets.
 - `handleSelectConnection` now resets fields absent from the entry
   (stdio fields no longer leak into sse entries) and calls
   `touchSavedConnection` so sorting by last-used works correctly.
