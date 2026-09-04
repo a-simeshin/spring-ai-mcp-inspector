@@ -67,6 +67,7 @@ const mockStreamableHTTPTransport: {
   start: jest.Mock;
   url: URL | undefined;
   options: SSEClientTransportOptions | undefined;
+  terminateSession?: jest.Mock;
 } = {
   start: jest.fn(),
   url: undefined,
@@ -113,6 +114,7 @@ jest.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => {
     StreamableHTTPClientTransport: jest.fn((url, options) => {
       mockStreamableHTTPTransport.url = url;
       mockStreamableHTTPTransport.options = options;
+      mockStreamableHTTPTransport.terminateSession = jest.fn().mockResolvedValue(undefined);
       return mockStreamableHTTPTransport;
     }),
   };
@@ -1866,6 +1868,106 @@ describe("useConnection", () => {
           message: "connection to the MCP server was refused",
         }),
       );
+    });
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Regression tests for PR #166 round 2.
+  // Blocker 1: connect() must NOT clear() the OAuth provider at the start.
+  // Before the fix, clear() ran in connect(), wiping tokens saved by the
+  // OAuth callback before the transport was built, so the first authenticated
+  // connect went out without a token and looped back to authorization.
+  describe("OAuth clear regression (PR #166)", () => {
+    let mockClear: jest.Mock;
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockClient.connect.mockResolvedValue(undefined);
+      mockClear = jest.fn();
+      // Provide a provider whose tokens() resolves to a real access_token,
+      // so the code path that injects the Authorization header is exercised.
+      const { InspectorOAuthClientProvider } = jest.requireMock("../../auth");
+      InspectorOAuthClientProvider.mockImplementation(() => ({
+        tokens: jest.fn().mockResolvedValue({ access_token: "test-token" }),
+        redirectUrl: "http://localhost:3000/oauth/callback",
+        clear: mockClear,
+      }));
+    });
+
+    afterEach(() => {
+      // Restore the default mock so other describe blocks see "mock-token".
+      const { InspectorOAuthClientProvider } = jest.requireMock("../../auth");
+      InspectorOAuthClientProvider.mockImplementation(() => ({
+        tokens: jest.fn().mockResolvedValue({ access_token: "mock-token" }),
+        redirectUrl: "http://localhost:3000/oauth/callback",
+        clear: jest.fn(),
+      }));
+    });
+
+    test("connect() does not call clear() on the OAuth provider", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(mockClear).not.toHaveBeenCalled();
+    });
+
+    test("disconnect() does call clear() on the OAuth provider", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      mockClear.mockClear();
+      await act(async () => {
+        await result.current.disconnect();
+      });
+
+      expect(mockClear).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Blocker 2: disconnect() must not throw when terminateSession() rejects
+  // with 404 (session already gone after a silent drop). Before the fix,
+  // the uncaught throw aborted the Reconnect handler before onConnect().
+  describe("disconnect swallows terminateSession 404 (PR #166)", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockClient.connect.mockResolvedValue(undefined);
+    });
+
+    test("disconnect resolves cleanly when terminateSession rejects", async () => {
+      // Set up a streamable-http connection so disconnect() calls terminateSession
+      const propsStreamable = {
+        ...defaultProps,
+        transportType: "streamable-http" as const,
+        config: {
+          ...DEFAULT_INSPECTOR_CONFIG,
+          MCP_PROXY_FULL_ADDRESS: {
+            ...DEFAULT_INSPECTOR_CONFIG.MCP_PROXY_FULL_ADDRESS,
+            value: "http://localhost:8080/mcp-inspector/mcp_proxy",
+          },
+        },
+      };
+
+      const { result } = renderHook(() => useConnection(propsStreamable));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      // Override terminateSession to reject (simulating 404/410)
+      mockStreamableHTTPTransport.terminateSession = jest
+        .fn()
+        .mockRejectedValue(new Error("404 Not Found"));
+
+      // disconnect must resolve, not throw
+      await act(async () => {
+        await expect(result.current.disconnect()).resolves.not.toThrow();
+      });
+
+      expect(result.current.connectionStatus).toBe("disconnected");
     });
   });
 });

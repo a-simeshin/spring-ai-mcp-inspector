@@ -78,7 +78,7 @@ interface SidebarProps {
   oauthScope: string;
   setOauthScope: (scope: string) => void;
   onConnect: () => void;
-  onDisconnect: () => void;
+  onDisconnect: () => Promise<void>;
   onResetSession: () => void;
   logLevel: LoggingLevel;
   sendLogLevelRequest: (level: LoggingLevel) => void;

@@ -164,6 +164,8 @@ class SilentDropReconnectIT {
 		// then - the reconnect succeeds and the connected state is re-established
 		$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
 		sidebar().shouldHave(text("mcp-inspector-demo"), Duration.ofSeconds(10));
+		// No error should be surfaced (the reconnect must succeed, not fail).
+		$("[role=alert]").shouldNotBe(visible, Duration.ofSeconds(5));
 	}
 
 	/** DELETEs a proxy session by id. */

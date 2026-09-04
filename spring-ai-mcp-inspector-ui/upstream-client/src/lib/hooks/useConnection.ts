@@ -506,9 +506,6 @@ export function useConnection({
     });
     receiverTasksRef.current.clear();
 
-    const authProvider = new InspectorOAuthClientProvider(sseUrl);
-    authProvider.clear();
-
     setMcpClient(null);
     setClientTransport(null);
     setMcpSessionId(null);
@@ -659,10 +656,6 @@ export function useConnection({
         // assigns a new session ID in its response headers, captured by
         // captureResponseHeaders below.
         // [spring-ai-mcp-inspector PATCH] Refs #157: stale closure value.
-        const sessionId = null;
-        if (sessionId) {
-          requestHeaders["mcp-session-id"] = sessionId;
-        }
         switch (transportType) {
           case "sse":
             requestHeaders["Accept"] = "text/event-stream";
@@ -908,8 +901,6 @@ export function useConnection({
           };
         }
 
-        setClientTransport(transport);
-
         // [spring-ai-mcp-inspector PATCH] Guard against stale handshake: if a
         // newer connect attempt has already started, skip setting the transport
         // and server info so the old handshake cannot overwrite the active
@@ -917,6 +908,8 @@ export function useConnection({
         if (generation !== connectAttemptRef.current) {
           return;
         }
+
+        setClientTransport(transport);
 
         capabilities = client.getServerCapabilities();
         const serverInfo = client.getServerVersion();
@@ -1382,10 +1375,19 @@ export function useConnection({
     receiverTasksRef.current.clear();
 
     if (transportType === "streamable-http")
-      await (
-        clientTransport as StreamableHTTPClientTransport
-      ).terminateSession();
-    await mcpClient?.close();
+      try {
+        await (
+          clientTransport as StreamableHTTPClientTransport
+        ).terminateSession();
+      } catch {
+        // 404/410/5xx from DELETE means the session is already gone,
+        // which is not a failure for this code path.
+      }
+    try {
+      await mcpClient?.close();
+    } catch {
+      // close() may throw if the transport is already in a broken state.
+    }
     const authProvider = new InspectorOAuthClientProvider(sseUrl);
     authProvider.clear();
     setMcpClient(null);
