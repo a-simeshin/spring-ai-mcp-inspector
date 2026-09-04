@@ -781,6 +781,37 @@ class StreamableHttpProxyControllerTests {
 		}
 
 		@Test
+		@Story("Auth failure")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() existing-session request whose upstream answers 302 returns the structured redirect DTO (D3 streamable)")
+		void postMcp_existingSessionRedirect_returnsStructuredRedirectDto() throws Exception {
+			// given: a short await budget so the tryEmitError lands before the block
+			// times out, and a session whose upstream answers with a 302 redirect failure
+			final McpInspectorProperties props = new McpInspectorProperties();
+			props.getTimeouts().setStreamableRequest(Duration.ofSeconds(5));
+			final StreamableHttpProxyController shortTimeoutController = new StreamableHttpProxyController(
+					StreamableHttpProxyControllerTests.this.registry,
+					StreamableHttpProxyControllerTests.this.transportFactory,
+					StreamableHttpProxyControllerTests.this.mcpProxy,
+					StreamableHttpProxyControllerTests.this.objectMapper, props);
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			session.targetToBrowser()
+				.tryEmitError(new RuntimeException("Sending message failed with a non-OK HTTP code: 302"));
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
+
+			// when
+			final ResponseEntity<Object> entity = shortTimeoutController.postMcp("s1", null, body);
+
+			// then: the live-server 302 becomes the structured redirect DTO on streamable
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.FOUND);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
+				.path("code");
+			assertThat(error.asText()).isEqualTo("redirect");
+		}
+
+		@Test
 		@Story("New session")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("postMcp() new-session request whose upstream dies with ConnectException fails fast with a structured 502 connection_refused")

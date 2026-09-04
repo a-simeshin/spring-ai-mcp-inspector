@@ -1735,6 +1735,41 @@ class ProxyHandlerTests {
 			verify(ProxyHandlerTests.this.registry).removeAndClose(captured[0].sessionId());
 		}
 
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() existing-session request whose upstream answers 302 returns the structured redirect DTO (D3 streamable)")
+		void postMcp_existingSessionRedirect_returnsStructuredRedirectDto() {
+			// given: a known session whose upstream answers with a 302 redirect failure
+			final ProxySession session = newSession("s-redir");
+			given(ProxyHandlerTests.this.registry.get("s-redir")).willReturn(session);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s-redir")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}"));
+
+			// when: the upstream fails the relay with a 302
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request)
+				.doOnSubscribe((s) -> new Thread(() -> {
+					try {
+						Thread.sleep(50);
+					}
+					catch (final InterruptedException ignored) {
+						Thread.currentThread().interrupt();
+					}
+					session.targetToBrowser()
+						.tryEmitError(new RuntimeException("Sending message failed with a non-OK HTTP code: 302"));
+				}).start())
+				.block();
+
+			// then: the structured redirect DTO surfaces on streamable (D3)
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.FOUND);
+			final ProxyErrorDto dto = (ProxyErrorDto) ((EntityResponse<Object>) response).entity();
+			assertThat(dto.code()).isEqualTo("redirect");
+			assertThat(dto.status()).isEqualTo(302);
+		}
+
 	}
 
 	@Nested
