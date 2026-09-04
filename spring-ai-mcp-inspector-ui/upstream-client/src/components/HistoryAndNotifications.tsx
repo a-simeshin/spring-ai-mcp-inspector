@@ -57,7 +57,7 @@ const HistoryAndNotifications = ({
             </Button>
           </div>
         </div>
-        <p className="text-xs text-muted-foreground mb-2">
+        <p className="text-xs text-amber-600 dark:text-amber-400 mb-2">
           History may contain tool arguments and results in plain text.
         </p>
         {requestHistory.length === 0 ? (

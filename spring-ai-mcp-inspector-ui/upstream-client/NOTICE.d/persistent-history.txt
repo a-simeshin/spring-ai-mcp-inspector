@@ -7,7 +7,8 @@ entries (JSON-RPC requests, responses, errors, and timestamps) survive
 page reload. Each connection bucket caps at 100 entries; the global
 store caps at 500 KB, with FIFO eviction of the oldest entries when
 limits are exceeded. Request and response strings are truncated to
-10 KB before storage. The Clear button in the History panel clears both
+10 KB before storage, with a "...[truncated]" suffix appended when
+truncation occurs. The Clear button in the History panel clears both
 in-memory and persistent storage for the current connection. A Clear All
 button with confirmation clears all history across all connections.
 The History panel shows a warning that history may contain tool arguments

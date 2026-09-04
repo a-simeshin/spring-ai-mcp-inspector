@@ -144,7 +144,7 @@ describe("persistentHistory", () => {
     // are truncated to 10 KB before storage (#121). Verify at the raw
     // localStorage level because the truncated string may be invalid JSON
     // and would be filtered out by isValidEntry on load.
-    it("truncates request and response strings to 10 KB", () => {
+    it("truncates request and response strings to 10 KB with marker", () => {
       const longRequest = JSON.stringify({
         method: "tools/call",
         params: { data: "x".repeat(15 * 1024) },
@@ -162,8 +162,10 @@ describe("persistentHistory", () => {
       const stored = raw.byConnection["conn-1"][0];
       expect(stored.request.length).toBeLessThanOrEqual(10 * 1024);
       expect(stored.request.length).toBe(10 * 1024);
+      expect(stored.request.endsWith("...[truncated]")).toBe(true);
       expect(stored.response.length).toBeLessThanOrEqual(10 * 1024);
       expect(stored.response.length).toBe(10 * 1024);
+      expect(stored.response.endsWith("...[truncated]")).toBe(true);
     });
 
     // [spring-ai-mcp-inspector PATCH] Truncation: entries under 10 KB

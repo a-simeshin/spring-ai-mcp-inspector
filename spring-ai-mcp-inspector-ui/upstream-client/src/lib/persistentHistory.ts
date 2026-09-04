@@ -10,6 +10,7 @@ export const HISTORY_KEY = "mcp-inspector.history.v1";
 const MAX_ENTRIES_PER_CONNECTION = 100;
 const MAX_STORE_SIZE_BYTES = 500 * 1024; // 500 KB
 const MAX_BODY_LENGTH = 10 * 1024; // 10 KB per request/response string
+const TRUNCATION_MARKER = "...[truncated]";
 
 /**
  * Read the full history store from localStorage.
@@ -195,11 +196,16 @@ export function appendHistory(
     store.byConnection[connectionId] = [];
   }
 
-  // Truncate request and response to MAX_BODY_LENGTH
+  // Truncate request and response to MAX_BODY_LENGTH, appending a marker
+  // when truncation occurs so the UI shows the body was cut.
+  const truncate = (s: string): string =>
+    s.length > MAX_BODY_LENGTH
+      ? s.slice(0, MAX_BODY_LENGTH - TRUNCATION_MARKER.length) + TRUNCATION_MARKER
+      : s;
   const truncated: HistoryEntry = {
-    request: entry.request.slice(0, MAX_BODY_LENGTH),
+    request: truncate(entry.request),
     response: entry.response !== undefined
-      ? entry.response.slice(0, MAX_BODY_LENGTH)
+      ? truncate(entry.response)
       : undefined,
     at: entry.at,
   };
