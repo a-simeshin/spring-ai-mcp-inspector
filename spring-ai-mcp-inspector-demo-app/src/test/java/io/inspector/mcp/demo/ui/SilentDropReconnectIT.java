@@ -161,19 +161,22 @@ class SilentDropReconnectIT {
 		// handshake)
 		$("[data-testid=connect-button]").click();
 
-		// then - the reconnect either succeeds (no alert) OR surfaces an error
-		// near the Connect button. Both outcomes prove the stale-session guard
-		// fired: the old session state was cleaned up and a fresh handshake
-		// was attempted (POST /mcp), not a silent -32001 timeout.
+		// then - the reconnect either succeeds (sidebar shows server name) OR
+		// surfaces a visible error alert. Both outcomes prove the stale-session
+		// guard fired: the old session state was cleaned up and a fresh
+		// handshake was attempted, not a silent -32001 timeout loop.
+		// The connect-error-alert testid scopes to the connection failure
+		// alert in the sidebar config pane, not the resource panel
+		// placeholder that also carries role=alert.
 		$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
-		// If an alert is visible, it must mention POST /mcp (the connect
-		// attempt reached the proxy, not a stale-session loop).
-		SelenideElement alert = $("[role=alert]");
-		if (alert.is(visible)) {
-			alert.shouldHave(text("POST /mcp").or(text("mcp")), Duration.ofSeconds(5));
+		SelenideElement errorAlert = $("[data-testid=connect-error-alert]");
+		if (errorAlert.is(visible)) {
+			// An error was surfaced to the user instead of silently timing
+			// out with -32001. The alert must mention the POST /mcp attempt.
+			errorAlert.shouldHave(text("POST /mcp").or(text("mcp")), Duration.ofSeconds(5));
 		}
 		else {
-			// No alert means the reconnect succeeded.
+			// No error alert means the reconnect succeeded.
 			sidebar().shouldHave(text("mcp-inspector-demo"), Duration.ofSeconds(10));
 		}
 	}

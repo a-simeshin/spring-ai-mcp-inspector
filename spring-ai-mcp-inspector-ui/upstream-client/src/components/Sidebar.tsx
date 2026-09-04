@@ -348,6 +348,7 @@ const Sidebar = ({
               return (
                 <div
                   role="alert"
+                  data-testid="connect-error-alert"
                   className="bg-amber-50 dark:bg-amber-950 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 rounded-lg p-3 mb-4"
                 >
                   <div className="flex items-center gap-2 mb-1">
@@ -388,6 +389,7 @@ const Sidebar = ({
             return (
               <div
                 role="alert"
+                data-testid="connect-error-alert"
                 className="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200 rounded-lg p-3 mb-4"
               >
                 <div className="flex items-center gap-2 mb-1">
