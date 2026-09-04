@@ -367,6 +367,124 @@ class AuthOwnerScopeIT {
 	 * headers reach the upstream, a foreign owner's cookie is rejected and a cookie-less
 	 * proxy request still mints an owner before the rejection.
 	 */
+	/**
+	 * Live session isolation (D8, finding #1): an owner opens a streamable session and
+	 * captures its {@code mcp-session-id}. A foreign owner (B) sends POST /message, POST
+	 * /mcp (existing), GET /mcp and DELETE /mcp against that session id; every attempt is
+	 * rejected with 404 without forwarding or closing the session. Owner A sends one more
+	 * frame and still gets 202: the session survived B's attempts.
+	 */
+	@Test
+	@DisplayName("cross-owner live session isolation: A opens, B rejected, A continues")
+	@Story("Cross-owner isolation")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("A opens a streamable session with a profile and captures the returned mcp-session-id. "
+			+ "B is rejected on POST /message, POST /mcp, GET /mcp and DELETE /mcp (no forwarding, no close). "
+			+ "A continues to work after B's attempts.")
+	void crossOwnerIsolation_aliveSession_protected() throws Exception {
+		// given
+		app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
+		final String proxyBase = proxyBase();
+		final String targetUrl = "http://127.0.0.1:" + ProxyAppHarness.port(app) + "/mcp";
+
+		// ---- 1. A opens a session ------------------------------------------
+		final ObjectNode init = initializeFrame();
+		final HttpRequest initRequest = HttpRequest
+			.newBuilder(URI.create(proxyBase + "/mcp?url=" + URLEncoder.encode(targetUrl, StandardCharsets.UTF_8)))
+			.timeout(BUDGET)
+			.header("Content-Type", "application/json")
+			.header("Accept", "application/json, text/event-stream")
+			.header(PROXY_AUTH_HEADER, "Bearer " + AUTH_TOKEN)
+			.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(init)))
+			.build();
+		final HttpResponse<String> initResponse = HTTP.send(initRequest, HttpResponse.BodyHandlers.ofString());
+		assertThat(initResponse.statusCode())
+			.as("A: initialize must be 200 on %s, body=%s", ProxyAppHarness.stack(), initResponse.body())
+			.isEqualTo(200);
+		final String sessionId = initResponse.headers().firstValue("mcp-session-id").orElse(null);
+		assertThat(sessionId).as("A: mcp-session-id must be present on %s", ProxyAppHarness.stack()).isNotBlank();
+
+		// Extract A's owner cookie
+		final String aCookie = initResponse.headers().firstValue("Set-Cookie").orElse(null);
+
+		// ---- 2. B tries POST /message - no cookie -> 404 --------------------
+		final ObjectNode ping = MAPPER.createObjectNode();
+		ping.put("jsonrpc", "2.0");
+		ping.put("method", "ping");
+		ping.put("id", 2);
+
+		final HttpRequest bPostMessage = HttpRequest
+			.newBuilder(URI.create(proxyBase + "/message?sessionId=" + sessionId))
+			.timeout(BUDGET)
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(ping)))
+			.build();
+		final HttpResponse<String> bPostMessageResponse = HTTP.send(bPostMessage, HttpResponse.BodyHandlers.ofString());
+		assertThat(bPostMessageResponse.statusCode())
+			.as("B: POST /message must be rejected (401 without auth token, 404 without owner cookie) on %s",
+					ProxyAppHarness.stack())
+			.isIn(401, 404);
+
+		// ---- 3. B tries POST /mcp (existing session) - no cookie -> 404 -----
+		final HttpRequest bPostMcp = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
+			.timeout(BUDGET)
+			.header("Content-Type", "application/json")
+			.header("mcp-session-id", sessionId)
+			.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(ping)))
+			.build();
+		final HttpResponse<String> bPostMcpResponse = HTTP.send(bPostMcp, HttpResponse.BodyHandlers.ofString());
+		assertThat(bPostMcpResponse.statusCode())
+			.as("B: POST /mcp (existing session) must be rejected (401 without auth token, 404 without owner cookie) on %s",
+					ProxyAppHarness.stack())
+			.isIn(401, 404);
+
+		// ---- 4. B tries GET /mcp - no cookie -> 404 -------------------------
+		final HttpRequest bGetMcp = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
+			.timeout(BUDGET)
+			.header("mcp-session-id", sessionId)
+			.GET()
+			.build();
+		final HttpResponse<String> bGetMcpResponse = HTTP.send(bGetMcp, HttpResponse.BodyHandlers.ofString());
+		assertThat(bGetMcpResponse.statusCode())
+			.as("B: GET /mcp must be rejected (401 without auth token, 404 without owner cookie) on %s",
+					ProxyAppHarness.stack())
+			.isIn(401, 404);
+
+		// ---- 5. B tries DELETE /mcp - no cookie -> 404 ----------------------
+		final HttpRequest bDeleteMcp = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
+			.timeout(BUDGET)
+			.header("mcp-session-id", sessionId)
+			.DELETE()
+			.build();
+		final HttpResponse<String> bDeleteMcpResponse = HTTP.send(bDeleteMcp, HttpResponse.BodyHandlers.ofString());
+		assertThat(bDeleteMcpResponse.statusCode())
+			.as("B: DELETE /mcp must be rejected (401 without auth token, 404 without owner cookie) on %s",
+					ProxyAppHarness.stack())
+			.isIn(401, 404);
+
+		// ---- 6. A continues to work - with cookie -> 202 --------------------
+		final ObjectNode initializedNotification = MAPPER.createObjectNode();
+		initializedNotification.put("jsonrpc", "2.0");
+		initializedNotification.put("method", "notifications/initialized");
+
+		final HttpRequest.Builder aPostBuilder = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
+			.timeout(BUDGET)
+			.header("Content-Type", "application/json")
+			.header("Accept", "application/json, text/event-stream")
+			.header("mcp-session-id", sessionId)
+			.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(initializedNotification)));
+		if (aCookie != null) {
+			aPostBuilder.header("Cookie", aCookie);
+		}
+		aPostBuilder.header(PROXY_AUTH_HEADER, "Bearer " + AUTH_TOKEN);
+		final HttpResponse<String> aPostResponse = HTTP.send(aPostBuilder.build(),
+				HttpResponse.BodyHandlers.ofString());
+		assertThat(aPostResponse.statusCode())
+			.as("A: POST /mcp must still work on %s, body=%s, status=%s", ProxyAppHarness.stack(), aPostResponse.body(),
+					aPostResponse.statusCode())
+			.isIn(200, 202);
+	}
+
 	@Nested
 	@DisplayName("Proxy-namespace owner handoff")
 	class ProxyOwnerHandoff {

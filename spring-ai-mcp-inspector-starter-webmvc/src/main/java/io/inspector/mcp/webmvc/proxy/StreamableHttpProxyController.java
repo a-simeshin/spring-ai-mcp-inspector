@@ -214,7 +214,7 @@ public class StreamableHttpProxyController {
 			return openSessionAndForward(url, profileId, body);
 		}
 		final ProxySession session = this.registry.get(mcpSessionId);
-		if (session == null) {
+		if (session == null || !isOwnerOf(session)) {
 			return ResponseEntity.status(HttpStatus.NOT_FOUND).body("unknown mcp-session-id: " + mcpSessionId);
 		}
 		return forwardOnExistingSession(session, body);
@@ -224,7 +224,7 @@ public class StreamableHttpProxyController {
 	public SseEmitter getMcp(@RequestHeader(ProxyConstants.MCP_SESSION_ID_HEADER) final String mcpSessionId) {
 		final SseEmitter emitter = new SseEmitter(resolveTimeouts().getSseSession().toMillis());
 		final ProxySession session = this.registry.get(mcpSessionId);
-		if (session == null) {
+		if (session == null || !isOwnerOf(session)) {
 			return emitErrorAndComplete(emitter, "unknown mcp-session-id: " + mcpSessionId);
 		}
 		// takeUntilOther: close() cannot complete the sink while another thread owns it,
@@ -239,6 +239,10 @@ public class StreamableHttpProxyController {
 	@DeleteMapping("/mcp")
 	public ResponseEntity<Void> deleteMcp(
 			@RequestHeader(ProxyConstants.MCP_SESSION_ID_HEADER) final String mcpSessionId) {
+		final ProxySession session = this.registry.get(mcpSessionId);
+		if (session == null || !isOwnerOf(session)) {
+			return ResponseEntity.notFound().build();
+		}
 		final boolean removed = this.registry.removeAndClose(mcpSessionId);
 		return removed ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
 	}
@@ -288,6 +292,22 @@ public class StreamableHttpProxyController {
 		final String ownerId = resolveOwner();
 		return ownerId != null && this.authProfileStore != null
 				&& this.authProfileStore.resolve(ownerId, profileId).isPresent();
+	}
+
+	/**
+	 * Checks whether the current request's owner matches the session's bound owner.
+	 * Sessions without a bound profile (no ownerId) remain accessible to all callers,
+	 * matching the pre-auth-profile behaviour.
+	 * @param session the session to check
+	 * @return {@code true} when the caller owns the session or the session has no owner
+	 */
+	private boolean isOwnerOf(final ProxySession session) {
+		final String sessionOwner = session.ownerId();
+		if (sessionOwner == null) {
+			return true;
+		}
+		final String callerOwner = resolveOwner();
+		return callerOwner != null && callerOwner.equals(sessionOwner);
 	}
 
 	/**

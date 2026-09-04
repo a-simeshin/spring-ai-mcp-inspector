@@ -27,7 +27,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * {@code InspectorOAuthClient}) are not reused for target-server prefill.
  *
  * <p>
- * Example application.yml:
+ * Example application.yml (the binding path is
+ * {@code spring.ai.mcp.inspector.auth-profiles.profiles[0].*}):
  *
  * <pre>
  * spring:
@@ -35,30 +36,31 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *     mcp:
  *       inspector:
  *         auth-profiles:
- *           - name: prod-bearer
- *             type: BEARER
- *             bearer:
- *               token: ${PROD_BEARER_TOKEN}
- *           - name: prod-api
- *             type: API_KEY
- *             api-key:
- *               name: X-API-Key
- *               value: ${PROD_API_KEY}
- *               placement: HEADER
- *           - name: prod-oauth
- *             type: OAUTH2
- *             oauth2:
- *               grant-mode: CLIENT_CREDENTIALS
- *               token-url: https://auth.example.com/token
- *               client-id: inspector
- *               client-secret: ${PROD_CLIENT_SECRET}
- *               scopes: mcp.read
- *           - name: extra-headers
- *             type: CUSTOM_HEADERS
- *             custom-headers:
- *               headers:
- *                 - name: X-Tenant
- *                   value: acme
+ *           profiles:
+ *             - name: prod-bearer
+ *               type: BEARER
+ *               bearer:
+ *                 token: ${PROD_BEARER_TOKEN}
+ *             - name: prod-api
+ *               type: API_KEY
+ *               api-key:
+ *                 name: X-API-Key
+ *                 value: ${PROD_API_KEY}
+ *                 placement: HEADER
+ *             - name: prod-oauth
+ *               type: OAUTH2
+ *               oauth2:
+ *                 grant-mode: CLIENT_CREDENTIALS
+ *                 token-url: https://auth.example.com/token
+ *                 client-id: inspector
+ *                 client-secret: ${PROD_CLIENT_SECRET}
+ *                 scopes: mcp.read
+ *             - name: extra-headers
+ *               type: CUSTOM_HEADERS
+ *               custom-headers:
+ *                 headers:
+ *                   - name: X-Tenant
+ *                     value: acme
  * </pre>
  *
  * @author Artem Simeshin

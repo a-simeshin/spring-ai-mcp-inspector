@@ -348,7 +348,7 @@ public class ProxyHandler {
 			return ServerResponse.badRequest().bodyValue(Map.of("error", "missing sessionId"));
 		}
 		final ProxySession session = this.registry.get(sessionId);
-		if (session == null) {
+		if (session == null || !isOwnerOf(session, request)) {
 			return ServerResponse.notFound().build();
 		}
 		return readJsonBody(request).flatMap((body) -> {
@@ -488,6 +488,23 @@ public class ProxyHandler {
 	}
 
 	/**
+	 * Checks whether the current request's owner matches the session's bound owner.
+	 * Sessions without a bound profile (no ownerId) remain accessible to all callers,
+	 * matching the pre-auth-profile behaviour.
+	 * @param session the session to check
+	 * @param request the current request
+	 * @return {@code true} when the caller owns the session or the session has no owner
+	 */
+	private boolean isOwnerOf(final ProxySession session, final ServerRequest request) {
+		final String sessionOwner = session.ownerId();
+		if (sessionOwner == null) {
+			return true;
+		}
+		final String callerOwner = resolveOwner(request);
+		return callerOwner != null && callerOwner.equals(sessionOwner);
+	}
+
+	/**
 	 * Serialises the D3 error DTO for the SSE {@code error} event, attaching the
 	 * D5-redacted target URL.
 	 * @param dto the structured error DTO
@@ -621,7 +638,7 @@ public class ProxyHandler {
 			return openSessionAndRelay(url, body, authorization, customHeaders, profileId, request);
 		}
 		final ProxySession session = this.registry.get(mcpSessionId);
-		if (session == null) {
+		if (session == null || !isOwnerOf(session, request)) {
 			return ServerResponse.status(HttpStatus.NOT_FOUND)
 				.bodyValue(Map.of("error", "unknown mcp-session-id: " + mcpSessionId));
 		}
@@ -826,7 +843,7 @@ public class ProxyHandler {
 	public Mono<ServerResponse> getMcp(final ServerRequest request) {
 		final String mcpSessionId = request.headers().firstHeader(ProxyConstants.MCP_SESSION_ID_HEADER);
 		final ProxySession session = (mcpSessionId != null) ? this.registry.get(mcpSessionId) : null;
-		if (session == null) {
+		if (session == null || !isOwnerOf(session, request)) {
 			return ServerResponse.status(HttpStatus.NOT_FOUND)
 				.bodyValue(Map.of("error", "unknown mcp-session-id: " + mcpSessionId));
 		}
@@ -847,6 +864,12 @@ public class ProxyHandler {
 
 	public Mono<ServerResponse> deleteMcp(final ServerRequest request) {
 		final String mcpSessionId = request.headers().firstHeader(ProxyConstants.MCP_SESSION_ID_HEADER);
+		if (mcpSessionId != null) {
+			final ProxySession session = this.registry.get(mcpSessionId);
+			if (session == null || !isOwnerOf(session, request)) {
+				return ServerResponse.notFound().build();
+			}
+		}
 		final boolean removed = this.registry.removeAndClose(mcpSessionId);
 		return (removed) ? ServerResponse.ok().build() : ServerResponse.notFound().build();
 	}
