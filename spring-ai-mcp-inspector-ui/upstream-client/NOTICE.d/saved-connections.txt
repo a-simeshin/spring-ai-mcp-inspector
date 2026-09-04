@@ -25,10 +25,32 @@ REVIEW FIXES (PR #149 review findings):
   entries. Added `findConnectionByName(name)` for the UI layer to
   check before saving. App.tsx's `handleSaveConnection` now prompts
   with `window.confirm` for overwrite-or-cancel when the name is
-  taken. Sidebar.tsx handles the `undefined` return (cancel) by
-  keeping the save dialog open.
+  taken with a different id (including when an entry is selected).
+  Sidebar.tsx handles the `undefined` return (cancel) by keeping the
+  save dialog open.
 - Added `isValidConnection(c)` runtime type guard and
   `filterValidConnections(entries)` to filter out corrupt persisted
   entries (null, missing fields, wrong types) during migration
   and load. Previously `connections:[null]` would pass through
   `as SavedConnection[]` and break the UI on render.
+- `isValidConnection` now validates nested header objects (name,
+  value, enabled types), env keys/values (string values), and
+  transport-specific optional fields (url, command, args).
+- Authorization headers are stripped on save: `stripSecrets(draft)`
+  filters out headers with name "Authorization" and clears env values
+  (keys preserved with empty string). Secrets are never persisted in
+  localStorage. On restore, the user re-enters secrets.
+- `handleSelectConnection` now resets fields absent from the entry
+  (stdio fields no longer leak into sse entries) and calls
+  `touchSavedConnection` so sorting by last-used works correctly.
+- Duplicate-name check in `handleSaveConnection` now also triggers
+  when `activeConnectionId` is set (not only when unset).
+
+STORAGE KEY ALIGNMENT WITH #89 (auth profiles):
+- PR #89 (NOTICE.d/auth-profiles.txt D10) purges six legacy
+  secret-bearing localStorage keys on first mount.
+- `mcp-inspector.savedConnections.v1` is intentionally NOT included
+  in that purge list: it is not a secret-bearing key (secrets are
+  stripped before persistence). The key holds only non-secret
+  connection metadata (name, transport type, URL, header names
+  without values, env keys with empty values).

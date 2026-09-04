@@ -10,6 +10,34 @@ import type {
 
 export const SAVED_CONNECTIONS_KEY = "mcp-inspector.savedConnections.v1";
 
+// Header names whose values are treated as secrets and stripped on save.
+// Authorization is the primary case: it would persist bearer tokens in
+// plaintext localStorage. Env values are also stripped because stdio
+// servers commonly hold API keys there.
+const SECRET_HEADER_NAMES = new Set(["authorization"]);
+
+/**
+ * Strip secret fields from a draft before persisting.
+ * - Authorization headers are removed from customHeaders.
+ * - Env values are cleared (keys preserved with empty string).
+ * Returns a new draft object; the original is not mutated.
+ */
+export function stripSecrets(draft: SavedConnectionDraft): SavedConnectionDraft {
+  return {
+    ...draft,
+    customHeaders: draft.customHeaders
+      ? draft.customHeaders.filter(
+          (h) => !SECRET_HEADER_NAMES.has(h.name.toLowerCase()),
+        )
+      : draft.customHeaders,
+    env: draft.env
+      ? Object.fromEntries(
+          Object.keys(draft.env).map((k) => [k, ""]),
+        )
+      : draft.env,
+  };
+}
+
 const MAX_CONNECTIONS = 20;
 
 function generateId(): string {
@@ -47,6 +75,26 @@ export function isValidConnection(c: unknown): c is SavedConnection {
   if (typeof obj.createdAt !== "number") return false;
   if (typeof obj.lastUsedAt !== "number") return false;
   if (!Array.isArray(obj.customHeaders)) return false;
+  // Validate nested header objects: each must be a non-null object
+  // with string name/value and boolean enabled.
+  for (const h of obj.customHeaders) {
+    if (h === null || h === undefined || typeof h !== "object") return false;
+    const header = h as Record<string, unknown>;
+    if (typeof header.name !== "string") return false;
+    if (typeof header.value !== "string") return false;
+    if (typeof header.enabled !== "boolean") return false;
+  }
+  // Validate env: if present, must be a non-null object with string values
+  if (obj.env !== undefined) {
+    if (obj.env === null || typeof obj.env !== "object") return false;
+    for (const v of Object.values(obj.env as Record<string, unknown>)) {
+      if (typeof v !== "string") return false;
+    }
+  }
+  // Validate transport-specific optional fields
+  if (obj.url !== undefined && typeof obj.url !== "string") return false;
+  if (obj.command !== undefined && typeof obj.command !== "string") return false;
+  if (obj.args !== undefined && typeof obj.args !== "string") return false;
   return true;
 }
 

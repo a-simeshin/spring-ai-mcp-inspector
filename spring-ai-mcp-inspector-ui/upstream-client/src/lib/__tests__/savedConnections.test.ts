@@ -11,6 +11,7 @@ import {
   findConnectionByName,
   isValidConnection,
   filterValidConnections,
+  stripSecrets,
 } from "../savedConnections";
 import type { SavedConnection } from "../types/savedConnection";
 
@@ -228,6 +229,56 @@ describe("savedConnections", () => {
         ),
       ).toBe(false);
     });
+
+    it("returns false when customHeaders contains null", () => {
+      expect(
+        isValidConnection(mockConnection({ customHeaders: [null as unknown as { name: string; value: string; enabled: boolean }] })),
+      ).toBe(false);
+    });
+
+    it("returns false when customHeaders element has non-string name", () => {
+      expect(
+        isValidConnection(mockConnection({ customHeaders: [{ name: null, value: "v", enabled: true }] as unknown as { name: string; value: string; enabled: boolean }[] })),
+      ).toBe(false);
+    });
+
+    it("returns false when customHeaders element has non-boolean enabled", () => {
+      expect(
+        isValidConnection(mockConnection({ customHeaders: [{ name: "X", value: "v", enabled: "yes" }] as unknown as { name: string; value: string; enabled: boolean }[] })),
+      ).toBe(false);
+    });
+
+    it("returns false when env has non-string value", () => {
+      expect(
+        isValidConnection(mockConnection({ env: { TOKEN: null } as unknown as Record<string, string> })),
+      ).toBe(false);
+    });
+
+    it("returns false when env is not an object", () => {
+      expect(
+        isValidConnection(mockConnection({ env: "not-an-object" as unknown as Record<string, string> })),
+      ).toBe(false);
+    });
+
+    it("returns false when url is not a string", () => {
+      expect(
+        isValidConnection(mockConnection({ url: 123 as unknown as string })),
+      ).toBe(false);
+    });
+
+    it("returns false when command is not a string", () => {
+      expect(
+        isValidConnection(mockConnection({ command: 123 as unknown as string })),
+      ).toBe(false);
+    });
+
+    it("returns true when optional fields are absent", () => {
+      expect(
+        isValidConnection(
+          mockConnection({ url: undefined, command: undefined, args: undefined, env: undefined }),
+        ),
+      ).toBe(true);
+    });
   });
 
   describe("filterValidConnections", () => {
@@ -302,7 +353,7 @@ describe("savedConnections", () => {
       expect(result.connections).toHaveLength(1);
     });
 
-    it("handles unknown schemaVersion by returning empty", () => {
+    it("handles unknown schemaVersion by returning valid connections", () => {
       const store = {
         schemaVersion: 0,
         connections: [mockConnection()],
@@ -329,6 +380,72 @@ describe("savedConnections", () => {
       expect(result.connections[0].id).toBe("test-id");
       expect(consoleWarn).toHaveBeenCalled();
       consoleWarn.mockRestore();
+    });
+  });
+
+  describe("stripSecrets", () => {
+    it("removes Authorization headers from the draft", () => {
+      const draft = {
+        ...mockDraft(),
+        customHeaders: [
+          { name: "X-Custom", value: "ok", enabled: true },
+          { name: "Authorization", value: "Bearer secret", enabled: true },
+        ],
+      };
+      const result = stripSecrets(draft);
+      expect(result.customHeaders).toHaveLength(1);
+      expect(result.customHeaders[0].name).toBe("X-Custom");
+    });
+
+    it("preserves non-Authorization headers", () => {
+      const draft = {
+        ...mockDraft(),
+        customHeaders: [
+          { name: "X-Custom", value: "ok", enabled: true },
+          { name: "X-API-Key", value: "abc123", enabled: true },
+        ],
+      };
+      const result = stripSecrets(draft);
+      expect(result.customHeaders).toHaveLength(2);
+    });
+
+    it("clears env values while preserving keys", () => {
+      const draft = {
+        ...mockDraft(),
+        env: { API_KEY: "secret-value", FOO: "bar" },
+      };
+      const result = stripSecrets(draft);
+      expect(result.env).toEqual({ API_KEY: "", FOO: "" });
+    });
+
+    it("handles draft without env", () => {
+      const draft = { ...mockDraft() };
+      delete (draft as Record<string, unknown>).env;
+      const result = stripSecrets(draft);
+      expect(result.env).toBeUndefined();
+    });
+
+    it("handles draft without customHeaders", () => {
+      const draft = { ...mockDraft() };
+      (draft as Record<string, unknown>).customHeaders = undefined;
+      const result = stripSecrets(draft);
+      expect(result.customHeaders).toBeUndefined();
+    });
+
+    it("does not mutate the original draft", () => {
+      const draft = {
+        ...mockDraft(),
+        customHeaders: [
+          { name: "Authorization", value: "Bearer secret", enabled: true },
+        ],
+        env: { KEY: "val" },
+      };
+      const originalHeaders = draft.customHeaders;
+      const originalEnv = { ...draft.env };
+      stripSecrets(draft);
+      expect(draft.customHeaders).toBe(originalHeaders);
+      expect(draft.customHeaders).toHaveLength(1);
+      expect(draft.env).toEqual(originalEnv);
     });
   });
 });

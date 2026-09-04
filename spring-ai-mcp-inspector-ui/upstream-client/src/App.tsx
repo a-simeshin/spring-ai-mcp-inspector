@@ -116,6 +116,8 @@ import {
   saveConnection,
   deleteSavedConnection,
   findConnectionByName,
+  stripSecrets,
+  touchSavedConnection,
 } from "./lib/savedConnections";
 import MetadataTab from "./components/MetadataTab";
 
@@ -532,7 +534,7 @@ const App = () => {
 
   const handleSaveConnection = useCallback(
     (name: string): SavedConnection | undefined => {
-      const draft = {
+      const draft = stripSecrets({
         name,
         transport: transportType,
         connectionType,
@@ -541,13 +543,13 @@ const App = () => {
         args: transportType === "stdio" ? args : undefined,
         env: transportType === "stdio" ? env : undefined,
         customHeaders,
-      };
+      });
       // [spring-ai-mcp-inspector PATCH] Check for duplicate name before
       // saving. The caller expects SavedConnection | undefined and
       // keeps the save dialog open when undefined is returned.
       const existing = findConnectionByName(name);
       let targetId = activeConnectionId;
-      if (existing && !activeConnectionId) {
+      if (existing && existing.id !== targetId) {
         if (
           !window.confirm(
             `Connection "${name}" already exists. Overwrite?`,
@@ -585,6 +587,9 @@ const App = () => {
     [activeConnectionId],
   );
 
+  // [spring-ai-mcp-inspector PATCH] Saved connections: reset fields
+  // absent from the entry so stale values (e.g. stdio fields leaking
+  // into an sse entry) don't persist across selections.
   const handleSelectConnection = useCallback(
     (connection: SavedConnection) => {
       setTransportType(connection.transport);
@@ -593,20 +598,29 @@ const App = () => {
       }
       if (connection.url !== undefined) {
         setSseUrl(connection.url);
+      } else {
+        setSseUrl("");
       }
       if (connection.command !== undefined) {
         setCommand(connection.command);
+      } else {
+        setCommand("");
       }
       if (connection.args !== undefined) {
         setArgs(connection.args);
+      } else {
+        setArgs("");
       }
       if (connection.env !== undefined) {
         setEnv(connection.env);
+      } else {
+        setEnv({});
       }
       if (connection.customHeaders) {
         setCustomHeaders(connection.customHeaders);
       }
       setActiveConnectionId(connection.id);
+      touchSavedConnection(connection.id);
     },
     [
       setTransportType,
