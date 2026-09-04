@@ -801,6 +801,7 @@ public class ProxyHandler {
 				return ServerResponse.status(dto.status())
 					.bodyValue(dto.withUrl(ProxyErrorDto.redactUrl(session.targetUri())));
 			}
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
 			// A failed first POST (the initialize) never returned a session id to the
 			// client, so the session is orphaned - tear it down instead of leaking it.
 			if (includeSessionHeader) {
