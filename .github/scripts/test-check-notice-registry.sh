@@ -41,6 +41,11 @@ EOF
 }
 EOF
 
+  # Generated files excluded from notice registry
+  echo '{}' > spring-ai-mcp-inspector-ui/upstream-client/package-lock.json
+  echo 'MIT License' > spring-ai-mcp-inspector-ui/upstream-client/LICENSE
+  echo '# README' > spring-ai-mcp-inspector-ui/upstream-client/README.md
+
   # A source file with PATCH marker (already patched)
   cat > spring-ai-mcp-inspector-ui/upstream-client/src/components/App.tsx <<'EOF'
 // [spring-ai-mcp-inspector PATCH] Test fixture
@@ -215,6 +220,60 @@ test_deleted_vendored_file() {
   fi
 }
 
+# ----- Scenario: OK - package-lock.json change without NOTICE.d (generated file) --
+test_package_lock_change() {
+  cd "$TMPDIR"
+  git checkout -q -b test-package-lock "$base_rev"
+
+  # Change package-lock.json (generated, should be excluded)
+  echo '{"lockfileVersion": 2}' > spring-ai-mcp-inspector-ui/upstream-client/package-lock.json
+  git add -A
+  git commit -q -m "update package-lock.json"
+
+  if output=$("$GATE" "origin/HEAD" 2>&1); then
+    pass "package-lock.json change without NOTICE.d: exit 0"
+  else
+    fail "package-lock.json change without NOTICE.d: expected exit 0, got $?"
+    echo "    $output"
+  fi
+}
+
+# ----- Scenario: OK - LICENSE change without NOTICE.d (copied file) -----------
+test_license_change() {
+  cd "$TMPDIR"
+  git checkout -q -b test-license "$base_rev"
+
+  # Change LICENSE (copied from upstream, should be excluded)
+  echo 'Apache 2.0' > spring-ai-mcp-inspector-ui/upstream-client/LICENSE
+  git add -A
+  git commit -q -m "update LICENSE"
+
+  if output=$("$GATE" "origin/HEAD" 2>&1); then
+    pass "LICENSE change without NOTICE.d: exit 0"
+  else
+    fail "LICENSE change without NOTICE.d: expected exit 0, got $?"
+    echo "    $output"
+  fi
+}
+
+# ----- Scenario: OK - README.md change without NOTICE.d (copied file) ---------
+test_readme_change() {
+  cd "$TMPDIR"
+  git checkout -q -b test-readme "$base_rev"
+
+  # Change README.md (copied from upstream, should be excluded)
+  echo '# Upstream Client' > spring-ai-mcp-inspector-ui/upstream-client/README.md
+  git add -A
+  git commit -q -m "update README.md"
+
+  if output=$("$GATE" "origin/HEAD" 2>&1); then
+    pass "README.md change without NOTICE.d: exit 0"
+  else
+    fail "README.md change without NOTICE.d: expected exit 0, got $?"
+    echo "    $output"
+  fi
+}
+
 # ----- main ------------------------------------------------------------------
 echo "=== check-notice-registry.sh self-test ==="
 base_rev="$(setup_repo)"
@@ -231,6 +290,9 @@ test_notice_txt_numbered
 test_src_with_marker_and_notice
 test_notice_d_only
 test_deleted_vendored_file
+test_package_lock_change
+test_license_change
+test_readme_change
 
 echo "---"
 if [[ $failures -eq 0 ]]; then

@@ -33,9 +33,11 @@ if grep -qx "$ui/NOTICE.txt" <<< "$changed"; then
   fi
 fi
 
-# Правило 2: любая правка в upstream-client/ (кроме NOTICE.d/ и NOTICE.txt)
-# требует записи в NOTICE.d/
-vendored_files="$(grep -E "^$ui/" <<< "$existing" | grep -vE "^$ui/(NOTICE\.d/|NOTICE\.txt$)" || true)"
+# Правило 2: любая правка в upstream-client/ (кроме NOTICE.d/, NOTICE.txt,
+# package-lock.json, LICENSE, README.md) требует записи в NOTICE.d/
+# Исключения: package-lock.json/LICENSE/README.md генерируются или копируются
+# при пере-вендоризации и не являются локальными патчами.
+vendored_files="$(grep -E "^$ui/" <<< "$existing" | grep -vE "^$ui/(NOTICE\.d/|NOTICE\.txt$|package-lock\.json$|LICENSE$|README\.md$)" || true)"
 if [[ -n "$vendored_files" ]]; then
   if ! grep -qE "^$ui/NOTICE\.d/" <<< "$changed"; then
     echo "FAIL: тронут вендоренный код ($ui/), но ни один файл в $ui/NOTICE.d/ не добавлен и не изменён."
