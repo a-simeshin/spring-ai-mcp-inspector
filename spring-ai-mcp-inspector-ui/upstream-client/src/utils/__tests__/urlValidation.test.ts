@@ -1,4 +1,4 @@
-import { validateRedirectUrl } from "../urlValidation";
+import { validateRedirectUrl, validateServerUrl } from "../urlValidation";
 
 describe("validateRedirectUrl", () => {
   describe("valid URLs", () => {
@@ -130,6 +130,102 @@ describe("validateRedirectUrl", () => {
       expect(() => validateRedirectUrl("JaVaScRiPt:alert('XSS')")).toThrow(
         "Authorization URL must be HTTP or HTTPS",
       );
+    });
+  });
+});
+
+describe("validateServerUrl", () => {
+  describe("valid URLs", () => {
+    it("should accept http:// URLs with host", () => {
+      expect(validateServerUrl("http://127.0.0.1:8080/mcp")).toEqual({
+        isValid: true,
+        errorMessage: null,
+      });
+    });
+
+    it("should accept https:// URLs with host", () => {
+      expect(validateServerUrl("https://example.com/mcp")).toEqual({
+        isValid: true,
+        errorMessage: null,
+      });
+    });
+
+    it("should accept ws:// URLs with host", () => {
+      expect(validateServerUrl("ws://localhost:3000/mcp")).toEqual({
+        isValid: true,
+        errorMessage: null,
+      });
+    });
+
+    it("should accept wss:// URLs with host", () => {
+      expect(validateServerUrl("wss://host.example/mcp")).toEqual({
+        isValid: true,
+        errorMessage: null,
+      });
+    });
+
+    it("should accept absolute paths starting with /", () => {
+      expect(validateServerUrl("/mcp")).toEqual({
+        isValid: true,
+        errorMessage: null,
+      });
+    });
+
+    it("should accept absolute paths with slashes", () => {
+      expect(validateServerUrl("/path/to/endpoint")).toEqual({
+        isValid: true,
+        errorMessage: null,
+      });
+    });
+  });
+
+  describe("invalid URLs", () => {
+    it("should reject empty string", () => {
+      const result = validateServerUrl("");
+      expect(result.isValid).toBe(false);
+      expect(result.errorMessage).toBe("URL must not be empty");
+    });
+
+    it("should reject whitespace-only string", () => {
+      const result = validateServerUrl("   ");
+      expect(result.isValid).toBe(false);
+      expect(result.errorMessage).toBe("URL must not be empty");
+    });
+
+    it("should reject single character", () => {
+      const result = validateServerUrl("h");
+      expect(result.isValid).toBe(false);
+      expect(result.errorMessage).toContain("http://");
+    });
+
+    it("should reject URL with typo scheme (htp://)", () => {
+      const result = validateServerUrl("htp://typo-scheme.example/mcp");
+      expect(result.isValid).toBe(false);
+      expect(result.errorMessage).toContain("http://");
+    });
+
+    it("should reject URL without scheme (example.com)", () => {
+      const result = validateServerUrl("example.com/mcp");
+      expect(result.isValid).toBe(false);
+      expect(result.errorMessage).toContain("http://");
+    });
+
+    it("should reject scheme with no host (http://)", () => {
+      const result = validateServerUrl("http://");
+      expect(result.isValid).toBe(false);
+      expect(result.errorMessage).toContain("http://");
+    });
+
+    it("should reject ftp:// scheme", () => {
+      const result = validateServerUrl("ftp://example.com/mcp");
+      expect(result.isValid).toBe(false);
+      expect(result.errorMessage).toContain("http://");
+    });
+
+    it("should reject file:// scheme", () => {
+      const result = validateServerUrl("file:///etc/passwd");
+      expect(result.isValid).toBe(false);
+      expect(result.errorMessage).toContain("http://");
     });
   });
 });
