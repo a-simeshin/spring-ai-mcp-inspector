@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] owner-session isolation and auth-profile tests
 import {
   ConnectFailedError,
   CONNECT_FAILED_ERROR_CODE,
