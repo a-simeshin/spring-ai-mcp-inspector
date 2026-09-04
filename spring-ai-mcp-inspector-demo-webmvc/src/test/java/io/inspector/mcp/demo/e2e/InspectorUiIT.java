@@ -764,17 +764,12 @@ class InspectorUiIT {
 			// carries the '(default)' marker its tooltip must disclose that the value
 			// comes from the spec, not the server (title embeds newlines → DOTALL).
 			SelenideElement defaultReadOnly = defaultBadges.$(byText("Read-only")).shouldBe(visible);
-			defaultReadOnly.shouldHave(text("✗ Read-only"));
-			if (defaultReadOnly.getText().contains("(default)")) {
-				defaultReadOnly.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
-			}
+			defaultReadOnly.shouldHave(text("✗ Read-only (default)"));
+			defaultReadOnly.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
 			// Destructive: same honesty contract on the spec-default true (✓).
 			SelenideElement defaultDestructive = defaultBadges.$(byText("Destructive")).shouldBe(visible);
-			defaultDestructive.shouldHave(text("✓ Destructive"));
-			if (defaultDestructive.getText().contains("(default)")) {
-				defaultDestructive
-					.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
-			}
+			defaultDestructive.shouldHave(text("✓ Destructive (default)"));
+			defaultDestructive.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
 
 			// --- sweep: every destructive=true claim is disclosed or accounted for ---
 			for (String name : ALL_DEMO_TOOLS) {
@@ -788,14 +783,14 @@ class InspectorUiIT {
 					destructive.shouldHave(attributeMatching("title", "(?s).*Spec default, not declared by server.*"));
 				}
 				else if (chipText.contains("✓")) {
-					// Declared destructive=true is only tolerable on the annotation-less
-					// slowEcho, and only while spring-ai synthesizes annotations for it;
-					// any other tool hitting this branch means a demo tool really
-					// declares destructive=true — that is a regression.
-					Assertions.assertEquals("slowEcho", name,
-							"Tool renders a server-declared destructive=true chip; only the "
-									+ "annotation-less slowEcho may do so while spring-ai synthesizes "
-									+ "its annotations");
+					// No tool should show a declared destructive=true chip without a
+					// (default) disclosure marker. If we reach this branch the
+					// annotation-synthesis workaround has regressed or a new tool with
+					// explicit destructive=true annotations was added.
+					Assertions.fail("Tool \"" + name + "\" renders a server-declared destructive=true chip "
+							+ "without (default) disclosure marker. Either the annotation-synthesis "
+							+ "workaround has regressed or a new tool with explicit destructive=true "
+							+ "annotations was added.");
 				}
 				else {
 					// Declared path: the only honest value is destructive=false.
@@ -1209,26 +1204,26 @@ class InspectorUiIT {
 		@Test
 		@Story("Resource preview")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("Clicking demo-logo exposes a download/open control for the binary resource bytes.")
-		@DisplayName("resourcePreview_downloadControlPresent — demo-logo exposes a download/open control")
+		@Description("Clicking demo-logo renders a download link with the correct data:image/png MIME and logo.png filename.")
+		@DisplayName("resourcePreview_downloadControlPresent — demo-logo exposes download with exact data URL and filename")
 		void resourcePreview_downloadControlPresent() {
 			// given & when
 			selectRow("demo-logo");
 
 			// then
-			// Wait for the resource read to materialize the right-panel header (the
-			// selected resource name) regardless of render implementation.
-			activePanel().$$("h3").findBy(exactText("demo-logo")).shouldBe(visible, Duration.ofSeconds(15));
-			// Binary resource preview must expose a download/open affordance (per the
-			// shared MediaContentView recommendation: <a download href=data:...> for
-			// binary/*). Red against current behavior (no download control exists),
-			// green after the implementation. `exists()` on the composed selector so
-			// any one of the affordance shapes satisfies the check.
-			Assertions.assertTrue(
-					!activePanel().$$("a[download]").isEmpty()
-							|| !activePanel().$$("button").filterBy(exactText("Download")).isEmpty()
-							|| !activePanel().$$("button").filterBy(exactText("Open")).isEmpty(),
-					"Expected a download/open control in the resource preview pane after clicking demo-logo");
+			// Wait for the resource content to render (the <img> proves the
+			// ReadResourceResult was parsed and MediaContentView rendered it).
+			activePanel().$("img[src^='data:image/png;base64,']").shouldBe(visible, Duration.ofSeconds(15));
+			// The download link must have the correct href (data:image/png;base64,...)
+			// and download attribute matching the resource filename from the URI.
+			// The expected filename is "logo.png" (from "demo://logo.png").
+			SelenideElement downloadLink = activePanel().$("a[download='logo.png']");
+			downloadLink.shouldBe(visible, Duration.ofSeconds(5));
+			String href = downloadLink.getAttribute("href");
+			Assertions.assertNotNull(href, "Download link must have an href");
+			Assertions.assertTrue(href.startsWith("data:image/png;base64,iVBORw0KGgo"),
+					"Download href should be a data:image/png;base64 URL starting with the PNG magic bytes, got: "
+							+ href);
 		}
 
 		@Test
@@ -1241,6 +1236,9 @@ class InspectorUiIT {
 			selectRow("demo-logo");
 
 			// then
+			// First wait for the resource content to render (the <img> proves the
+			// ReadResourceResult was parsed and MediaContentView rendered it).
+			activePanel().$("img[src^='data:image/png;base64,']").shouldBe(visible, Duration.ofSeconds(15));
 			// The base64 blob content should NOT be visible as raw text in the panel.
 			// The TINY_PNG_BASE64 from DemoAdvancedResourcesProvider starts with this
 			// known prefix. This will FAIL against current behavior (base64 is visible
@@ -3874,6 +3872,104 @@ class InspectorUiIT {
 			// invocation must not satisfy the acceptance contract.
 			activePanel().shouldHave(text("15"), Duration.ofSeconds(15));
 			activePanel().$$("h4").findBy(text("Tool Result:")).shouldHave(text("Success"), Duration.ofSeconds(15));
+		}
+
+	}
+
+	// =====================================================================
+	// J. Tool row click state preservation (regression)
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Tool row click state preservation")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class ToolRowClickStatePreservation {
+
+		/**
+		 * Boot once per @Nested group, matching the neighbouring Tools/Resources/Prompts
+		 * groups.
+		 */
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+			final int port = ((WebServerApplicationContext) app).getWebServer().getPort();
+			// Set Transport = SSE (default, but ensure the UI is on it)
+			$("#transport-type-select").shouldBe(visible);
+			// URL is auto-populated; force-set it to a known value via React-controlled
+			// input pathway (see setReactInputValue javadoc).
+			$("#sse-url-input").shouldBe(visible);
+			setReactInputValue("#sse-url-input", "http://localhost:" + port + "/sse");
+			$("#sse-url-input").shouldHave(Condition.value("http://localhost:" + port + "/sse"));
+			// Connect
+			connectButton().click();
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@BeforeEach
+		void goToToolsTabAndListTools() {
+			clickTab("tools");
+			final SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$(".cursor-pointer").shouldHave(CollectionCondition.sizeGreaterThan(0));
+		}
+
+		@Test
+		@Story("Tool call form")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Clicking a tool row opens the call form in the right pane, preserves the Connected state, and keeps the Transport Type and URL unchanged. Repeating on a second tool row verifies that switching between tools does not regress the connection or transport state.")
+		@DisplayName("toolRowClickPreservesState - clicking echo then sum preserves Connected, Transport, and URL")
+		void toolRowClick_onEchoThenSum_preservesConnectedStateTransportAndUrl() {
+			final int port = ((WebServerApplicationContext) app).getWebServer().getPort();
+
+			// --- First tool row click (echo) ---
+			selectRow("echo");
+
+			// then: tool call form appears in the right pane
+			$("[data-testid=tools-detail-pane]").shouldBe(visible, Duration.ofMillis(500));
+			$("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofMillis(500));
+			// The echo tool has a single text parameter, its input renders
+			$("#text").shouldBe(visible, Duration.ofMillis(500));
+
+			// Connection indicator still shows 'Connected'
+			$("[data-testid=connect-button]").shouldBe(visible);
+
+			// Transport Type select still shows 'SSE'
+			$("#transport-type-select").shouldBe(visible);
+			$("#transport-type-select").shouldHave(text("SSE"));
+
+			// URL field still shows the user-entered value
+			$("#sse-url-input").shouldBe(visible);
+			$("#sse-url-input").shouldHave(Condition.value("http://localhost:" + port + "/sse"));
+
+			// --- Second tool row click (sum): the original bug manifested on second
+			// click ---
+			selectRow("sum");
+
+			// then: tool call form reappears in the right pane
+			$("[data-testid=tools-detail-pane]").shouldBe(visible, Duration.ofMillis(500));
+			$("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofMillis(500));
+			// The sum tool has two parameters (a, b), their inputs render
+			$("#a").shouldBe(visible, Duration.ofMillis(500));
+			$("#b").shouldBe(visible, Duration.ofMillis(500));
+
+			// Connection indicator still shows 'Connected'
+			$("[data-testid=connect-button]").shouldBe(visible);
+
+			// Transport Type select still shows 'SSE'
+			$("#transport-type-select").shouldBe(visible);
+			$("#transport-type-select").shouldHave(text("SSE"));
+
+			// URL field still shows the user-entered value
+			$("#sse-url-input").shouldBe(visible);
+			$("#sse-url-input").shouldHave(Condition.value("http://localhost:" + port + "/sse"));
 		}
 
 	}

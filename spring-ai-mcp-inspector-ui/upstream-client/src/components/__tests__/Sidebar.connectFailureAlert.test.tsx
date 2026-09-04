@@ -111,7 +111,7 @@ describe("Sidebar connect-failure alert", () => {
     });
 
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Could not resolve the host",
+      "Cannot resolve host",
     );
   });
 
