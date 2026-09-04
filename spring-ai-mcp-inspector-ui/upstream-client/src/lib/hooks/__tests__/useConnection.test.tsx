@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] owner-session isolation and auth-profile tests
 import { renderHook, act } from "@testing-library/react";
 import { useConnection } from "../useConnection";
 import { z } from "zod/v3";

@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] owner-session isolation and auth-profile tests
 // jsdom lacks MediaQueryList; useTheme calls window.matchMedia on mount.
 import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
