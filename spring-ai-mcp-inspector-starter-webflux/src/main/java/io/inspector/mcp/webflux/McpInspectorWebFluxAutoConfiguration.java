@@ -28,8 +28,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplicat
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.core.env.Environment;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.web.reactive.config.CorsRegistry;
 import org.springframework.web.reactive.config.WebFluxConfigurer;
 
@@ -145,8 +145,10 @@ public class McpInspectorWebFluxAutoConfiguration {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxySessionRegistry mcpInspectorProxySessionRegistry() {
-		return new ProxySessionRegistry();
+	public ProxySessionRegistry mcpInspectorProxySessionRegistry(final McpInspectorProperties properties) {
+		final ProxySessionRegistry registry = new ProxySessionRegistry();
+		registry.setInactivityBudget(properties.getTimeouts().getSessionReaper());
+		return registry;
 	}
 
 	/**

@@ -134,7 +134,7 @@ public final class McpProxy {
 				session.touch();
 			}
 			return Mono.<JSONRPCMessage>empty();
-		}));
+		}).doOnTerminate(() -> session.failUpstream(null)));
 	}
 
 	/**

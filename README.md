@@ -294,6 +294,12 @@ fast). All values use Spring's relaxed `Duration` syntax — e.g. `30s`, `2m`, `
 | `spring.ai.mcp.inspector.timeouts.fetch-connect` | `10s` | Connect timeout for the outbound `/fetch` HTTP client. |
 | `spring.ai.mcp.inspector.timeouts.fetch-request` | `30s` | Per-request timeout for outbound `/fetch` calls. |
 | `spring.ai.mcp.inspector.timeouts.server-request` | `120s` | How long a server→UI request (sampling / elicitation / roots) waits for the browser to answer. |
+| `spring.ai.mcp.inspector.timeouts.upstream-probe-interval` | `10s` | Interval between upstream liveness probes for proxied sessions. |
+| `spring.ai.mcp.inspector.timeouts.upstream-probe-timeout` | `5s` | Per-probe timeout for the upstream JSON-RPC response. |
+| `spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold` | `15s` | How long a proxied session may idle before the first probe is sent. |
+| `spring.ai.mcp.inspector.timeouts.session-reaper` | `30m` | Inactivity budget after which the session reaper evicts a quiet proxy session. |
+| `spring.ai.mcp.inspector.timeouts.reaper-interval` | `1m` | How often the session reaper sweep runs. |
+| `spring.ai.mcp.inspector.upstream-liveness-probe-enabled` | `true` | Whether upstream liveness probing is enabled for proxied sessions. |
 
 ```yaml
 spring:

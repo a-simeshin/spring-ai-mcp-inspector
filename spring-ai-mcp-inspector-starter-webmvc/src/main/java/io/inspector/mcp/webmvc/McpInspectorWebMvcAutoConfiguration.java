@@ -31,9 +31,9 @@ import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.Ordered;
-import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.core.env.Environment;
 import org.springframework.http.CacheControl;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
@@ -168,8 +168,10 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxySessionRegistry mcpInspectorProxySessionRegistry() {
-		return new ProxySessionRegistry();
+	public ProxySessionRegistry mcpInspectorProxySessionRegistry(final McpInspectorProperties properties) {
+		final ProxySessionRegistry registry = new ProxySessionRegistry();
+		registry.setInactivityBudget(properties.getTimeouts().getSessionReaper());
+		return registry;
 	}
 
 	/**

@@ -102,13 +102,25 @@ public class ProxyUpstreamProber {
 
 			session.targetTransport().sendMessage(ping).timeout(probeTimeout).onErrorResume((err) -> {
 				LOG.warn("proxy[{}] liveness probe {} failed: {}", session.sessionId(), probeId, err.toString());
+				session.removeProbeId(probeId);
 				session.failUpstream(err);
 				return Mono.empty();
 			}).subscribeOn(Schedulers.boundedElastic()).subscribe((ignored) -> {
 				// sendMessage completed (HTTP 202 accepted). The JSON-RPC
-				// response will arrive on the inbound flux, update
-				// lastActivity via session.touch(), and be filtered from
-				// the browser stream by McpProxy.
+				// response is expected on the inbound flux, where McpProxy
+				// will match it via session.isProbeId() and call
+				// session.removeProbeId(). If the response never arrives,
+				// the response-level deadline below cleans up.
+				Mono.delay(probeTimeout).subscribe((ignored2) -> {
+					if (session.isProbeId(probeId)) {
+						// Probe response never arrived - clean up and fail upstream.
+						session.removeProbeId(probeId);
+						LOG.warn("proxy[{}] liveness probe {} timed out (no response within {})", session.sessionId(),
+								probeId, probeTimeout);
+						session.failUpstream(
+								new java.util.concurrent.TimeoutException("liveness probe " + probeId + " timed out"));
+					}
+				});
 			}, (err) -> {
 				// onErrorResume handles this already.
 			});

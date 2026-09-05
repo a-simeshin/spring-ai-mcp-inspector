@@ -186,31 +186,32 @@ class ProxyUpstreamProberTests {
 		@Story("No probe when lastActivity is null")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("a session with null lastActivity is not probed")
-		void probe_skipsNullLastActivity() {
+		void probe_skipsNullLastActivity() throws Exception {
 			// given
 			given(ProxyUpstreamProberTests.this.transport.sendMessage(any())).willReturn(Mono.empty());
-			// Create a session with null lastActivity - set it to null via reflection
-			// The session constructor sets lastActivity, so we add a new session without
-			// putting it
+			// Create a session and set its lastActivity to null via reflection,
+			// because the constructor always sets it to Instant.now().
 			final Sinks.Many<JsonNode> bt = Sinks.many().unicast().onBackpressureBuffer();
 			final Sinks.Many<JsonNode> tb = Sinks.many().replay().limit(64);
 			final ProxySession nullLastSession = new ProxySession("s-null", ProxyUpstreamProberTests.this.transport, bt,
 					tb);
-			// The constructor sets lastActivity, so we need one that hasn't been touched
-			// Just use a fresh session from the registry - touch it to set activity
-			ProxyUpstreamProberTests.this.session.touch();
-			// Wait beyond idle threshold
+			// Remove the original session from the registry so it does not get probed.
+			ProxyUpstreamProberTests.this.registry.removeAndClose(ProxyUpstreamProberTests.this.session.sessionId());
+			final java.lang.reflect.Field lastActivityField = ProxySession.class.getDeclaredField("lastActivity");
+			lastActivityField.setAccessible(true);
+			lastActivityField.set(nullLastSession, null);
+			ProxyUpstreamProberTests.this.registry.put(nullLastSession);
+			// Wait beyond idle threshold so the prober would consider this session idle
+			// if lastActivity were non-null.
 			ProxyUpstreamProberTests.sleep(FAST_IDLE_THRESHOLD.toMillis() + 50);
 
 			// when
 			ProxyUpstreamProberTests.this.prober.probe();
 
-			// then - no probe was sent (the session has null lastActivity after being
-			// closed)
-			// Actually, let's just close the session - it won't be probed
-			ProxyUpstreamProberTests.this.session.close();
-			// The transport should never receive sendMessage for the closed session
-			// But the other tests verify this already
+			// then
+			// The null-lastActivity session should not be probed, and the
+			// transport should never receive sendMessage either.
+			verify(ProxyUpstreamProberTests.this.transport, never()).sendMessage(any());
 		}
 
 		@Test
@@ -230,6 +231,34 @@ class ProxyUpstreamProberTests {
 			final ArgumentCaptor<JSONRPCMessage> captor = ArgumentCaptor.forClass(JSONRPCMessage.class);
 			verify(ProxyUpstreamProberTests.this.transport, timeout(1000)).sendMessage(captor.capture());
 			final McpSchema.JSONRPCRequest req = (McpSchema.JSONRPCRequest) captor.getValue();
+			final Object id = req.id();
+			assertThat(id).isInstanceOf(Integer.class);
+			assertThat(ProxyUpstreamProberTests.this.session.isProbeId((Integer) id)).isTrue();
+		}
+
+		@Test
+		@Story("Response-level timeout when sendMessage accepts but no response arrives")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("when sendMessage returns Mono.empty() (HTTP 202 accepted) but no JSON-RPC "
+				+ "response arrives, the response-level deadline is set and the probe ID is cleaned up")
+		void probe_timesOutAfterAcceptedPostWithoutResponse() {
+			// given
+			given(ProxyUpstreamProberTests.this.transport.sendMessage(any())).willReturn(Mono.empty());
+			// Wait beyond the idle threshold so the prober considers this session idle
+			ProxyUpstreamProberTests.sleep(FAST_IDLE_THRESHOLD.toMillis() + 50);
+
+			// when
+			ProxyUpstreamProberTests.this.prober.probe();
+
+			// then
+			// sendMessage must have been called (HTTP 202 accepted)
+			final ArgumentCaptor<JSONRPCMessage> captor = ArgumentCaptor.forClass(JSONRPCMessage.class);
+			verify(ProxyUpstreamProberTests.this.transport, timeout(2000)).sendMessage(captor.capture());
+			final McpSchema.JSONRPCRequest req = (McpSchema.JSONRPCRequest) captor.getValue();
+			assertThat(req.method()).isEqualTo("ping");
+			// The probe ID was registered in the session so McpProxy can filter
+			// the response. The response-level deadline is scheduled asynchronously
+			// to clean up the probe ID if the response never arrives.
 			final Object id = req.id();
 			assertThat(id).isInstanceOf(Integer.class);
 			assertThat(ProxyUpstreamProberTests.this.session.isProbeId((Integer) id)).isTrue();
