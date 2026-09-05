@@ -179,6 +179,128 @@ class ProxyTransportFactoryTests {
 	}
 
 	@Nested
+	@DisplayName("buildSse()")
+	class BuildSse {
+
+		@Test
+		@Story("Build SSE transport with preflight wrapper")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("buildSse() returns an SsePreflightTransport wrapping an HttpClientSseClientTransport")
+		void buildSse_withFullUri_wrapsInPreflightTransport() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri);
+
+			// then
+			assertThat(transport).isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("buildSse() rejects a null URI")
+		void buildSse_withNullUri_throwsIllegalArgument() {
+			// when & then
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.buildSse(null))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("sseUri");
+		}
+
+		@Test
+		@Story("Header forwarding -- auth only")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("buildSse() three-arg overload with an authorization value and no custom headers "
+				+ "returns a non-null SsePreflightTransport")
+		void buildSse_withAuthorizationOnly_returnsSsePreflightTransport() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri,
+					"Bearer tok-123", null);
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Header forwarding -- custom headers only")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("buildSse() three-arg overload with no authorization but with custom headers "
+				+ "returns a non-null SsePreflightTransport")
+		void buildSse_withCustomHeadersOnly_returnsSsePreflightTransport() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri, null,
+					Map.of("X-Tenant", "acme"));
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Header forwarding -- auth and custom headers")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("buildSse() three-arg overload with both authorization and custom headers "
+				+ "returns a non-null SsePreflightTransport")
+		void buildSse_withAuthAndCustomHeaders_returnsSsePreflightTransport() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri,
+					"Bearer tok-abc", Map.of("X-Tenant", "acme"));
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Header forwarding -- both null/empty")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("buildSse() three-arg overload with null authorization and empty custom headers "
+				+ "returns a non-null SsePreflightTransport")
+		void buildSse_withNullAuthAndEmptyCustomHeaders_returnsSsePreflightTransport() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri, null,
+					Map.of());
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Restricted header swallowed")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("buildSse() does not propagate an IllegalArgumentException caused by a restricted "
+				+ "custom header name -- the transport is still returned")
+		void buildSse_withRestrictedCustomHeaderName_doesNotThrow() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when & then -- must not throw
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri, null,
+					Map.of("host", "evil.example.com"));
+
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+	}
+
+	@Nested
 	@DisplayName("openStreamable()")
 	class OpenStreamable {
 
