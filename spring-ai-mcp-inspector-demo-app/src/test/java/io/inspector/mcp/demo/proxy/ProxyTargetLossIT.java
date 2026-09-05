@@ -131,7 +131,10 @@ class ProxyTargetLossIT {
 			+ "hanging, then the session is reaped so a subsequent DELETE returns 404")
 	void targetLossMidSession_whenUpstreamKilled_surfacesAsErrorAndCleansUp() throws Exception {
 		// given
-		inspectorApp = ProxyAppHarness.start("STREAMABLE", false, null);
+		// Disable liveness probing for this test so the proxy does not send ping
+		// probes during the baseline phase.
+		inspectorApp = ProxyAppHarness.start("STREAMABLE", false, null,
+				"--spring.ai.mcp.inspector.upstream-liveness-probe-enabled=false");
 		targetApp = ProxyAppHarness.start("STREAMABLE", false, null);
 
 		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
