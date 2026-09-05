@@ -27,7 +27,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.mcp.client.common.autoconfigure.NamedClientMcpTransport;
 import reactor.core.publisher.Mono;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -55,6 +54,18 @@ class RecordingTransportPostProcessorTests {
 		this.timelineService = new BoundedTimelineService();
 		this.recorder = new McpClientTrafficRecorder(this.timelineService);
 		this.postProcessor = new RecordingTransportPostProcessor(this.recorder);
+	}
+
+	/**
+	 * Creates a new NamedClientMcpTransport record via reflection, exercising the same
+	 * code path used by {@link RecordingTransportPostProcessor} at runtime.
+	 */
+	private Object newNamedClientMcpTransport(final String name, final McpClientTransport transport) throws Exception {
+		final Class<?> clazz = Class
+			.forName("org.springframework.ai.mcp.client.common.autoconfigure.NamedClientMcpTransport");
+		final java.lang.reflect.Constructor<?> constructor = clazz.getDeclaredConstructor(String.class,
+				McpClientTransport.class);
+		return constructor.newInstance(name, transport);
 	}
 
 	@Nested
@@ -101,23 +112,24 @@ class RecordingTransportPostProcessorTests {
 
 		@Test
 		@DisplayName("wraps NamedClientMcpTransport bean with recording decorator")
-		void wrapsNamedClientMcpTransportBean() {
+		void wrapsNamedClientMcpTransportBean() throws Exception {
 			// given
 			final McpClientTransport mockTransport = mock(McpClientTransport.class);
 			given(mockTransport.sendMessage(any(JSONRPCMessage.class))).willReturn(Mono.empty());
-			final NamedClientMcpTransport named = new NamedClientMcpTransport("my-client", mockTransport);
+			final Object named = newNamedClientMcpTransport("my-client", mockTransport);
 
 			// when
 			final Object result = RecordingTransportPostProcessorTests.this.postProcessor
 				.postProcessAfterInitialization(named, "namedTransport");
 
 			// then
-			assertThat(result).isInstanceOf(NamedClientMcpTransport.class);
-			final NamedClientMcpTransport wrapped = (NamedClientMcpTransport) result;
-			assertThat(wrapped.name()).isEqualTo("my-client");
-			assertThat(wrapped.transport()).isInstanceOf(RecordingMcpClientTransport.class);
+			assertThat(result).isInstanceOf(named.getClass());
+			final String clientName = (String) named.getClass().getMethod("name").invoke(result);
+			assertThat(clientName).isEqualTo("my-client");
+			final Object transport = named.getClass().getMethod("transport").invoke(result);
+			assertThat(transport).isInstanceOf(RecordingMcpClientTransport.class);
 			// Verify traffic is captured through the wrapped transport
-			final RecordingMcpClientTransport recording = (RecordingMcpClientTransport) wrapped.transport();
+			final RecordingMcpClientTransport recording = (RecordingMcpClientTransport) transport;
 			final JSONRPCRequest request = new JSONRPCRequest("2.0", "tools/list", 1, null);
 			recording.sendMessage(request).block();
 			final List<TimelineEvent> events = RecordingTransportPostProcessorTests.this.timelineService
@@ -128,93 +140,65 @@ class RecordingTransportPostProcessorTests {
 
 		@Test
 		@DisplayName("detects stdio transport type from delegate class name")
-		void detectsStdioTransportType() {
+		void detectsStdioTransportType() throws Exception {
 			// given
 			final StdioLikeTransport stdioTransport = new StdioLikeTransport();
-			final NamedClientMcpTransport named = new NamedClientMcpTransport("stdio-client", stdioTransport);
+			final Object named = newNamedClientMcpTransport("stdio-client", stdioTransport);
 
 			// when
 			final Object result = RecordingTransportPostProcessorTests.this.postProcessor
 				.postProcessAfterInitialization(named, "b");
 
 			// then
-			final NamedClientMcpTransport wrapped = (NamedClientMcpTransport) result;
-			final RecordingMcpClientTransport recording = (RecordingMcpClientTransport) wrapped.transport();
+			final Object transport = named.getClass().getMethod("transport").invoke(result);
+			final RecordingMcpClientTransport recording = (RecordingMcpClientTransport) transport;
 			assertThat(recording.transportType()).isEqualTo("stdio");
 		}
 
 		@Test
 		@DisplayName("detects sse transport type from delegate class name")
-		void detectsSseTransportType() {
+		void detectsSseTransportType() throws Exception {
 			// given
 			final SseLikeTransport sseTransport = new SseLikeTransport();
-			final NamedClientMcpTransport named = new NamedClientMcpTransport("sse-client", sseTransport);
+			final Object named = newNamedClientMcpTransport("sse-client", sseTransport);
 
 			// when
 			final Object result = RecordingTransportPostProcessorTests.this.postProcessor
 				.postProcessAfterInitialization(named, "b");
 
 			// then
-			final NamedClientMcpTransport wrapped = (NamedClientMcpTransport) result;
-			final RecordingMcpClientTransport recording = (RecordingMcpClientTransport) wrapped.transport();
+			final Object transport = named.getClass().getMethod("transport").invoke(result);
+			final RecordingMcpClientTransport recording = (RecordingMcpClientTransport) transport;
 			assertThat(recording.transportType()).isEqualTo("sse");
 		}
 
 		@Test
 		@DisplayName("detects streamable-http transport type from delegate class name")
-		void detectsStreamableHttpTransportType() {
+		void detectsStreamableHttpTransportType() throws Exception {
 			// given
 			final StreamableHttpLikeTransport httpTransport = new StreamableHttpLikeTransport();
-			final NamedClientMcpTransport named = new NamedClientMcpTransport("http-client", httpTransport);
+			final Object named = newNamedClientMcpTransport("http-client", httpTransport);
 
 			// when
 			final Object result = RecordingTransportPostProcessorTests.this.postProcessor
 				.postProcessAfterInitialization(named, "b");
 
 			// then
-			final NamedClientMcpTransport wrapped = (NamedClientMcpTransport) result;
-			final RecordingMcpClientTransport recording = (RecordingMcpClientTransport) wrapped.transport();
+			final Object transport = named.getClass().getMethod("transport").invoke(result);
+			final RecordingMcpClientTransport recording = (RecordingMcpClientTransport) transport;
 			assertThat(recording.transportType()).isEqualTo("streamable-http");
 		}
 
 		@Test
-		@DisplayName("wraps real NamedClientMcpTransport from Spring AI classpath")
-		void wrapsRealNamedClientMcpTransport() {
-			// given: use the real NamedClientMcpTransport record (not a hand-written
-			// double)
-			final McpClientTransport mockTransport = mock(McpClientTransport.class);
-			given(mockTransport.sendMessage(any(JSONRPCMessage.class))).willReturn(Mono.empty());
-			final NamedClientMcpTransport named = new NamedClientMcpTransport("real-client", mockTransport);
-
-			// when
-			final Object result = RecordingTransportPostProcessorTests.this.postProcessor
-				.postProcessAfterInitialization(named, "realNamedTransport");
-
-			// then
-			assertThat(result).isInstanceOf(NamedClientMcpTransport.class);
-			final NamedClientMcpTransport wrapped = (NamedClientMcpTransport) result;
-			assertThat(wrapped.name()).isEqualTo("real-client");
-			assertThat(wrapped.transport()).isInstanceOf(RecordingMcpClientTransport.class);
-			// Verify traffic is captured through the wrapped transport
-			final RecordingMcpClientTransport recording = (RecordingMcpClientTransport) wrapped.transport();
-			final JSONRPCRequest request = new JSONRPCRequest("2.0", "tools/list", 1, null);
-			recording.sendMessage(request).block();
-			final List<TimelineEvent> events = RecordingTransportPostProcessorTests.this.timelineService
-				.query(TimelineQuery.all());
-			assertThat(events).hasSize(1);
-			assertThat(events.get(0).payload().path("clientName").asText()).isEqualTo("real-client");
-		}
-
-		@Test
 		@DisplayName("wraps elements in a List<NamedClientMcpTransport> bean")
-		void wrapsListBeanElements() {
+		void wrapsListBeanElements() throws Exception {
 			// given: a List<NamedClientMcpTransport> as Spring AI 2.0.0 exposes
 			final McpClientTransport mockTransport1 = mock(McpClientTransport.class);
 			given(mockTransport1.sendMessage(any(JSONRPCMessage.class))).willReturn(Mono.empty());
 			final McpClientTransport mockTransport2 = mock(McpClientTransport.class);
 			given(mockTransport2.sendMessage(any(JSONRPCMessage.class))).willReturn(Mono.empty());
-			final List<NamedClientMcpTransport> list = List.of(new NamedClientMcpTransport("client-a", mockTransport1),
-					new NamedClientMcpTransport("client-b", mockTransport2));
+			final List<Object> list = List.of(newNamedClientMcpTransport("client-a", mockTransport1),
+					newNamedClientMcpTransport("client-b", mockTransport2));
 
 			// when
 			final Object result = RecordingTransportPostProcessorTests.this.postProcessor
@@ -222,16 +206,17 @@ class RecordingTransportPostProcessorTests {
 
 			// then
 			assertThat(result).isInstanceOf(List.class);
-			@SuppressWarnings("unchecked")
-			final List<NamedClientMcpTransport> wrappedList = (List<NamedClientMcpTransport>) result;
+			final List<?> wrappedList = (List<?>) result;
 			assertThat(wrappedList).hasSize(2);
-			for (final NamedClientMcpTransport named : wrappedList) {
-				assertThat(named.transport()).isInstanceOf(RecordingMcpClientTransport.class);
+			for (final Object element : wrappedList) {
+				final Object transport = element.getClass().getMethod("transport").invoke(element);
+				assertThat(transport).isInstanceOf(RecordingMcpClientTransport.class);
 			}
 			// Verify traffic flows through the wrapped transports
-			final NamedClientMcpTransport wrappedA = wrappedList.get(0);
-			final RecordingMcpClientTransport recordingA = (RecordingMcpClientTransport) wrappedA.transport();
-			recordingA.sendMessage(new JSONRPCRequest("2.0", "tools/list", 1, null)).block();
+			final Object first = wrappedList.get(0);
+			final Object transport = first.getClass().getMethod("transport").invoke(first);
+			final RecordingMcpClientTransport recording = (RecordingMcpClientTransport) transport;
+			recording.sendMessage(new JSONRPCRequest("2.0", "tools/list", 1, null)).block();
 			assertThat(RecordingTransportPostProcessorTests.this.timelineService.query(TimelineQuery.all())).hasSize(1);
 		}
 

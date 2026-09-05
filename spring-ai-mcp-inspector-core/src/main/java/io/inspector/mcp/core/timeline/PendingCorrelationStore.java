@@ -94,12 +94,19 @@ final class PendingCorrelationStore<K> {
 	}
 
 	/**
-	 * A pending request correlation with bookkeeping for latency computation.
+	 * A pending request correlation with bookkeeping for latency computation and optional
+	 * progress tracking.
 	 *
 	 * @param correlationId the generated correlation id
 	 * @param timestamp the instant when the request was recorded
+	 * @param progressToken the request's {@code params._meta.progressToken} text, may be
+	 * {@code null}
 	 */
-	record PendingCorrelation(String correlationId, Instant timestamp) {
+	record PendingCorrelation(String correlationId, Instant timestamp, String progressToken) {
+
+		PendingCorrelation(final String correlationId, final Instant timestamp) {
+			this(correlationId, timestamp, null);
+		}
 
 		/**
 		 * Returns the elapsed time in milliseconds since this pending entry was created.

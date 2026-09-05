@@ -211,19 +211,6 @@ public final class McpClientTrafficRecorder {
 		return this.requestCorrelations.size();
 	}
 
-	/**
-	 * Drops every pending correlation recorded for {@code clientName}. Invoked when a
-	 * client session closes so abandoned requests leave no residue.
-	 * @param clientName the client name whose correlations to clear (may be {@code null})
-	 */
-	public void clearClient(final String clientName) {
-		if (clientName == null) {
-			return;
-		}
-		final String prefix = CORRELATION_PREFIX + clientName + ":";
-		this.requestCorrelations.removeIf((key) -> key.startsWith(prefix));
-	}
-
 	private static String correlationId(final String clientName, final Object requestId) {
 		return CORRELATION_PREFIX + clientName + ":" + requestId;
 	}
