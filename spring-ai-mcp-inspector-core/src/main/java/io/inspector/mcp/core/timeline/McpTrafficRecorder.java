@@ -17,8 +17,6 @@
 package io.inspector.mcp.core.timeline;
 
 import java.time.Instant;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -44,23 +42,15 @@ public final class McpTrafficRecorder {
 	private final TimelineService timelineService;
 
 	/**
-	 * Pending request→response correlations, ordered by insertion. When the map exceeds
-	 * {@link #MAX_PENDING_CORRELATIONS} the eldest entry is evicted automatically via
-	 * {@link LinkedHashMap#removeEldestEntry}.
+	 * Pending request→response correlations, bounded LRU with thread-safe access.
 	 */
-	private final LinkedHashMap<CorrelationKey, PendingCorrelation> requestCorrelations;
+	private final PendingCorrelationStore<CorrelationKey> requestCorrelations;
 
 	/**
 	 * Pending progress-token → correlation mappings, session-scoped and TTL-free (cleared
 	 * on response/close).
 	 */
 	private final ConcurrentHashMap<String, String> progressCorrelations = new ConcurrentHashMap<>();
-
-	/**
-	 * Guards all access to {@link #requestCorrelations}, which is a non-thread-safe
-	 * {@link LinkedHashMap}.
-	 */
-	private final Object pendingLock = new Object();
 
 	/**
 	 * Creates a new traffic recorder.
@@ -71,16 +61,11 @@ public final class McpTrafficRecorder {
 			throw new IllegalArgumentException("timelineService must not be null");
 		}
 		this.timelineService = timelineService;
-		this.requestCorrelations = new LinkedHashMap<>() {
-			@Override
-			protected boolean removeEldestEntry(final Map.Entry<CorrelationKey, PendingCorrelation> eldest) {
-				if (size() > MAX_PENDING_CORRELATIONS) {
-					evictProgress(eldest.getKey(), eldest.getValue());
-					return true;
-				}
-				return false;
+		this.requestCorrelations = new PendingCorrelationStore<>(MAX_PENDING_CORRELATIONS, (key, pending) -> {
+			if (pending.progressToken() != null) {
+				McpTrafficRecorder.this.progressCorrelations.remove(keyOf(key.sessionId(), pending.progressToken()));
 			}
-		};
+		});
 	}
 
 	/**
@@ -137,10 +122,8 @@ public final class McpTrafficRecorder {
 		if (message instanceof JSONRPCResponse response) {
 			final Object id = response.id();
 			final CorrelationKey key = (id != null) ? new CorrelationKey(sessionId, id) : null;
-			final PendingCorrelation pending;
-			synchronized (this.pendingLock) {
-				pending = (key != null) ? this.requestCorrelations.remove(key) : null;
-			}
+			final PendingCorrelationStore.PendingCorrelation pending = (key != null)
+					? this.requestCorrelations.remove(key) : null;
 			if (pending != null) {
 				evictProgress(key, pending);
 			}
@@ -234,31 +217,26 @@ public final class McpTrafficRecorder {
 	 * @return the number of pending correlations
 	 */
 	public int pendingCorrelations() {
-		synchronized (this.pendingLock) {
-			return this.requestCorrelations.size();
-		}
+		return this.requestCorrelations.size();
 	}
 
 	/**
-	 * Stores a pending request correlation, keeping the map bounded. An
-	 * {@link LinkedHashMap#removeEldestEntry} override on the map itself handles
-	 * oldest-first eviction atomically when the map exceeds capacity, so no separate scan
-	 * is needed.
+	 * Stores a pending request correlation, keeping the map bounded. The
+	 * {@link PendingCorrelationStore} handles LRU eviction internally.
 	 * @param key the session-scoped request key
 	 * @param correlationId the generated correlation id
 	 * @param progressToken the request's progress token text, may be {@code null}
 	 */
 	private void storePending(final CorrelationKey key, final String correlationId, final String progressToken) {
-		final PendingCorrelation value = new PendingCorrelation(correlationId, progressToken);
-		synchronized (this.pendingLock) {
-			this.requestCorrelations.put(key, value);
-		}
+		final PendingCorrelationStore.PendingCorrelation value = new PendingCorrelationStore.PendingCorrelation(
+				correlationId, Instant.now(), progressToken);
+		this.requestCorrelations.store(key, value);
 		if (progressToken != null) {
 			this.progressCorrelations.put(keyOf(key.sessionId(), progressToken), correlationId);
 		}
 	}
 
-	private void evictProgress(final CorrelationKey key, final PendingCorrelation value) {
+	private void evictProgress(final CorrelationKey key, final PendingCorrelationStore.PendingCorrelation value) {
 		if (value.progressToken() != null) {
 			// best-effort: a stale token lookup simply falls back to a fresh id
 			this.progressCorrelations.remove(keyOf(key.sessionId(), value.progressToken()));
@@ -274,9 +252,7 @@ public final class McpTrafficRecorder {
 		if (sessionId == null) {
 			return;
 		}
-		synchronized (this.pendingLock) {
-			this.requestCorrelations.keySet().removeIf((key) -> key.sessionId().equals(sessionId));
-		}
+		this.requestCorrelations.removeIf((key) -> key.sessionId().equals(sessionId));
 		this.progressCorrelations.keySet().removeIf((token) -> token.startsWith(sessionId + "\u0000"));
 	}
 
@@ -339,17 +315,6 @@ public final class McpTrafficRecorder {
 			// Normalise null sessionId to empty string so the map key is consistent
 			sessionId = (sessionId != null) ? sessionId : "";
 		}
-
-	}
-
-	/**
-	 * A pending request correlation with the bookkeeping needed for bounded storage.
-	 *
-	 * @param correlationId the generated correlation id
-	 * @param progressToken the request's {@code params._meta.progressToken} text, may be
-	 * {@code null}
-	 */
-	record PendingCorrelation(String correlationId, String progressToken) {
 
 	}
 
