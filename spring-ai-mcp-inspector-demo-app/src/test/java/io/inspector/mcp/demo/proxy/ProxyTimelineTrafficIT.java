@@ -239,14 +239,14 @@ class ProxyTimelineTrafficIT {
 		final String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
 		final String connectUrl = proxyBase + "/mcp?url=" + URLEncoder.encode(targetUrl, StandardCharsets.UTF_8);
 
-		// when — initialize through the proxy
+		// when: initialize through the proxy
 		final HttpResponse<String> initResponse = post(connectUrl, null, initializeFrame());
 
-		// then — the proxy response body (the wire frame forwarded to the browser) is a
+		// then: the proxy response body (the wire frame forwarded to the browser) is a
 		// valid JSON-RPC response without enrichment artifacts
 		assertThat(initResponse.statusCode()).as("initialize status on %s", ProxyAppHarness.stack()).isEqualTo(200);
 		final JsonNode forwarded = MAPPER.readTree(initResponse.body());
-		// The forwarded frame must NOT carry _protocolNegotiation — the MCP SDK validates
+		// The forwarded frame must NOT carry _protocolNegotiation: the MCP SDK validates
 		// responses with a strict schema and rejects unknown fields.
 		assertThat(forwarded.get("_protocolNegotiation"))
 			.as("forwarded frame must not carry _protocolNegotiation on %s", ProxyAppHarness.stack())
@@ -256,7 +256,7 @@ class ProxyTimelineTrafficIT {
 			.as("initialize result protocolVersion on %s", ProxyAppHarness.stack())
 			.isNotEmpty();
 
-		// and — the timeline event DOES carry the enrichment
+		// and: the timeline event DOES carry the enrichment
 		final String sessionId = initResponse.headers().firstValue("mcp-session-id").orElse("");
 		assertThat(sessionId).as("mcp-session-id on %s", ProxyAppHarness.stack()).isNotBlank();
 		final List<JsonNode> events = timelineEvents(port);
