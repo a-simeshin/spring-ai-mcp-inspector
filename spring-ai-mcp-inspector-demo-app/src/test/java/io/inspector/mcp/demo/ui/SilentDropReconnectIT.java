@@ -174,18 +174,18 @@ class SilentDropReconnectIT {
 		// Unlike the previous tautology, this does NOT use connect-button in
 		// the initial wait: connect-button is shown while connectionStatus ===
 		// "connected", which is the status at click time, so that wait would
-		// return immediately.  Instead we first wait for the server name to
+		// return immediately. Instead we first wait for the server name to
 		// disappear (confirming disconnect took effect), then wait for either
 		// the error alert or the server name to come back.
 		// The connect-error-alert testid scopes to the connection failure
 		// alert in the sidebar config pane, not the resource panel
 		// placeholder that also carries role=alert.
 		sidebar().shouldNotHave(text("mcp-inspector-demo"), Duration.ofSeconds(30));
-		// Now wait for either reconnect success or error alert.  We cannot
+		// Now wait for either reconnect success or error alert. We cannot
 		// use connect-button here because it is rendered while
 		// connectionStatus === "connected" — the same status the UI was in
 		// before the click — so a wait on connect-button would return
-		// immediately.  Instead, wait for the error alert explicitly; if it
+		// immediately. Instead, wait for the error alert explicitly; if it
 		// does not appear within the timeout, Selenide cancels and throws,
 		// which we catch as "reconnect succeeded".
 		try {
