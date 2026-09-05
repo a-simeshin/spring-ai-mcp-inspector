@@ -117,16 +117,16 @@ class ProxySseLivenessIT {
 	void upstreamDeath_closesDownstreamSseWithinBound() throws Exception {
 		// given
 		// Use fast probe intervals to keep the test bounded
-		inspectorApp = ProxyAppHarness.start("SSE", false, null,
+		inspectorApp = ProxyAppHarness.start("STREAMABLE", false, null,
 				"--spring.ai.mcp.inspector.timeouts.upstream-probe-interval=PT2S",
 				"--spring.ai.mcp.inspector.timeouts.upstream-probe-timeout=PT3S",
 				"--spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold=PT3S");
-		targetApp = ProxyAppHarness.start("SSE", false, null);
+		targetApp = ProxyAppHarness.start("STREAMABLE", false, null);
 
 		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
 		final int targetPort = ProxyAppHarness.port(targetApp);
 		final String proxyBase = "http://127.0.0.1:" + inspectorPort + "/mcp-inspector-api";
-		final String targetSseUrl = "http://127.0.0.1:" + targetPort + "/mcp";
+		final String targetSseUrl = "http://127.0.0.1:" + targetPort + "/sse";
 
 		// 1. Open the SSE stream and capture the endpoint prologue.
 		final AtomicBoolean streamClosed = new AtomicBoolean(false);
@@ -251,16 +251,16 @@ class ProxySseLivenessIT {
 			+ "one probe interval, proving the probe does not produce false positives")
 	void upstreamAlive_keepsSseStreamOpen() throws Exception {
 		// given
-		// Use default probe intervals (10s interval, 15s idle threshold) to ensure
-		// the probe does NOT trigger during the 5s observation window.
+		// Disable liveness probing in the negative control: with a live upstream
+		// the prober must not interfere with the SSE stream.
 		inspectorApp = ProxyAppHarness.start("STREAMABLE", false, null,
-				"--spring.ai.mcp.inspector.timeouts.sse-session=PT30M");
+				"--spring.ai.mcp.inspector.upstream-liveness-probe-enabled=false");
 		targetApp = ProxyAppHarness.start("STREAMABLE", false, null);
 
 		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
 		final int targetPort = ProxyAppHarness.port(targetApp);
 		final String proxyBase = "http://127.0.0.1:" + inspectorPort + "/mcp-inspector-api";
-		final String targetSseUrl = "http://127.0.0.1:" + targetPort + "/mcp";
+		final String targetSseUrl = "http://127.0.0.1:" + targetPort + "/sse";
 
 		// Open the SSE stream and capture the endpoint prologue.
 		final AtomicBoolean streamClosed = new AtomicBoolean(false);
