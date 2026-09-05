@@ -303,7 +303,7 @@ describe("App saved connections integration", () => {
     mockConfirm.mockRestore();
   });
 
-  it("selects a saved connection and populates form fields", async () => {
+  it("selects a saved connection and populates all form fields", async () => {
     // Seed a connection "first" with specific headers and env
     const draft = {
       name: "first",
@@ -334,10 +334,257 @@ describe("App saved connections integration", () => {
     // Click the saved connection
     fireEvent.click(screen.getByTestId(`saved-connection-${saved.id}`));
 
+    // Transport Type should be SSE
+    await waitFor(() => {
+      const transportTrigger = screen.getByRole("combobox", {
+        name: /transport type/i,
+      });
+      expect(transportTrigger).toHaveTextContent("SSE");
+    });
+
+    // Connection Type should be visible (non-STDIO) and set to "Via Proxy"
+    await waitFor(() => {
+      const connTypeTrigger = screen.getByRole("combobox", {
+        name: /connection type/i,
+      });
+      expect(connTypeTrigger).toHaveTextContent("Via Proxy");
+    });
+
     // The URL should be populated
     await waitFor(() => {
       const urlInput = screen.getByLabelText("URL") as HTMLInputElement;
       expect(urlInput.value).toBe("http://my-server:8080/sse");
+    });
+
+    // Command should NOT be in the document (stdio-only)
+    expect(screen.queryByLabelText("Command")).not.toBeInTheDocument();
+
+    // Arguments should NOT be in the document (stdio-only)
+    expect(screen.queryByLabelText("Arguments")).not.toBeInTheDocument();
+
+    // Env vars button should NOT be in the document (stdio-only)
+    expect(screen.queryByTestId("env-vars-button")).not.toBeInTheDocument();
+
+    // Open the auth section and check custom headers
+    fireEvent.click(screen.getByTestId("auth-button"));
+    await waitFor(() => {
+      const headerNameInput = screen.getByTestId(
+        "header-name-input-0",
+      ) as HTMLInputElement;
+      expect(headerNameInput.value).toBe("X-Custom");
+      const headerValueInput = screen.getByTestId(
+        "header-value-input-0",
+      ) as HTMLInputElement;
+      // Header values are stripped by stripSecrets
+      expect(headerValueInput.value).toBe("");
+    });
+  });
+
+  it("selects a stdio saved connection and populates all fields", async () => {
+    // Seed a stdio connection with command, args, env, custom headers
+    const stdioDraft = {
+      name: "my-stdio",
+      transport: "stdio" as const,
+      connectionType: "proxy" as const,
+      command: "node",
+      args: "server.js",
+      env: { FOO: "bar" },
+      customHeaders: [
+        { name: "X-Header", value: "should-be-empty", enabled: true },
+      ],
+    };
+    const stripped = stripSecrets(stdioDraft);
+    const saved = saveConnection(stripped);
+
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalled();
+    });
+
+    // The saved connection should be visible
+    expect(screen.getByText("my-stdio")).toBeInTheDocument();
+
+    // Click the saved connection
+    fireEvent.click(screen.getByTestId(`saved-connection-${saved.id}`));
+
+    // Transport Type should be STDIO
+    await waitFor(() => {
+      const transportTrigger = screen.getByRole("combobox", {
+        name: /transport type/i,
+      });
+      expect(transportTrigger).toHaveTextContent("STDIO");
+    });
+
+    // URL should NOT be in the document (non-STDIO only)
+    expect(screen.queryByLabelText("URL")).not.toBeInTheDocument();
+
+    // Connection Type should NOT be in the document (non-STDIO only)
+    expect(screen.queryByRole("combobox", { name: /connection type/i }))
+      .not.toBeInTheDocument();
+
+    // Command should be populated
+    await waitFor(() => {
+      const commandInput = screen.getByLabelText(
+        "Command",
+      ) as HTMLInputElement;
+      expect(commandInput.value).toBe("node");
+    });
+
+    // Arguments should be populated
+    await waitFor(() => {
+      const argsInput = screen.getByLabelText(
+        "Arguments",
+      ) as HTMLInputElement;
+      expect(argsInput.value).toBe("server.js");
+    });
+
+    // Open the env vars section and check env values
+    fireEvent.click(screen.getByTestId("env-vars-button"));
+    await waitFor(() => {
+      const envKeyInput = screen.getByLabelText(
+        "Environment variable key 1",
+      ) as HTMLInputElement;
+      expect(envKeyInput.value).toBe("FOO");
+      const envValueInput = screen.getByLabelText(
+        "Environment variable value 1",
+      ) as HTMLInputElement;
+      // Env values are stripped by stripSecrets
+      expect(envValueInput.value).toBe("");
+    });
+
+    // Open the auth section and check custom headers
+    fireEvent.click(screen.getByTestId("auth-button"));
+    await waitFor(() => {
+      const headerNameInput = screen.getByTestId(
+        "header-name-input-0",
+      ) as HTMLInputElement;
+      expect(headerNameInput.value).toBe("X-Header");
+      const headerValueInput = screen.getByTestId(
+        "header-value-input-0",
+      ) as HTMLInputElement;
+      // Header values are stripped by stripSecrets
+      expect(headerValueInput.value).toBe("");
+    });
+  });
+
+  it("switches between stdio and sse entries and resets absent fields", async () => {
+    // Seed a stdio entry
+    const stdioDraft = {
+      name: "stdio-server",
+      transport: "stdio" as const,
+      connectionType: "proxy" as const,
+      command: "python",
+      args: "main.py --port 8080",
+      env: { MODE: "prod" },
+      customHeaders: [],
+    };
+    const stdio = saveConnection(stripSecrets(stdioDraft));
+
+    // Seed an SSE entry
+    const sseDraft = {
+      name: "sse-server",
+      transport: "sse" as const,
+      connectionType: "direct" as const,
+      url: "http://localhost:9999/sse",
+      customHeaders: [
+        { name: "X-SSE", value: "should-be-empty", enabled: true },
+      ],
+      env: {},
+    };
+    const sse = saveConnection(stripSecrets(sseDraft));
+
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalled();
+    });
+
+    // Step 1: Select the stdio entry
+    fireEvent.click(screen.getByTestId(`saved-connection-${stdio.id}`));
+
+    // Verify stdio fields are populated
+    await waitFor(() => {
+      expect(
+        screen.getByRole("combobox", { name: /transport type/i }),
+      ).toHaveTextContent("STDIO");
+    });
+    await waitFor(() => {
+      const commandInput = screen.getByLabelText(
+        "Command",
+      ) as HTMLInputElement;
+      expect(commandInput.value).toBe("python");
+    });
+    await waitFor(() => {
+      const argsInput = screen.getByLabelText(
+        "Arguments",
+      ) as HTMLInputElement;
+      expect(argsInput.value).toBe("main.py --port 8080");
+    });
+
+    // Step 2: Select the SSE entry
+    fireEvent.click(screen.getByTestId(`saved-connection-${sse.id}`));
+
+    // Verify transport type changed to SSE
+    await waitFor(() => {
+      expect(
+        screen.getByRole("combobox", { name: /transport type/i }),
+      ).toHaveTextContent("SSE");
+    });
+
+    // Verify stdio fields are absent (non-STDIO only)
+    expect(screen.queryByLabelText("Command")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Arguments")).not.toBeInTheDocument();
+
+    // Verify SSE fields are populated
+    await waitFor(() => {
+      const urlInput = screen.getByLabelText("URL") as HTMLInputElement;
+      expect(urlInput.value).toBe("http://localhost:9999/sse");
+    });
+
+    // Verify connection type is set to "Direct"
+    await waitFor(() => {
+      expect(
+        screen.getByRole("combobox", { name: /connection type/i }),
+      ).toHaveTextContent("Direct");
+    });
+
+    // Open auth section and verify custom headers
+    fireEvent.click(screen.getByTestId("auth-button"));
+    await waitFor(() => {
+      const headerNameInput = screen.getByTestId(
+        "header-name-input-0",
+      ) as HTMLInputElement;
+      expect(headerNameInput.value).toBe("X-SSE");
+    });
+
+    // Step 3: Switch back to stdio entry
+    fireEvent.click(screen.getByTestId(`saved-connection-${stdio.id}`));
+
+    // Verify SSE fields are absent
+    expect(screen.queryByLabelText("URL")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: /connection type/i }),
+    ).not.toBeInTheDocument();
+
+    // Verify stdio fields are restored
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText("Command") as HTMLInputElement,
+      ).toHaveValue("python");
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText("Arguments") as HTMLInputElement,
+      ).toHaveValue("main.py --port 8080");
     });
   });
 });
