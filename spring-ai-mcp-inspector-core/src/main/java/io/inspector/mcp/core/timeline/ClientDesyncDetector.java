@@ -152,6 +152,13 @@ public final class ClientDesyncDetector {
 			if (url == null && command == null) {
 				continue;
 			}
+			if (url != null && command != null) {
+				findings.add(new DesyncFinding(DesyncType.TRANSPORT_MISMATCH, config.name(), null,
+						"url=" + url + ", command=" + command,
+						"Client '" + config.name() + "' has both url and command properties configured: " + "url=" + url
+								+ ", command=" + command + ". Only one transport property is allowed per connection."));
+				continue;
+			}
 			if ("stdio".equals(transport)) {
 				if (url != null) {
 					findings.add(new DesyncFinding(DesyncType.TRANSPORT_MISMATCH, config.name(), null, url,
@@ -170,12 +177,6 @@ public final class ClientDesyncDetector {
 							"Client '" + config.name() + "' is configured as " + transport
 									+ " but has a command property: " + command + ". Did you mean stdio?"));
 				}
-			}
-			if (url != null && command != null) {
-				findings.add(new DesyncFinding(DesyncType.TRANSPORT_MISMATCH, config.name(), null,
-						"url=" + url + ", command=" + command,
-						"Client '" + config.name() + "' has both url and command properties configured: " + "url=" + url
-								+ ", command=" + command + ". Only one transport property is allowed per connection."));
 			}
 		}
 		return findings;

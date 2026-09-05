@@ -131,14 +131,13 @@ public final class ClientConfigReader {
 		}
 		String result = raw;
 		final int schemeEnd = result.indexOf("://");
-		if (schemeEnd < 0) {
-			return result;
-		}
-		final int atSign = result.indexOf('@', schemeEnd + 3);
-		if (atSign >= 0) {
-			final int queryStart = result.indexOf('?');
-			if (queryStart < 0 || atSign < queryStart) {
-				result = result.substring(0, schemeEnd + 3) + "***" + result.substring(atSign);
+		if (schemeEnd >= 0) {
+			final int atSign = result.indexOf('@', schemeEnd + 3);
+			if (atSign >= 0) {
+				final int queryStart = result.indexOf('?');
+				if (queryStart < 0 || atSign < queryStart) {
+					result = result.substring(0, schemeEnd + 3) + "***" + result.substring(atSign);
+				}
 			}
 		}
 		final int queryStart = result.indexOf('?');
