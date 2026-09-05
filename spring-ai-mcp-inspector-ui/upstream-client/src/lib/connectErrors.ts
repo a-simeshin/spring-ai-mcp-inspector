@@ -174,7 +174,7 @@ export function connectionFailureFromError(error: unknown): ConnectFailure {
 export function humanReadableReason(reason: ConnectFailureReason): string {
   switch (reason) {
     case "timeout":
-      return "Connection timed out";
+      return "POST /mcp request timed out";
     case "connection_refused":
       return "Connection refused";
     case "dns":

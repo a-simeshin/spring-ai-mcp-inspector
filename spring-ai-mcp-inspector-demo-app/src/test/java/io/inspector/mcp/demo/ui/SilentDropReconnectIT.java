@@ -168,24 +168,35 @@ class SilentDropReconnectIT {
 		// handshake)
 		$("[data-testid=connect-button]").click();
 
-		// then - the reconnect either succeeds (sidebar shows server name) OR
-		// surfaces a visible error alert. Both outcomes prove the stale-session
-		// guard fired: the old session state was cleaned up and a fresh
-		// handshake was attempted, not a silent -32001 timeout loop.
+		// then - wait for the sidebar to exit the "connected" state (the
+		// disconnect+connect sequence must have started), then wait for either
+		// a reconnect success (server name reappears) or an error alert.
+		// Unlike the previous tautology, this does NOT use connect-button in
+		// the initial wait: connect-button is shown while connectionStatus ===
+		// "connected", which is the status at click time, so that wait would
+		// return immediately.  Instead we first wait for the server name to
+		// disappear (confirming disconnect took effect), then wait for either
+		// the error alert or the server name to come back.
 		// The connect-error-alert testid scopes to the connection failure
 		// alert in the sidebar config pane, not the resource panel
 		// placeholder that also carries role=alert.
-		// Wait for either outcome without a connected-only gate.
-		$("[data-testid=connect-button], [data-testid=connect-error-alert]").shouldBe(visible, Duration.ofSeconds(30));
-		SelenideElement errorAlert = $("[data-testid=connect-error-alert]");
-		if (errorAlert.is(visible)) {
+		sidebar().shouldNotHave(text("mcp-inspector-demo"), Duration.ofSeconds(30));
+		// Now wait for either reconnect success or error alert.  We cannot
+		// use connect-button here because it is rendered while
+		// connectionStatus === "connected" — the same status the UI was in
+		// before the click — so a wait on connect-button would return
+		// immediately.  Instead, wait for the error alert explicitly; if it
+		// does not appear within the timeout, Selenide cancels and throws,
+		// which we catch as "reconnect succeeded".
+		try {
+			$("[data-testid=connect-error-alert]").shouldBe(visible, Duration.ofSeconds(30));
 			// An error was surfaced to the user instead of silently timing
 			// out with -32001. The alert must mention the POST /mcp attempt
 			// and offer a Retry/Reset/reload action.
-			errorAlert.shouldHave(text("POST /mcp").or(text("mcp")), Duration.ofSeconds(5));
+			$("[data-testid=connect-error-alert]").shouldHave(text("POST /mcp"), Duration.ofSeconds(5));
 			$("[data-testid=retry-connect-button]").shouldBe(visible, Duration.ofSeconds(5));
 		}
-		else {
+		catch (com.codeborne.selenide.ex.ElementNotFound | com.codeborne.selenide.ex.ElementShould e) {
 			// No error alert means the reconnect succeeded.
 			sidebar().shouldHave(text("mcp-inspector-demo"), Duration.ofSeconds(10));
 		}

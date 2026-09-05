@@ -220,7 +220,7 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	 * @return set of session IDs at the time of the call
 	 */
 	public Set<String> sessionIds() {
-		return this.sessions.keySet();
+		return Set.copyOf(this.sessions.keySet());
 	}
 
 	/**
