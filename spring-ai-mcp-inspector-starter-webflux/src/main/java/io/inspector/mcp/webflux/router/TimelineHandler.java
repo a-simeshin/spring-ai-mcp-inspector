@@ -113,7 +113,7 @@ public class TimelineHandler {
 		try {
 			return Instant.parse(raw);
 		}
-		catch (final IllegalArgumentException ex) {
+		catch (final RuntimeException ex) {
 			return null;
 		}
 	}
