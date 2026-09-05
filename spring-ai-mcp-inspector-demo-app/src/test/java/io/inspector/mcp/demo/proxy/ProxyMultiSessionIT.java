@@ -106,7 +106,8 @@ class ProxyMultiSessionIT {
 			+ "and both tear down cleanly")
 	void twoSessions_whenRequestsRunInParallel_routeResponsesIndependently() throws Exception {
 		// given
-		app = ProxyAppHarness.start("STREAMABLE", false, null);
+		app = ProxyAppHarness.start("STREAMABLE", false, null,
+				"--spring.ai.mcp.inspector.upstream-liveness-probe-enabled=false");
 		final int port = ProxyAppHarness.port(app);
 		final String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		final String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";

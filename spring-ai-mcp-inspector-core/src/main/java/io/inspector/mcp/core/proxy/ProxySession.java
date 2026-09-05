@@ -18,8 +18,11 @@ package io.inspector.mcp.core.proxy;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.modelcontextprotocol.spec.McpClientTransport;
@@ -136,6 +139,14 @@ public final class ProxySession {
 
 	private final Mono<Void> closeSignal;
 
+	/**
+	 * IDs of active liveness-probe requests that must not be forwarded to the browser.
+	 */
+	private final Set<Integer> probeIds = ConcurrentHashMap.newKeySet();
+
+	/** Monotonic counter for generating unique probe request IDs. */
+	private static final AtomicInteger PROBE_ID_SEQ = new AtomicInteger(0);
+
 	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
 			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser) {
 		this.sessionId = sessionId;
@@ -248,6 +259,46 @@ public final class ProxySession {
 	 */
 	public Mono<Void> closeSignal() {
 		return this.closeSignal;
+	}
+
+	/**
+	 * Registers a probe request ID so that the proxy's inbound handler can recognise the
+	 * matching response and skip forwarding it to the browser.
+	 * @param id the JSON-RPC request id of the probe
+	 */
+	public void registerProbeId(final int id) {
+		this.probeIds.add(id);
+	}
+
+	/**
+	 * Returns {@code true} if the given JSON-RPC id belongs to an internal liveness probe
+	 * whose response must not be forwarded to the browser.
+	 * @param id the JSON-RPC request/response id to check
+	 * @return {@code true} if this is a probe id
+	 */
+	public boolean isProbeId(final int id) {
+		return this.probeIds.contains(id);
+	}
+
+	/**
+	 * Removes a previously registered probe ID from the set. Called after the matching
+	 * probe response has been filtered out, preventing unbounded growth of the set.
+	 * @param id the probe id to remove
+	 */
+	public void removeProbeId(final int id) {
+		this.probeIds.remove(id);
+	}
+
+	/**
+	 * Generates the next unique probe request ID. The ID is automatically registered so
+	 * its response will be filtered from the browser stream.
+	 * @return a unique negative probe ID
+	 */
+	public int nextProbeId() {
+		// Use negative IDs to avoid collision with normal MCP request IDs
+		final int id = -Math.abs(PROBE_ID_SEQ.incrementAndGet());
+		this.probeIds.add(id);
+		return id;
 	}
 
 	/**

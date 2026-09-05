@@ -113,6 +113,18 @@ public final class McpProxy {
 		// targetToBrowser sink. Returning Mono.empty() tells the SDK we have no
 		// further response to send.
 		return session.targetTransport().connect((inbound) -> inbound.flatMap((message) -> {
+			// Skip internal probe responses - they are not real MCP messages
+			// and must not be forwarded to the browser.
+			if (message instanceof McpSchema.JSONRPCResponse response) {
+				final Object id = response.id();
+				if (id instanceof Number numId && session.isProbeId(numId.intValue())) {
+					// Probe responses are internal traffic - they must not count as
+					// activity for session reaping, and the probe id must be removed
+					// to prevent unbounded growth of the probeIds set.
+					session.removeProbeId(numId.intValue());
+					return Mono.<JSONRPCMessage>empty();
+				}
+			}
 			final JsonNode body = toJsonNode(message);
 			if (body != null) {
 				final Sinks.EmitResult er = session.targetToBrowser().tryEmitNext(body);
@@ -122,7 +134,7 @@ public final class McpProxy {
 				session.touch();
 			}
 			return Mono.<JSONRPCMessage>empty();
-		}));
+		}).doOnError((err) -> session.failUpstream(err)).doOnSuccess((ignored) -> session.failUpstream(null)));
 	}
 
 	/**

@@ -131,7 +131,10 @@ class ProxyTargetLossIT {
 			+ "hanging, then the session is reaped so a subsequent DELETE returns 404")
 	void targetLossMidSession_whenUpstreamKilled_surfacesAsErrorAndCleansUp() throws Exception {
 		// given
-		inspectorApp = ProxyAppHarness.start("STREAMABLE", false, null);
+		// Disable liveness probing for this test so the proxy does not send ping
+		// probes during the baseline phase.
+		inspectorApp = ProxyAppHarness.start("STREAMABLE", false, null,
+				"--spring.ai.mcp.inspector.upstream-liveness-probe-enabled=false");
 		targetApp = ProxyAppHarness.start("STREAMABLE", false, null);
 
 		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
@@ -193,14 +196,15 @@ class ProxyTargetLossIT {
 	private static String openSession(String proxyBase, String targetUrl) throws Exception {
 		final ObjectNode init = buildInit(1);
 		final HttpRequest request = HttpRequest
-			.newBuilder(URI.create(proxyBase + "/mcp?url=" + URLEncoder.encode(targetUrl, StandardCharsets.UTF_8)))
+			.newBuilder(URI.create(proxyBase + "/sse?url=" + URLEncoder.encode(targetUrl, StandardCharsets.UTF_8)))
 			.timeout(BUDGET)
 			.header("Content-Type", "application/json")
-			.header("Accept", "application/json, text/event-stream")
+			.header("Accept", "text/event-stream")
 			.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(init)))
 			.build();
 		final HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
 		assertThat(response.statusCode()).as("initialize must be 200, body=%s", response.body()).isEqualTo(200);
+		// For SSE transport, the session ID comes in the mcp-session-id header.
 		return response.headers().firstValue("mcp-session-id").orElseThrow();
 	}
 
@@ -209,10 +213,9 @@ class ProxyTargetLossIT {
 		final ObjectNode notification = MAPPER.createObjectNode();
 		notification.put("jsonrpc", "2.0");
 		notification.put("method", "notifications/initialized");
-		final HttpRequest request = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
+		final HttpRequest request = HttpRequest.newBuilder(URI.create(proxyBase + "/sse?sessionId=" + sessionId))
 			.timeout(BUDGET)
 			.header("Content-Type", "application/json")
-			.header("mcp-session-id", sessionId)
 			.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(notification)))
 			.build();
 		final HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
@@ -230,11 +233,9 @@ class ProxyTargetLossIT {
 		toolsList.put("jsonrpc", "2.0");
 		toolsList.put("method", "tools/list");
 		toolsList.put("id", id);
-		final HttpRequest request = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
+		final HttpRequest request = HttpRequest.newBuilder(URI.create(proxyBase + "/sse?sessionId=" + sessionId))
 			.timeout(budget)
 			.header("Content-Type", "application/json")
-			.header("Accept", "application/json, text/event-stream")
-			.header("mcp-session-id", sessionId)
 			.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(toolsList)))
 			.build();
 		return HTTP.send(request, HttpResponse.BodyHandlers.ofString());
@@ -242,9 +243,8 @@ class ProxyTargetLossIT {
 
 	/** DELETE a session by id. Returns the raw response so callers can inspect status. */
 	private static HttpResponse<String> deleteSession(String proxyBase, String sessionId) throws Exception {
-		final HttpRequest request = HttpRequest.newBuilder(URI.create(proxyBase + "/mcp"))
+		final HttpRequest request = HttpRequest.newBuilder(URI.create(proxyBase + "/sse?sessionId=" + sessionId))
 			.timeout(Duration.ofSeconds(10))
-			.header("mcp-session-id", sessionId)
 			.DELETE()
 			.build();
 		return HTTP.send(request, HttpResponse.BodyHandlers.ofString());

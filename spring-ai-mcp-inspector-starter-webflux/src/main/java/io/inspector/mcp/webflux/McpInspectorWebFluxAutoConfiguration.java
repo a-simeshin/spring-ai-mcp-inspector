@@ -29,6 +29,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.env.Environment;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.web.reactive.config.CorsRegistry;
 import org.springframework.web.reactive.config.WebFluxConfigurer;
 
@@ -43,6 +44,7 @@ import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.proxy.ProxyUpstreamProber;
 import io.inspector.mcp.core.shutdown.McpServerTransportDrain;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.webflux.filter.InspectorAuthWebFilter;
@@ -75,6 +77,7 @@ import io.inspector.mcp.webflux.router.InspectorRouterConfig;
 @ConditionalOnProperty(prefix = "spring.ai.mcp.inspector", name = "enabled", havingValue = "true",
 		matchIfMissing = true)
 @EnableConfigurationProperties(McpInspectorProperties.class)
+@EnableScheduling
 @Import(InspectorRouterConfig.class)
 public class McpInspectorWebFluxAutoConfiguration {
 
@@ -142,8 +145,10 @@ public class McpInspectorWebFluxAutoConfiguration {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxySessionRegistry mcpInspectorProxySessionRegistry() {
-		return new ProxySessionRegistry();
+	public ProxySessionRegistry mcpInspectorProxySessionRegistry(final McpInspectorProperties properties) {
+		final ProxySessionRegistry registry = new ProxySessionRegistry();
+		registry.setInactivityBudget(properties.getTimeouts().getSessionReaper());
+		return registry;
 	}
 
 	/**
@@ -177,6 +182,15 @@ public class McpInspectorWebFluxAutoConfiguration {
 	@ConditionalOnMissingBean
 	public McpProxy mcpInspectorMcpProxy(final ObjectMapper objectMapper) {
 		return new McpProxy(objectMapper);
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector", name = "upstream-liveness-probe-enabled",
+			havingValue = "true", matchIfMissing = true)
+	public ProxyUpstreamProber mcpInspectorProxyUpstreamProber(final ProxySessionRegistry registry,
+			final McpInspectorProperties properties) {
+		return new ProxyUpstreamProber(registry, properties.getTimeouts());
 	}
 
 	@Bean

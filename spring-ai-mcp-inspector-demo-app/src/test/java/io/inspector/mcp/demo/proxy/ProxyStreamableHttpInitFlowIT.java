@@ -108,7 +108,8 @@ class ProxyStreamableHttpInitFlowIT {
 			+ "notifications), guarding against the old {\"accepted\":true} placeholder")
 	void streamableHttpInitFlow_whenDriven_returnsRealUpstreamResponses() throws Exception {
 		// given
-		app = ProxyAppHarness.start("STREAMABLE", false, null);
+		app = ProxyAppHarness.start("STREAMABLE", false, null,
+				"--spring.ai.mcp.inspector.upstream-liveness-probe-enabled=false");
 		int port = ProxyAppHarness.port(app);
 		String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
