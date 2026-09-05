@@ -34,6 +34,43 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Feature("Transport detector")
 class TransportDetectorTests {
 
+	/**
+	 * Creates a {@link ClassLoader} that simulates the presence or absence of Spring Web
+	 * framework marker classes.
+	 * @param hasDispatcherServlet whether {@code DispatcherServlet} should be visible
+	 * @param hasDispatcherHandler whether {@code DispatcherHandler} should be visible
+	 * @return a custom class loader for testing
+	 */
+	private static ClassLoader appClassLoader(final boolean hasDispatcherServlet, final boolean hasDispatcherHandler) {
+		return new ClassLoader() {
+			@Override
+			public java.net.URL getResource(final String name) {
+				if ("org/springframework/web/servlet/DispatcherServlet.class".equals(name)) {
+					if (!hasDispatcherServlet) {
+						return null;
+					}
+					return createDummyUrl();
+				}
+				if ("org/springframework/web/reactive/DispatcherHandler.class".equals(name)) {
+					if (!hasDispatcherHandler) {
+						return null;
+					}
+					return createDummyUrl();
+				}
+				return super.getResource(name);
+			}
+
+			private static java.net.URL createDummyUrl() {
+				try {
+					return new java.net.URL("file:///dummy-marker");
+				}
+				catch (final java.net.MalformedURLException ex) {
+					throw new RuntimeException(ex);
+				}
+			}
+		};
+	}
+
 	@Nested
 	@DisplayName("detect()")
 	class Detect {
@@ -266,6 +303,70 @@ class TransportDetectorTests {
 			// then
 			assertThat(detected.endpoint()).isEqualTo("/sse");
 			assertThat(detected.messageEndpoint()).isEqualTo("/mcp/message");
+		}
+
+	}
+
+	@Nested
+	@DisplayName("detectAppStack()")
+	class AppStackDetection {
+
+		@Test
+		@Story("WebMVC classpath")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("detectAppStack() returns WEBMVC when only DispatcherServlet is on the classpath")
+		void detectAppStack_whenOnlyDispatcherServlet_returnsWebMvc() {
+			final ClassLoader cl = appClassLoader(true, false);
+
+			final TransportDetector.AppStack stack = TransportDetector.detectAppStack(cl);
+
+			assertThat(stack).isEqualTo(TransportDetector.AppStack.WEBMVC);
+		}
+
+		@Test
+		@Story("WebFlux classpath")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("detectAppStack() returns WEBFLUX when only DispatcherHandler is on the classpath")
+		void detectAppStack_whenOnlyDispatcherHandler_returnsWebFlux() {
+			final ClassLoader cl = appClassLoader(false, true);
+
+			final TransportDetector.AppStack stack = TransportDetector.detectAppStack(cl);
+
+			assertThat(stack).isEqualTo(TransportDetector.AppStack.WEBFLUX);
+		}
+
+		@Test
+		@Story("Both on classpath")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("detectAppStack() returns UNKNOWN when both DispatcherServlet and DispatcherHandler are present")
+		void detectAppStack_whenBothPresent_returnsUnknown() {
+			final ClassLoader cl = appClassLoader(true, true);
+
+			final TransportDetector.AppStack stack = TransportDetector.detectAppStack(cl);
+
+			assertThat(stack).isEqualTo(TransportDetector.AppStack.UNKNOWN);
+		}
+
+		@Test
+		@Story("Neither on classpath")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("detectAppStack() returns UNKNOWN when neither framework is on the classpath")
+		void detectAppStack_whenNeitherPresent_returnsUnknown() {
+			final ClassLoader cl = appClassLoader(false, false);
+
+			final TransportDetector.AppStack stack = TransportDetector.detectAppStack(cl);
+
+			assertThat(stack).isEqualTo(TransportDetector.AppStack.UNKNOWN);
+		}
+
+		@Test
+		@Story("Default class loader")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("detectAppStack() with no argument returns UNKNOWN because core module has neither DispatcherServlet nor DispatcherHandler")
+		void detectAppStack_whenDefaultClassLoader_returnsUnknown() {
+			final TransportDetector.AppStack stack = TransportDetector.detectAppStack();
+
+			assertThat(stack).isEqualTo(TransportDetector.AppStack.UNKNOWN);
 		}
 
 	}

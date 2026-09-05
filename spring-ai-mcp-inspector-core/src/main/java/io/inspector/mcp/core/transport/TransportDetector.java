@@ -49,6 +49,41 @@ import org.springframework.core.env.Environment;
  */
 public class TransportDetector {
 
+	/** Stack label for Spring Web MVC (servlet) applications. */
+	public static final String STACK_WEBMVC = "WEBMVC";
+
+	/** Stack label for Spring WebFlux (reactive) applications. */
+	public static final String STACK_WEBFLUX = "WEBFLUX";
+
+	/** Stack label for pure stdio applications without an HTTP stack. */
+	public static final String STACK_STDIO = "STDIO";
+
+	/** Stack label when the application stack cannot be determined. */
+	public static final String STACK_UNKNOWN = "UNKNOWN";
+
+	/**
+	 * The web framework stack of the host application.
+	 */
+	public enum AppStack {
+
+		/** Spring Web MVC (servlet-based, uses MockMvc in tests). */
+		WEBMVC,
+		/** Spring WebFlux (reactive, uses WebTestClient in tests). */
+		WEBFLUX,
+		/** Stack could not be determined from the classpath. */
+		UNKNOWN;
+
+		/**
+		 * Returns the {@link #name()} uppercased, for compatibility with
+		 * {@link DetectedTransport#stack()} string constants.
+		 */
+		@Override
+		public String toString() {
+			return name();
+		}
+
+	}
+
 	/**
 	 * Property key for the MCP server protocol ({@code SSE}, {@code STREAMABLE}, etc.).
 	 */
@@ -87,19 +122,58 @@ public class TransportDetector {
 	/** Default MCP endpoint path used when no override is configured. */
 	public static final String DEFAULT_MCP_ENDPOINT = "/mcp";
 
-	/** Stack label for Spring Web MVC (servlet) applications. */
-	public static final String STACK_WEBMVC = "WEBMVC";
+	private static final String DISPATCHER_SERVLET_CLASS = "org.springframework.web.servlet.DispatcherServlet";
 
-	/** Stack label for Spring WebFlux (reactive) applications. */
-	public static final String STACK_WEBFLUX = "WEBFLUX";
-
-	/** Stack label for pure stdio applications without an HTTP stack. */
-	public static final String STACK_STDIO = "STDIO";
+	private static final String DISPATCHER_HANDLER_CLASS = "org.springframework.web.reactive.DispatcherHandler";
 
 	private final Environment environment;
 
 	public TransportDetector(final Environment environment) {
 		this.environment = environment;
+	}
+
+	/**
+	 * Detects the web application stack from the runtime classpath by checking for the
+	 * presence of framework marker classes.
+	 * <p>
+	 * Heuristics:
+	 * <ul>
+	 * <li>{@link org.springframework.web.servlet.DispatcherDispatcherServlet} present
+	 * alone → {@link AppStack#WEBMVC}</li>
+	 * <li>{@link org.springframework.web.reactive.DispatcherHandler} present alone →
+	 * {@link AppStack#WEBFLUX}</li>
+	 * <li>both present or neither present → {@link AppStack#UNKNOWN}</li>
+	 * </ul>
+	 * When both frameworks are on the classpath, the caller should fall back to the
+	 * inspector's own starter (which one is active) rather than guessing.
+	 * @return detected stack; never {@code null}
+	 */
+	public static AppStack detectAppStack() {
+		return detectAppStack(TransportDetector.class.getClassLoader());
+	}
+
+	/**
+	 * Detects the web application stack using the given {@link ClassLoader}. This
+	 * overload exists for testing with a custom class loader.
+	 * @param classLoader class loader to use for classpath checks
+	 * @return detected stack; never {@code null}
+	 */
+	static AppStack detectAppStack(final ClassLoader classLoader) {
+		final boolean hasDispatcherServlet = hasClass(DISPATCHER_SERVLET_CLASS, classLoader);
+		final boolean hasDispatcherHandler = hasClass(DISPATCHER_HANDLER_CLASS, classLoader);
+
+		if (hasDispatcherServlet && !hasDispatcherHandler) {
+			return AppStack.WEBMVC;
+		}
+		if (hasDispatcherHandler && !hasDispatcherServlet) {
+			return AppStack.WEBFLUX;
+		}
+		return AppStack.UNKNOWN;
+	}
+
+	private static boolean hasClass(final String className, final ClassLoader classLoader) {
+		final String resource = className.replace('.', '/') + ".class";
+		return classLoader.getResource(resource) != null;
 	}
 
 	/**
