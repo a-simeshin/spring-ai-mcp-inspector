@@ -78,7 +78,7 @@ class McpClientTrafficRecorderTests {
 			assertThat(events).hasSize(1);
 			final TimelineEvent event = events.get(0);
 			assertThat(event.type()).isEqualTo(TimelineEventType.MCP_JSONRPC_REQUEST);
-			assertThat(event.correlationId()).isEqualTo("mcpc:my-client:1");
+			assertThat(event.correlationId()).matches("[a-f0-9-]{36}");
 			assertThat(event.payload().path("endpoint").asText()).isEqualTo("client");
 			assertThat(event.payload().path("clientName").asText()).isEqualTo("my-client");
 			assertThat(event.payload().path("transport").asText()).isEqualTo("stdio");
@@ -133,7 +133,7 @@ class McpClientTrafficRecorderTests {
 			assertThat(events).hasSize(2);
 			final TimelineEvent responseEvent = events.get(0);
 			assertThat(responseEvent.type()).isEqualTo(TimelineEventType.MCP_JSONRPC_RESPONSE);
-			assertThat(responseEvent.correlationId()).isEqualTo("mcpc:my-client:7");
+			assertThat(responseEvent.correlationId()).matches("[a-f0-9-]{36}");
 			assertThat(responseEvent.payload().path("direction").asText()).isEqualTo("server->client");
 			assertThat(McpClientTrafficRecorderTests.this.recorder.pendingCorrelations()).isZero();
 		}
@@ -172,6 +172,31 @@ class McpClientTrafficRecorderTests {
 			final TimelineEvent responseEvent = events.get(0);
 			assertThat(responseEvent.payload().has("latencyMs")).isTrue();
 			assertThat(responseEvent.payload().path("latencyMs").asLong()).isGreaterThanOrEqualTo(0L);
+		}
+
+		@Test
+		@DisplayName("pairs callback response with server request via srv:-prefixed key")
+		void pairsCallbackResponseWithServerRequest() {
+			// given: a server-initiated request (e.g. sampling/createMessage)
+			final JSONRPCRequest serverRequest = new JSONRPCRequest("2.0", "sampling/createMessage", "srv-1", null);
+			McpClientTrafficRecorderTests.this.recorder.recordServerRequest("my-client", "stdio", serverRequest);
+
+			// when: the client answers with a JSONRPCResponse via recordClientResponse
+			final JSONRPCResponse response = JSONRPCResponse.result("srv-1", java.util.Map.of());
+			McpClientTrafficRecorderTests.this.recorder.recordClientResponse("my-client", "stdio", response);
+
+			// then: response is not orphan, has latency, and pending is released
+			final List<TimelineEvent> events = McpClientTrafficRecorderTests.this.timelineService
+				.query(TimelineQuery.all());
+			assertThat(events).hasSize(2);
+			final TimelineEvent responseEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.findFirst()
+				.orElseThrow();
+			assertThat(responseEvent.payload().has("orphan")).isFalse();
+			assertThat(responseEvent.payload().has("latencyMs")).isTrue();
+			assertThat(responseEvent.payload().path("latencyMs").asLong()).isGreaterThanOrEqualTo(0L);
+			assertThat(McpClientTrafficRecorderTests.this.recorder.pendingCorrelations()).isZero();
 		}
 
 	}
@@ -221,7 +246,7 @@ class McpClientTrafficRecorderTests {
 			final TimelineEvent event = events.get(0);
 			assertThat(event.type()).isEqualTo(TimelineEventType.MCP_JSONRPC_REQUEST);
 			assertThat(event.payload().path("direction").asText()).isEqualTo("server->client");
-			assertThat(event.correlationId()).isEqualTo("mcpc:c:srv:srv-1");
+			assertThat(event.correlationId()).matches("[a-f0-9-]{36}");
 		}
 
 	}
@@ -296,18 +321,39 @@ class McpClientTrafficRecorderTests {
 				.query(TimelineQuery.all());
 			assertThat(events).hasSize(4);
 			final TimelineEvent responseA = events.stream()
-				.filter((e) -> "mcpc:client-a:1".equals(e.correlationId())
+				.filter((e) -> "client-a".equals(e.payload().path("clientName").asText())
 						&& e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
 				.findFirst()
 				.orElseThrow();
 			final TimelineEvent responseB = events.stream()
-				.filter((e) -> "mcpc:client-b:1".equals(e.correlationId())
+				.filter((e) -> "client-b".equals(e.payload().path("clientName").asText())
 						&& e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
 				.findFirst()
 				.orElseThrow();
 			assertThat(responseA.payload().path("clientName").asText()).isEqualTo("client-a");
 			assertThat(responseB.payload().path("clientName").asText()).isEqualTo("client-b");
 			assertThat(McpClientTrafficRecorderTests.this.recorder.pendingCorrelations()).isZero();
+		}
+
+		@Test
+		@DisplayName("sequential same-id requests from one client get unique correlation ids")
+		void sequentialSameIdRequestsGetUniqueCorrelationIds() {
+			// given
+			final JSONRPCRequest req1 = new JSONRPCRequest("2.0", "tools/call", 1, null);
+			final JSONRPCRequest req2 = new JSONRPCRequest("2.0", "tools/call", 1, null);
+
+			// when
+			McpClientTrafficRecorderTests.this.recorder.recordClientRequest("c", "stdio", req1);
+			McpClientTrafficRecorderTests.this.recorder.recordClientRequest("c", "stdio", req2);
+
+			// then: each event has a unique correlation id
+			final List<TimelineEvent> events = McpClientTrafficRecorderTests.this.timelineService
+				.query(TimelineQuery.all());
+			assertThat(events).hasSize(2);
+			assertThat(events.get(0).correlationId()).isNotEqualTo(events.get(1).correlationId());
+			// Only one pending entry survives (the second overwrites the first at the
+			// same key)
+			assertThat(McpClientTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(1);
 		}
 
 	}
