@@ -126,7 +126,7 @@ class ProxySseLivenessIT {
 		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
 		final int targetPort = ProxyAppHarness.port(targetApp);
 		final String proxyBase = "http://127.0.0.1:" + inspectorPort + "/mcp-inspector-api";
-		final String targetSseUrl = "http://127.0.0.1:" + targetPort + "/sse";
+		final String targetSseUrl = "http://127.0.0.1:" + targetPort + "/mcp";
 
 		// 1. Open the SSE stream and capture the endpoint prologue.
 		final AtomicBoolean streamClosed = new AtomicBoolean(false);
@@ -253,14 +253,14 @@ class ProxySseLivenessIT {
 		// given
 		// Use default probe intervals (10s interval, 15s idle threshold) to ensure
 		// the probe does NOT trigger during the 5s observation window.
-		inspectorApp = ProxyAppHarness.start("SSE", false, null,
+		inspectorApp = ProxyAppHarness.start("STREAMABLE", false, null,
 				"--spring.ai.mcp.inspector.timeouts.sse-session=PT30M");
-		targetApp = ProxyAppHarness.start("SSE", false, null);
+		targetApp = ProxyAppHarness.start("STREAMABLE", false, null);
 
 		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
 		final int targetPort = ProxyAppHarness.port(targetApp);
 		final String proxyBase = "http://127.0.0.1:" + inspectorPort + "/mcp-inspector-api";
-		final String targetSseUrl = "http://127.0.0.1:" + targetPort + "/sse";
+		final String targetSseUrl = "http://127.0.0.1:" + targetPort + "/mcp";
 
 		// Open the SSE stream and capture the endpoint prologue.
 		final AtomicBoolean streamClosed = new AtomicBoolean(false);
@@ -269,7 +269,7 @@ class ProxySseLivenessIT {
 		final Thread sseReader = new Thread(() -> {
 			try {
 				final HttpRequest sseRequest = HttpRequest
-					.newBuilder(URI.create(proxyBase + "/sse?transportType=sse&url="
+					.newBuilder(URI.create(proxyBase + "/sse?transportType=streamable-http&url="
 							+ URLEncoder.encode(targetSseUrl, StandardCharsets.UTF_8)))
 					.timeout(Duration.ofSeconds(60))
 					.header("Accept", "text/event-stream")
