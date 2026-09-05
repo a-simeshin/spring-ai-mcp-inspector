@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * a JSON-RPC request relayed through the proxy must appear in {@code GET
  * ${path}/api/timeline} as an {@code MCP_JSONRPC_REQUEST} event, its matching response as
  * an {@code MCP_JSONRPC_RESPONSE} event, and the pair must share one
- * {@code correlationId}. This is the contract of issue #53 — without the proxy actually
+ * {@code correlationId}. This is the contract of issue #53: without the proxy actually
  * holding a recorder bean, the timeline only ever shows application logs.
  *
  * <p>
@@ -104,7 +104,7 @@ class ProxyTimelineTrafficIT {
 		final String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		final String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
 
-		// when — one initialize + one tools/list through the proxy
+		// when: one initialize + one tools/list through the proxy
 		final HttpResponse<String> initResponse = post(
 				proxyBase + "/mcp?url=" + URLEncoder.encode(targetUrl, StandardCharsets.UTF_8), null,
 				initializeFrame());
@@ -189,7 +189,7 @@ class ProxyTimelineTrafficIT {
 			+ "McpTrafficRecorder bean exists, /api/timeline is not served, and initialize "
 			+ "through the proxy still returns 200")
 	void timelineDisabled_proxyStillWorksWithoutRecorderBean() throws Exception {
-		// given — the demo's application.yml enables the timeline (d9f96ff), so the
+		// given: the demo's application.yml enables the timeline (d9f96ff), so the
 		// disabled case must override it explicitly; harness args are appended last.
 		this.app = ProxyAppHarness.start("STREAMABLE", false, null, "--spring.ai.mcp.inspector.timeline.enabled=false");
 		assertThat(this.app.getBeanNamesForType(McpTrafficRecorder.class))

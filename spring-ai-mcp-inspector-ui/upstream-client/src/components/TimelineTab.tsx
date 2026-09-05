@@ -119,6 +119,7 @@ function ProtocolNegotiationBlock({ negotiation }: { negotiation: ProtocolNegoti
             target="_blank"
             rel="noopener noreferrer"
             className="text-blue-400 hover:text-blue-300 underline"
+            onClick={(e) => e.stopPropagation()}
           >
             See compatibility matrix: issue #129
           </a>
@@ -163,7 +164,7 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
       </div>
       {expanded ? (
         <div className="mt-1 text-[11px] font-mono opacity-80 overflow-x-auto whitespace-pre-wrap max-h-40 overflow-y-auto">
-          {negotiation && negotiation.severity !== "OK" && <ProtocolNegotiationBlock negotiation={negotiation} />}
+          {negotiation && <ProtocolNegotiationBlock negotiation={negotiation} />}
           {Object.keys(payload).length > 0 ? (
             <div className="mb-1">{JSON.stringify(payload, null, 2)}</div>
           ) : (

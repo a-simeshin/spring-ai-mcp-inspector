@@ -268,7 +268,7 @@ describe("TimelineTab", () => {
     expect(screen.queryByText("Protocol negotiation:")).not.toBeInTheDocument();
   });
 
-  it("renders an unknown badge without expanded block for UNKNOWN severity", async () => {
+  it("renders an unknown badge for UNKNOWN severity", async () => {
     mockFetch([UNKNOWN_RESPONSE_EVENT]);
     renderTab();
 
