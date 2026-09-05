@@ -87,6 +87,12 @@ public class McpInspectorProperties {
 	@NestedConfigurationProperty
 	private Shutdown shutdown = new Shutdown();
 
+	/**
+	 * Whether upstream liveness probing is enabled for proxied SSE sessions. Defaults to
+	 * {@code true}.
+	 */
+	private boolean upstreamLivenessProbeEnabled = true;
+
 	public boolean isEnabled() {
 		return this.enabled;
 	}
@@ -173,6 +179,14 @@ public class McpInspectorProperties {
 		this.timeouts = (timeouts != null) ? timeouts : new Timeouts();
 	}
 
+	public boolean isUpstreamLivenessProbeEnabled() {
+		return this.upstreamLivenessProbeEnabled;
+	}
+
+	public void setUpstreamLivenessProbeEnabled(final boolean upstreamLivenessProbeEnabled) {
+		this.upstreamLivenessProbeEnabled = upstreamLivenessProbeEnabled;
+	}
+
 	public Shutdown getShutdown() {
 		return this.shutdown;
 	}
@@ -244,6 +258,31 @@ public class McpInspectorProperties {
 		private Duration fetchRequest = Duration.ofSeconds(30);
 
 		/**
+		 * Interval between upstream liveness probes for proxied SSE sessions. Default
+		 * 10s.
+		 */
+		private Duration upstreamProbeInterval = Duration.ofSeconds(10);
+
+		/**
+		 * Timeout for each upstream liveness probe POST. Default 5s.
+		 */
+		private Duration upstreamProbeTimeout = Duration.ofSeconds(5);
+
+		/**
+		 * How long a proxied session may see no upstream traffic before the first probe
+		 * is sent. Default 15s.
+		 */
+		private Duration upstreamProbeIdleThreshold = Duration.ofSeconds(15);
+
+		/**
+		 * Inactivity budget after which the session reaper evicts a proxy session that
+		 * has seen no traffic. Sessions whose upstream transport has already terminated
+		 * are reaped immediately regardless of this value. Default 30m, matching
+		 * {@link #sseSession}.
+		 */
+		private Duration sessionReaper = Duration.ofMinutes(30);
+
+		/**
 		 * How long a server→UI request (sampling / elicitation / roots) waits for the
 		 * browser to answer before the proxied tool call fails. Default 120s.
 		 */
@@ -287,6 +326,38 @@ public class McpInspectorProperties {
 
 		public void setServerRequest(final Duration serverRequest) {
 			this.serverRequest = serverRequest;
+		}
+
+		public Duration getSessionReaper() {
+			return this.sessionReaper;
+		}
+
+		public void setSessionReaper(final Duration sessionReaper) {
+			this.sessionReaper = sessionReaper;
+		}
+
+		public Duration getUpstreamProbeInterval() {
+			return this.upstreamProbeInterval;
+		}
+
+		public void setUpstreamProbeInterval(final Duration upstreamProbeInterval) {
+			this.upstreamProbeInterval = upstreamProbeInterval;
+		}
+
+		public Duration getUpstreamProbeTimeout() {
+			return this.upstreamProbeTimeout;
+		}
+
+		public void setUpstreamProbeTimeout(final Duration upstreamProbeTimeout) {
+			this.upstreamProbeTimeout = upstreamProbeTimeout;
+		}
+
+		public Duration getUpstreamProbeIdleThreshold() {
+			return this.upstreamProbeIdleThreshold;
+		}
+
+		public void setUpstreamProbeIdleThreshold(final Duration upstreamProbeIdleThreshold) {
+			this.upstreamProbeIdleThreshold = upstreamProbeIdleThreshold;
 		}
 
 	}
