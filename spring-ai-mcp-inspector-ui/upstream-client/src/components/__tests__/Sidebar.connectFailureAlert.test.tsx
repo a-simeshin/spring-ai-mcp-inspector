@@ -9,7 +9,7 @@ import type { ConnectFailure } from "@/lib/connectErrors";
 import { LoggingLevel } from "@modelcontextprotocol/sdk/types.js";
 
 jest.mock("@/lib/hooks/useToast", () => ({
-  useToast: () => ({ toast: jest.fn() }),
+  useToast: () => ({ toast: jest.fn().mockReturnValue({ dismiss: jest.fn() }) }),
 }));
 
 beforeAll(() => {
