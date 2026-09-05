@@ -265,4 +265,69 @@ class BoundedTimelineServiceTests {
 		assertThat(result).isEmpty();
 	}
 
+	@Test
+	@DisplayName("query filters by clientName in payload")
+	void queryByClientNameFilter() {
+		final ObjectNode payload1 = JsonNodeFactory.instance.objectNode();
+		payload1.put("clientName", "clientA");
+		final ObjectNode payload2 = JsonNodeFactory.instance.objectNode();
+		payload2.put("clientName", "clientB");
+		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), null, null,
+				TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), payload1));
+		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), null, null,
+				TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), payload2));
+		final List<TimelineEvent> result = this.service.query(TimelineQuery.builder().clientName("clientA").build());
+		assertThat(result).hasSize(1);
+		assertThat(result.get(0).payload().get("clientName").asText()).isEqualTo("clientA");
+	}
+
+	@Test
+	@DisplayName("query filters by direction in payload")
+	void queryByDirectionFilter() {
+		final ObjectNode payload1 = JsonNodeFactory.instance.objectNode();
+		payload1.put("direction", "client->server");
+		final ObjectNode payload2 = JsonNodeFactory.instance.objectNode();
+		payload2.put("direction", "server->client");
+		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), null, null,
+				TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), payload1));
+		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), null, null,
+				TimelineEventType.MCP_JSONRPC_RESPONSE, Instant.now(), payload2));
+		final List<TimelineEvent> result = this.service
+			.query(TimelineQuery.builder().direction("server->client").build());
+		assertThat(result).hasSize(1);
+		assertThat(result.get(0).payload().get("direction").asText()).isEqualTo("server->client");
+	}
+
+	@Test
+	@DisplayName("query with clientName filter returns empty when payload has no clientName field")
+	void queryByClientNameFilter_noClientNameInPayload() {
+		final ObjectNode payload = JsonNodeFactory.instance.objectNode();
+		payload.put("method", "tools/list");
+		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), null, null,
+				TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), payload));
+		final List<TimelineEvent> result = this.service.query(TimelineQuery.builder().clientName("clientA").build());
+		assertThat(result).isEmpty();
+	}
+
+	@Test
+	@DisplayName("query with direction filter returns empty when payload has no direction field")
+	void queryByDirectionFilter_noDirectionInPayload() {
+		final ObjectNode payload = JsonNodeFactory.instance.objectNode();
+		payload.put("method", "tools/list");
+		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), null, null,
+				TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), payload));
+		final List<TimelineEvent> result = this.service
+			.query(TimelineQuery.builder().direction("client->server").build());
+		assertThat(result).isEmpty();
+	}
+
+	@Test
+	@DisplayName("query with clientName filter matches when payload is null returns empty")
+	void queryByClientNameFilter_nullPayload() {
+		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), null, null,
+				TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), null));
+		final List<TimelineEvent> result = this.service.query(TimelineQuery.builder().clientName("clientA").build());
+		assertThat(result).isEmpty();
+	}
+
 }

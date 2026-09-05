@@ -55,7 +55,8 @@ public class TimelineHandler {
 	/**
 	 * Returns timeline events matching the optional filter criteria, newest first.
 	 * @param request the incoming request; query params {@code correlationId},
-	 * {@code sessionId}, {@code since}, {@code until}, {@code types}, {@code limit}
+	 * {@code sessionId}, {@code since}, {@code until}, {@code types}, {@code clientName},
+	 * {@code direction}, {@code limit}
 	 * @return the matching events as JSON
 	 */
 	public Mono<ServerResponse> query(final ServerRequest request) {
@@ -65,9 +66,25 @@ public class TimelineHandler {
 			.since(instantParam(request, "since"))
 			.until(instantParam(request, "until"))
 			.eventTypes(parseTypes(request.queryParam("types").orElse(null)))
+			.clientName(param(request, "clientName"))
+			.direction(param(request, "direction"))
 			.limit(intParam(request, "limit"))
 			.build();
 		final List<TimelineEvent> events = this.timelineService.query(query);
+		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(events);
+	}
+
+	/**
+	 * Returns diagnostic events (client handler desync findings) from the timeline.
+	 * @param request the incoming request
+	 * @return the diagnostic events as JSON
+	 */
+	public Mono<ServerResponse> diagnostics(final ServerRequest request) {
+		final List<TimelineEvent> events = this.timelineService.query(TimelineQuery.all())
+			.stream()
+			.filter((e) -> e.payload() != null && e.payload().has("endpoint")
+					&& "client-diagnostics".equals(e.payload().get("endpoint").asText()))
+			.toList();
 		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(events);
 	}
 
@@ -96,7 +113,7 @@ public class TimelineHandler {
 		try {
 			return Instant.parse(raw);
 		}
-		catch (final IllegalArgumentException ex) {
+		catch (final RuntimeException ex) {
 			return null;
 		}
 	}

@@ -1,4 +1,18 @@
-TimelineTab.tsx, App.tsx, __tests__/TimelineTab.test.tsx — new TimelineTab component that polls /mcp-inspector/api/timeline
+App.tsx, TimelineTab.tsx, __tests__/TimelineTab.test.tsx — new TimelineTab component that polls /mcp-inspector/api/timeline
 and renders a color-coded, expandable chronological event log for MCP traffic and
 application logs. No upstream equivalent exists; this is a Spring AI MCP Inspector
 extension. Tab icon: Bell (lucide-react, already a project dependency).
+
+Extended with:
+- Direction filter dropdown (client->server / server->client) and client name filter
+  dropdown, populated from live event payload.
+- Client traffic detail: direction, client name, transport, latency, orphan/error
+  highlighting (red border for orphan/error events).
+- Diagnostic badge for client handler desync findings (ORPHAN_HANDLER, ORPHAN_CLIENT,
+  TRANSPORT_MISMATCH, DUPLICATE_BINDING) with orange border and colour-coded badges.
+- Masked sensitive values (token, secret, password, auth header) in expanded payload
+  detail view.
+- Backend: TimelineQuery extended with clientName and direction filter fields;
+  TimelineController (WebMVC) and TimelineHandler (WebFlux) accept the new query
+  params; BoundedTimelineService.matches() filters by payload.clientName and
+  payload.direction. New /diagnostics endpoint on both stacks.
