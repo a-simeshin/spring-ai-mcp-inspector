@@ -3548,9 +3548,11 @@ class InspectorUiIT {
 				awaitRequestCount(tokenServer, 2, Duration.ofSeconds(30));
 				Assertions.assertEquals(2, tokenServer.requestCount(), "token exchanges");
 				Assertions.assertFalse(tokenServer.anyRequestWithField("refresh_token"), "no refresh_token grant");
+				Assertions.assertEquals(2, stub.authorizations().size(),
+						"expected exactly 2 upstream Authorization values");
 				Assertions.assertEquals(
 						List.of("Bearer " + E2eTokenServer.tokenValue(1), "Bearer " + E2eTokenServer.tokenValue(2)),
-						stub.authorizations().subList(0, 2), "Authorization per upstream message POST");
+						stub.authorizations(), "Authorization per upstream message POST");
 
 				// then - the retried round-trip reached Connected.
 				$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
