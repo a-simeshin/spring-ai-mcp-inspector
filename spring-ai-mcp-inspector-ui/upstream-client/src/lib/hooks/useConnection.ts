@@ -1333,6 +1333,7 @@ export function useConnection({
       // If a newer connect attempt has already started, ignore this
       // stale completion so it cannot overwrite the active session.
       if (generation !== connectAttemptRef.current) {
+        void client.close().catch(() => {});
         return;
       }
       if (

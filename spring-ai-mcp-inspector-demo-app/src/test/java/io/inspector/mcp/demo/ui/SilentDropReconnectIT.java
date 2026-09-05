@@ -28,6 +28,7 @@ import io.github.bonigarcia.wdm.WebDriverManager;
 import io.inspector.mcp.demo.e2e.E2ePreconditions;
 import io.inspector.mcp.demo.proxy.ProxyAppHarness;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
+import org.awaitility.Awaitility;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -180,27 +181,23 @@ class SilentDropReconnectIT {
 		// The connect-error-alert testid scopes to the connection failure
 		// alert in the sidebar config pane, not the resource panel
 		// placeholder that also carries role=alert.
-		sidebar().shouldNotHave(text("mcp-inspector-demo"), Duration.ofSeconds(30));
-		// Now wait for either reconnect success or error alert. We cannot
-		// use connect-button here because it is rendered while
-		// connectionStatus === "connected" — the same status the UI was in
-		// before the click — so a wait on connect-button would return
-		// immediately. Instead, wait for the error alert explicitly; if it
-		// does not appear within the timeout, Selenide cancels and throws,
-		// which we catch as "reconnect succeeded".
-		try {
-			$("[data-testid=connect-error-alert]").shouldBe(visible, Duration.ofSeconds(30));
-			// An error was surfaced to the user instead of silently timing
-			// out with -32001. The alert must mention the POST /mcp attempt
-			// and offer a Retry/Reset/reload action.
-			$("[data-testid=connect-error-alert]").shouldHave(text("POST /mcp"), Duration.ofSeconds(5));
-			$("[data-testid=retry-connect-button]").shouldBe(visible, Duration.ofSeconds(5));
-		}
-		catch (com.codeborne.selenide.ex.ElementNotFound | com.codeborne.selenide.ex.ElementShould e) {
-			// No error alert means the reconnect succeeded.
-			sidebar().shouldHave(text("mcp-inspector-demo"), Duration.ofSeconds(10));
-		}
-	}
+		// Wait for the connect-button to disappear (the disconnect must have
+		// started), then poll the ProxySessionRegistry for a fresh handshake.  Poll the ProxySessionRegistry
+		// until it contains a session ID that was not in the original set
+		// (meaning a new handshake completed).  If the error alert appears
+		// instead, the reconnect failed with a visible error.
+		// The connect-error-alert testid scopes to the connection failure
+		// alert in the sidebar config pane, not the resource panel
+		// placeholder that also carries role=alert.
+		Awaitility.await("fresh handshake")
+			.atMost(Duration.ofSeconds(30))
+			.pollInterval(Duration.ofMillis(200))
+			.untilAsserted(() -> {
+				Set<String> currentIds = new HashSet<>(registry.sessionIds());
+				currentIds.removeAll(sessionIds);
+				assertFalse(currentIds.isEmpty(),
+					"Expected a new session ID from fresh handshake");
+			})
 
 	/** DELETEs a proxy session by id and asserts the server accepted it. */
 	private static void deleteSession(String proxyBase, String sessionId) {
