@@ -19,6 +19,7 @@ package io.inspector.mcp.core.timeline;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 
 /**
@@ -35,17 +36,36 @@ final class PendingCorrelationStore<K> {
 
 	private final LinkedHashMap<K, PendingCorrelation> correlations;
 
+	private final BiConsumer<K, PendingCorrelation> evictionListener;
+
 	private final Object lock = new Object();
 
 	/**
-	 * Creates a new store with the given maximum capacity.
+	 * Creates a new store with the given maximum capacity and no eviction listener.
 	 * @param maxCapacity the maximum number of pending entries before eldest eviction
 	 */
 	PendingCorrelationStore(final int maxCapacity) {
+		this(maxCapacity, null);
+	}
+
+	/**
+	 * Creates a new store with the given maximum capacity and an eviction listener.
+	 * @param maxCapacity the maximum number of pending entries before eldest eviction
+	 * @param evictionListener invoked when an entry is evicted by the capacity bound, may
+	 * be {@code null}
+	 */
+	PendingCorrelationStore(final int maxCapacity, final BiConsumer<K, PendingCorrelation> evictionListener) {
+		this.evictionListener = evictionListener;
 		this.correlations = new LinkedHashMap<>() {
 			@Override
 			protected boolean removeEldestEntry(final Map.Entry<K, PendingCorrelation> eldest) {
-				return super.size() > maxCapacity;
+				if (super.size() > maxCapacity) {
+					if (PendingCorrelationStore.this.evictionListener != null) {
+						PendingCorrelationStore.this.evictionListener.accept(eldest.getKey(), eldest.getValue());
+					}
+					return true;
+				}
+				return false;
 			}
 		};
 	}

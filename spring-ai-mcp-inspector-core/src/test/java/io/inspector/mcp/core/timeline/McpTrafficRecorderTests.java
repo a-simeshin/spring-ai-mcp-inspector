@@ -868,6 +868,67 @@ class McpTrafficRecorderTests {
 		}
 
 		@Test
+		@DisplayName("evicted pending entry removes its progress-token mapping")
+		void evictedRequestClearsProgressTokenMapping() throws Exception {
+			// given: a request with a progress token - this will be the eldest entry
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.put("method", "tools/call");
+			reqFrame.putObject("params").putObject("_meta").put("progressToken", "tok-evict");
+			final JSONRPCMessage reqTyped = deserialize(reqFrame);
+			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", reqTyped, reqFrame);
+
+			// when: fill past capacity to evict the eldest request
+			for (int i = 0; i < McpTrafficRecorder.MAX_PENDING_CORRELATIONS + 5; i++) {
+				final ObjectNode fillFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+					.put("jsonrpc", "2.0")
+					.put("id", 100_000 + i)
+					.put("method", "tools/list");
+				McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", deserialize(fillFrame), fillFrame);
+			}
+			// the evicted entry is gone from pending
+			assertThat(McpTrafficRecorderTests.this.recorder.pendingCorrelations())
+				.isLessThanOrEqualTo(McpTrafficRecorder.MAX_PENDING_CORRELATIONS);
+
+			// when: a new request with the same progress token gets a fresh correlation
+			final ObjectNode req2Frame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 9999)
+				.put("method", "tools/call");
+			req2Frame.putObject("params").putObject("_meta").put("progressToken", "tok-evict");
+			final JSONRPCMessage req2Typed = deserialize(req2Frame);
+			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", req2Typed, req2Frame);
+
+			// then: the progress notification for "tok-evict" uses the NEW request's
+			// correlation, not the stale one
+			final ObjectNode progressFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("method", "notifications/progress");
+			progressFrame.putObject("params").put("progressToken", "tok-evict");
+			final JSONRPCMessage progressTyped = deserialize(progressFrame);
+			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", progressTyped, progressFrame);
+
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			// find the stream event for the progress notification
+			final TimelineEvent progressEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_STREAM_EVENT)
+				.findFirst()
+				.orElseThrow();
+			// find the second request event (id=9999)
+			final TimelineEvent req2Event = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_REQUEST)
+				.filter((e) -> {
+					final JsonNode p = e.payload();
+					return p != null && p.get("id") != null && p.get("id").asInt() == 9999;
+				})
+				.findFirst()
+				.orElseThrow();
+			// progress shares the new request's correlation, not the stale one
+			assertThat(progressEvent.correlationId()).isEqualTo(req2Event.correlationId());
+		}
+
+		@Test
 		@DisplayName("pending correlations are bounded at MAX_PENDING_CORRELATIONS")
 		void pendingCorrelationsAreBounded() throws Exception {
 			// given/when: send more requests than the bound, all unanswered

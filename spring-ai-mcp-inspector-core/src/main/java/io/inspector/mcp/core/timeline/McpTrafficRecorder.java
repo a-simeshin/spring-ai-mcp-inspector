@@ -61,7 +61,11 @@ public final class McpTrafficRecorder {
 			throw new IllegalArgumentException("timelineService must not be null");
 		}
 		this.timelineService = timelineService;
-		this.requestCorrelations = new PendingCorrelationStore<>(MAX_PENDING_CORRELATIONS);
+		this.requestCorrelations = new PendingCorrelationStore<>(MAX_PENDING_CORRELATIONS, (key, pending) -> {
+			if (pending.progressToken() != null) {
+				McpTrafficRecorder.this.progressCorrelations.remove(keyOf(key.sessionId(), pending.progressToken()));
+			}
+		});
 	}
 
 	/**
