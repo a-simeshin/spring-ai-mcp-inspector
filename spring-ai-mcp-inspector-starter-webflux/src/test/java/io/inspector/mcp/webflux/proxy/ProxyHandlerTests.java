@@ -795,6 +795,14 @@ class ProxyHandlerTests {
 			// then
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			// structured MCP_CONNECT_FAILED payload
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> error = (Map<String, Object>) entityBody(response).get("error");
+			assertThat(error).isNotNull();
+			assertThat(error).containsEntry("code", "MCP_CONNECT_FAILED");
+			assertThat(error).containsKey("reason");
+			assertThat(error).containsKey("message");
+			assertThat(error).containsEntry("retryable", Boolean.TRUE);
 		}
 
 		@Test
@@ -1499,7 +1507,13 @@ class ProxyHandlerTests {
 			// then — 504 gateway timeout and the orphaned new session is removed
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
-			assertThat(entityBody(response).get("error").toString()).contains("did not respond");
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> error = (Map<String, Object>) entityBody(response).get("error");
+			assertThat(error).isNotNull();
+			assertThat(error).containsEntry("code", "MCP_CONNECT_FAILED");
+			assertThat(error).containsKey("reason");
+			assertThat(error).containsKey("message");
+			assertThat(error).containsEntry("retryable", Boolean.TRUE);
 			verify(ProxyHandlerTests.this.registry).removeAndClose(captured[0].sessionId());
 		}
 
