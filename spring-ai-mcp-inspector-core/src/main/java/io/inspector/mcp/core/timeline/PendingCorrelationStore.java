@@ -19,6 +19,7 @@ package io.inspector.mcp.core.timeline;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 
 /**
@@ -35,17 +36,36 @@ final class PendingCorrelationStore<K> {
 
 	private final LinkedHashMap<K, PendingCorrelation> correlations;
 
+	private final BiConsumer<K, PendingCorrelation> evictionListener;
+
 	private final Object lock = new Object();
 
 	/**
-	 * Creates a new store with the given maximum capacity.
+	 * Creates a new store with the given maximum capacity and no eviction listener.
 	 * @param maxCapacity the maximum number of pending entries before eldest eviction
 	 */
 	PendingCorrelationStore(final int maxCapacity) {
+		this(maxCapacity, null);
+	}
+
+	/**
+	 * Creates a new store with the given maximum capacity and an eviction listener.
+	 * @param maxCapacity the maximum number of pending entries before eldest eviction
+	 * @param evictionListener invoked when an entry is evicted by the capacity bound, may
+	 * be {@code null}
+	 */
+	PendingCorrelationStore(final int maxCapacity, final BiConsumer<K, PendingCorrelation> evictionListener) {
+		this.evictionListener = evictionListener;
 		this.correlations = new LinkedHashMap<>() {
 			@Override
 			protected boolean removeEldestEntry(final Map.Entry<K, PendingCorrelation> eldest) {
-				return super.size() > maxCapacity;
+				if (super.size() > maxCapacity) {
+					if (PendingCorrelationStore.this.evictionListener != null) {
+						PendingCorrelationStore.this.evictionListener.accept(eldest.getKey(), eldest.getValue());
+					}
+					return true;
+				}
+				return false;
 			}
 		};
 	}
@@ -94,12 +114,26 @@ final class PendingCorrelationStore<K> {
 	}
 
 	/**
-	 * A pending request correlation with bookkeeping for latency computation.
+	 * A pending request correlation with bookkeeping for latency computation and optional
+	 * progress tracking.
 	 *
 	 * @param correlationId the generated correlation id
 	 * @param timestamp the instant when the request was recorded
+	 * @param progressToken the request's {@code params._meta.progressToken} text, may be
+	 * {@code null}
+	 * @param requestedProtocolVersion the protocol version the client requested in the
+	 * initialize params, or {@code null} for non-initialize requests
 	 */
-	record PendingCorrelation(String correlationId, Instant timestamp) {
+	record PendingCorrelation(String correlationId, Instant timestamp, String progressToken,
+			String requestedProtocolVersion) {
+
+		PendingCorrelation(final String correlationId, final Instant timestamp) {
+			this(correlationId, timestamp, null, null);
+		}
+
+		PendingCorrelation(final String correlationId, final Instant timestamp, final String progressToken) {
+			this(correlationId, timestamp, progressToken, null);
+		}
 
 		/**
 		 * Returns the elapsed time in milliseconds since this pending entry was created.

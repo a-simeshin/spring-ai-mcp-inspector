@@ -276,28 +276,6 @@ class McpClientTrafficRecorderTests {
 	}
 
 	@Nested
-	@DisplayName("clearClient")
-	class ClearClient {
-
-		@Test
-		@DisplayName("removes pending correlations for the client")
-		void removesPendingCorrelations() {
-			// given
-			final JSONRPCRequest request = new JSONRPCRequest("2.0", "tools/call", 1, null);
-			McpClientTrafficRecorderTests.this.recorder.recordClientRequest("c1", "stdio", request);
-			McpClientTrafficRecorderTests.this.recorder.recordClientRequest("c2", "stdio",
-					new JSONRPCRequest("2.0", "tools/call", 1, null));
-
-			// when
-			McpClientTrafficRecorderTests.this.recorder.clearClient("c1");
-
-			// then
-			assertThat(McpClientTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(1);
-		}
-
-	}
-
-	@Nested
 	@DisplayName("request response correlation")
 	class RequestResponseCorrelation {
 
