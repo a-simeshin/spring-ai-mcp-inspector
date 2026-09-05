@@ -15,6 +15,10 @@ import {
 import type { SavedConnection } from "../lib/types/savedConnection";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
+// jsdom does not implement scrollIntoView; Radix UI Select's auto-scroll
+// in the opened content popover crashes without it.
+Element.prototype.scrollIntoView = jest.fn();
+
 // Mock auth dependencies
 jest.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
   auth: jest.fn(),
@@ -498,16 +502,6 @@ describe("App saved connections integration", () => {
     };
     const sse = saveConnection(stripSecrets(sseDraft));
 
-    // Seed an empty stdio entry (no command/args/env) to prove reset
-    const emptyStdioDraft = {
-      name: "empty-stdio",
-      transport: "stdio" as const,
-      connectionType: "proxy" as const,
-      // command, args, env are intentionally undefined
-      customHeaders: [],
-    };
-    const emptyStdio = saveConnection(stripSecrets(emptyStdioDraft));
-
     render(
       <TooltipProvider>
         <App />
@@ -576,9 +570,12 @@ describe("App saved connections integration", () => {
       expect(headerNameInput.value).toBe("X-SSE");
     });
 
-    // Step 3: Select the empty stdio entry to prove command/args/env
-    // were reset to empty after SSE select (not stale from step 1)
-    fireEvent.click(screen.getByTestId(`saved-connection-${emptyStdio.id}`));
+    // Step 3: Change transport type to STDIO to observe that command/args/env
+    // were reset to empty after SSE select (proves setCommand(""),
+    // setArgs(""), setEnv({}) were called, not just DOM hidden)
+    fireEvent.click(screen.getByRole("combobox", { name: /transport type/i }));
+    const stdioOption = await screen.findByRole("option", { name: "STDIO" });
+    fireEvent.click(stdioOption);
 
     // Verify transport type changed to STDIO
     await waitFor(() => {
@@ -587,7 +584,7 @@ describe("App saved connections integration", () => {
       ).toHaveTextContent("STDIO");
     });
 
-    // Verify SSE fields are absent (inverse reset)
+    // Verify SSE fields are absent (inverse reset: SSE -> stdio)
     expect(screen.queryByLabelText("URL")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("combobox", { name: /connection type/i }),
