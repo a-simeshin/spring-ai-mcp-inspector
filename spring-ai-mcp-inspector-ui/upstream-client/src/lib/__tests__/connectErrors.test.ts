@@ -136,7 +136,7 @@ describe("connectionFailureFromError", () => {
 
 describe("humanReadableReason", () => {
   it("maps every reason to a human-readable label", () => {
-    expect(humanReadableReason("timeout")).toBe("Connection timed out");
+    expect(humanReadableReason("timeout")).toBe("POST /mcp request timed out");
     expect(humanReadableReason("connection_refused")).toBe("Connection refused");
     expect(humanReadableReason("dns")).toBe("Cannot resolve host");
     expect(humanReadableReason("unauthorized")).toBe("Authentication required");
