@@ -17,15 +17,11 @@
 package io.inspector.mcp.core.timeline;
 
 import java.time.Instant;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.UUID;
 
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCNotification;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCRequest;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCResponse;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -42,31 +38,15 @@ import tools.jackson.databind.node.ObjectNode;
  */
 public final class McpClientTrafficRecorder {
 
-	private static final Logger LOG = LoggerFactory.getLogger(McpClientTrafficRecorder.class);
-
-	/** Maximum number of pending request&rarr;response correlations before eviction. */
+	/** Maximum number of pending request→response correlations before eviction. */
 	static final int MAX_PENDING_CORRELATIONS = 1000;
-
-	/** Payload key for MDC correlation id linking to APP_LOG events. */
-	static final String MDC_CORRELATION_KEY = "mdcCorrelationId";
 
 	/** Prefix for client-side correlation ids. */
 	static final String CORRELATION_PREFIX = "mcpc:";
 
 	private final TimelineService timelineService;
 
-	/**
-	 * Pending request&rarr;response correlations, keyed by
-	 * {@code mcpc:<clientName>:<jsonrpc-id>}. When the map exceeds capacity the eldest
-	 * entry is evicted.
-	 */
-	private final LinkedHashMap<String, PendingCorrelation> requestCorrelations;
-
-	/**
-	 * Guards all access to {@link #requestCorrelations}, which is a non-thread-safe
-	 * {@link LinkedHashMap}.
-	 */
-	private final Object pendingLock = new Object();
+	private final PendingCorrelationStore<String> requestCorrelations;
 
 	/**
 	 * Creates a new client traffic recorder.
@@ -77,12 +57,7 @@ public final class McpClientTrafficRecorder {
 			throw new IllegalArgumentException("timelineService must not be null");
 		}
 		this.timelineService = timelineService;
-		this.requestCorrelations = new LinkedHashMap<>() {
-			@Override
-			protected boolean removeEldestEntry(final Map.Entry<String, PendingCorrelation> eldest) {
-				return size() > MAX_PENDING_CORRELATIONS;
-			}
-		};
+		this.requestCorrelations = new PendingCorrelationStore<>(MAX_PENDING_CORRELATIONS);
 	}
 
 	/**
@@ -96,9 +71,10 @@ public final class McpClientTrafficRecorder {
 			return;
 		}
 		final Object id = request.id();
-		final String correlationId = (id != null) ? correlationId(clientName, id) : UUID.randomUUID().toString();
+		final String correlationId = UUID.randomUUID().toString();
 		if (id != null) {
-			storePending(correlationId, Instant.now());
+			this.requestCorrelations.store(correlationId(clientName, id),
+					new PendingCorrelationStore.PendingCorrelation(correlationId, Instant.now()));
 		}
 		final ObjectNode payload = buildPayload(clientName, transportType, "client->server", request.method(), id,
 				null);
@@ -140,20 +116,42 @@ public final class McpClientTrafficRecorder {
 		}
 		final Object id = response.id();
 		final String corrKey = (id != null) ? correlationId(clientName, id) : null;
-		final PendingCorrelation pending;
-		synchronized (this.pendingLock) {
-			pending = (corrKey != null) ? this.requestCorrelations.remove(corrKey) : null;
+		final PendingCorrelationStore.PendingCorrelation pending = (corrKey != null)
+				? this.requestCorrelations.remove(corrKey) : null;
+		if (pending == null && corrKey != null) {
+			// Also try the srv:-prefixed key for server-initiated request callbacks
+			// (sampling/elicitation/roots/list) whose response arrives via the client
+			// transport's sendMessage, not via the inbound handler.
+			final String srvKey = correlationId(clientName, "srv:" + id);
+			final PendingCorrelationStore.PendingCorrelation srvPending = this.requestCorrelations.remove(srvKey);
+			if (srvPending != null) {
+				emitClientResponse(clientName, transportType, response, id, srvPending, true);
+				return;
+			}
 		}
-		final String correlationId = (pending != null) ? pending.correlationId()
-				: fallbackCorrelationId(clientName, id);
-		final long latency = (pending != null) ? pending.elapsed() : 0L;
+		if (pending != null) {
+			emitClientResponse(clientName, transportType, response, id, pending, true);
+			return;
+		}
+		// Orphan: no matching pending request found
+		final String correlationId = fallbackCorrelationId(clientName, id);
 		final ObjectNode payload = buildPayload(clientName, transportType, "server->client", null, id,
 				(response.error() != null) ? response.error().message() : null);
-		if (pending != null) {
-			payload.put("latencyMs", latency);
-		}
-		if (pending == null && id != null) {
+		if (id != null) {
 			payload.put("orphan", true);
+		}
+		final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, null,
+				TimelineEventType.MCP_JSONRPC_RESPONSE, Instant.now(), payload);
+		this.timelineService.append(event);
+	}
+
+	private void emitClientResponse(final String clientName, final String transportType, final JSONRPCResponse response,
+			final Object id, final PendingCorrelationStore.PendingCorrelation pending, final boolean withLatency) {
+		final String correlationId = pending.correlationId();
+		final ObjectNode payload = buildPayload(clientName, transportType, "server->client", null, id,
+				(response.error() != null) ? response.error().message() : null);
+		if (withLatency) {
+			payload.put("latencyMs", pending.elapsed());
 		}
 		final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, null,
 				TimelineEventType.MCP_JSONRPC_RESPONSE, Instant.now(), payload);
@@ -172,10 +170,10 @@ public final class McpClientTrafficRecorder {
 			return;
 		}
 		final Object id = request.id();
-		final String correlationId = (id != null) ? correlationId(clientName, "srv:" + id)
-				: UUID.randomUUID().toString();
+		final String correlationId = UUID.randomUUID().toString();
 		if (id != null) {
-			storePending(correlationId, Instant.now());
+			this.requestCorrelations.store(correlationId(clientName, "srv:" + id),
+					new PendingCorrelationStore.PendingCorrelation(correlationId, Instant.now()));
 		}
 		final ObjectNode payload = buildPayload(clientName, transportType, "server->client", request.method(), id,
 				null);
@@ -210,9 +208,7 @@ public final class McpClientTrafficRecorder {
 	 * @return the number of pending correlations
 	 */
 	public int pendingCorrelations() {
-		synchronized (this.pendingLock) {
-			return this.requestCorrelations.size();
-		}
+		return this.requestCorrelations.size();
 	}
 
 	/**
@@ -225,9 +221,7 @@ public final class McpClientTrafficRecorder {
 			return;
 		}
 		final String prefix = CORRELATION_PREFIX + clientName + ":";
-		synchronized (this.pendingLock) {
-			this.requestCorrelations.keySet().removeIf((key) -> key.startsWith(prefix));
-		}
+		this.requestCorrelations.removeIf((key) -> key.startsWith(prefix));
 	}
 
 	private static String correlationId(final String clientName, final Object requestId) {
@@ -258,30 +252,6 @@ public final class McpClientTrafficRecorder {
 			payload.put("error", error);
 		}
 		return payload;
-	}
-
-	private void storePending(final String correlationId, final Instant timestamp) {
-		synchronized (this.pendingLock) {
-			this.requestCorrelations.put(correlationId, new PendingCorrelation(correlationId, timestamp));
-		}
-	}
-
-	/**
-	 * A pending request correlation.
-	 *
-	 * @param correlationId the correlation id
-	 * @param timestamp the instant when the request was recorded
-	 */
-	record PendingCorrelation(String correlationId, Instant timestamp) {
-
-		/**
-		 * Returns the elapsed time in milliseconds since this pending entry was created.
-		 * @return elapsed milliseconds
-		 */
-		long elapsed() {
-			return java.time.Duration.between(this.timestamp, Instant.now()).toMillis();
-		}
-
 	}
 
 }

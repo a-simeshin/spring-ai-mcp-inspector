@@ -16,6 +16,9 @@
 
 package io.inspector.mcp.core.timeline;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import io.modelcontextprotocol.spec.McpClientTransport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,6 +37,11 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
  * post-processor detects the bean by class name at runtime and extracts the name and
  * transport via record component accessors. When the class is absent from the classpath,
  * no bean matches and the post-processor is a no-op.
+ *
+ * <p>
+ * In Spring AI 2.0.0, the bean is a {@code List<NamedClientMcpTransport>} rather than
+ * individual records. This post-processor also handles list beans by iterating over their
+ * elements and wrapping each matching entry.
  *
  * @author Artem Simeshin
  */
@@ -63,16 +71,45 @@ public final class RecordingTransportPostProcessor implements BeanPostProcessor 
 
 	@Override
 	public Object postProcessAfterInitialization(final Object bean, final String beanName) throws BeansException {
-		if (!isNamedClientMcpTransport(bean)) {
-			return bean;
+		if (bean == null) {
+			return null;
 		}
-		try {
-			return wrapBean(bean);
+		// Handle List<NamedClientMcpTransport> (Spring AI 2.0.0 bean shape)
+		if (bean instanceof List<?> list) {
+			return wrapListBean(list);
 		}
-		catch (final ReflectiveOperationException ex) {
-			LOG.warn("Failed to wrap NamedClientMcpTransport bean '{}': {}", beanName, ex.getMessage());
-			return bean;
+		// Handle individual NamedClientMcpTransport record
+		if (isNamedClientMcpTransport(bean)) {
+			try {
+				return wrapBean(bean);
+			}
+			catch (final ReflectiveOperationException ex) {
+				LOG.warn("Failed to wrap NamedClientMcpTransport bean '{}': {}", beanName, ex.getMessage());
+				return bean;
+			}
 		}
+		return bean;
+	}
+
+	private Object wrapListBean(final List<?> list) {
+		final List<Object> wrapped = new ArrayList<>(list.size());
+		boolean changed = false;
+		for (final Object element : list) {
+			if (isNamedClientMcpTransport(element)) {
+				try {
+					wrapped.add(wrapBean(element));
+					changed = true;
+				}
+				catch (final ReflectiveOperationException ex) {
+					LOG.warn("Failed to wrap NamedClientMcpTransport in list: {}", ex.getMessage());
+					wrapped.add(element);
+				}
+			}
+			else {
+				wrapped.add(element);
+			}
+		}
+		return changed ? wrapped : list;
 	}
 
 	private boolean isNamedClientMcpTransport(final Object bean) {

@@ -177,6 +177,78 @@ class RecordingTransportPostProcessorTests {
 			assertThat(recording.transportType()).isEqualTo("streamable-http");
 		}
 
+		@Test
+		@DisplayName("wraps real NamedClientMcpTransport from Spring AI classpath")
+		void wrapsRealNamedClientMcpTransport() {
+			// given: use the real NamedClientMcpTransport record (not a hand-written
+			// double)
+			final McpClientTransport mockTransport = mock(McpClientTransport.class);
+			given(mockTransport.sendMessage(any(JSONRPCMessage.class))).willReturn(Mono.empty());
+			final NamedClientMcpTransport named = new NamedClientMcpTransport("real-client", mockTransport);
+
+			// when
+			final Object result = RecordingTransportPostProcessorTests.this.postProcessor
+				.postProcessAfterInitialization(named, "realNamedTransport");
+
+			// then
+			assertThat(result).isInstanceOf(NamedClientMcpTransport.class);
+			final NamedClientMcpTransport wrapped = (NamedClientMcpTransport) result;
+			assertThat(wrapped.name()).isEqualTo("real-client");
+			assertThat(wrapped.transport()).isInstanceOf(RecordingMcpClientTransport.class);
+			// Verify traffic is captured through the wrapped transport
+			final RecordingMcpClientTransport recording = (RecordingMcpClientTransport) wrapped.transport();
+			final JSONRPCRequest request = new JSONRPCRequest("2.0", "tools/list", 1, null);
+			recording.sendMessage(request).block();
+			final List<TimelineEvent> events = RecordingTransportPostProcessorTests.this.timelineService
+				.query(TimelineQuery.all());
+			assertThat(events).hasSize(1);
+			assertThat(events.get(0).payload().path("clientName").asText()).isEqualTo("real-client");
+		}
+
+		@Test
+		@DisplayName("wraps elements in a List<NamedClientMcpTransport> bean")
+		void wrapsListBeanElements() {
+			// given: a List<NamedClientMcpTransport> as Spring AI 2.0.0 exposes
+			final McpClientTransport mockTransport1 = mock(McpClientTransport.class);
+			given(mockTransport1.sendMessage(any(JSONRPCMessage.class))).willReturn(Mono.empty());
+			final McpClientTransport mockTransport2 = mock(McpClientTransport.class);
+			given(mockTransport2.sendMessage(any(JSONRPCMessage.class))).willReturn(Mono.empty());
+			final List<NamedClientMcpTransport> list = List.of(new NamedClientMcpTransport("client-a", mockTransport1),
+					new NamedClientMcpTransport("client-b", mockTransport2));
+
+			// when
+			final Object result = RecordingTransportPostProcessorTests.this.postProcessor
+				.postProcessAfterInitialization(list, "namedTransports");
+
+			// then
+			assertThat(result).isInstanceOf(List.class);
+			@SuppressWarnings("unchecked")
+			final List<NamedClientMcpTransport> wrappedList = (List<NamedClientMcpTransport>) result;
+			assertThat(wrappedList).hasSize(2);
+			for (final NamedClientMcpTransport named : wrappedList) {
+				assertThat(named.transport()).isInstanceOf(RecordingMcpClientTransport.class);
+			}
+			// Verify traffic flows through the wrapped transports
+			final NamedClientMcpTransport wrappedA = wrappedList.get(0);
+			final RecordingMcpClientTransport recordingA = (RecordingMcpClientTransport) wrappedA.transport();
+			recordingA.sendMessage(new JSONRPCRequest("2.0", "tools/list", 1, null)).block();
+			assertThat(RecordingTransportPostProcessorTests.this.timelineService.query(TimelineQuery.all())).hasSize(1);
+		}
+
+		@Test
+		@DisplayName("returns list unchanged when no elements are NamedClientMcpTransport")
+		void returnsListUnchangedWhenNoMatchingElements() {
+			// given
+			final List<String> list = List.of("a", "b");
+
+			// when
+			final Object result = RecordingTransportPostProcessorTests.this.postProcessor
+				.postProcessAfterInitialization(list, "someList");
+
+			// then
+			assertThat(result).isSameAs(list);
+		}
+
 	}
 
 	/** Test helper: a transport whose class name contains "Stdio". */

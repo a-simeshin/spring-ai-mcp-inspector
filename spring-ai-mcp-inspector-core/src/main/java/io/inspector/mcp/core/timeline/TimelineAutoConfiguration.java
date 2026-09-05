@@ -20,6 +20,7 @@ import ch.qos.logback.classic.AsyncAppender;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -102,14 +103,14 @@ public class TimelineAutoConfiguration {
 	 * Bean post-processor that wraps {@code NamedClientMcpTransport} beans with recording
 	 * decorators. Active only when client capture is enabled and the recorder bean
 	 * exists.
-	 * @param trafficRecorder the client traffic recorder
+	 * @param trafficRecorderProvider the provider for the client traffic recorder
 	 * @return a new {@link RecordingTransportPostProcessor}
 	 */
 	@Bean
 	@ConditionalOnBean(McpClientTrafficRecorder.class)
-	public RecordingTransportPostProcessor mcpInspectorRecordingTransportPostProcessor(
-			final McpClientTrafficRecorder trafficRecorder) {
-		return new RecordingTransportPostProcessor(trafficRecorder);
+	public static RecordingTransportPostProcessor mcpInspectorRecordingTransportPostProcessor(
+			final ObjectProvider<McpClientTrafficRecorder> trafficRecorderProvider) {
+		return new RecordingTransportPostProcessor(trafficRecorderProvider.getObject());
 	}
 
 	/**

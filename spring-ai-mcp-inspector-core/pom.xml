@@ -73,8 +73,6 @@
             <artifactId>spring-ai-mcp-annotations</artifactId>
             <scope>test</scope>
         </dependency>
-
-
         <!-- Test-only: ProxySessionRegistryShutdownOrderingTests pins its probe phase to
              Boot's own WebServerGracefulShutdownLifecycle.SMART_LIFECYCLE_PHASE rather
              than to a copied 2147482623. Boot 4 split that class out of the spring-boot

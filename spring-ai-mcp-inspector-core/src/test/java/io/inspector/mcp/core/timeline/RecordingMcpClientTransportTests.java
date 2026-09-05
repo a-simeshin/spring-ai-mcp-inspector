@@ -132,6 +132,23 @@ class RecordingMcpClientTransportTests {
 			assertThat(events.get(0).type()).isEqualTo(TimelineEventType.MCP_JSONRPC_NOTIFICATION);
 		}
 
+		@Test
+		@DisplayName("records outbound JSONRPCResponse for server-initiated callbacks")
+		void recordsOutboundResponseForServerInitiatedCallbacks() {
+			// given
+			final JSONRPCResponse response = JSONRPCResponse.result("srv-1", java.util.Map.of());
+
+			// when
+			RecordingMcpClientTransportTests.this.transport.sendMessage(response).block();
+
+			// then
+			then(RecordingMcpClientTransportTests.this.delegate).should().sendMessage(response);
+			final List<TimelineEvent> events = RecordingMcpClientTransportTests.this.timelineService
+				.query(TimelineQuery.all());
+			assertThat(events).hasSize(1);
+			assertThat(events.get(0).type()).isEqualTo(TimelineEventType.MCP_JSONRPC_RESPONSE);
+		}
+
 	}
 
 	@Nested
