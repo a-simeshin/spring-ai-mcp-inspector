@@ -585,6 +585,57 @@ describe("savedConnections", () => {
       expect(storedJson).not.toContain("safe-value");
     });
 
+    it("verifies persisted JSON contains no secrets for X-API-Key, Proxy-Authorization, whitespace-padded Authorization, and X-Token", () => {
+      // This test verifies the raw localStorage JSON after persistence,
+      // covering header cases that stripSecrets result alone cannot prove:
+      // 1. X-API-Key  (known secret header name)
+      // 2. Proxy-Authorization (known secret header name)
+      // 3. Authorization with whitespace padding around the name
+      //    (server may trim or not - stripSecrets must clear regardless)
+      // 4. X-Token (arbitrary header name that could carry a secret)
+      const draft = {
+        ...mockDraft(),
+        customHeaders: [
+          { name: "Authorization", value: "Bearer live-token", enabled: true },
+          { name: " X-API-Key ", value: "leaked-api-key", enabled: true },
+          { name: "Proxy-Authorization", value: "Basic creds", enabled: true },
+          { name: " Authorization ", value: "padded-bearer", enabled: true },
+          { name: "X-Token", value: "arbitrary-token", enabled: true },
+        ],
+      };
+      const stripped = stripSecrets(draft);
+      saveConnection(stripped);
+      const storedJson = localStorage.getItem(SAVED_CONNECTIONS_KEY)!;
+      const parsed = JSON.parse(storedJson) as {
+        schemaVersion: number;
+        connections: Array<{
+          customHeaders: Array<{ name: string; value: string }>;
+        }>;
+      };
+      // All headers are preserved, but all values are empty
+      const headers = parsed.connections[0].customHeaders;
+      expect(headers).toHaveLength(5);
+      headers.forEach((h) => {
+        expect(h.value).toBe("");
+      });
+      // The raw JSON string contains none of the original secret values
+      expect(storedJson).not.toContain("live-token");
+      expect(storedJson).not.toContain("leaked-api-key");
+      expect(storedJson).not.toContain("Basic creds");
+      expect(storedJson).not.toContain("padded-bearer");
+      expect(storedJson).not.toContain("arbitrary-token");
+      // But header names ARE preserved (including whitespace-padded ones)
+      expect(storedJson).toContain("Authorization");
+      expect(storedJson).toContain(" X-API-Key ");
+      expect(storedJson).toContain("Proxy-Authorization");
+      expect(storedJson).toContain(" Authorization ");
+      expect(storedJson).toContain("X-Token");
+      // Verify the original values are not present even in the draft
+      // (the save path stripsSecrets before saveConnection, so the
+      // raw JSON should never contain the original values)
+      expect(storedJson).not.toContain("Bearer live-token");
+    });
+
     it("verifies restore does not return secret values", () => {
       const draft = {
         ...mockDraft(),

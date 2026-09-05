@@ -168,10 +168,25 @@ describe("App saved connections integration", () => {
     }
   });
 
-  it("shows confirm dialog when saving with duplicate name and cancels keeps both entries", async () => {
-    // Seed a connection named "first"
-    const existing = seedConnection();
-    expect(existing.name).toBe("first");
+  function seedTwoConnections(): { first: SavedConnection; second: SavedConnection } {
+    const first = seedConnection();
+    const second = saveConnection(
+      stripSecrets({
+        name: "second",
+        transport: "sse" as const,
+        connectionType: "proxy" as const,
+        url: "http://other-server:8080/sse",
+        customHeaders: [
+          { name: "X-Other", value: "other-val", enabled: true },
+        ],
+        env: { BAR: "baz" },
+      }),
+    );
+    return { first, second };
+  }
+
+  it("shows confirm dialog when saving selected entry under duplicate name and cancel keeps both entries with original ids", async () => {
+    const { first, second } = seedTwoConnections();
 
     render(
       <TooltipProvider>
@@ -183,6 +198,9 @@ describe("App saved connections integration", () => {
       expect(global.fetch).toHaveBeenCalled();
     });
 
+    // Select the first entry
+    fireEvent.click(screen.getByTestId(`saved-connection-${first.id}`));
+
     // Mock window.confirm to return false (cancel)
     const mockConfirm = jest.spyOn(window, "confirm");
     mockConfirm.mockReturnValue(false);
@@ -190,16 +208,16 @@ describe("App saved connections integration", () => {
     // Open the save dialog
     fireEvent.click(screen.getByTestId("save-current-connection"));
 
-    // Type a name that matches the existing connection
+    // Type the name of the second entry (duplicate)
     const nameInput = screen.getByTestId("save-connection-name-input");
-    fireEvent.change(nameInput, { target: { value: "first" } });
+    fireEvent.change(nameInput, { target: { value: "second" } });
 
     // Click Save
     fireEvent.click(screen.getByTestId("confirm-save-connection"));
 
     // window.confirm should have been called with the overwrite message
     expect(mockConfirm).toHaveBeenCalledWith(
-      'Connection "first" already exists. Overwrite?',
+      'Connection "second" already exists. Overwrite?',
     );
 
     // The dialog should stay open (input still visible)
@@ -207,10 +225,80 @@ describe("App saved connections integration", () => {
       screen.getByTestId("save-connection-name-input"),
     ).toBeInTheDocument();
 
-    // Both entries should still exist in localStorage
+    // Both entries must still exist with their original ids
     const stored = JSON.parse(localStorage.getItem(SAVED_CONNECTIONS_KEY)!);
-    expect(stored.connections).toHaveLength(1);
-    expect(stored.connections[0].name).toBe("first");
+    expect(stored.connections).toHaveLength(2);
+    const ids = stored.connections.map((c: { id: string }) => c.id);
+    expect(ids).toContain(first.id);
+    expect(ids).toContain(second.id);
+    // Original names unchanged
+    const names = stored.connections.map((c: { name: string }) => c.name);
+    expect(names).toContain("first");
+    expect(names).toContain("second");
+
+    mockConfirm.mockRestore();
+  });
+
+  it("overwrites existing entry when confirm is accepted and does not create a silent duplicate", async () => {
+    const { first, second } = seedTwoConnections();
+
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalled();
+    });
+
+    // Select the first entry
+    fireEvent.click(screen.getByTestId(`saved-connection-${first.id}`));
+
+    // Mock window.confirm to return true (confirm overwrite)
+    const mockConfirm = jest.spyOn(window, "confirm");
+    mockConfirm.mockReturnValue(true);
+
+    // Open the save dialog
+    fireEvent.click(screen.getByTestId("save-current-connection"));
+
+    // Type the name of the second entry (duplicate)
+    const nameInput = screen.getByTestId("save-connection-name-input");
+    fireEvent.change(nameInput, { target: { value: "second" } });
+
+    // Click Save
+    fireEvent.click(screen.getByTestId("confirm-save-connection"));
+
+    // window.confirm should have been called
+    expect(mockConfirm).toHaveBeenCalledWith(
+      'Connection "second" already exists. Overwrite?',
+    );
+
+    // The dialog should close (input no longer visible)
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("save-connection-name-input"),
+      ).not.toBeInTheDocument();
+    });
+
+    // Exactly 2 entries: the second entry was overwritten, not duplicated
+    const stored = JSON.parse(localStorage.getItem(SAVED_CONNECTIONS_KEY)!);
+    expect(stored.connections).toHaveLength(2);
+    const ids = stored.connections.map((c: { id: string }) => c.id);
+    // The second entry's id is preserved (overwritten, not replaced)
+    expect(ids).toContain(first.id);
+    expect(ids).toContain(second.id);
+    // The overwritten entry has the name "second" (from the dialog)
+    const overwritten = stored.connections.find(
+      (c: { id: string }) => c.id === second.id,
+    );
+    expect(overwritten.name).toBe("second");
+    // Header values are empty (stripped by stripSecrets)
+    overwritten.customHeaders.forEach(
+      (h: { name: string; value: string }) => {
+        expect(h.value).toBe("");
+      },
+    );
 
     mockConfirm.mockRestore();
   });
