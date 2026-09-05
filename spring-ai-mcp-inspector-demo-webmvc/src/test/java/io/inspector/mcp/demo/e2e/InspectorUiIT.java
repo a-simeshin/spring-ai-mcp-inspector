@@ -3548,11 +3548,22 @@ class InspectorUiIT {
 				awaitRequestCount(tokenServer, 2, Duration.ofSeconds(30));
 				Assertions.assertEquals(2, tokenServer.requestCount(), "token exchanges");
 				Assertions.assertFalse(tokenServer.anyRequestWithField("refresh_token"), "no refresh_token grant");
-				Assertions.assertEquals(2, stub.authorizations().size(),
-						"expected exactly 2 upstream Authorization values");
-				Assertions.assertEquals(
-						List.of("Bearer " + E2eTokenServer.tokenValue(1), "Bearer " + E2eTokenServer.tokenValue(2)),
-						stub.authorizations(), "Authorization per upstream message POST");
+				// The first two Authorization values prove the one-retry:
+				// 1. Bearer tok-1 on the initial POST (rejected 401)
+				// 2. Bearer tok-2 on the retry POST after refresh (accepted)
+				// Subsequent POSTs (e.g. tools/list, notifications/initialized)
+				// are normal MCP protocol frames and carry the same refreshed token.
+				Assertions.assertTrue(stub.authorizations().size() >= 2,
+						"expected at least 2 upstream Authorization values");
+				Assertions.assertEquals("Bearer " + E2eTokenServer.tokenValue(1), stub.authorizations().get(0),
+						"first Authorization: initial token");
+				Assertions.assertEquals("Bearer " + E2eTokenServer.tokenValue(2), stub.authorizations().get(1),
+						"second Authorization: refreshed token");
+				stub.authorizations()
+					.stream()
+					.skip(2)
+					.forEach((auth) -> Assertions.assertEquals("Bearer " + E2eTokenServer.tokenValue(2), auth,
+							"subsequent Authorization: must use refreshed token"));
 
 				// then - the retried round-trip reached Connected.
 				$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
