@@ -19,6 +19,8 @@ import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -30,8 +32,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
-import tools.jackson.databind.json.JsonMapper;
-import tools.jackson.databind.node.ObjectNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -66,7 +66,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Feature("SSE liveness probe")
 class ProxySseLivenessIT {
 
-	private static final JsonMapper MAPPER = new JsonMapper();
+	private static final ObjectMapper MAPPER = new ObjectMapper();
 
 	private static final HttpClient HTTP = ProxyAppHarness.httpClient(Duration.ofSeconds(5));
 
