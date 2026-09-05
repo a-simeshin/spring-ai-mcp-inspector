@@ -473,7 +473,7 @@ describe("App saved connections integration", () => {
   });
 
   it("switches between stdio and sse entries and resets absent fields", async () => {
-    // Seed a stdio entry
+    // Seed a stdio entry with command/args/env
     const stdioDraft = {
       name: "stdio-server",
       transport: "stdio" as const,
@@ -485,7 +485,7 @@ describe("App saved connections integration", () => {
     };
     const stdio = saveConnection(stripSecrets(stdioDraft));
 
-    // Seed an SSE entry
+    // Seed an SSE entry (no command/args/env)
     const sseDraft = {
       name: "sse-server",
       transport: "sse" as const,
@@ -497,6 +497,16 @@ describe("App saved connections integration", () => {
       env: {},
     };
     const sse = saveConnection(stripSecrets(sseDraft));
+
+    // Seed an empty stdio entry (no command/args/env) to prove reset
+    const emptyStdioDraft = {
+      name: "empty-stdio",
+      transport: "stdio" as const,
+      connectionType: "proxy" as const,
+      // command, args, env are intentionally undefined
+      customHeaders: [],
+    };
+    const emptyStdio = saveConnection(stripSecrets(emptyStdioDraft));
 
     render(
       <TooltipProvider>
@@ -511,7 +521,7 @@ describe("App saved connections integration", () => {
     // Step 1: Select the stdio entry
     fireEvent.click(screen.getByTestId(`saved-connection-${stdio.id}`));
 
-    // Verify stdio fields are populated
+    // Verify transport type changed to STDIO
     await waitFor(() => {
       expect(
         screen.getByRole("combobox", { name: /transport type/i }),
@@ -530,7 +540,7 @@ describe("App saved connections integration", () => {
       expect(argsInput.value).toBe("main.py --port 8080");
     });
 
-    // Step 2: Select the SSE entry
+    // Step 2: Select the SSE entry (no command/args/env)
     fireEvent.click(screen.getByTestId(`saved-connection-${sse.id}`));
 
     // Verify transport type changed to SSE
@@ -566,25 +576,42 @@ describe("App saved connections integration", () => {
       expect(headerNameInput.value).toBe("X-SSE");
     });
 
-    // Step 3: Switch back to stdio entry
-    fireEvent.click(screen.getByTestId(`saved-connection-${stdio.id}`));
+    // Step 3: Select the empty stdio entry to prove command/args/env
+    // were reset to empty after SSE select (not stale from step 1)
+    fireEvent.click(screen.getByTestId(`saved-connection-${emptyStdio.id}`));
 
-    // Verify SSE fields are absent
+    // Verify transport type changed to STDIO
+    await waitFor(() => {
+      expect(
+        screen.getByRole("combobox", { name: /transport type/i }),
+      ).toHaveTextContent("STDIO");
+    });
+
+    // Verify SSE fields are absent (inverse reset)
     expect(screen.queryByLabelText("URL")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("combobox", { name: /connection type/i }),
     ).not.toBeInTheDocument();
 
-    // Verify stdio fields are restored
+    // Verify command is empty (proves reset: stale "python" would show
+    // if setCommand("") at SSE select had been a no-op)
     await waitFor(() => {
       expect(
         screen.getByLabelText("Command") as HTMLInputElement,
-      ).toHaveValue("python");
+      ).toHaveValue("");
     });
+    // Verify args is empty (proves setArgs("") reset)
     await waitFor(() => {
       expect(
         screen.getByLabelText("Arguments") as HTMLInputElement,
-      ).toHaveValue("main.py --port 8080");
+      ).toHaveValue("");
     });
+    // Verify env vars are empty: open the env section and check no rows
+    fireEvent.click(screen.getByTestId("env-vars-button"));
+    // An empty env object renders no env key/value inputs; check that
+    // the only env-related label is the section header (not key 1)
+    expect(
+      screen.queryByLabelText("Environment variable key 1"),
+    ).not.toBeInTheDocument();
   });
 });
