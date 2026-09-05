@@ -262,6 +262,17 @@ class ProxyUpstreamProberTests {
 			final Object id = req.id();
 			assertThat(id).isInstanceOf(Integer.class);
 			assertThat(ProxyUpstreamProberTests.this.session.isProbeId((Integer) id)).isTrue();
+
+			// Wait for the response-level deadline to fire and clean up the probe ID.
+			// The deadline is Mono.delay(probeTimeout) which is FAST_PROBE (100ms).
+			// The async chain (sendMessage → onComplete → Mono.delay → callback)
+			// runs on boundedElastic and parallel schedulers.
+			ProxyUpstreamProberTests.sleep(5000);
+
+			// The probe ID must be removed after the deadline fires.
+			assertThat(ProxyUpstreamProberTests.this.session.isProbeId((Integer) id)).isFalse();
+			// The session must be terminated via failUpstream.
+			assertThat(ProxyUpstreamProberTests.this.session.isUpstreamTerminated()).isTrue();
 		}
 
 	}

@@ -283,6 +283,11 @@ public class McpInspectorProperties {
 		private Duration sessionReaper = Duration.ofMinutes(30);
 
 		/**
+		 * How often the session reaper sweep runs. Default 1m.
+		 */
+		private Duration reaperInterval = Duration.ofMinutes(1);
+
+		/**
 		 * How long a server→UI request (sampling / elicitation / roots) waits for the
 		 * browser to answer before the proxied tool call fails. Default 120s.
 		 */
@@ -334,6 +339,14 @@ public class McpInspectorProperties {
 
 		public void setSessionReaper(final Duration sessionReaper) {
 			this.sessionReaper = sessionReaper;
+		}
+
+		public Duration getReaperInterval() {
+			return this.reaperInterval;
+		}
+
+		public void setReaperInterval(final Duration reaperInterval) {
+			this.reaperInterval = reaperInterval;
 		}
 
 		public Duration getUpstreamProbeInterval() {

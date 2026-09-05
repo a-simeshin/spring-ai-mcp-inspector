@@ -131,16 +131,16 @@ class ProxyTargetLossIT {
 			+ "hanging, then the session is reaped so a subsequent DELETE returns 404")
 	void targetLossMidSession_whenUpstreamKilled_surfacesAsErrorAndCleansUp() throws Exception {
 		// given
-		// Use SSE protocol like ProxySseLivenessIT to avoid interference between
-		// the proxy and the target on the /mcp endpoint.
-		inspectorApp = ProxyAppHarness.start("SSE", false, null,
+		// Disable liveness probing for this test so the proxy does not send ping
+		// probes during the baseline phase.
+		inspectorApp = ProxyAppHarness.start("STREAMABLE", false, null,
 				"--spring.ai.mcp.inspector.upstream-liveness-probe-enabled=false");
-		targetApp = ProxyAppHarness.start("SSE", false, null);
+		targetApp = ProxyAppHarness.start("STREAMABLE", false, null);
 
 		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
 		final int targetPort = ProxyAppHarness.port(targetApp);
 		final String proxyBase = "http://127.0.0.1:" + inspectorPort + "/mcp-inspector-api";
-		final String targetUrl = "http://127.0.0.1:" + targetPort + "/sse";
+		final String targetUrl = "http://127.0.0.1:" + targetPort + "/mcp";
 
 		// 1. Open the session against the target app.
 		final String sessionId = openSession(proxyBase, targetUrl);

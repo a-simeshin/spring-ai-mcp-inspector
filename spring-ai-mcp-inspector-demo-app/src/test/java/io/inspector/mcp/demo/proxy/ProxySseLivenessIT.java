@@ -117,16 +117,16 @@ class ProxySseLivenessIT {
 	void upstreamDeath_closesDownstreamSseWithinBound() throws Exception {
 		// given
 		// Use fast probe intervals to keep the test bounded
-		inspectorApp = ProxyAppHarness.start("STREAMABLE", false, null,
+		inspectorApp = ProxyAppHarness.start("SSE", false, null,
 				"--spring.ai.mcp.inspector.timeouts.upstream-probe-interval=PT2S",
 				"--spring.ai.mcp.inspector.timeouts.upstream-probe-timeout=PT3S",
 				"--spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold=PT3S");
-		targetApp = ProxyAppHarness.start("STREAMABLE", false, null);
+		targetApp = ProxyAppHarness.start("SSE", false, null);
 
 		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
 		final int targetPort = ProxyAppHarness.port(targetApp);
 		final String proxyBase = "http://127.0.0.1:" + inspectorPort + "/mcp-inspector-api";
-		final String targetSseUrl = "http://127.0.0.1:" + targetPort + "/mcp";
+		final String targetSseUrl = "http://127.0.0.1:" + targetPort + "/sse";
 
 		// 1. Open the SSE stream and capture the endpoint prologue.
 		final AtomicBoolean streamClosed = new AtomicBoolean(false);
