@@ -137,7 +137,7 @@ public class ClientHandlerScanner implements ApplicationContextAware {
 		if (!annotation.isPresent()) {
 			return;
 		}
-		final String[] clients = annotation.getStringArray("clients");
+		final String[] clients = annotation.getValue("clients", String[].class).orElse(new String[0]);
 		final Set<String> clientNames = new LinkedHashSet<>();
 		if (clients == null || clients.length == 0) {
 			clientNames.add(ALL_CLIENTS);

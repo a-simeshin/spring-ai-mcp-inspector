@@ -242,6 +242,20 @@ class ClientConfigReaderTests {
 		}
 
 		@Test
+		@DisplayName("redacts query string in URL without scheme")
+		void redactsNoSchemeQuery() {
+			// given
+			final String raw = "host/sse?token=abc123";
+
+			// when
+			final String redacted = ClientConfigReader.redactUrl(raw);
+
+			// then
+			assertThat(redacted).doesNotContain("token=abc123");
+			assertThat(redacted).endsWith("?***");
+		}
+
+		@Test
 		@DisplayName("does not alter non-URL string")
 		void doesNotAlterNonUrl() {
 			// given

@@ -231,7 +231,7 @@ class ClientDesyncDetectorTests {
 		}
 
 		@Test
-		@DisplayName("flags sse client with both url and command configured")
+		@DisplayName("flags sse client with both url and command configured as single finding")
 		void flagsSseWithBothUrlAndCommand() {
 			// given
 			final Map<String, ClientConfig> clients = Map.of("mixed",
@@ -240,12 +240,26 @@ class ClientDesyncDetectorTests {
 			// when
 			final List<DesyncFinding> findings = ClientDesyncDetector.detectTransportMismatches(clients);
 
-			// then
-			assertThat(findings).hasSize(2);
-			assertThat(findings)
-				.anyMatch((f) -> f.type() == DesyncType.TRANSPORT_MISMATCH && f.message().contains("command property"));
-			assertThat(findings).anyMatch(
-					(f) -> f.type() == DesyncType.TRANSPORT_MISMATCH && f.message().contains("both url and command"));
+			// then: exactly one finding for the combined misconfiguration
+			assertThat(findings).hasSize(1);
+			assertThat(findings.get(0).type()).isEqualTo(DesyncType.TRANSPORT_MISMATCH);
+			assertThat(findings.get(0).message()).contains("both url and command");
+		}
+
+		@Test
+		@DisplayName("flags stdio client with both url and command configured as single finding")
+		void flagsStdioWithBothUrlAndCommand() {
+			// given
+			final Map<String, ClientConfig> clients = Map.of("mixed",
+					config("mixed", "stdio", "https://example.invalid/sse", "my-command"));
+
+			// when
+			final List<DesyncFinding> findings = ClientDesyncDetector.detectTransportMismatches(clients);
+
+			// then: exactly one finding for the combined misconfiguration, not two
+			assertThat(findings).hasSize(1);
+			assertThat(findings.get(0).type()).isEqualTo(DesyncType.TRANSPORT_MISMATCH);
+			assertThat(findings.get(0).message()).contains("both url and command");
 		}
 
 		@Test
