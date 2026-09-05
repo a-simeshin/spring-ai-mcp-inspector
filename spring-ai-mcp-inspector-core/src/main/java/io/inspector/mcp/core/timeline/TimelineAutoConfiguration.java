@@ -20,7 +20,9 @@ import ch.qos.logback.classic.AsyncAppender;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -79,6 +81,36 @@ public class TimelineAutoConfiguration {
 			matchIfMissing = true)
 	public McpTrafficRecorder mcpInspectorMcpTrafficRecorder(final TimelineService timelineService) {
 		return new McpTrafficRecorder(timelineService);
+	}
+
+	/**
+	 * The client-side traffic recorder that captures outgoing MCP client traffic into the
+	 * timeline. Absent when client capture is switched off (default). When present, a
+	 * {@link RecordingTransportPostProcessor} wraps every {@code NamedClientMcpTransport}
+	 * bean with a {@link RecordingMcpClientTransport} decorator.
+	 * @param timelineService the timeline service to append events to
+	 * @return a new {@link McpClientTrafficRecorder}
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline", name = "client-capture-enabled",
+			havingValue = "true")
+	public McpClientTrafficRecorder mcpInspectorMcpClientTrafficRecorder(final TimelineService timelineService) {
+		return new McpClientTrafficRecorder(timelineService);
+	}
+
+	/**
+	 * Bean post-processor that wraps {@code NamedClientMcpTransport} beans with recording
+	 * decorators. Active only when client capture is enabled and the recorder bean
+	 * exists.
+	 * @param trafficRecorderProvider the provider for the client traffic recorder
+	 * @return a new {@link RecordingTransportPostProcessor}
+	 */
+	@Bean
+	@ConditionalOnBean(McpClientTrafficRecorder.class)
+	public static RecordingTransportPostProcessor mcpInspectorRecordingTransportPostProcessor(
+			final ObjectProvider<McpClientTrafficRecorder> trafficRecorderProvider) {
+		return new RecordingTransportPostProcessor(trafficRecorderProvider.getObject());
 	}
 
 	/**
