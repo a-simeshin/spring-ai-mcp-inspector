@@ -253,7 +253,8 @@ class ProxySseLivenessIT {
 		// given
 		// Use default probe intervals (10s interval, 15s idle threshold) to ensure
 		// the probe does NOT trigger during the 5s observation window.
-		inspectorApp = ProxyAppHarness.start("SSE", false, null);
+		inspectorApp = ProxyAppHarness.start("SSE", false, null,
+				"--spring.ai.mcp.inspector.timeouts.sse-session=PT30M");
 		targetApp = ProxyAppHarness.start("SSE", false, null);
 
 		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
