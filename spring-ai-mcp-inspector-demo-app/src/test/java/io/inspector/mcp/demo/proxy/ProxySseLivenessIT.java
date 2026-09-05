@@ -126,7 +126,7 @@ class ProxySseLivenessIT {
 		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
 		final int targetPort = ProxyAppHarness.port(targetApp);
 		final String proxyBase = "http://127.0.0.1:" + inspectorPort + "/mcp-inspector-api";
-		final String targetSseUrl = "http://127.0.0.1:" + targetPort + "/sse";
+		final String targetSseUrl = "http://127.0.0.1:" + targetPort + "/mcp";
 
 		// 1. Open the SSE stream and capture the endpoint prologue.
 		final AtomicBoolean streamClosed = new AtomicBoolean(false);
@@ -260,7 +260,7 @@ class ProxySseLivenessIT {
 		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
 		final int targetPort = ProxyAppHarness.port(targetApp);
 		final String proxyBase = "http://127.0.0.1:" + inspectorPort + "/mcp-inspector-api";
-		final String targetSseUrl = "http://127.0.0.1:" + targetPort + "/sse";
+		final String targetSseUrl = "http://127.0.0.1:" + targetPort + "/mcp";
 
 		// Open the SSE stream and capture the endpoint prologue.
 		final AtomicBoolean streamClosed = new AtomicBoolean(false);
