@@ -14,6 +14,10 @@ reason and a Retry button that repeats connect. The human-readable
 messages are cleaned up: no parenthetical reason suffixes, the
 unknown case returns empty string so the original error text shows
 through. A new `not_found` reason (wire: "not_found") maps HTTP 404
-from the upstream server. Covered by
+from the upstream server. The sidebar status text (the colored dot
+label) now uses the error reason too: connection_refused/dns show
+reachability hint without token mention; unauthorized shows proxy
+token hint; timeout shows server-not-responding text; unknown shows
+a neutral message. Covered by
 src/lib/__tests__/connectErrors.test.ts and
 src/components/__tests__/Sidebar.connectFailureAlert.test.tsx.

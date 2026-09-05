@@ -906,16 +906,26 @@ const Sidebar = ({
                 })()}`}
               />
               <span className="text-sm text-gray-600 dark:text-gray-400">
+                {/* [spring-ai-mcp-inspector PATCH] Status text depends on error reason
+                    instead of proxy token presence: unauthorized shows token hint,
+                    connection_refused/dns show reachability hint, timeout shows
+                    server-not-responding (see NOTICE.d/connect-error-alert.txt). */}
                 {(() => {
                   switch (connectionStatus) {
                     case "connected":
                       return "Connected";
                     case "error": {
-                      const hasProxyToken = config.MCP_PROXY_AUTH_TOKEN?.value;
-                      if (!hasProxyToken) {
-                        return "Connection Error - Did you add the proxy session token in Configuration?";
+                      const reason = connectionError?.reason;
+                      if (reason === "unauthorized") {
+                        return "Connection Error - Check if your proxy token is correct";
                       }
-                      return "Connection Error - Check if your MCP server is running and proxy token is correct";
+                      if (reason === "connection_refused" || reason === "dns") {
+                        return "Connection Error - Check if your MCP server is running and the URL is reachable";
+                      }
+                      if (reason === "timeout") {
+                        return "Connection Error - The server is not responding";
+                      }
+                      return "Connection Error - Check if your MCP server is running";
                     }
                     case "error-connecting-to-proxy":
                       return "Error Connecting to MCP Inspector Proxy - Check Console logs";
