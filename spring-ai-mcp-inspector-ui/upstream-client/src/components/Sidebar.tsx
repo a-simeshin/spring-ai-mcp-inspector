@@ -605,6 +605,7 @@ const Sidebar = ({
                 onProfilesChange={onProfilesChange}
                 activeProfileId={activeProfileId ?? null}
                 onActiveProfileChange={onActiveProfileChange}
+                transportType={transportType}
               />
             </div>
           )}
