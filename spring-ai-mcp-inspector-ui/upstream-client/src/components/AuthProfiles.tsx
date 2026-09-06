@@ -49,6 +49,8 @@ interface AuthProfilesProps {
   onProfilesChange: (profiles: AuthProfileSummary[]) => void;
   activeProfileId: string | null;
   onActiveProfileChange: (profileId: string | null) => void;
+  /** Transport type: profiles panel is hidden for stdio (no profile type applies). */
+  transportType?: "stdio" | "sse" | "streamable-http";
 }
 
 const draftTemplate = (type: AuthProfileType): ProfileDraft => {
@@ -87,6 +89,7 @@ const AuthProfiles = ({
   onProfilesChange,
   activeProfileId,
   onActiveProfileChange,
+  transportType,
 }: AuthProfilesProps) => {
   const { toast } = useToast();
   const [draft, setDraft] = useState<ProfileDraft>(() => draftTemplate("BEARER"));
@@ -335,7 +338,7 @@ const AuthProfiles = ({
     draft.type === "OAUTH2" && draft.grantMode === "AUTHORIZATION_CODE";
 
   // Hide panel for stdio transport where no profile type applies (UI/UX fix, owner review round 2)
-  if (config.transport?.type === "stdio") {
+  if (transportType === "stdio") {
     return null;
   }
 
