@@ -210,6 +210,22 @@ class ProxyTransportFactoryTests {
 		}
 
 		@Test
+		@Story("Normalization")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("buildSse() with a URI that has no path normalizes to /sse in the preflight")
+		void buildSse_withNoPath_normalizesToSse() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri);
+
+			// then
+			assertThat(transport).isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
 		@Story("Header forwarding -- auth only")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("buildSse() three-arg overload with an authorization value and no custom headers "

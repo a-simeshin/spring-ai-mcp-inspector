@@ -179,10 +179,11 @@ public class ProxyTransportFactory {
 			throw new IllegalArgumentException("sseUri must not be null");
 		}
 		final McpClientTransport delegate = openSse(sseUri, authorization, customHeaders);
+		final URI normalizedUri = normalizeSseUri(sseUri);
 		final HttpClient preflightClient = HttpClient.newBuilder().executor(SHARED_HTTP_EXECUTOR).build();
 		final HttpRequest.Builder requestTemplate = HttpRequest.newBuilder();
 		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(authorization, customHeaders);
-		return new SsePreflightTransport(delegate, sseUri, requestTemplate, customizer, preflightClient);
+		return new SsePreflightTransport(delegate, normalizedUri, requestTemplate, customizer, preflightClient);
 	}
 
 	/**
@@ -285,6 +286,20 @@ public class ProxyTransportFactory {
 				});
 			}
 		};
+	}
+
+	/**
+	 * Normalizes an SSE URI by ensuring the path is non-empty, defaulting to {@code /sse}
+	 * when the supplied URI has no path.
+	 * @param uri the source URI (may have an empty or null path)
+	 * @return a URI with the same scheme, host and port, but with a non-empty path
+	 */
+	private static URI normalizeSseUri(final URI uri) {
+		final String rawPath = uri.getRawPath();
+		if (rawPath != null && !rawPath.isBlank()) {
+			return uri;
+		}
+		return URI.create(stripPath(uri) + "/sse");
 	}
 
 	/**

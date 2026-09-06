@@ -21,10 +21,12 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow.Subscription;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -68,6 +70,8 @@ final class SsePreflightTransport implements McpClientTransport {
 
 	private static final String ACCEPT_EVENT_STREAM = "text/event-stream";
 
+	private static final Duration PREFLIGHT_TIMEOUT = Duration.ofSeconds(10);
+
 	private final McpClientTransport delegate;
 
 	private final URI targetUri;
@@ -90,7 +94,7 @@ final class SsePreflightTransport implements McpClientTransport {
 
 	@Override
 	public Mono<Void> connect(final Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>> handler) {
-		return preflight().then(this.delegate.connect(handler));
+		return preflight().then(Mono.defer(() -> this.delegate.connect(handler)));
 	}
 
 	@Override
@@ -134,18 +138,22 @@ final class SsePreflightTransport implements McpClientTransport {
 	private Mono<Void> preflight() {
 		return Mono.deferContextual((context) -> {
 			final HttpRequest headRequest = buildRequest("HEAD", context);
-			return Mono.fromFuture(this.preflightClient.sendAsync(headRequest, HttpResponse.BodyHandlers.discarding()))
-				.flatMap((response) -> {
-					final int status = response.statusCode();
-					if (status >= 200 && status < 300) {
-						return Mono.empty();
-					}
-					if (status == 405) {
-						return preflightGet(context);
-					}
-					return Mono.error(
-							new McpTransportException("SSE handshake rejected by upstream with HTTP status " + status));
-				});
+			final CompletableFuture<HttpResponse<Void>> headFuture = this.preflightClient
+				.sendAsync(headRequest, HttpResponse.BodyHandlers.discarding())
+				.orTimeout(PREFLIGHT_TIMEOUT.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+			return Mono.fromFuture(headFuture).flatMap((response) -> {
+				final int status = response.statusCode();
+				if (status >= 200 && status < 300) {
+					return Mono.<Void>empty();
+				}
+				if (status == 405) {
+					return preflightGet(context);
+				}
+				return Mono.<Void>error(
+						new McpTransportException("SSE handshake rejected by upstream with HTTP status " + status));
+			})
+				.onErrorMap(TimeoutException.class,
+						(e) -> new McpTransportException("SSE preflight HEAD timed out after " + PREFLIGHT_TIMEOUT));
 		});
 	}
 
@@ -158,15 +166,16 @@ final class SsePreflightTransport implements McpClientTransport {
 	 */
 	private Mono<Void> preflightGet(final reactor.util.context.ContextView context) {
 		final HttpRequest getRequest = buildRequest("GET", context);
-		return Mono.fromFuture(this.preflightClient.sendAsync(getRequest, headerOnlyBodyHandler()))
+		final CompletableFuture<HttpResponse<Void>> getFuture = this.preflightClient
+			.sendAsync(getRequest, headerOnlyBodyHandler())
+			.orTimeout(PREFLIGHT_TIMEOUT.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+		return Mono.fromFuture(getFuture)
 			.map((response) -> response.statusCode())
-			.flatMap((status) -> {
-				if (status >= 200 && status < 300) {
-					return Mono.empty();
-				}
-				return Mono
-					.error(new McpTransportException("SSE handshake rejected by upstream with HTTP status " + status));
-			});
+			.flatMap((status) -> (status >= 200 && status < 300) ? Mono.empty()
+					: Mono.<Void>error(
+							new McpTransportException("SSE handshake rejected by upstream with HTTP status " + status)))
+			.onErrorMap(TimeoutException.class,
+					(e) -> new McpTransportException("SSE preflight GET timed out after " + PREFLIGHT_TIMEOUT));
 	}
 
 	/**
