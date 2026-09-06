@@ -91,6 +91,12 @@ public class McpInspectorProperties {
 	@NestedConfigurationProperty
 	private Timeline timeline = new Timeline();
 
+	/**
+	 * Whether upstream liveness probing is enabled for proxied SSE sessions. Defaults to
+	 * {@code true}.
+	 */
+	private boolean upstreamLivenessProbeEnabled = true;
+
 	public boolean isEnabled() {
 		return this.enabled;
 	}
@@ -193,6 +199,14 @@ public class McpInspectorProperties {
 		this.timeline = (timeline != null) ? timeline : new Timeline();
 	}
 
+	public boolean isUpstreamLivenessProbeEnabled() {
+		return this.upstreamLivenessProbeEnabled;
+	}
+
+	public void setUpstreamLivenessProbeEnabled(final boolean upstreamLivenessProbeEnabled) {
+		this.upstreamLivenessProbeEnabled = upstreamLivenessProbeEnabled;
+	}
+
 	/**
 	 * Context-shutdown behaviour. Bound under {@code spring.ai.mcp.inspector.shutdown}.
 	 */
@@ -235,6 +249,23 @@ public class McpInspectorProperties {
 	 * Bound under {@code spring.ai.mcp.inspector.timeouts}.
 	 */
 	public static class Timeouts {
+
+		/**
+		 * Interval between upstream liveness probes for proxied SSE sessions. Default
+		 * 10s.
+		 */
+		private Duration upstreamProbeInterval = Duration.ofSeconds(10);
+
+		/**
+		 * Timeout for each upstream liveness probe POST. Default 5s.
+		 */
+		private Duration upstreamProbeTimeout = Duration.ofSeconds(5);
+
+		/**
+		 * How long a proxied session may see no upstream traffic before the first probe
+		 * is sent. Default 15s.
+		 */
+		private Duration upstreamProbeIdleThreshold = Duration.ofSeconds(15);
 
 		/**
 		 * Inactivity budget for a proxied SSE / streamable-HTTP browser session (servlet
@@ -315,6 +346,30 @@ public class McpInspectorProperties {
 
 		public void setSessionReaper(final Duration sessionReaper) {
 			this.sessionReaper = sessionReaper;
+		}
+
+		public Duration getUpstreamProbeInterval() {
+			return this.upstreamProbeInterval;
+		}
+
+		public void setUpstreamProbeInterval(final Duration upstreamProbeInterval) {
+			this.upstreamProbeInterval = upstreamProbeInterval;
+		}
+
+		public Duration getUpstreamProbeTimeout() {
+			return this.upstreamProbeTimeout;
+		}
+
+		public void setUpstreamProbeTimeout(final Duration upstreamProbeTimeout) {
+			this.upstreamProbeTimeout = upstreamProbeTimeout;
+		}
+
+		public Duration getUpstreamProbeIdleThreshold() {
+			return this.upstreamProbeIdleThreshold;
+		}
+
+		public void setUpstreamProbeIdleThreshold(final Duration upstreamProbeIdleThreshold) {
+			this.upstreamProbeIdleThreshold = upstreamProbeIdleThreshold;
 		}
 
 	}

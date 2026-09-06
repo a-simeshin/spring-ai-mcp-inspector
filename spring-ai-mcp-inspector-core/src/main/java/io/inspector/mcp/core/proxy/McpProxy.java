@@ -154,7 +154,23 @@ public final class McpProxy {
 		// The inbound flux's terminal signals are surfaced too: an upstream
 		// disconnect that completes/errors the inbound stream is propagated via
 		// failUpstream so awaiters and the SSE subscriber are released promptly.
+		//
+		// Internal liveness-probe responses are detected by their JSON-RPC id
+		// (registered via session.registerProbeId) and filtered out - they must
+		// never reach the browser.
 		return session.targetTransport().connect((inbound) -> inbound.flatMap((message) -> {
+			// Skip internal probe responses - they are not real MCP messages
+			// and must not be forwarded to the browser.
+			if (message instanceof McpSchema.JSONRPCResponse response) {
+				final Object id = response.id();
+				if (id instanceof String strId && session.isProbeId(strId)) {
+					// Probe responses are internal traffic - they must not count as
+					// activity for session reaping, and the probe id must be removed
+					// to prevent unbounded growth of the probeIds set.
+					session.removeProbeId(strId);
+					return Mono.<JSONRPCMessage>empty();
+				}
+			}
 			final JsonNode body = toJsonNode(message);
 			if (body != null) {
 				recordInbound(session, message, body);
@@ -165,7 +181,9 @@ public final class McpProxy {
 				session.touch();
 			}
 			return Mono.<JSONRPCMessage>empty();
-		}).doOnError((err) -> session.failUpstream(err))).doOnError((err) -> session.failUpstream(err));
+		}).doOnSuccess((v) -> session.failUpstream(null)).doOnError((err) -> session.failUpstream(err)))
+			.doOnSuccess((v) -> session.failUpstream(null))
+			.doOnError((err) -> session.failUpstream(err));
 	}
 
 	/**

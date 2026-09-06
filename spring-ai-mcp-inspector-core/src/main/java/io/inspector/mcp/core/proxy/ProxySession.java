@@ -18,8 +18,11 @@ package io.inspector.mcp.core.proxy;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
@@ -137,6 +140,14 @@ public final class ProxySession {
 
 	private final Mono<Void> closeSignal;
 
+	/**
+	 * IDs of active liveness-probe requests that must not be forwarded to the browser.
+	 */
+	private final Set<String> probeIds = ConcurrentHashMap.newKeySet();
+
+	/** Monotonic counter for generating unique probe request IDs. */
+	private static final AtomicLong PROBE_ID_SEQ = new AtomicLong(0);
+
 	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
 			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser) {
 		this.sessionId = sessionId;
@@ -235,6 +246,54 @@ public final class ProxySession {
 		return this.closeSignal;
 	}
 
+	/**
+	 * Registers a probe request ID so that the proxy's inbound handler can recognise the
+	 * matching response and skip forwarding it to the browser.
+	 * @param id the JSON-RPC request id of the probe
+	 */
+	public void registerProbeId(final String id) {
+		this.probeIds.add(id);
+	}
+
+	/**
+	 * Returns {@code true} if the given JSON-RPC id belongs to an internal liveness probe
+	 * whose response must not be forwarded to the browser.
+	 * @param id the JSON-RPC request/response id to check
+	 * @return {@code true} if this is a probe id
+	 */
+	public boolean isProbeId(final String id) {
+		return this.probeIds.contains(id);
+	}
+
+	/**
+	 * Removes a previously registered probe ID from the set. Called after the matching
+	 * probe response has been filtered out, preventing unbounded growth of the set.
+	 * @param id the probe id to remove
+	 */
+	public void removeProbeId(final String id) {
+		this.probeIds.remove(id);
+	}
+
+	/**
+	 * Removes all registered probe IDs from the set. Called when the session closes or
+	 * when a probe times out, preventing unbounded growth of the set.
+	 */
+	public void clearProbeIds() {
+		this.probeIds.clear();
+	}
+
+	/**
+	 * Generates the next unique probe request ID. The ID is automatically registered so
+	 * its response will be filtered from the browser stream.
+	 * @return a unique string probe ID (mcpi-probe-N)
+	 */
+	public String nextProbeId() {
+		// Use string IDs with a prefix to avoid collision with normal MCP request IDs
+		final String id = "mcpi-probe-" + PROBE_ID_SEQ.incrementAndGet();
+		this.probeIds.add(id);
+		return id;
+	}
+
 	public void failUpstream(final Throwable error) {
 		if (!this.upstreamTerminated.compareAndSet(false, true)) {
 			return;
@@ -260,6 +319,8 @@ public final class ProxySession {
 		if (!this.closed.compareAndSet(false, true)) {
 			return;
 		}
+		// Clear any pending probe IDs so they do not leak past this session.
+		this.probeIds.clear();
 		// First, and lock-free: this is what actually ends the browser-facing streams.
 		this.closeFuture.complete(null);
 		try {
