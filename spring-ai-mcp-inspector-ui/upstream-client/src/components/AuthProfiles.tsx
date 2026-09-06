@@ -13,7 +13,7 @@
  * Secrets live in React state only and travel backend-ward via the
  * `/auth-profile` handoff; nothing secret is persisted to localStorage.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { AlertCircle, Loader2, Pencil, Trash2 } from "lucide-react";
 import { useToast } from "@/lib/hooks/useToast";
 import { InspectorConfig } from "@/lib/configurationTypes";
@@ -93,6 +93,7 @@ const AuthProfiles = ({
   const [validationError, setValidationError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [authCodeBusy, setAuthCodeBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [prefill, setPrefill] = useState<AuthProfileSummary[]>([]);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   /**
@@ -104,19 +105,27 @@ const AuthProfiles = ({
   const [lastDraftByProfileId, setLastDraftByProfileId] = useState<
     Record<string, ProfileDraft>
   >({});
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   const notifyError = useCallback(
     (description: string) => {
-      toast({ title: "Auth Profile Error", description, variant: "destructive" });
+      const friendly = description
+        .replace("Failed to fetch", "Unable to connect to the server. Check that the server is running.")
+        .replace("NetworkError", "Network error. Please check your connection.")
+        .replace("timeout", "Request timed out. Try again.");
+      toast({ title: "Auth Profile Error", description: friendly, variant: "destructive" });
     },
     [toast],
   );
 
   const refreshProfiles = useCallback(async () => {
+    setLoading(true);
     try {
       onProfilesChange(await listAuthProfiles(config));
     } catch (error) {
       notifyError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
     }
   }, [config, onProfilesChange, notifyError]);
 
@@ -160,7 +169,7 @@ const AuthProfiles = ({
     setValidationError(null);
   };
 
-  const handleSaved = (
+  const handleSaved = async (
     profileId: string,
     savedDraft: ProfileDraft,
     message: string,
@@ -170,7 +179,7 @@ const AuthProfiles = ({
     setEditingProfileId(null);
     setDraft(draftTemplate(savedDraft.type));
     onActiveProfileChange(profileId);
-    void refreshProfiles();
+    await refreshProfiles();
     toast({ title: "Auth Profile", description: message, variant: "default" });
   };
 
@@ -183,7 +192,7 @@ const AuthProfiles = ({
     setSaving(true);
     try {
       const { profileId } = await createAuthProfile(config, draft);
-      handleSaved(profileId, draft, `Profile "${draft.name}" saved`);
+      await handleSaved(profileId, draft, `Profile "${draft.name}" saved`);
     } catch (err) {
       notifyError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -241,6 +250,13 @@ const AuthProfiles = ({
     }
   };
 
+  // Focus name input when editing starts (UI/UX fix, owner review round 2)
+  useEffect(() => {
+    if (editingProfileId && nameInputRef.current) {
+      nameInputRef.current.focus();
+    }
+  }, [editingProfileId]);
+
   /** Loads a saved profile into the editor for rename / field update (PUT). */
   const handleEdit = (summary: AuthProfileSummary) => {
     setEditingProfileId(summary.profileId ?? null);
@@ -263,7 +279,7 @@ const AuthProfiles = ({
     setSaving(true);
     try {
       await updateAuthProfile(config, editingProfileId, draft);
-      handleSaved(editingProfileId, draft, `Profile "${draft.name}" updated`);
+      await handleSaved(editingProfileId, draft, `Profile "${draft.name}" updated`);
     } catch (err) {
       notifyError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -285,7 +301,7 @@ const AuthProfiles = ({
       if (activeProfileId === summary.profileId) {
         onActiveProfileChange(null);
       }
-      void refreshProfiles();
+      await refreshProfiles();
     } catch (err) {
       notifyError(err instanceof Error ? err.message : String(err));
     }
@@ -304,7 +320,7 @@ const AuthProfiles = ({
         [profileId]: draftFromPrefill(summary),
       }));
       onActiveProfileChange(profileId);
-      void refreshProfiles();
+      await refreshProfiles();
       toast({
         title: "Auth Profile",
         description: `Prefill profile "${summary.name}" activated`,
@@ -317,6 +333,11 @@ const AuthProfiles = ({
 
   const isOAuth2AuthCode =
     draft.type === "OAUTH2" && draft.grantMode === "AUTHORIZATION_CODE";
+
+  // Hide panel for stdio transport where no profile type applies (UI/UX fix, owner review round 2)
+  if (config.transport?.type === "stdio") {
+    return null;
+  }
 
   return (
     <div className="space-y-3" data-testid="auth-profiles-panel">
@@ -334,8 +355,17 @@ const AuthProfiles = ({
       </div>
 
       {/* Saved profile selector */}
-      {profiles.length > 0 && (
-        <div className="space-y-1" data-testid="auth-profiles-list">
+      {loading && profiles.length === 0 ? (
+        <div className="space-y-1" data-testid="auth-profiles-loading">
+          <Label className="text-xs text-muted-foreground">Loading profiles...</Label>
+        </div>
+      ) : profiles.length === 0 ? (
+        <div className="space-y-1" data-testid="auth-profiles-empty">
+          <Label className="text-xs text-muted-foreground">No saved profiles</Label>
+          <p className="text-xs text-muted-foreground">Create a profile below to get started.</p>
+        </div>
+      ) : (
+        <div className="space-y-1" data-testid="auth-profiles-list" role="radiogroup" aria-label="Saved profiles">
           <Label className="text-xs text-muted-foreground">Saved profiles</Label>
           {profiles.map((profile) => (
             <div
@@ -407,8 +437,9 @@ const AuthProfiles = ({
       {/* Editor */}
       <div className="space-y-2 rounded border p-3" data-testid="auth-profile-editor">
         <div className="flex items-center gap-2">
-          <Label className="text-xs text-muted-foreground shrink-0">Type</Label>
+          <Label htmlFor="auth-profile-type" className="text-xs text-muted-foreground shrink-0">Type</Label>
           <select
+            id="auth-profile-type"
             value={draft.type}
             onChange={(e) => switchType(e.target.value as AuthProfileType)}
             className="h-8 flex-1 rounded border bg-transparent px-2 text-sm"
@@ -426,6 +457,7 @@ const AuthProfiles = ({
             Name
           </Label>
           <Input
+            ref={nameInputRef}
             id="auth-profile-name"
             placeholder="Unique profile name"
             value={draft.name}
@@ -438,10 +470,11 @@ const AuthProfiles = ({
         {draft.type === "OAUTH2" && (
           <>
             <div className="flex items-center gap-2">
-              <Label className="text-xs text-muted-foreground shrink-0">
+              <Label htmlFor="auth-profile-grant-mode" className="text-xs text-muted-foreground shrink-0">
                 Grant
               </Label>
               <select
+                id="auth-profile-grant-mode"
                 value={draft.grantMode}
                 onChange={(e) =>
                   updateDraft({ grantMode: e.target.value as OAuth2GrantMode })
@@ -614,10 +647,11 @@ const AuthProfiles = ({
               />
             </div>
             <div className="flex items-center gap-2">
-              <Label className="text-xs text-muted-foreground shrink-0">
+              <Label htmlFor="auth-profile-key-placement" className="text-xs text-muted-foreground shrink-0">
                 Placement
               </Label>
               <select
+                id="auth-profile-key-placement"
                 value={draft.placement}
                 onChange={(e) =>
                   updateDraft({ placement: e.target.value as ApiKeyPlacement })
@@ -634,7 +668,7 @@ const AuthProfiles = ({
 
         {draft.type === "CUSTOM_HEADERS" && (
           <div className="space-y-1">
-            <Label className="text-xs">Headers</Label>
+            <Label htmlFor="auth-profile-custom-headers" className="text-xs">Headers</Label>
             <div className="max-h-40 overflow-y-auto rounded border p-1">
               <CustomHeaders
                 headers={draft.headers}

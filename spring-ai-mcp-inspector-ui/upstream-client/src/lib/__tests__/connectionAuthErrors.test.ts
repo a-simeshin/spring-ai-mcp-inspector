@@ -73,4 +73,24 @@ describe("parseProxyErrorDto", () => {
     expect(parseProxyErrorDto('{"status": "401"}')).toBeNull();
     expect(parseProxyErrorDto("[]")).toBeNull();
   });
+
+  it("parses a 302 redirect DTO (streamable 3xx contract, owner review round 2)", () => {
+    const dto = parseProxyErrorDto(
+      JSON.stringify({
+        status: 302,
+        code: "redirect",
+        reason: "The MCP server redirected the request and it was not followed.",
+        guidance: "Check the server URL; redirects are not followed automatically.",
+        url: "https://server/mcp",
+      }),
+    );
+    expect(dto).not.toBeNull();
+    expect(dto).toMatchObject({
+      status: 302,
+      code: "redirect",
+      reason: "The MCP server redirected the request and it was not followed.",
+      guidance: "Check the server URL; redirects are not followed automatically.",
+      url: "https://server/mcp",
+    });
+  });
 });
