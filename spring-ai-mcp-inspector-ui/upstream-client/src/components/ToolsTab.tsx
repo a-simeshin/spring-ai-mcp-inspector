@@ -241,7 +241,8 @@ const ToolsTab = ({
   const [hasValidationErrors, setHasValidationErrors] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const formRefs = useRef<Record<string, DynamicJsonFormRef | null>>({});
-  // Ref to track the latest params, updated inside setParams functional updates
+  // [spring-ai-mcp-inspector PATCH] Ref to track the latest params, updated
+  // inside setParams functional updates to avoid stale closure in onClick handler
   const paramsRef = useRef(params);
   paramsRef.current = params;
   const { toast } = useToast();
@@ -277,9 +278,9 @@ const ToolsTab = ({
     [selectedTool, params],
   );
 
-  // Validate all fields against the tool's inputSchema
-  // Accepts an optional currentParams parameter to avoid stale closure issues
-  // when called after DynamicJsonForm's validateJson updates params
+  // [spring-ai-mcp-inspector PATCH] Validate all fields against the tool's
+  // inputSchema. Accepts an optional currentParams parameter to avoid stale
+  // closure issues when called after DynamicJsonForm's validateJson updates params
   const validateAll = useCallback((currentParams?: Record<string, unknown>) => {
     if (!selectedTool?.inputSchema) return true;
     const schema = selectedTool.inputSchema as JsonSchemaType;
@@ -301,7 +302,7 @@ const ToolsTab = ({
         value as JsonSchemaType,
         selectedTool?.inputSchema as JsonSchemaType,
       );
-      // Only initialize fields that have a schema.default.
+      // [spring-ai-mcp-inspector PATCH] Only initialize fields that have a schema.default.
       // Required fields without a default stay undefined so that:
       // 1. Derived validation sees them as empty and disables the button
       // 2. They don't appear in the submit payload
@@ -345,11 +346,12 @@ const ToolsTab = ({
     return trimmedKey !== "" && !hasValidMetaName(trimmedKey);
   });
 
-  // Derived field errors: computed from schema + current params on every render
-  // so the button is disabled immediately on untouched forms with required fields.
-  // Only simple types (string, number, integer, boolean) are checked here;
-  // object/array types rendered by DynamicJsonForm have their own ref-based validation
-  // (hasValidationErrors) that is checked in the onClick handler.
+  // [spring-ai-mcp-inspector PATCH] Derived field errors: computed from schema +
+  // current params on every render so the button is disabled immediately on
+  // untouched forms with required fields. Only simple types (string, number,
+  // integer, boolean) are checked here; object/array types rendered by
+  // DynamicJsonForm have their own ref-based validation (hasValidationErrors)
+  // that is checked in the onClick handler.
   const derivedFieldErrors = selectedTool?.inputSchema
     ? validateToolParams(
         selectedTool.inputSchema as JsonSchemaType,

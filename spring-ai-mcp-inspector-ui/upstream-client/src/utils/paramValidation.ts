@@ -29,12 +29,12 @@ export interface FieldError {
  * - For `boolean` properties: the value must be a boolean.
  * - Nullable fields (nullable: true) accept `null` as valid.
  * - Schemas without a `required` array return no errors.
- * - Ambiguous schemas (no clear primitive type) are skipped — the server
+ * - Ambiguous schemas (no clear primitive type) are skipped. The server
  *   round-trip handles them.
  *
  * @param schema  The tool's inputSchema (JSON Schema).
  * @param params  The current parameter values as stored in state.
- * @returns An array of FieldError — empty when valid.
+ * @returns An array of FieldError. Empty when valid.
  */
 export function validateToolParams(
   schema: JsonSchemaType,
@@ -88,7 +88,7 @@ export function validateToolParams(
           errors.push({ field: key, message: "must be a boolean" });
         }
         break;
-      // string, array, object, null — no client-side type check
+      // string, array, object, null: no client-side type check
       default:
         break;
     }
@@ -100,13 +100,13 @@ export function validateToolParams(
 /**
  * Validates prompt arguments against the prompt's argument definitions.
  *
- * Prompt arguments are simpler than JSON Schema — each argument has a
+ * Prompt arguments are simpler than JSON Schema. Each argument has a
  * `required?: boolean` flag.  Required arguments with empty values block
  * submission.
  *
  * @param args   The prompt's argument definitions.
  * @param promptArgs  The current argument values as stored in state.
- * @returns An array of FieldError — empty when valid.
+ * @returns An array of FieldError. Empty when valid.
  */
 export function validatePromptArgs(
   args: { name: string; required?: boolean }[] | undefined,
