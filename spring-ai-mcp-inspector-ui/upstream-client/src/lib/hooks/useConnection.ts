@@ -587,9 +587,14 @@ export function useConnection({
         serverUrl = new URL(toAbsoluteServerUrl(sseUrl));
 
         const requestHeaders = { ...headers };
-        if (mcpSessionId) {
-          requestHeaders["mcp-session-id"] = mcpSessionId;
-        }
+        // [spring-ai-mcp-inspector PATCH] Don't reuse a stale session ID
+        // from a previous connection.  After cleanup at the start of
+        // connect(), the session ID is always null for a fresh connect.
+        // The closure variable mcpSessionId may still hold a stale value
+        // from a silently dropped session, which would cause the server
+        // to reject the handshake with -32001.  The server assigns a new
+        // session ID in its response headers, captured by
+        // captureResponseHeaders below. Refs #157.
         switch (transportType) {
           case "sse":
             requestHeaders["Accept"] = "text/event-stream";
@@ -1226,10 +1231,19 @@ export function useConnection({
     receiverTasksRef.current.clear();
 
     if (transportType === "streamable-http")
-      await (
-        clientTransport as StreamableHTTPClientTransport
-      ).terminateSession();
-    await mcpClient?.close();
+      try {
+        await (
+          clientTransport as StreamableHTTPClientTransport
+        ).terminateSession();
+      } catch {
+        // 404/410/5xx from DELETE means the session is already gone,
+        // which is not a failure for this code path.
+      }
+    try {
+      await mcpClient?.close();
+    } catch {
+      // close() may throw if the transport is already in a broken state.
+    }
     const authProvider = new InspectorOAuthClientProvider(sseUrl);
     authProvider.clear();
     setMcpClient(null);
