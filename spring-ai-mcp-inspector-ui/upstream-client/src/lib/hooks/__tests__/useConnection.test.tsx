@@ -29,13 +29,15 @@ import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import { discoverScopes } from "../../auth";
 import { CustomHeaders } from "../../types/customHeaders";
 
-// Mock fetch
-global.fetch = jest.fn().mockResolvedValue({
-  json: () => Promise.resolve({ status: "ok" }),
-  headers: {
-    get: jest.fn().mockReturnValue(null),
-  },
-});
+// Mock fetch - return a fresh Response for each call
+global.fetch = jest.fn().mockImplementation(() =>
+  Promise.resolve(
+    new Response(JSON.stringify({ status: "ok" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })
+  )
+);
 
 // Mock the SDK dependencies
 const mockRequest = jest.fn().mockResolvedValue({ test: "response" });

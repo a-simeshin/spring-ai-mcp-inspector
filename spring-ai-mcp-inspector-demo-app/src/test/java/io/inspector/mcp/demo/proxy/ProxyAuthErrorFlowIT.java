@@ -51,10 +51,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Verifies the D3 error contract (plan v13, issue #54) on a real HTTP stack: upstream
  * 401/403 answers surface the exact structured error DTO on both transports (SSE relay
- * and streamable HTTP), upstream 3xx redirects surface the {@code redirect} DTO on the
- * SSE transport only, a streamable 3xx falls back to the legacy 502/504 without any DTO,
- * and an unsuccessful initial handshake leaves no partial connect state (the proxy
- * session is deleted, the next connect starts fresh).
+ * and streamable HTTP), upstream 3xx redirects surface the {@code redirect} DTO on both
+ * transports (SSE relay and streamable HTTP), and an unsuccessful initial handshake
+ * leaves no partial connect state (the proxy session is deleted, the next connect starts
+ * fresh).
  *
  * <p>
  * The class lives in {@code demo-app}'s test-jar, so Failsafe's
@@ -380,12 +380,12 @@ class ProxyAuthErrorFlowIT {
 		}
 
 		@Test
-		@DisplayName("handshake 3xx falls back to legacy 502/504 without a DTO")
-		@Story("Streamable redirect fallback")
+		@DisplayName("handshake 3xx surfaces the redirect DTO on the streamable transport")
+		@Story("Streamable redirect DTO")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("A streamable handshake answered with 3xx never yields a DTO (the redirect DTO is SSE-only): "
-				+ "the response is the legacy 502/504 envelope and no session id is issued")
-		void handshake_whenUpstreamRedirects_fallsBackToLegacyWithoutDto() throws Exception {
+		@Description("A streamable handshake answered with 3xx surfaces the exact redirect DTO (D3): "
+				+ "the redirect DTO is now returned on both SSE and streamable, and no session id is issued")
+		void handshake_whenUpstreamRedirects_returnsStructuredRedirectDto() throws Exception {
 			// given
 			ProxyAuthErrorFlowIT.this.app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
 			final String base = proxyBase();
@@ -395,13 +395,10 @@ class ProxyAuthErrorFlowIT {
 				// when
 				final HttpResponse<String> failed = postInitialize(base, stub.mcpUrl());
 
-				// then — legacy 502/504, never a D3 DTO (the envelope shape is
-				// stack-specific, the contract is the status and the absent DTO)
-				assertThat(failed.statusCode())
-					.as("streamable 3xx status on %s, body=%s", ProxyAppHarness.stack(), failed.body())
-					.isIn(502, 504);
-				assertThat(failed.body()).as("legacy envelope (no D3 DTO) on %s", ProxyAppHarness.stack())
-					.doesNotContain("\"guidance\"", "\"redirect\"");
+				// then — the exact redirect D3 DTO
+				assertDto(failed, 302, codeFor(302), reasonFor(302), guidanceFor(302), stub.redactedMcpUrl());
+
+				// and — a failed handshake never issues a session id
 				assertThat(failed.headers().firstValue(MCP_SESSION_ID_HEADER))
 					.as("failed handshake must not issue a session id on %s", ProxyAppHarness.stack())
 					.isEmpty();

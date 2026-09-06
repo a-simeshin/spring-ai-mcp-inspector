@@ -76,6 +76,7 @@ public class ServletSessionOwnerResolver {
 				.sameSite("Lax")
 				.path("/")
 				.maxAge(COOKIE_MAX_AGE)
+				.secure(request.isSecure())
 				.build();
 			response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
 		}
