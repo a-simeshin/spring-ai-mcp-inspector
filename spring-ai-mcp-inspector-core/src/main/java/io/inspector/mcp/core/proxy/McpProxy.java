@@ -123,7 +123,7 @@ public final class McpProxy {
 			// streamable-request timeout. But the SDK also re-surfaces protocol-level
 			// replies from a LIVE server (e.g. a 404 "session not found") through this
 			// same pump, so only transport-level failures (refused / dns / timeout)
-			// justify tearing the session down - anything unrecognized is logged and
+			// justify tearing the session down — anything unrecognized is logged and
 			// the relay keeps forwarding. failUpstream is idempotent, so the first
 			// terminal signal wins.
 			if (failure.reason() != ProxyConnectFailure.Reason.UNKNOWN) {
@@ -161,13 +161,13 @@ public final class McpProxy {
 		return session.targetTransport().connect((inbound) -> inbound.flatMap((message) -> {
 			// Skip internal probe responses - they are not real MCP messages
 			// and must not be forwarded to the browser.
-			if (message instanceof io.modelcontextprotocol.spec.McpSchema.JSONRPCResponse response) {
+			if (message instanceof McpSchema.JSONRPCResponse response) {
 				final Object id = response.id();
-				if (id instanceof Number numId && session.isProbeId(numId.intValue())) {
+				if (id instanceof String strId && session.isProbeId(strId)) {
 					// Probe responses are internal traffic - they must not count as
 					// activity for session reaping, and the probe id must be removed
 					// to prevent unbounded growth of the probeIds set.
-					session.removeProbeId(numId.intValue());
+					session.removeProbeId(strId);
 					return Mono.<JSONRPCMessage>empty();
 				}
 			}
@@ -181,7 +181,9 @@ public final class McpProxy {
 				session.touch();
 			}
 			return Mono.<JSONRPCMessage>empty();
-		}).doOnError((err) -> session.failUpstream(err))).doOnError((err) -> session.failUpstream(err));
+		}).doOnSuccess((v) -> session.failUpstream(null)).doOnError((err) -> session.failUpstream(err)))
+			.doOnSuccess((v) -> session.failUpstream(null))
+			.doOnError((err) -> session.failUpstream(err));
 	}
 
 	/**

@@ -117,16 +117,16 @@ class ProxySseLivenessIT {
 	void upstreamDeath_closesDownstreamSseWithinBound() throws Exception {
 		// given
 		// Use fast probe intervals to keep the test bounded
-		inspectorApp = ProxyAppHarness.start("STREAMABLE", false, null,
+		inspectorApp = ProxyAppHarness.start("SSE", false, null,
 				"--spring.ai.mcp.inspector.timeouts.upstream-probe-interval=PT2S",
 				"--spring.ai.mcp.inspector.timeouts.upstream-probe-timeout=PT3S",
 				"--spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold=PT3S");
-		targetApp = ProxyAppHarness.start("STREAMABLE", false, null);
+		targetApp = ProxyAppHarness.start("SSE", false, null);
 
 		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
 		final int targetPort = ProxyAppHarness.port(targetApp);
 		final String proxyBase = "http://127.0.0.1:" + inspectorPort + "/mcp-inspector-api";
-		final String targetUrl = "http://127.0.0.1:" + targetPort + "/mcp";
+		final String targetUrl = "http://127.0.0.1:" + targetPort + "/sse";
 
 		// 1. Open the SSE stream and capture the endpoint prologue.
 		final AtomicBoolean streamClosed = new AtomicBoolean(false);
@@ -135,7 +135,7 @@ class ProxySseLivenessIT {
 		final Thread sseReader = new Thread(() -> {
 			try {
 				final HttpRequest sseRequest = HttpRequest
-					.newBuilder(URI.create(proxyBase + "/sse?transportType=streamable-http&url="
+					.newBuilder(URI.create(proxyBase + "/sse?transportType=sse&url="
 							+ URLEncoder.encode(targetUrl, StandardCharsets.UTF_8)))
 					.timeout(Duration.ofSeconds(60))
 					.header("Accept", "text/event-stream")
@@ -253,13 +253,16 @@ class ProxySseLivenessIT {
 		// given
 		// Use default probe intervals (10s interval, 15s idle threshold) to ensure
 		// the probe does NOT trigger during the 5s observation window.
-		inspectorApp = ProxyAppHarness.start("STREAMABLE", false, null);
-		targetApp = ProxyAppHarness.start("STREAMABLE", false, null);
+		inspectorApp = ProxyAppHarness.start("SSE", false, null,
+				"--spring.ai.mcp.inspector.timeouts.upstream-probe-interval=PT2S",
+				"--spring.ai.mcp.inspector.timeouts.upstream-probe-timeout=PT2S",
+				"--spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold=PT2S");
+		targetApp = ProxyAppHarness.start("SSE", false, null);
 
 		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
 		final int targetPort = ProxyAppHarness.port(targetApp);
 		final String proxyBase = "http://127.0.0.1:" + inspectorPort + "/mcp-inspector-api";
-		final String targetUrl = "http://127.0.0.1:" + targetPort + "/mcp";
+		final String targetUrl = "http://127.0.0.1:" + targetPort + "/sse";
 
 		// Open the SSE stream and capture the endpoint prologue.
 		final AtomicBoolean streamClosed = new AtomicBoolean(false);
@@ -268,7 +271,7 @@ class ProxySseLivenessIT {
 		final Thread sseReader = new Thread(() -> {
 			try {
 				final HttpRequest sseRequest = HttpRequest
-					.newBuilder(URI.create(proxyBase + "/sse?transportType=streamable-http&url="
+					.newBuilder(URI.create(proxyBase + "/sse?transportType=sse&url="
 							+ URLEncoder.encode(targetUrl, StandardCharsets.UTF_8)))
 					.timeout(Duration.ofSeconds(60))
 					.header("Accept", "text/event-stream")
@@ -324,12 +327,13 @@ class ProxySseLivenessIT {
 			.until(() -> endpointData.get() != null);
 
 		// then
-		// Wait longer than one probe interval. With tightened config (2s interval),
-		// waiting 5s is safely beyond a single probe cycle. If the stream closed
-		// or errored during this window, the probe falsely triggered.
-		Thread.sleep(Duration.ofSeconds(5).toMillis());
+		// Wait longer than one probe interval. With the tightened config
+		// (2s interval, 2s idle threshold), waiting 3s is safely beyond a
+		// single probe cycle. If the stream closed or errored during this
+		// window, the probe falsely triggered on an alive target.
+		Thread.sleep(Duration.ofSeconds(3).toMillis());
 
-		// The stream MUST still be open after the sleep — if it closed or
+		// The stream MUST still be open after the sleep: if it closed or
 		// errored, the probe falsely triggered on an alive target.
 		assertThat(streamClosed.get())
 			.as("SSE stream must not close while target is alive on %s", ProxyAppHarness.stack())

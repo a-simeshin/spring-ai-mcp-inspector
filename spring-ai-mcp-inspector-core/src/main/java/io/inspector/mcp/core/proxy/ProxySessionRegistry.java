@@ -38,7 +38,7 @@ import io.inspector.mcp.core.shutdown.ShutdownDrain;
  * In-memory map of active proxy sessions, keyed by web-app session id.
  *
  * <p>
- * Thread-safe: the underlying {@link ConcurrentHashMap} permits concurrent lookups
+ * Thread-safe — the underlying {@link ConcurrentHashMap} permits concurrent lookups
  * (browser POSTs) and writes (new {@code GET /sse} requests, session closures).
  *
  * <p>
@@ -52,7 +52,7 @@ import io.inspector.mcp.core.shutdown.ShutdownDrain;
  *
  * <p>
  * Every session pins a browser-facing SSE request open, so the registry drains itself on
- * {@link ContextClosedEvent}: the first step of context close, before Boot's
+ * {@link ContextClosedEvent} — the first step of context close, before Boot's
  * {@code WebServerGracefulShutdownLifecycle} starts waiting for in-flight requests.
  * Destruction callbacks ({@code @PreDestroy}, {@code DisposableBean},
  * {@code destroyMethod}) run after every lifecycle phase and would fire only once that
@@ -62,7 +62,7 @@ import io.inspector.mcp.core.shutdown.ShutdownDrain;
  * The hook is {@link EventListener}-annotated rather than an implemented
  * {@code ApplicationListener<ContextClosedEvent>}, which keeps subclasses free to be an
  * {@code ApplicationListener} of their own event type. The trade is that it needs
- * {@code EventListenerMethodProcessor} in the context: present in every Spring Boot
+ * {@code EventListenerMethodProcessor} in the context — present in every Spring Boot
  * application, and therefore in every context this starter configures, but not in a bare
  * {@code GenericApplicationContext} assembled by hand.
  *
@@ -89,20 +89,20 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	private ApplicationContext applicationContext;
 
 	/**
-	 * Set once {@link #closeAll()} has started. Never reset: a registry whose context is
+	 * Set once {@link #closeAll()} has started. Never reset — a registry whose context is
 	 * closing does not reopen.
 	 */
 	private volatile boolean closed;
 
 	/**
 	 * Adds {@code session} under {@code session.sessionId()}, unless the registry has
-	 * already been drained: in which case the session is closed immediately instead.
+	 * already been drained — in which case the session is closed immediately instead.
 	 *
 	 * <p>
 	 * The guard is not theoretical. A {@code GET /sse} that arrived just before shutdown
 	 * can still be connecting upstream when {@link ContextClosedEvent} fires; the sweep
 	 * runs, and only then does the request register its session. The container has not
-	 * paused its connector yet: that happens later, at phase 2147482623: so the request
+	 * paused its connector yet — that happens later, at phase 2147482623 — so the request
 	 * is live and its emitter would never be completed. Worse, a {@code put} landing
 	 * between the sweep and a bare {@code clear()} used to erase the session from the map
 	 * without closing it, which made {@link #size()} report zero over a still-open
@@ -149,7 +149,7 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	}
 
 	/**
-	 * Closes and removes every session. Idempotent: {@link ProxySession#close()} is a
+	 * Closes and removes every session. Idempotent — {@link ProxySession#close()} is a
 	 * no-op after the first call, which matters because a child context (an actuator
 	 * management server, say) republishes {@link ContextClosedEvent} to the parent.
 	 *
@@ -169,7 +169,7 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	}
 
 	/**
-	 * Drains every session on context close: the first step of
+	 * Drains every session on context close — the first step of
 	 * {@code AbstractApplicationContext.doClose()}, before any lifecycle phase stops.
 	 *
 	 * <p>
@@ -181,8 +181,8 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	 * <p>
 	 * Only <em>this</em> context's close counts.
 	 * {@code AbstractApplicationContext.publishEvent} forwards every event to the parent,
-	 * so a child context closing: Spring Boot's actuator management context is the
-	 * everyday case, it comes and goes independently: delivers a
+	 * so a child context closing — Spring Boot's actuator management context is the
+	 * everyday case, it comes and goes independently — delivers a
 	 * {@link ContextClosedEvent} here while this context is still serving traffic. Acting
 	 * on it would drain live sessions and latch {@link #closed}, permanently disabling
 	 * the inspector in a running application.
@@ -208,7 +208,7 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	}
 
 	/**
-	 * Current session count: intended for tests / metrics.
+	 * Current session count — intended for tests / metrics.
 	 * @return number of active sessions
 	 */
 	public int size() {
@@ -243,7 +243,7 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	 * Evicts every session that is already closed or that has been idle longer than the
 	 * configured inactivity budget. An upstream-terminated session stops refreshing its
 	 * activity timestamp (its sinks are already errored, so new requests fail fast), so
-	 * it is reaped once it crosses the idle budget: we deliberately do not evict purely
+	 * it is reaped once it crosses the idle budget — we deliberately do not evict purely
 	 * on {@link ProxySession#isUpstreamTerminated()} to avoid tearing down a session on a
 	 * single transient send failure. Each eviction routes through
 	 * {@link #removeAndClose(String)} so the upstream transport is torn down and the

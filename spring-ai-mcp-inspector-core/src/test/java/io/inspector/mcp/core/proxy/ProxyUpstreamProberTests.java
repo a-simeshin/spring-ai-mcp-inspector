@@ -35,7 +35,6 @@ import org.mockito.ArgumentCaptor;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.json.JsonMapper;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
 
@@ -55,8 +54,6 @@ class ProxyUpstreamProberTests {
 	private static final Duration FAST_PROBE = Duration.ofMillis(100);
 
 	private static final Duration FAST_IDLE_THRESHOLD = Duration.ofMillis(50);
-
-	private final JsonMapper mapper = new JsonMapper();
 
 	private ProxySessionRegistry registry;
 
@@ -89,7 +86,7 @@ class ProxyUpstreamProberTests {
 		this.registry.put(this.session);
 	}
 
-	private static void sleep(final long millis) {
+	private static void await(final long millis) {
 		try {
 			Thread.sleep(millis);
 		}
@@ -99,7 +96,7 @@ class ProxyUpstreamProberTests {
 	}
 
 	@Nested
-	@DisplayName("probe() \u2014 idle session detection")
+	@DisplayName("probe(): idle session detection")
 	class IdleDetection {
 
 		@Test
@@ -110,7 +107,7 @@ class ProxyUpstreamProberTests {
 			// given
 			given(ProxyUpstreamProberTests.this.transport.sendMessage(any())).willReturn(Mono.empty());
 			// Wait beyond the idle threshold so the prober considers this session idle
-			ProxyUpstreamProberTests.sleep(FAST_IDLE_THRESHOLD.toMillis() + 50);
+			ProxyUpstreamProberTests.await(FAST_IDLE_THRESHOLD.toMillis() + 50);
 
 			// when
 			ProxyUpstreamProberTests.this.prober.probe();
@@ -164,9 +161,9 @@ class ProxyUpstreamProberTests {
 		void probe_failUpstreamOnSendError() {
 			// given
 			given(ProxyUpstreamProberTests.this.transport.sendMessage(any()))
-				.willReturn(Mono.error(new RuntimeException("probe failed")));
+				.willReturn(Mono.error(new java.net.ConnectException("connection refused")));
 			// Wait beyond the idle threshold so the prober considers this session idle
-			ProxyUpstreamProberTests.sleep(FAST_IDLE_THRESHOLD.toMillis() + 50);
+			ProxyUpstreamProberTests.await(FAST_IDLE_THRESHOLD.toMillis() + 50);
 
 			// when
 			ProxyUpstreamProberTests.this.prober.probe();
@@ -177,9 +174,30 @@ class ProxyUpstreamProberTests {
 			final long deadline = System.currentTimeMillis() + 3000;
 			while (!ProxyUpstreamProberTests.this.session.isUpstreamTerminated()
 					&& System.currentTimeMillis() < deadline) {
-				ProxyUpstreamProberTests.sleep(50);
+				ProxyUpstreamProberTests.await(50);
 			}
 			assertThat(ProxyUpstreamProberTests.this.session.isUpstreamTerminated()).isTrue();
+		}
+
+		@Test
+		@Story("Unknown probe failure does NOT fail the session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("when sendMessage errors with an unclassified error (e.g. HTTP 4xx), "
+				+ "the session is NOT terminated (only transport-level failures justify teardown)")
+		void probe_unknownError_doesNotFailSession() {
+			// given
+			given(ProxyUpstreamProberTests.this.transport.sendMessage(any()))
+				.willReturn(Mono.error(new RuntimeException("unexpected 400 Bad Request")));
+			// Wait beyond the idle threshold so the prober considers this session idle
+			ProxyUpstreamProberTests.await(FAST_IDLE_THRESHOLD.toMillis() + 50);
+
+			// when
+			ProxyUpstreamProberTests.this.prober.probe();
+
+			// then
+			verify(ProxyUpstreamProberTests.this.transport, timeout(2000)).sendMessage(any());
+			// The session must NOT be failed for UNKNOWN errors
+			assertThat(ProxyUpstreamProberTests.this.session.isUpstreamTerminated()).isFalse();
 		}
 
 		@Test
@@ -190,7 +208,7 @@ class ProxyUpstreamProberTests {
 			// given
 			given(ProxyUpstreamProberTests.this.transport.sendMessage(any())).willReturn(Mono.empty());
 			// Wait beyond the idle threshold so the prober considers this session idle
-			ProxyUpstreamProberTests.sleep(FAST_IDLE_THRESHOLD.toMillis() + 50);
+			ProxyUpstreamProberTests.await(FAST_IDLE_THRESHOLD.toMillis() + 50);
 
 			// when
 			ProxyUpstreamProberTests.this.prober.probe();
@@ -200,8 +218,9 @@ class ProxyUpstreamProberTests {
 			verify(ProxyUpstreamProberTests.this.transport, timeout(1000)).sendMessage(captor.capture());
 			final McpSchema.JSONRPCRequest req = (McpSchema.JSONRPCRequest) captor.getValue();
 			final Object id = req.id();
-			assertThat(id).isInstanceOf(Integer.class);
-			assertThat(ProxyUpstreamProberTests.this.session.isProbeId((Integer) id)).isTrue();
+			assertThat(id).isInstanceOf(String.class);
+			assertThat((String) id).startsWith("mcpi-probe-");
+			assertThat(ProxyUpstreamProberTests.this.session.isProbeId((String) id)).isTrue();
 		}
 
 	}

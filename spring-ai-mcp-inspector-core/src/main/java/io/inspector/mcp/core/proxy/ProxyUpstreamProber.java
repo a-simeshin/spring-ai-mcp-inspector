@@ -39,7 +39,7 @@ import io.inspector.mcp.core.config.McpInspectorProperties;
  *
  * <p>
  * Probe responses are detected by their JSON-RPC id (registered via
- * {@link ProxySession#registerProbeId(int)}) and filtered out of the browser stream by
+ * {@link ProxySession#registerProbeId(String)}) and filtered out of the browser stream by
  * {@link McpProxy#start(ProxySession)}.
  *
  * <p>
@@ -95,23 +95,50 @@ public class ProxyUpstreamProber {
 				return;
 			}
 			// Session is idle - send a ping probe.
-			final int probeId = session.nextProbeId();
+			final String probeId = session.nextProbeId();
 			final JSONRPCMessage ping = new McpSchema.JSONRPCRequest(McpSchema.JSONRPC_VERSION, "ping", probeId, null);
 			LOG.debug("proxy[{}] sending liveness probe (id={}, idle={}s)", session.sessionId(), probeId,
 					idle.toSeconds());
 
-			session.targetTransport().sendMessage(ping).timeout(probeTimeout).onErrorResume((err) -> {
-				LOG.warn("proxy[{}] liveness probe {} failed: {}", session.sessionId(), probeId, err.toString());
-				session.failUpstream(err);
-				return Mono.empty();
-			}).subscribeOn(Schedulers.boundedElastic()).subscribe((ignored) -> {
-				// sendMessage completed (HTTP 202 accepted). The JSON-RPC
-				// response will arrive on the inbound flux, update
-				// lastActivity via session.touch(), and be filtered from
-				// the browser stream by McpProxy.
-			}, (err) -> {
-				// onErrorResume handles this already.
-			});
+			// Schedule the answer deadline BEFORE sending: a half-open upstream that
+			// accepts the POST but never responds must also be detected. When the
+			// timer fires, the probe id is removed and the session is failed.
+			final Mono<Void> answerDeadline = Mono.delay(probeTimeout).doOnNext((ignored) -> {
+				LOG.warn("proxy[{}] liveness probe {} answer deadline expired: failing upstream", session.sessionId(),
+						probeId);
+				session.removeProbeId(probeId);
+				session.failUpstream(new java.util.concurrent.TimeoutException(
+						"liveness probe " + probeId + " timed out after " + probeTimeout));
+			}).then();
+
+			// sendMessage sends the ping frame and completes on HTTP 202.
+			// The JSON-RPC answer arrives on the inbound flux. The answer
+			// deadline runs in parallel: it is cancelled when sendMessage errors
+			// (no answer can arrive for a frame never sent) and fires on its own
+			// if the upstream accepts the POST but never responds.
+			final var deadlineSub = answerDeadline.subscribeOn(Schedulers.boundedElastic()).subscribe();
+			session.targetTransport()
+				.sendMessage(ping)
+				.timeout(probeTimeout)
+				.doOnError((err) -> deadlineSub.dispose())
+				.onErrorResume((err) -> {
+					final ProxyConnectFailure failure = ProxyConnectFailure.classify(err);
+					LOG.warn("proxy[{}] liveness probe {} failed ({}): {}", session.sessionId(), probeId,
+							failure.reason().wire(), err.toString());
+					if (failure.reason() != ProxyConnectFailure.Reason.UNKNOWN) {
+						session.failUpstream(err);
+					}
+					return Mono.empty();
+				})
+				.subscribeOn(Schedulers.boundedElastic())
+				.subscribe((ignored) -> {
+					// sendMessage completed (HTTP 202 accepted). The JSON-RPC
+					// response will arrive on the inbound flux and be filtered from
+					// the browser stream by McpProxy. lastActivity is NOT updated by
+					// the probe; only real browser-initiated frames update it.
+				}, (err) -> {
+					// onErrorResume handles this already.
+				});
 		});
 	}
 
