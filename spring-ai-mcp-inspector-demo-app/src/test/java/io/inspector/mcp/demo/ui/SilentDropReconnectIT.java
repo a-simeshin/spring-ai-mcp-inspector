@@ -169,35 +169,35 @@ class SilentDropReconnectIT {
 		// handshake)
 		$("[data-testid=connect-button]").click();
 
-		// then - wait for the sidebar to exit the "connected" state (the
-		// disconnect+connect sequence must have started), then wait for either
-		// a reconnect success (server name reappears) or an error alert.
-		// Unlike the previous tautology, this does NOT use connect-button in
-		// the initial wait: connect-button is shown while connectionStatus ===
-		// "connected", which is the status at click time, so that wait would
-		// return immediately. Instead we first wait for the server name to
-		// disappear (confirming disconnect took effect), then wait for either
-		// the error alert or the server name to come back.
+		// then - poll the ProxySessionRegistry for a fresh handshake.
+		// The connect-button is shown while connectionStatus === "connected"
+		// (the status at click time), so we cannot use it to detect the
+		// disconnect start.  Instead, poll the registry until it contains a
+		// session ID that was not in the original set (meaning a new handshake
+		// completed).  If the error alert appears instead, the reconnect
+		// failed with a visible error; assert on its content and the retry
+		// button.
 		// The connect-error-alert testid scopes to the connection failure
 		// alert in the sidebar config pane, not the resource panel
 		// placeholder that also carries role=alert.
-		// Wait for the connect-button to disappear (the disconnect must have
-		// started), then poll the ProxySessionRegistry for a fresh handshake.  Poll the ProxySessionRegistry
-		// until it contains a session ID that was not in the original set
-		// (meaning a new handshake completed).  If the error alert appears
-		// instead, the reconnect failed with a visible error.
-		// The connect-error-alert testid scopes to the connection failure
-		// alert in the sidebar config pane, not the resource panel
-		// placeholder that also carries role=alert.
-		Awaitility.await("fresh handshake")
-			.atMost(Duration.ofSeconds(30))
-			.pollInterval(Duration.ofMillis(200))
-			.untilAsserted(() -> {
-				Set<String> currentIds = new HashSet<>(registry.sessionIds());
-				currentIds.removeAll(sessionIds);
-				assertFalse(currentIds.isEmpty(),
-					"Expected a new session ID from fresh handshake");
-			})
+		try {
+			Awaitility.await("fresh handshake")
+				.atMost(Duration.ofSeconds(30))
+				.pollInterval(Duration.ofMillis(200))
+				.untilAsserted(() -> {
+					Set<String> currentIds = new HashSet<>(registry.sessionIds());
+					currentIds.removeAll(sessionIds);
+					assertFalse(currentIds.isEmpty(),
+						"Expected a new session ID from fresh handshake");
+				});
+		}
+		catch (Exception e) {
+			// Awaitility timed out -- the reconnect did not produce a fresh handshake.
+			// Check whether an error alert was shown instead.
+			$("[data-testid=connect-error-alert]").shouldBe(visible, Duration.ofSeconds(5));
+			$("[data-testid=connect-error-alert]").shouldHave(text("POST /mcp"), Duration.ofSeconds(5));
+			$("[data-testid=retry-connect-button]").shouldBe(visible, Duration.ofSeconds(5));
+		}
 
 	/** DELETEs a proxy session by id and asserts the server accepted it. */
 	private static void deleteSession(String proxyBase, String sessionId) {
