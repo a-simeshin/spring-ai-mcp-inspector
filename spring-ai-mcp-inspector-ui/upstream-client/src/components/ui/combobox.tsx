@@ -20,6 +20,7 @@ interface ComboboxProps {
   onChange: (value: string) => void;
   onInputChange: (value: string) => void;
   onFocus?: () => void;
+  onBlur?: () => void;
   options: string[];
   placeholder?: string;
   emptyMessage?: string;
@@ -31,6 +32,7 @@ export function Combobox({
   onChange,
   onInputChange,
   onFocus,
+  onBlur,
   options = [],
   placeholder = "Select...",
   emptyMessage = "No results found.",
@@ -72,6 +74,7 @@ export function Combobox({
           aria-expanded={open}
           aria-controls={id}
           className="w-full justify-between"
+          onBlur={onBlur}
         >
           {value || placeholder}
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -83,6 +86,7 @@ export function Combobox({
             placeholder={placeholder}
             value={value}
             onValueChange={handleInputChange}
+            onBlur={onBlur}
           />
           <CommandEmpty>{emptyMessage}</CommandEmpty>
           <CommandGroup>

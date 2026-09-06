@@ -16,12 +16,14 @@ jest.mock("@/components/ui/combobox", () => ({
     value,
     onChange,
     onInputChange,
+    onBlur,
     id,
     placeholder,
   }: {
     value: string;
     onChange: (value: string) => void;
     onInputChange: (value: string) => void;
+    onBlur?: () => void;
     id?: string;
     placeholder?: string;
   }) => (
@@ -32,6 +34,7 @@ jest.mock("@/components/ui/combobox", () => ({
         onChange(e.target.value);
         onInputChange(e.target.value);
       }}
+      onBlur={onBlur}
       placeholder={placeholder}
     />
   ),
@@ -166,5 +169,52 @@ describe("PromptsTab", () => {
     });
 
     expect(getPromptButton).toBeDisabled();
+  });
+
+  it("should show required field error on blur when required argument is empty", async () => {
+    renderPromptsTab({ selectedPrompt: mockPrompts[0] });
+
+    // Focus on the required name field
+    const nameInput = screen.getByTestId("combobox-name");
+    await act(async () => {
+      fireEvent.focus(nameInput);
+    });
+
+    // Blur without filling - should trigger validation error
+    await act(async () => {
+      fireEvent.blur(nameInput);
+    });
+
+    // Verify error message appears
+    expect(screen.getByText("This field is required")).toBeInTheDocument();
+  });
+
+  it("should clear field error on blur when required argument is filled", async () => {
+    renderPromptsTab({ selectedPrompt: mockPrompts[0] });
+
+    const nameInput = screen.getByTestId("combobox-name");
+
+    // Blur empty first to trigger error
+    await act(async () => {
+      fireEvent.blur(nameInput);
+    });
+
+    // Verify error is shown
+    expect(screen.getByText("This field is required")).toBeInTheDocument();
+
+    // Fill the field
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "World" } });
+    });
+
+    // Blur again - error should clear since field is now filled
+    await act(async () => {
+      fireEvent.blur(nameInput);
+    });
+
+    // Verify error message is gone
+    expect(
+      screen.queryByText("This field is required"),
+    ).not.toBeInTheDocument();
   });
 });

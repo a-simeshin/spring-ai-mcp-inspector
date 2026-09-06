@@ -329,6 +329,7 @@ const ToolsTab = ({
 
     // Reset validation errors when switching tools
     setHasValidationErrors(false);
+    setFieldErrors({});
   }, [selectedTool, serverSupportsTaskRequests]);
 
   const hasReservedMetadataEntry = metadataEntries.some(({ key }) => {
