@@ -172,9 +172,9 @@ class SilentDropReconnectIT {
 		// then - poll the ProxySessionRegistry for a fresh handshake.
 		// The connect-button is shown while connectionStatus === "connected"
 		// (the status at click time), so we cannot use it to detect the
-		// disconnect start.  Instead, poll the registry until it contains a
+		// disconnect start. Instead, poll the registry until it contains a
 		// session ID that was not in the original set (meaning a new handshake
-		// completed).  If the error alert appears instead, the reconnect
+		// completed). If the error alert appears instead, the reconnect
 		// failed with a visible error; assert on its content and the retry
 		// button.
 		// The connect-error-alert testid scopes to the connection failure
@@ -187,8 +187,7 @@ class SilentDropReconnectIT {
 				.untilAsserted(() -> {
 					Set<String> currentIds = new HashSet<>(registry.sessionIds());
 					currentIds.removeAll(sessionIds);
-					assertFalse(currentIds.isEmpty(),
-						"Expected a new session ID from fresh handshake");
+					assertFalse(currentIds.isEmpty(), "Expected a new session ID from fresh handshake");
 				});
 		}
 		catch (Exception e) {
@@ -198,6 +197,7 @@ class SilentDropReconnectIT {
 			$("[data-testid=connect-error-alert]").shouldHave(text("POST /mcp"), Duration.ofSeconds(5));
 			$("[data-testid=retry-connect-button]").shouldBe(visible, Duration.ofSeconds(5));
 		}
+	}
 
 	/** DELETEs a proxy session by id and asserts the server accepted it. */
 	private static void deleteSession(String proxyBase, String sessionId) {
