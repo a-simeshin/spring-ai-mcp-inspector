@@ -1184,11 +1184,12 @@ describe("ToolsTab", () => {
       const textareas = screen.getAllByRole("textbox");
       expect(textareas.length).toBe(2);
 
-      // Clear both textareas (empty JSON should be valid)
-      fireEvent.change(textareas[0], { target: { value: "{}" } });
-      fireEvent.change(textareas[1], { target: { value: "[]" } });
+      // Enter non-empty JSON first to trigger DynamicJsonForm onChange,
+      // then clear to empty (empty JSON should be valid)
+      fireEvent.change(textareas[0], { target: { value: '{ "x": 1 }' } });
+      fireEvent.change(textareas[1], { target: { value: '["a"]' } });
 
-      // Wait for debounced updates
+      // Wait for debounced updates to propagate
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 350));
       });
@@ -1199,7 +1200,7 @@ describe("ToolsTab", () => {
         fireEvent.click(runButton);
       });
 
-      // Tool should have been called (empty JSON is considered valid)
+      // Tool should have been called (JSON is considered valid)
       expect(mockCallTool).toHaveBeenCalled();
     });
   });

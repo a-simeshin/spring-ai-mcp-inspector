@@ -1,0 +1,56 @@
+src/utils/paramValidation.ts (new) + src/components/ToolsTab.tsx +
+ src/components/PromptsTab.tsx: client-side required/type validation
+ for tool-call parameters and prompt arguments, with derived disabled
+ state on the Run Tool and Get Prompt buttons.
+
+What changed for the user:
+- The Run Tool button is now disabled immediately when a tool with
+  required fields is selected, without requiring the user to blur
+  every field first. Validation is computed on every render from the
+  tool's inputSchema plus current params (derived), not from a flag
+  set by a blur event.
+- Required fields without a schema.default are no longer initialized
+  to 0/false/"". They stay absent from state and are omitted from
+  the submit payload, so a `sum` tool no longer silently sends
+  `{a:0,b:0}` when the user never typed anything.
+- The Get Prompt button follows the same rules: disabled when a
+  prompt with required arguments is untouched.
+
+Implementation:
+- `src/utils/paramValidation.ts` (new): pure functions
+  `validateToolParams(schema, params)` and
+  `validatePromptArgs(args, promptArgs)` returning per-field errors.
+  Rules: required array checked; undefined/null/empty-string is
+  "required"; integer must be a whole number; number must be a
+  number; boolean must be a boolean; `nullable: true` accepts null;
+  ambiguous schemas (no clear primitive type) are skipped. The
+  server round-trip handles them.
+- `src/components/ToolsTab.tsx`: fieldErrors state kept for blur/
+  submit hint display only; the button's disabled state derives from
+  `validateToolParams(schema, params)` on every render, combined
+  with the existing hasValidationErrors (DynamicJsonForm) check.
+  The initialization effect only seeds fields that declare a
+  `default` in the schema; required fields without a default are
+  filtered out of the initial params object. DynamicJsonForm onChange
+  handlers use functional setParams plus a paramsRef to avoid stale
+  closures.
+- `src/components/PromptsTab.tsx`: same pattern. validatePromptArgs
+  drives the disabled state on Get Prompt; fieldErrors only shown
+  after touch.
+
+`src/components/ui/combobox.tsx`: added optional onBlur, aria-invalid
+  and aria-describedby props, forwarded to trigger Button.
+`src/components/ToolsTab.tsx`: error paragraphs get stable id and
+  role="alert"; all controls (textarea, numeric input, enum select,
+  boolean checkbox) get aria-invalid and aria-describedby pointing
+  to their error paragraph.
+`src/components/PromptsTab.tsx`: same pattern for the combobox
+  trigger and its error paragraph.
+
+Covered by:
+- `src/utils/__tests__/paramValidation.test.ts`: unit tests for
+  both validation functions (required, type checks, nullable, union
+  types, ambiguous schemas).
+- `spring-ai-mcp-inspector-demo-webmvc/src/test/java/io/inspector/
+  mcp/demo/e2e/InspectorUiIT.java`: Selenide IT on sum tool with
+  empty required fields (submit disabled, hint shown).
