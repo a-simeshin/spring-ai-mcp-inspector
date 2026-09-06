@@ -15,6 +15,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 
+// [spring-ai-mcp-inspector PATCH] Added onBlur prop to support blur-based validation in ToolsTab/PromptsTab
 interface ComboboxProps {
   value: string;
   onChange: (value: string) => void;
