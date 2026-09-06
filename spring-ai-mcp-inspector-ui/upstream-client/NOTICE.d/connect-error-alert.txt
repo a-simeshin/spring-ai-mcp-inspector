@@ -1,5 +1,5 @@
 src/lib/connectErrors.ts + src/lib/hooks/useConnection.ts +
- src/components/Sidebar.tsx + src/App.tsx — surface connect failures
+ src/components/Sidebar.tsx + src/App.tsx - surface connect failures
 with a reason and a Retry button. When the Java proxy answers
 POST /mcp-inspector-api/mcp with the structured non-2xx contract
 `{"error":{"code":"MCP_CONNECT_FAILED","reason":"<timeout|connection_refused|dns|not_found|unknown>","message":"...","retryable":true}}`,
@@ -10,7 +10,9 @@ contract out of non-ok responses and throws `ConnectFailedError`
 (non-contract bodies pass through untouched); the connect() catch
 stores the failure instead of throwing into an unhandled rejection;
 the sidebar renders it as a `role=alert` with a human-readable
-reason and a Retry button that repeats connect. The human-readable
+reason and a Retry button that repeats connect. The alert is rendered
+at the top of the config pane, above the URL/command inputs, so it is
+immediately visible without scrolling. The human-readable
 messages are cleaned up: no parenthetical reason suffixes, the
 unknown case returns empty string so the original error text shows
 through. A new `not_found` reason (wire: "not_found") maps HTTP 404
