@@ -19,6 +19,8 @@ jest.mock("@/components/ui/combobox", () => ({
     onBlur,
     id,
     placeholder,
+    "aria-invalid": ariaInvalid,
+    "aria-describedby": ariaDescribedby,
   }: {
     value: string;
     onChange: (value: string) => void;
@@ -26,6 +28,8 @@ jest.mock("@/components/ui/combobox", () => ({
     onBlur?: () => void;
     id?: string;
     placeholder?: string;
+    "aria-invalid"?: boolean;
+    "aria-describedby"?: string;
   }) => (
     <input
       data-testid={`combobox-${id}`}
@@ -36,6 +40,8 @@ jest.mock("@/components/ui/combobox", () => ({
       }}
       onBlur={onBlur}
       placeholder={placeholder}
+      aria-invalid={ariaInvalid}
+      aria-describedby={ariaDescribedby}
     />
   ),
 }));
@@ -187,6 +193,29 @@ describe("PromptsTab", () => {
 
     // Verify error message appears
     expect(screen.getByText("This field is required")).toBeInTheDocument();
+  });
+
+  it("should set aria-invalid and aria-describedby on combobox after blur", async () => {
+    renderPromptsTab({ selectedPrompt: mockPrompts[0] });
+
+    const nameInput = screen.getByTestId("combobox-name");
+
+    // Blur empty required field
+    await act(async () => {
+      fireEvent.blur(nameInput);
+    });
+
+    // Verify aria-invalid is set to true
+    expect(nameInput).toHaveAttribute("aria-invalid", "true");
+
+    // Verify aria-describedby points to the error element
+    const describedBy = nameInput.getAttribute("aria-describedby");
+    expect(describedBy).toBe("name-error");
+
+    // Verify the error element exists with the expected id
+    const errorEl = screen.getByRole("alert");
+    expect(errorEl).toHaveAttribute("id", "name-error");
+    expect(errorEl).toHaveTextContent("This field is required");
   });
 
   it("should clear field error on blur when required argument is filled", async () => {

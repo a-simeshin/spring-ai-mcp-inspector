@@ -38,12 +38,24 @@ Implementation:
   drives the disabled state on Get Prompt; fieldErrors only shown
   after touch.
 
+`src/components/ui/combobox.tsx`: added optional aria-invalid and
+  aria-describedby props, forwarded to trigger Button.
+`src/components/ToolsTab.tsx`: error paragraphs get stable id and
+  role="alert"; all controls (textarea, numeric input, enum select,
+  boolean checkbox, DynamicJsonForm wrappers) get aria-invalid and
+  aria-describedby pointing to their error paragraph.
+`src/components/PromptsTab.tsx`: same pattern for the combobox
+  trigger and its error paragraph.
+
 Covered by:
 - `src/utils/__tests__/paramValidation.test.ts`: unit tests for
   both validation functions (required, type checks, nullable, union
   types, ambiguous schemas).
 - `src/components/__tests__/ToolsTab.test.tsx`: untouched sum tool
   → Run Tool disabled; submit payload regression test (a=2,b=3
-  sends exactly {a:2,b:3}).
+  sends exactly {a:2,b:3}); aria-invalid and aria-describedby
+  verified after blur of empty required textarea.
 - `src/components/__tests__/PromptsTab.test.tsx`: untouched prompt
-  → Get Prompt disabled; fills required arg → button enabled.
+  → Get Prompt disabled; fills required arg → button enabled;
+  aria-invalid and aria-describedby verified on combobox trigger
+  after blur.
