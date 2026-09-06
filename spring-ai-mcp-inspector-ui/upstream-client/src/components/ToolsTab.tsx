@@ -687,7 +687,8 @@ const ToolsTab = ({
                           ) : prop.type === "number" ||
                             prop.type === "integer" ? (
                             <Input
-                              type="number"
+                              type="text"
+                              inputMode="decimal"
                               id={key}
                               name={key}
                               placeholder={prop.description}

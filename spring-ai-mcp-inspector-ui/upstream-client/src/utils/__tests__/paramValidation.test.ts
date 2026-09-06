@@ -82,6 +82,19 @@ describe("validateToolParams", () => {
     expect(validateToolParams(schema, { count: null })).toEqual([]);
   });
 
+  it("rejects non-numeric string for integer type", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      required: ["count"],
+      properties: {
+        count: { type: "integer" },
+      },
+    };
+    expect(validateToolParams(schema, { count: "abc" })).toEqual([
+      { field: "count", message: "must be a number" },
+    ]);
+  });
+
   it("rejects 1.5 for integer type", () => {
     const schema: JsonSchemaType = {
       type: "object",
