@@ -17,6 +17,8 @@
 package io.inspector.mcp.core.proxy;
 
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -140,6 +142,51 @@ public class ProxyTransportFactory {
 	}
 
 	/**
+	 * Builds an SSE client transport wrapped in a lightweight preflight probe.
+	 *
+	 * <p>
+	 * The returned transport performs an HTTP HEAD-based preflight before delegating to
+	 * the inner {@link HttpClientSseClientTransport}. This avoids creating an orphaned
+	 * upstream SSE session — the HEAD probe never opens a stream. If the server rejects
+	 * HEAD with 405, a GET fallback is used with a header-only body handler that cancels
+	 * immediately on response headers.
+	 * @param sseUri the full SSE endpoint URI (must not be {@code null})
+	 * @return a configured {@link McpClientTransport} for SSE with preflight
+	 * @see SsePreflightTransport
+	 */
+	public McpClientTransport buildSse(final URI sseUri) {
+		return buildSse(sseUri, null, null);
+	}
+
+	/**
+	 * Builds an SSE client transport wrapped in a lightweight preflight probe, with the
+	 * supplied {@code authorization} header and {@code customHeaders} forwarded to the
+	 * upstream MCP server on every outbound request.
+	 *
+	 * <p>
+	 * Same preflight semantics as {@link #buildSse(URI)}. Headers are injected via the
+	 * SDK's {@code httpRequestCustomizer} hook so they ride on both the preflight probe
+	 * and the real transport's requests.
+	 * @param sseUri the full SSE endpoint URI (must not be {@code null})
+	 * @param authorization the inbound {@code Authorization} header value to forward, or
+	 * {@code null} / blank to omit
+	 * @param customHeaders additional headers to forward (may be {@code null} or empty)
+	 * @return a configured {@link McpClientTransport} for SSE with preflight
+	 */
+	public McpClientTransport buildSse(final URI sseUri, final String authorization,
+			final Map<String, String> customHeaders) {
+		if (sseUri == null) {
+			throw new IllegalArgumentException("sseUri must not be null");
+		}
+		final McpClientTransport delegate = openSse(sseUri, authorization, customHeaders);
+		final URI normalizedUri = normalizeSseUri(sseUri);
+		final HttpClient preflightClient = HttpClient.newBuilder().executor(SHARED_HTTP_EXECUTOR).build();
+		final HttpRequest.Builder requestTemplate = HttpRequest.newBuilder();
+		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(authorization, customHeaders);
+		return new SsePreflightTransport(delegate, normalizedUri, requestTemplate, customizer, preflightClient);
+	}
+
+	/**
 	 * Builds a streamable-HTTP transport that targets the supplied {@code mcpUri}.
 	 *
 	 * <p>
@@ -239,6 +286,20 @@ public class ProxyTransportFactory {
 				});
 			}
 		};
+	}
+
+	/**
+	 * Normalizes an SSE URI by ensuring the path is non-empty, defaulting to {@code /sse}
+	 * when the supplied URI has no path.
+	 * @param uri the source URI (may have an empty or null path)
+	 * @return a URI with the same scheme, host and port, but with a non-empty path
+	 */
+	private static URI normalizeSseUri(final URI uri) {
+		final String rawPath = uri.getRawPath();
+		if (rawPath != null && !rawPath.isBlank()) {
+			return uri;
+		}
+		return URI.create(stripPath(uri) + "/sse");
 	}
 
 	/**
