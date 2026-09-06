@@ -22,6 +22,8 @@ export interface FieldError {
  * - Only fields listed in `schema.required` are checked.
  * - A required field is empty (error: "required") when its value is
  *   undefined, null, or an empty string.
+ * - For required nullable fields, `undefined` (missing) still produces
+ *   a "required" error; only explicit `null` is accepted as valid.
  * - For `integer` properties: the value must be a whole number
  *   (Number.isInteger).  `1.5` is rejected; `1` and `0` pass.
  * - For `number` properties: the value must be a number (typeof === "number").
@@ -55,10 +57,15 @@ export function validateToolParams(
     const value = params[key];
 
     const isNullable = normalized.nullable === true;
+    const isMissing = value === undefined;
     const isEmpty =
-      value === undefined ||
       value === null ||
       (typeof value === "string" && value === "");
+
+    if (isMissing) {
+      errors.push({ field: key, message: "required" });
+      continue;
+    }
 
     if (isEmpty) {
       if (!isNullable) {
