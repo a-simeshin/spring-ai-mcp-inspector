@@ -58,11 +58,11 @@ import reactor.core.publisher.Mono;
  * Section 9.3.1, HEAD is identical to GET except the server MUST NOT send a message body.
  * Since no body is sent, the server never creates an SSE session, eliminating the
  * orphaned session problem that the previous GET-based probe suffered from. If the server
- * rejects HEAD with 405 (Method Not Allowed), the wrapper falls back to a GET-based probe
- * with a header-only body handler that cancels immediately on response headers. A non-2xx
- * status is turned into a {@link McpTransportException} whose message carries the status,
- * which the D3 {@code ProxyErrorMapper} maps to the structured DTO and the D9 one-retry
- * recognises as a refreshable 401.
+ * rejects HEAD with 405 (Method Not Allowed) or 404 (Not Found), the wrapper falls back
+ * to a GET-based probe with a header-only body handler that cancels immediately on
+ * response headers. A non-2xx status is turned into a {@link McpTransportException} whose
+ * message carries the status, which the D3 {@code ProxyErrorMapper} maps to the
+ * structured DTO and the D9 one-retry recognises as a refreshable 401.
  *
  * @author Artem Simeshin
  */
@@ -146,7 +146,7 @@ final class SsePreflightTransport implements McpClientTransport {
 				if (status >= 200 && status < 300) {
 					return Mono.<Void>empty();
 				}
-				if (status == 405) {
+				if (status == 405 || status == 404) {
 					return preflightGet(context);
 				}
 				return Mono.<Void>error(

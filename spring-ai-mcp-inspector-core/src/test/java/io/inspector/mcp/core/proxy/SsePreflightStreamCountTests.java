@@ -17,12 +17,11 @@
 package io.inspector.mcp.core.proxy;
 
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
+import io.modelcontextprotocol.spec.McpTransportException;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -36,6 +35,7 @@ import reactor.core.publisher.Mono;
 import tools.jackson.databind.json.JsonMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Regression tests that the {@link SsePreflightTransport} HEAD-based preflight never
@@ -59,8 +59,19 @@ class SsePreflightStreamCountTests {
 
 	private SseStreamCountingStub stub;
 
+	private McpClientTransport transport;
+
 	@AfterEach
 	void tearDown() {
+		if (this.transport != null) {
+			try {
+				this.transport.closeGracefully().block(Duration.ofSeconds(2));
+			}
+			catch (final Exception ignored) {
+				// best-effort
+			}
+			this.transport = null;
+		}
 		if (this.stub != null) {
 			this.stub.close();
 			this.stub = null;
@@ -78,10 +89,10 @@ class SsePreflightStreamCountTests {
 		// given
 		this.stub = new SseStreamCountingStub();
 		final ProxyTransportFactory factory = new ProxyTransportFactory(new JsonMapper());
-		final McpClientTransport transport = factory.buildSse(URI.create(this.stub.sseUrl()));
+		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()));
 
 		// when
-		transport.connect((inbound) -> inbound).then(Mono.fromRunnable(() -> {
+		this.transport.connect((inbound) -> inbound).then(Mono.fromRunnable(() -> {
 			try {
 				Thread.sleep(500);
 			}
@@ -95,7 +106,8 @@ class SsePreflightStreamCountTests {
 		// opens exactly one stream. Zero orphaned streams.
 		assertThat(this.stub.sseStreamCount()).as("SSE streams opened by the real delegate").isEqualTo(1);
 		assertThat(this.stub.headCount()).as("HEAD preflight probes").isEqualTo(1);
-		assertThat(this.stub.getFallbackCount()).as("GET fallback probes (should be 0 with HEAD support)").isEqualTo(0);
+		// The real SSE stream is active while the transport is connected.
+		assertThat(this.stub.activeExchangeCount()).as("Active exchanges (the real SSE stream)").isEqualTo(1);
 	}
 
 	@Test
@@ -104,18 +116,18 @@ class SsePreflightStreamCountTests {
 	@Description("When the HEAD preflight returns a non-2xx (non-405) status, "
 			+ "the SsePreflightTransport errors and no SSE stream is ever created : "
 			+ "zero orphaned streams, zero delegate connections")
-	@DisplayName("Preflight failure: 0 SSE streams when HEAD returns 403")
+	@DisplayName("Preflight failure: 0 SSE streams when HEAD returns 403, no leaked exchanges")
 	void preflightFailure_whenHeadReturns403_noSseStreamLeaked() throws Exception {
 		// given
 		this.stub = new SseStreamCountingStub();
 		this.stub.setHeadStatus(403);
 		final ProxyTransportFactory factory = new ProxyTransportFactory(new JsonMapper());
-		final McpClientTransport transport = factory.buildSse(URI.create(this.stub.sseUrl()));
+		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()));
 
 		// when : the preflight HEAD returns 403, so the transport errors
 		// The delegate's connect() is never called.
 		try {
-			transport.connect((inbound) -> inbound).block(Duration.ofSeconds(5));
+			this.transport.connect((inbound) -> inbound).block(Duration.ofSeconds(5));
 		}
 		catch (final Exception ex) {
 			// expected : preflight failure
@@ -124,7 +136,7 @@ class SsePreflightStreamCountTests {
 		// then : no SSE stream was created, the delegate never connected
 		assertThat(this.stub.sseStreamCount()).as("SSE streams opened (should be 0 : preflight failed)").isEqualTo(0);
 		assertThat(this.stub.headCount()).as("HEAD preflight probes").isEqualTo(1);
-		assertThat(this.stub.getFallbackCount()).as("GET fallback probes (should be 0 : 403 is not 405)").isEqualTo(0);
+		assertThat(this.stub.activeExchangeCount()).as("No leaked exchanges after preflight failure").isEqualTo(0);
 	}
 
 	@Test
@@ -132,19 +144,22 @@ class SsePreflightStreamCountTests {
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("When the HEAD preflight returns 405, the SsePreflightTransport "
 			+ "falls back to a GET-based probe. The header-only body handler cancels "
-			+ "immediately on response headers, so the first GET is never consumed. "
-			+ "The delegate then opens a real SSE stream. The stub sees 2 GET requests "
-			+ "(fallback + delegate) but the fallback stream is cancelled immediately.")
-	@DisplayName("Preflight 405 fallback: 2 GET requests (fallback cancelled, delegate opens real stream)")
-	void preflight405Fallback_whenHeadReturns405_fallsBackToGetAndConnects() throws Exception {
+			+ "immediately, so the fallback GET exchange is closed before the delegate "
+			+ "opens a real SSE stream. The test asserts that after the transport "
+			+ "completes, only the real delegate's stream is active (1 active exchange), "
+			+ "proving the fallback was properly closed. This test FAILS on the pre-fix "
+			+ "GET-only transport because the pre-fix probe opens a real SSE stream that "
+			+ "is never closed, leaving 2 active exchanges.")
+	@DisplayName("Preflight 405 fallback: fallback GET is closed, only delegate stream active")
+	void preflight405Fallback_whenHeadReturns405_fallbackClosedNoLeak() throws Exception {
 		// given
 		this.stub = new SseStreamCountingStub();
 		this.stub.setHeadStatus(405);
 		final ProxyTransportFactory factory = new ProxyTransportFactory(new JsonMapper());
-		final McpClientTransport transport = factory.buildSse(URI.create(this.stub.sseUrl()));
+		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()));
 
 		// when
-		transport.connect((inbound) -> inbound).then(Mono.fromRunnable(() -> {
+		this.transport.connect((inbound) -> inbound).then(Mono.fromRunnable(() -> {
 			try {
 				Thread.sleep(500);
 			}
@@ -155,46 +170,168 @@ class SsePreflightStreamCountTests {
 
 		// then
 		// The HEAD preflight returns 405, triggering the GET fallback.
-		// The GET fallback sends a GET /sse with Accept: text/event-stream (same
-		// as the real GET), so the stub treats it as a full SSE stream.
-		// The header-only body handler cancels immediately, but the stub has already
-		// incremented the stream count before the cancellation is noticed.
+		// The GET fallback sends a GET /sse; the header-only body handler cancels
+		// the subscription immediately, which closes the exchange.
+		// The stub counts the fallback as a failed SSE stream attempt.
 		// The real delegate then sends another GET /sse which opens the real stream.
-		// Result: stub sees 2 GET /sse requests, but only 1 is actually active.
+		// Result: stub sees 2 GET /sse requests, but only 1 active exchange.
 		assertThat(this.stub.headCount()).as("HEAD preflight probes").isEqualTo(1);
-		assertThat(this.stub.getFallbackCount()).as("GET fallback probes (stub distinguishes by Accept header)")
-			.isEqualTo(0);
-		// Two GET requests reached the stub: the fallback (cancelled immediately)
-		// and the real delegate's stream. The fallback is counted as an SSE stream
-		// because it has the same Accept header, but it is cancelled immediately
-		// and never holds a real connection.
 		assertThat(this.stub.sseStreamCount()).as("Total GET /sse requests (fallback + delegate)").isEqualTo(2);
+		// Only the real delegate's stream is active: the fallback was closed.
+		assertThat(this.stub.activeExchangeCount()).as("Active exchanges (only the real SSE stream)").isEqualTo(1);
 	}
 
 	@Test
-	@Story("Preflight HEAD on a non-SSE endpoint")
-	@Severity(SeverityLevel.NORMAL)
-	@Description("The SsePreflightTransport sends a HEAD request with an Accept: "
-			+ "text/event-stream header. The stub should see this header on the HEAD probe.")
-	@DisplayName("HEAD probe carries Accept: text/event-stream header")
-	void headProbe_carriesAcceptEventStreamHeader() throws Exception {
+	@Story("Preflight 404 fallback to GET")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("When the HEAD preflight returns 404, the SsePreflightTransport "
+			+ "falls back to a GET-based probe, same as 405. This ensures that servers "
+			+ "which do not support HEAD (returning 404 instead of 405) still work.")
+	@DisplayName("Preflight 404 fallback: HEAD 404 triggers GET fallback, no leaked exchanges")
+	void preflight404Fallback_whenHeadReturns404_fallsBackToGet() throws Exception {
 		// given
 		this.stub = new SseStreamCountingStub();
-		final String sseUrl = this.stub.sseUrl();
+		this.stub.setHeadStatus(404);
+		final ProxyTransportFactory factory = new ProxyTransportFactory(new JsonMapper());
+		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()));
 
-		// when : send a bare HEAD request to the stub, as the SsePreflightTransport would
-		final HttpClient client = HttpClient.newHttpClient();
-		final HttpRequest request = HttpRequest.newBuilder()
-			.uri(URI.create(sseUrl))
-			.header("Accept", "text/event-stream")
-			.method("HEAD", HttpRequest.BodyPublishers.noBody())
-			.build();
-		final HttpResponse<Void> response = client.send(request, HttpResponse.BodyHandlers.discarding());
+		// when
+		this.transport.connect((inbound) -> inbound).then(Mono.fromRunnable(() -> {
+			try {
+				Thread.sleep(500);
+			}
+			catch (final InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+		})).block(Duration.ofSeconds(10));
 
 		// then
-		assertThat(response.statusCode()).as("HEAD response status").isEqualTo(200);
-		assertThat(this.stub.headCount()).as("HEAD probe received by stub").isEqualTo(1);
+		assertThat(this.stub.headCount()).as("HEAD preflight probes").isEqualTo(1);
+		assertThat(this.stub.sseStreamCount()).as("Total GET /sse requests (fallback + delegate)").isEqualTo(2);
+		// Only the real delegate's stream is active: the fallback was closed.
+		assertThat(this.stub.activeExchangeCount()).as("Active exchanges (only the real SSE stream)").isEqualTo(1);
+	}
+
+	@Test
+	@Story("Preflight HEAD timeout")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("When the HEAD preflight hangs (server accepts but never responds), "
+			+ "the transport times out. The test asserts that no exchanges are leaked " + "after the timeout.")
+	@DisplayName("Preflight HEAD timeout: error on timeout, no leaked exchanges")
+	void preflightTimeout_whenHeadHangs_errorsWithTimeoutAndNoLeak() throws Exception {
+		// given
+		this.stub = new SseStreamCountingStub();
+		this.stub.setHangOnHead(true);
+		final ProxyTransportFactory factory = new ProxyTransportFactory(new JsonMapper());
+		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()));
+
+		// when
+		assertThatThrownBy(() -> this.transport.connect((inbound) -> inbound).block(Duration.ofSeconds(15)))
+			.isInstanceOf(McpTransportException.class)
+			.hasMessageContaining("timed out");
+
+		// then
+		assertThat(this.stub.headCount()).as("HEAD preflight probes").isEqualTo(1);
+		assertThat(this.stub.sseStreamCount()).as("No SSE stream opened on timeout").isEqualTo(0);
+		assertThat(this.stub.activeExchangeCount()).as("No leaked exchanges after timeout").isEqualTo(0);
+	}
+
+	@Test
+	@Story("Downstream cancellation mid-handshake")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("When the downstream cancels the connect Mono during the preflight "
+			+ "handshake, the transport should not leak any exchanges.")
+	@DisplayName("Downstream cancellation: no leaked exchanges after cancellation")
+	void downstreamCancellation_midHandshake_noLeakedExchanges() throws Exception {
+		// given
+		this.stub = new SseStreamCountingStub();
+		// Make the HEAD preflight hang so the Mono is still pending
+		this.stub.setHangOnHead(true);
+		final ProxyTransportFactory factory = new ProxyTransportFactory(new JsonMapper());
+		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()));
+
+		// when : cancel the connect Mono after 1 second
+		final CompletableFuture<Void> cancelled = new CompletableFuture<>();
+		final Mono<Void> connect = this.transport.connect((inbound) -> inbound);
+		final var disposable = connect.subscribe((value) -> cancelled.complete(null),
+				(error) -> cancelled.completeExceptionally(error));
+		Thread.sleep(1000);
+		disposable.dispose();
+		cancelled.complete(null);
+
+		// then
+		assertThat(this.stub.headCount()).as("HEAD preflight probes").isEqualTo(1);
+		assertThat(this.stub.sseStreamCount()).as("No SSE stream opened on cancellation").isEqualTo(0);
+		assertThat(this.stub.activeExchangeCount()).as("No leaked exchanges after cancellation").isEqualTo(0);
+	}
+
+	@Test
+	@Story("Preflight HEAD carries Accept header")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("The SsePreflightTransport sends a HEAD request with an Accept: "
+			+ "text/event-stream header. This test exercises the real transport "
+			+ "and verifies the header was received by the stub, instead of " + "sending a raw HttpClient request.")
+	@DisplayName("HEAD probe through real transport carries Accept: text/event-stream header")
+	void headProbeThroughRealTransport_carriesAcceptEventStreamHeader() throws Exception {
+		// given
+		this.stub = new SseStreamCountingStub();
+		// Make the stub return 403 so the preflight fails without connecting
+		// the delegate. This lets us observe the HEAD probe alone.
+		this.stub.setHeadStatus(403);
+		final ProxyTransportFactory factory = new ProxyTransportFactory(new JsonMapper());
+		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()));
+
+		// when : try to connect. The preflight HEAD returns 403, so the
+		// transport errors before the delegate connects.
+		try {
+			this.transport.connect((inbound) -> inbound).block(Duration.ofSeconds(5));
+		}
+		catch (final Exception ex) {
+			// expected : preflight failure
+		}
+
+		// then
+		// The stub received the HEAD probe. The test verifies that the real
+		// transport sent a HEAD request (not a raw HttpClient call).
+		assertThat(this.stub.headCount()).as("HEAD probe received by stub through real transport").isEqualTo(1);
+		// The HEAD probe should not open an SSE stream.
 		assertThat(this.stub.sseStreamCount()).as("SSE stream count (HEAD should not open a stream)").isEqualTo(0);
+		assertThat(this.stub.activeExchangeCount()).as("No leaked exchanges after HEAD probe").isEqualTo(0);
+	}
+
+	@Test
+	@Story("Cleanup after closeGracefully")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("After the transport is used once and closeGracefully is called, "
+			+ "the active exchange count should drop to 0: no leaked exchanges.")
+	@DisplayName("Cleanup: no leaked exchanges after transport closeGracefully")
+	void cleanup_afterTransportClose_noLeakedExchanges() throws Exception {
+		// given
+		this.stub = new SseStreamCountingStub();
+		final ProxyTransportFactory factory = new ProxyTransportFactory(new JsonMapper());
+		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()));
+
+		// when : connect
+		this.transport.connect((inbound) -> inbound).then(Mono.fromRunnable(() -> {
+			try {
+				Thread.sleep(500);
+			}
+			catch (final InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+		})).block(Duration.ofSeconds(10));
+
+		// then : close and verify no leaks
+		// The real SSE stream is active while connected.
+		assertThat(this.stub.activeExchangeCount()).as("Active exchanges while connected").isEqualTo(1);
+
+		this.transport.closeGracefully().block(Duration.ofSeconds(2));
+		this.transport = null;
+
+		// Allow a short delay for the server to process the close and the
+		// stub's loop to exit.
+		Thread.sleep(500);
+		assertThat(this.stub.activeExchangeCount()).as("No leaked exchanges after closeGracefully").isEqualTo(0);
 	}
 
 }

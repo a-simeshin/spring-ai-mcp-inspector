@@ -21,11 +21,13 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -43,23 +45,20 @@ import tools.jackson.databind.json.JsonMapper;
  * <ul>
  * <li>{@link #sseStreamCount()} : how many GET /sse opened a stream</li>
  * <li>{@link #headCount()} : how many HEAD /sse probes were received</li>
- * <li>{@link #getFallbackCount()} : how many GET /sse with header-only handling</li>
  * <li>{@link #postCount()} : how many POST /message requests were received</li>
- * </ul>
- *
- * <p>
- * The stub can be configured to:
- * <ul>
- * <li>Return a configurable HTTP status on HEAD /sse for preflight testing</li>
- * <li>Return a configurable HTTP status on GET /sse for SSE stream testing</li>
- * <li>Reject the first N POSTs with 401 for retry testing</li>
+ * <li>{@link #activeExchangeCount()} : how many SSE streams are currently writing (their
+ * SSE loop has not yet exited)</li>
  * </ul>
  */
 final class SseStreamCountingStub implements AutoCloseable {
 
 	private static final JsonMapper MAPPER = new JsonMapper();
 
+	private static final AtomicLong EXECUTOR_SEQ = new AtomicLong();
+
 	private final HttpServer server;
+
+	private final Executor executor;
 
 	/** Number of SSE streams opened (GET /sse that sent the endpoint prologue). */
 	private final AtomicInteger sseStreamCount = new AtomicInteger();
@@ -67,11 +66,11 @@ final class SseStreamCountingStub implements AutoCloseable {
 	/** Number of HEAD /sse probes received. */
 	private final AtomicInteger headCount = new AtomicInteger();
 
-	/** Number of GET /sse with header-only handling (fallback from 405). */
-	private final AtomicInteger getFallbackCount = new AtomicInteger();
-
 	/** Number of POST /message requests received. */
 	private final AtomicInteger postCount = new AtomicInteger();
+
+	/** Number of SSE streams currently active (writing loop still running). */
+	private final AtomicInteger activeExchangeCount = new AtomicInteger();
 
 	/** HTTP status to return on HEAD /sse. 200 = accept preflight. */
 	private volatile int headStatus = 200;
@@ -85,11 +84,19 @@ final class SseStreamCountingStub implements AutoCloseable {
 	/** JSON-RPC response queue, shared across all SSE streams. */
 	private final BlockingQueue<String> responses = new LinkedBlockingQueue<>();
 
+	/** Whether to hang on HEAD /sse (never respond). */
+	private volatile boolean hangOnHead;
+
 	private final AtomicBoolean stopped = new AtomicBoolean();
 
 	SseStreamCountingStub() throws IOException {
+		this.executor = Executors.newCachedThreadPool((runnable) -> {
+			final Thread thread = new Thread(runnable, "sse-counting-stub-" + EXECUTOR_SEQ.incrementAndGet());
+			thread.setDaemon(true);
+			return thread;
+		});
 		this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-		this.server.setExecutor(Executors.newCachedThreadPool());
+		this.server.setExecutor(this.executor);
 		this.server.createContext("/sse", this::handleSse);
 		this.server.createContext("/message", this::handleMessage);
 		this.server.start();
@@ -110,47 +117,40 @@ final class SseStreamCountingStub implements AutoCloseable {
 		return this.headCount.get();
 	}
 
-	/** Number of GET /sse with header-only handling (fallback from 405). */
-	int getFallbackCount() {
-		return this.getFallbackCount.get();
-	}
-
 	/** Number of POST /message requests received. */
 	int postCount() {
 		return this.postCount.get();
 	}
 
-	/**
-	 * Sets the HTTP status for HEAD /sse. When set to a non-2xx value, the stub returns
-	 * that status without creating an SSE stream, simulating a preflight-failure
-	 * condition. 405 triggers the GET fallback.
-	 */
+	/** Number of SSE streams currently active (writing loop still running). */
+	int activeExchangeCount() {
+		return this.activeExchangeCount.get();
+	}
+
 	void setHeadStatus(final int status) {
 		this.headStatus = status;
 	}
 
-	/**
-	 * Sets the HTTP status for GET /sse. When set to a non-2xx value, the stub returns
-	 * that status without creating an SSE stream.
-	 */
 	void setSseStatus(final int status) {
 		this.sseStatus = status;
 	}
 
-	/** Makes the first {@code n} POSTs answer 401. */
 	void rejectPosts(final int n) {
 		this.rejectPosts = n;
 	}
 
-	/** Queues a JSON-RPC response to be pushed over the next SSE stream. */
 	void enqueueResponse(final String jsonRpcResponse) {
 		this.responses.offer(jsonRpcResponse);
+	}
+
+	void setHangOnHead(final boolean hang) {
+		this.hangOnHead = hang;
 	}
 
 	@Override
 	public void close() {
 		this.stopped.set(true);
-		this.server.stop(0);
+		this.server.stop(1);
 	}
 
 	private void handleSse(final HttpExchange exchange) throws IOException {
@@ -158,48 +158,73 @@ final class SseStreamCountingStub implements AutoCloseable {
 		switch (method) {
 			case "HEAD" -> {
 				this.headCount.incrementAndGet();
+				if (this.hangOnHead) {
+					return;
+				}
 				exchange.sendResponseHeaders(this.headStatus, -1);
 				exchange.close();
 			}
 			case "GET" -> {
-				// Distinguish between a full SSE stream and a header-only fallback
-				// by checking if the client sends a non-empty Accept header.
-				final String accept = exchange.getRequestHeaders().getFirst("Accept");
-				final boolean isFallback = (accept == null || accept.isBlank());
-				if (isFallback) {
-					this.getFallbackCount.incrementAndGet();
-					// Header-only fallback : the client cancels immediately.
-					exchange.sendResponseHeaders((this.headStatus == 405) ? 200 : this.sseStatus, -1);
-					exchange.close();
-					return;
-				}
-				// Full SSE stream open.
 				if (this.sseStatus != 200) {
 					exchange.sendResponseHeaders(this.sseStatus, -1);
 					exchange.close();
 					return;
 				}
 				this.sseStreamCount.incrementAndGet();
+				this.activeExchangeCount.incrementAndGet();
 				exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
 				exchange.sendResponseHeaders(200, 0);
-				try (OutputStream out = exchange.getResponseBody()) {
-					out.write("event: endpoint\ndata: /message\n\n".getBytes(StandardCharsets.UTF_8));
-					out.flush();
-					while (!this.stopped.get()) {
-						final String response = this.responses.poll(200, TimeUnit.MILLISECONDS);
-						if (response != null) {
-							out.write(("event: message\ndata: " + response + "\n\n").getBytes(StandardCharsets.UTF_8));
-							out.flush();
-						}
-					}
-				}
-				catch (final InterruptedException | IOException ignored) {
-					// stream ended or stub was stopped
-				}
+				runSseLoop(exchange.getResponseBody());
+				this.activeExchangeCount.decrementAndGet();
 			}
 			default -> {
 				exchange.sendResponseHeaders(405, -1);
 				exchange.close();
+			}
+		}
+	}
+
+	/**
+	 * Runs the SSE event loop: writes the endpoint event, then waits for queued
+	 * responses. Every iteration writes a keep-alive newline to detect client
+	 * disconnection. The JDK HttpServer only detects a closed TCP connection when the
+	 * output buffer is flushed to the socket.
+	 */
+	private void runSseLoop(final OutputStream out) {
+		try {
+			out.write("event: endpoint\ndata: /message\n\n".getBytes(StandardCharsets.UTF_8));
+			out.flush();
+		}
+		catch (final IOException ex) {
+			return;
+		}
+		int keepAlive = 0;
+		while (!this.stopped.get()) {
+			try {
+				final String response = this.responses.poll(50, TimeUnit.MILLISECONDS);
+				if (response != null) {
+					out.write(("event: message\ndata: " + response + "\n\n").getBytes(StandardCharsets.UTF_8));
+					out.flush();
+					keepAlive = 0;
+				}
+				// Every 4 iterations (~200ms), write a keep-alive to detect
+				// client disconnection. The JDK HttpServer's output stream
+				// only throws IOException on write+flush when the underlying
+				// TCP socket is closed.
+				keepAlive++;
+				if (keepAlive >= 4) {
+					keepAlive = 0;
+					out.write("\n".getBytes(StandardCharsets.UTF_8));
+					out.flush();
+				}
+			}
+			catch (final InterruptedException ex) {
+				Thread.currentThread().interrupt();
+				break;
+			}
+			catch (final IOException ex) {
+				// Client disconnected
+				break;
 			}
 		}
 	}
