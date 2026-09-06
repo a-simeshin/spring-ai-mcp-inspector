@@ -994,7 +994,14 @@ const ToolsTab = ({
                   </div>
                 )}
                 {/* [spring-ai-mcp-inspector PATCH] Run Tool button (#58):
-                    data-testid anchor for the Selenide critical-path click. */}
+                    data-testid anchor for the Selenide critical-path click.
+                    Also covers client-side parameter validation (see
+                    NOTICE.d/param-validation.txt): validateField, validateAll,
+                    derivedFieldErrors, fieldErrors state for blur/submit hints,
+                    paramsRef for stale-closure fixes, button disabled state
+                    derived from validateToolParams on every render, and the
+                    initialization effect that only seeds fields with a schema
+                    default (required fields without default stay absent). */}
                 <Button
                   data-testid="run-tool-button"
                   onClick={async () => {

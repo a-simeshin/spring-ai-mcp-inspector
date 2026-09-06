@@ -1,3 +1,9 @@
+// [spring-ai-mcp-inspector PATCH] Client-side required/type validation for
+// prompt forms. The Get Prompt button is derived-disabled on every render
+// via validatePromptArgs(), and submit is blocked by validateAll().
+// fieldErrors state is only for showing hints after blur/submit.
+// [spring-ai-mcp-inspector PATCH] Component tests for PromptsTab validation
+// (see NOTICE.d/param-validation.txt).
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { describe, it, jest } from "@jest/globals";
