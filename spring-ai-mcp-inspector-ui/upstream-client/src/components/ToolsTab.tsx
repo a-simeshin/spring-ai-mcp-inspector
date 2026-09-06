@@ -241,6 +241,9 @@ const ToolsTab = ({
   const [hasValidationErrors, setHasValidationErrors] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const formRefs = useRef<Record<string, DynamicJsonFormRef | null>>({});
+  // Ref to track the latest params, updated inside setParams functional updates
+  const paramsRef = useRef(params);
+  paramsRef.current = params;
   const { toast } = useToast();
   const { copied, setCopied } = useCopy();
 
@@ -275,10 +278,12 @@ const ToolsTab = ({
   );
 
   // Validate all fields against the tool's inputSchema
-  const validateAll = useCallback(() => {
+  // Accepts an optional currentParams parameter to avoid stale closure issues
+  // when called after DynamicJsonForm's validateJson updates params
+  const validateAll = useCallback((currentParams?: Record<string, unknown>) => {
     if (!selectedTool?.inputSchema) return true;
     const schema = selectedTool.inputSchema as JsonSchemaType;
-    const result = validateToolParams(schema, params);
+    const result = validateToolParams(schema, currentParams ?? params);
     const errors: Record<string, string> = {};
     for (const e of result) {
       errors[e.field] = e.message;
@@ -296,6 +301,16 @@ const ToolsTab = ({
         value as JsonSchemaType,
         selectedTool?.inputSchema as JsonSchemaType,
       );
+      // Only initialize fields that have a schema.default.
+      // Required fields without a default stay undefined so that:
+      // 1. Derived validation sees them as empty and disables the button
+      // 2. They don't appear in the submit payload
+      const hasDefault =
+        "default" in resolvedValue &&
+        resolvedValue.default !== undefined;
+      if (!hasDefault) {
+        return [key, undefined];
+      }
       return [
         key,
         generateDefaultValue(
@@ -304,7 +319,7 @@ const ToolsTab = ({
           selectedTool?.inputSchema as JsonSchemaType,
         ),
       ];
-    });
+    }).filter(([, v]) => v !== undefined);
     setParams(Object.fromEntries(params));
     const toolTaskSupport = serverSupportsTaskRequests
       ? getTaskSupport(selectedTool)
@@ -313,9 +328,6 @@ const ToolsTab = ({
 
     // Reset validation errors when switching tools
     setHasValidationErrors(false);
-
-    // Clear form refs for the previous tool
-    formRefs.current = {};
   }, [selectedTool, serverSupportsTaskRequests]);
 
   const hasReservedMetadataEntry = metadataEntries.some(({ key }) => {
@@ -332,6 +344,33 @@ const ToolsTab = ({
     const trimmedKey = key.trim();
     return trimmedKey !== "" && !hasValidMetaName(trimmedKey);
   });
+
+  // Derived field errors: computed from schema + current params on every render
+  // so the button is disabled immediately on untouched forms with required fields.
+  // Only simple types (string, number, integer, boolean) are checked here;
+  // object/array types rendered by DynamicJsonForm have their own ref-based validation
+  // (hasValidationErrors) that is checked in the onClick handler.
+  const derivedFieldErrors = selectedTool?.inputSchema
+    ? validateToolParams(
+        selectedTool.inputSchema as JsonSchemaType,
+        params,
+      ).filter((e) => {
+          // Filter out errors for object/array fields that are handled by DynamicJsonForm
+          const prop = selectedTool.inputSchema.properties?.[e.field];
+          if (!prop) return true;
+          const resolved = resolveRef(
+            prop as JsonSchemaType,
+            selectedTool.inputSchema as JsonSchemaType,
+          );
+          const normalized = normalizeUnionType(resolved);
+          return (
+            normalized.type === "string" ||
+            normalized.type === "number" ||
+            normalized.type === "integer" ||
+            normalized.type === "boolean"
+          );
+        })
+    : [];
 
   const taskSupport = serverSupportsTaskRequests
     ? getTaskSupport(selectedTool)
@@ -626,12 +665,16 @@ const ToolsTab = ({
                                 }}
                                 value={
                                   (params[key] as JsonValue) ??
-                                  generateDefaultValue(prop)
+                                  generateDefaultValue(prop, key, inputSchema)
                                 }
                                 onChange={(newValue: JsonValue) => {
-                                  setParams({
-                                    ...params,
-                                    [key]: newValue,
+                                  setParams((prev) => {
+                                    const next = {
+                                      ...prev,
+                                      [key]: newValue,
+                                    };
+                                    paramsRef.current = next;
+                                    return next;
                                   });
                                   // Check validation after a short delay to allow form to update
                                   setTimeout(checkValidationErrors, 100);
@@ -700,9 +743,13 @@ const ToolsTab = ({
                                 }}
                                 value={params[key] as JsonValue}
                                 onChange={(newValue: JsonValue) => {
-                                  setParams({
-                                    ...params,
-                                    [key]: newValue,
+                                  setParams((prev) => {
+                                    const next = {
+                                      ...prev,
+                                      [key]: newValue,
+                                    };
+                                    paramsRef.current = next;
+                                    return next;
                                   });
                                   // Check validation after a short delay to allow form to update
                                   setTimeout(checkValidationErrors, 100);
@@ -954,8 +1001,8 @@ const ToolsTab = ({
                     // Validate JSON inputs before calling tool
                     if (checkValidationErrors(true)) return;
 
-                    // Validate required fields and types
-                    const fieldErrors = validateAll();
+                    // Validate required fields and types using latest params
+                    const fieldErrors = validateAll(paramsRef.current);
                     if (Object.keys(fieldErrors).length > 0) return;
 
                     try {
@@ -976,7 +1023,7 @@ const ToolsTab = ({
                       }, {});
                       await callTool(
                         selectedTool.name,
-                        params,
+                        paramsRef.current,
                         Object.keys(metadata).length ? metadata : undefined,
                         runAsTask,
                       );
@@ -988,6 +1035,7 @@ const ToolsTab = ({
                     isToolRunning ||
                     isPollingTask ||
                     hasValidationErrors ||
+                    derivedFieldErrors.length > 0 ||
                     Object.keys(fieldErrors).length > 0 ||
                     hasReservedMetadataEntry ||
                     hasInvalidMetaPrefixEntry ||
