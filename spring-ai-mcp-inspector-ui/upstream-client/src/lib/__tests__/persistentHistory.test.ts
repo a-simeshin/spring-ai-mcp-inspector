@@ -7,6 +7,7 @@ import {
   appendHistory,
   clearHistory,
   clearAllHistory,
+  readStore,
 } from "../persistentHistory";
 import type { HistoryEntry } from "../types/historyEntry";
 
@@ -142,8 +143,7 @@ describe("persistentHistory", () => {
 
     // [spring-ai-mcp-inspector PATCH] Truncation: request/response strings
     // are truncated to 10 KB before storage (#121). Verify at the raw
-    // localStorage level because the truncated string may be invalid JSON
-    // and would be filtered out by isValidEntry on load.
+    // localStorage level that the result is valid JSON and survives reload.
     it("truncates request and response strings to 10 KB with marker", () => {
       const longRequest = JSON.stringify({
         method: "tools/call",
@@ -160,12 +160,20 @@ describe("persistentHistory", () => {
       // Read raw localStorage to verify truncation at storage level
       const raw = JSON.parse(localStorage.getItem(HISTORY_KEY)!);
       const stored = raw.byConnection["conn-1"][0];
+      // Stored value must be valid JSON (parseable)
+      expect(() => JSON.parse(stored.request)).not.toThrow();
+      expect(() => JSON.parse(stored.response)).not.toThrow();
+      // Stored value must be shorter than original
+      expect(stored.request.length).toBeLessThan(longRequest.length);
+      expect(stored.response.length).toBeLessThan(longResponse.length);
+      // Stored value must be within the 10 KB limit
       expect(stored.request.length).toBeLessThanOrEqual(10 * 1024);
-      expect(stored.request.length).toBe(10 * 1024);
-      expect(stored.request.endsWith("...[truncated]")).toBe(true);
       expect(stored.response.length).toBeLessThanOrEqual(10 * 1024);
-      expect(stored.response.length).toBe(10 * 1024);
-      expect(stored.response.endsWith("...[truncated]")).toBe(true);
+      // Verify the entry survives loadHistory
+      const loaded = loadHistory("conn-1");
+      expect(loaded).toHaveLength(1);
+      expect(() => JSON.parse(loaded[0].request)).not.toThrow();
+      expect(() => JSON.parse(loaded[0].response!)).not.toThrow();
     });
 
     // [spring-ai-mcp-inspector PATCH] Truncation: entries under 10 KB
@@ -191,11 +199,12 @@ describe("persistentHistory", () => {
       // Read raw localStorage to verify undefined response is preserved
       const raw = JSON.parse(localStorage.getItem(HISTORY_KEY)!);
       const stored = raw.byConnection["conn-1"];
-      // Find the entry with the truncated request
-      expect(stored.length).toBeGreaterThanOrEqual(1);
-      const entry = stored.find((e: { request: string }) => e.request.length === 10 * 1024);
-      expect(entry).toBeDefined();
-      expect(entry.response).toBeUndefined();
+      expect(stored).toHaveLength(1);
+      expect(stored[0].response).toBeUndefined();
+      // Verify the entry survives loadHistory
+      const loaded = loadHistory("conn-1");
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0].response).toBeUndefined();
     });
   });
 
@@ -230,6 +239,19 @@ describe("persistentHistory", () => {
       clearAllHistory();
       expect(localStorage.getItem(HISTORY_KEY)).toBeNull();
       expect(loadHistory("conn-1")).toEqual([]);
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Multi-bucket Clear All regression (#121).
+    it("removes the key when multiple buckets exist", () => {
+      appendHistory("conn-1", makeEntry({ at: 100 }));
+      appendHistory("conn-2", makeEntry({ at: 200 }));
+      appendHistory("conn-3", makeEntry({ at: 300 }));
+      expect(Object.keys(readStore().byConnection)).toHaveLength(3);
+      clearAllHistory();
+      expect(localStorage.getItem(HISTORY_KEY)).toBeNull();
+      expect(loadHistory("conn-1")).toEqual([]);
+      expect(loadHistory("conn-2")).toEqual([]);
+      expect(loadHistory("conn-3")).toEqual([]);
     });
   });
 

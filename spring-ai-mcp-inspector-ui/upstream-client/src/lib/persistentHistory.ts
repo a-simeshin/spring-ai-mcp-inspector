@@ -16,7 +16,7 @@ const TRUNCATION_MARKER = "...[truncated]";
  * Read the full history store from localStorage.
  * Returns empty store on corrupt data.
  */
-function readStore(): HistoryStoreV1 {
+export function readStore(): HistoryStoreV1 {
   const raw = localStorage.getItem(HISTORY_KEY);
   if (!raw) {
     return { schemaVersion: 1, byConnection: {} };
@@ -198,10 +198,48 @@ export function appendHistory(
 
   // Truncate request and response to MAX_BODY_LENGTH, appending a marker
   // when truncation occurs so the UI shows the body was cut.
-  const truncate = (s: string): string =>
-    s.length > MAX_BODY_LENGTH
-      ? s.slice(0, MAX_BODY_LENGTH - TRUNCATION_MARKER.length) + TRUNCATION_MARKER
-      : s;
+  // Parse the JSON and truncate inner content so the result remains valid JSON.
+  const truncate = (s: string): string => {
+    if (s.length <= MAX_BODY_LENGTH) return s;
+    const cut = s.slice(0, MAX_BODY_LENGTH - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
+    try {
+      JSON.parse(cut);
+      return cut;
+    } catch {
+      // Invalid JSON after truncation: parse, truncate inner content, re-stringify.
+      try {
+        const obj = JSON.parse(s);
+        // Truncate large string fields inside the parsed structure
+        const truncateField = (val: unknown): unknown => {
+          if (typeof val === "string" && val.length > MAX_BODY_LENGTH / 2) {
+            return val.slice(0, MAX_BODY_LENGTH / 2 - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
+          }
+          if (Array.isArray(val)) {
+            return val.map(truncateField);
+          }
+          if (val !== null && typeof val === "object") {
+            const result: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+              result[k] = truncateField(v);
+            }
+            return result;
+          }
+          return val;
+        };
+        const truncated = truncateField(obj);
+        const result = JSON.stringify(truncated);
+        if (result.length <= MAX_BODY_LENGTH) return result;
+        // Still too long: return a minimal valid object with marker
+        return JSON.stringify({
+          jsonrpc: "2.0",
+          truncated: true,
+        });
+      } catch {
+        // Not valid JSON at all; return truncated string as-is
+        return cut;
+      }
+    }
+  };
   const truncated: HistoryEntry = {
     request: truncate(entry.request),
     response: entry.response !== undefined

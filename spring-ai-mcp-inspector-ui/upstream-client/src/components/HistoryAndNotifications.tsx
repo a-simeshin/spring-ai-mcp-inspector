@@ -4,6 +4,8 @@ import { ServerNotification } from "@modelcontextprotocol/sdk/types.js";
 import { useState } from "react";
 import JsonView from "./JsonView";
 import { Button } from "@/components/ui/button";
+// [spring-ai-mcp-inspector PATCH] Check global history store for Clear All button enablement (#121).
+import { readStore } from "@/lib/persistentHistory";
 
 const HistoryAndNotifications = ({
   requestHistory,
@@ -18,6 +20,15 @@ const HistoryAndNotifications = ({
   onClearAllHistory?: () => void;
   onClearNotifications?: () => void;
 }) => {
+  // [spring-ai-mcp-inspector PATCH] Enable Clear All when any global history exists, not just current bucket (#121).
+  const hasAnyGlobalHistory = (() => {
+    try {
+      const store = readStore();
+      return Object.keys(store.byConnection).length > 0;
+    } catch {
+      return false;
+    }
+  })();
   const [expandedRequests, setExpandedRequests] = useState<{
     [key: number]: boolean;
   }>({});
@@ -43,7 +54,7 @@ const HistoryAndNotifications = ({
               variant="outline"
               size="sm"
               onClick={onClearAllHistory}
-              disabled={requestHistory.length === 0}
+              disabled={!hasAnyGlobalHistory}
             >
               Clear All
             </Button>
@@ -84,7 +95,9 @@ const HistoryAndNotifications = ({
                       {requestHistory.length - index}.{" "}
                       {(() => {
                         try {
-                          return JSON.parse(request.request).method;
+                          const parsed = JSON.parse(request.request);
+                          // [spring-ai-mcp-inspector PATCH] Handle truncated JSON stored as string value (#121).
+                          return typeof parsed === "string" ? parsed : parsed.method;
                         } catch {
                           return "(invalid request)";
                         }

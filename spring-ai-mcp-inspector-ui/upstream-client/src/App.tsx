@@ -435,6 +435,7 @@ const App = () => {
     mcpClient,
     requestHistory,
     clearRequestHistory,
+    clearAllRequestHistory,
     makeRequest,
     cancelTask: cancelMcpTask,
     listTasks: listMcpTasks,
@@ -2020,7 +2021,7 @@ const handleSaveConnection = useCallback(
               onClearAllHistory={() => {
                 if (window.confirm("Clear all history across all connections? This cannot be undone.")) {
                   clearAllHistory();
-                  clearRequestHistory();
+                  clearAllRequestHistory();
                 }
               }}
               onClearNotifications={handleClearNotifications}

@@ -1442,6 +1442,13 @@ export function useConnection({
     clearHistory(connectionId);
   };
 
+  // [spring-ai-mcp-inspector PATCH] Clear all history: React state only, no
+  // per-connection persistence (clearAllHistory already removed the key).
+  const clearAllRequestHistory = () => {
+    setRequestHistory([]);
+    setServerImplementation(null);
+  };
+
   return {
     connectionStatus,
     connectionError,
@@ -1450,6 +1457,7 @@ export function useConnection({
     mcpClient,
     requestHistory,
     clearRequestHistory,
+    clearAllRequestHistory,
     makeRequest,
     cancelTask,
     listTasks,
