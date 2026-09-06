@@ -51,6 +51,9 @@ import CustomHeaders from "./CustomHeaders";
 import { CustomHeaders as CustomHeadersType } from "@/lib/types/customHeaders";
 import { useToast } from "../lib/hooks/useToast";
 import IconDisplay, { WithIcons } from "./IconDisplay";
+// [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+import type { SavedConnection } from "@/lib/types/savedConnection";
+import { Bookmark, Trash2, Plus } from "lucide-react";
 // [spring-ai-mcp-inspector PATCH] validateServerUrl for client-side URL format validation (see NOTICE.d/url-validation.txt).
 import { validateRedirectUrl, validateServerUrl } from "@/utils/urlValidation";
 
@@ -88,6 +91,12 @@ interface SidebarProps {
   serverImplementation?:
     | (WithIcons & { name?: string; version?: string; websiteUrl?: string })
     | null;
+  // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+  savedConnections: SavedConnection[];
+  activeConnectionId?: string;
+  onSaveConnection: (name: string) => SavedConnection | undefined;
+  onDeleteConnection: (id: string) => void;
+  onSelectConnection: (connection: SavedConnection) => void;
 }
 
 const Sidebar = ({
@@ -121,6 +130,11 @@ const Sidebar = ({
   connectionType,
   setConnectionType,
   serverImplementation,
+  savedConnections,
+  activeConnectionId,
+  onSaveConnection,
+  onDeleteConnection,
+  onSelectConnection,
 }: SidebarProps) => {
   const [theme, setTheme] = useTheme();
   const [showEnvVars, setShowEnvVars] = useState(false);
@@ -134,6 +148,10 @@ const Sidebar = ({
   const [urlError, setUrlError] = useState<string | null>(null);
   const [urlTouched, setUrlTouched] = useState(false);
   const { toast } = useToast();
+  // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+  const [showSavedConnections, setShowSavedConnections] = useState(true);
+  const [saveName, setSaveName] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   const connectionTypeTip =
     "Connect to server directly (requires CORS config on server) or via MCP Inspector Proxy";
@@ -308,6 +326,167 @@ const Sidebar = ({
                 <SelectItem value="streamable-http">Streamable HTTP</SelectItem>
               </SelectContent>
             </Select>
+          </div>
+
+          {/* [spring-ai-mcp-inspector PATCH] Saved connections (#121). */}
+          <div className="space-y-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowSavedConnections(!showSavedConnections)}
+              className="flex items-center w-full"
+              aria-expanded={showSavedConnections}
+            >
+              {showSavedConnections ? (
+                <ChevronDown className="w-4 h-4 mr-2" />
+              ) : (
+                <ChevronRight className="w-4 h-4 mr-2" />
+              )}
+              <Bookmark className="w-4 h-4 mr-2" />
+              Saved Connections
+            </Button>
+            {showSavedConnections && (
+              <div className="space-y-2">
+                {savedConnections.length === 0 ? (
+                  <p className="text-xs text-muted-foreground px-1">
+                    No saved connections yet.
+                  </p>
+                ) : (
+                  <div className="space-y-1 max-h-48 overflow-y-auto">
+                    {[...savedConnections]
+                      .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+                      .map((conn) => (
+                        <div
+                          key={conn.id}
+                          className={`flex items-center gap-2 p-2 rounded cursor-pointer text-sm hover:bg-accent ${
+                            activeConnectionId === conn.id
+                              ? "bg-accent border border-border"
+                              : "border border-transparent"
+                          }`}
+                          onClick={() => onSelectConnection(conn)}
+                          data-testid={`saved-connection-${conn.id}`}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium truncate">
+                              {conn.name}
+                            </div>
+                            <div className="text-xs text-muted-foreground flex items-center gap-1">
+                              <span className="px-1 rounded bg-muted text-[10px] uppercase">
+                                {conn.transport === "streamable-http"
+                                  ? "HTTP"
+                                  : conn.transport.toUpperCase()}
+                              </span>
+                              {conn.lastUsedAt > 0 && (
+                                <span>
+                                  {new Date(
+                                    conn.lastUsedAt,
+                                  ).toLocaleDateString()}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-destructive"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteConnection(conn.id);
+                            }}
+                            title="Delete saved connection"
+                            data-testid={`delete-saved-connection-${conn.id}`}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      ))}
+                  </div>
+                )}
+                {isSaving ? (
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Connection name"
+                      value={saveName}
+                      onChange={(e) => setSaveName(e.target.value)}
+                      className="font-mono text-sm h-8"
+                      autoFocus
+                      data-testid="save-connection-name-input"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && saveName.trim()) {
+                          const result = onSaveConnection(saveName.trim());
+                          if (result) {
+                            setSaveName("");
+                            setIsSaving(false);
+                          }
+                        }
+                        if (e.key === "Escape") {
+                          setSaveName("");
+                          setIsSaving(false);
+                        }
+                      }}
+                    />
+                    <Button
+                      size="sm"
+                      variant="default"
+                      className="h-8"
+                      disabled={!saveName.trim()}
+                      onClick={() => {
+                        if (saveName.trim()) {
+                          const result = onSaveConnection(saveName.trim());
+                          if (result) {
+                            setSaveName("");
+                            setIsSaving(false);
+                          }
+                        }
+                      }}
+                      data-testid="confirm-save-connection"
+                    >
+                      Save
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-8"
+                      onClick={() => {
+                        setSaveName("");
+                        setIsSaving(false);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => {
+                      setSaveName("");
+                      setIsSaving(true);
+                    }}
+                    data-testid="save-current-connection"
+                  >
+                    <Plus className="w-3 h-3 mr-2" />
+                    Save Current
+                  </Button>
+                )}
+                {/* Secrets warning: show when customHeaders has enabled Authorization header */}
+                {customHeaders.some(
+                  (h) =>
+                    h.enabled &&
+                    h.name.toLowerCase() === "authorization" &&
+                    h.value.trim(),
+                ) && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 px-1">
+                    Secrets are stored unencrypted in this browser profile.
+                  </p>
+                )}
+                {Object.values(env).some((v) => v.trim()) && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 px-1">
+                    Secrets are stored unencrypted in this browser profile.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           {transportType === "stdio" ? (
