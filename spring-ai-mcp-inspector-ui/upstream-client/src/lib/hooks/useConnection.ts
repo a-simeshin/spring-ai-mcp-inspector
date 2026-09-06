@@ -85,6 +85,16 @@ import { InspectorConfig } from "../configurationTypes";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CustomHeaders } from "../types/customHeaders";
 import { resolveRefsInMessage } from "@/utils/schemaUtils";
+// [spring-ai-mcp-inspector PATCH] Persistent history (#121).
+import {
+  appendHistory,
+  clearHistory,
+  loadHistory,
+} from "../persistentHistory";
+
+// [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+const MAX_AUTO_RETRY_ATTEMPTS = 5;
+const AUTO_RETRY_DELAYS = [1000, 2000, 4000, 8000, 16000];
 
 interface UseConnectionOptions {
   transportType: "stdio" | "sse" | "streamable-http";
@@ -110,6 +120,8 @@ interface UseConnectionOptions {
   defaultLoggingLevel?: LoggingLevel;
   serverImplementation?: Implementation;
   metadata?: Record<string, string>;
+  // [spring-ai-mcp-inspector PATCH] Persistent history connection id (#121).
+  connectionId?: string;
 }
 
 export function useConnection({
@@ -130,6 +142,8 @@ export function useConnection({
   getRoots,
   defaultLoggingLevel,
   metadata = {},
+  // [spring-ai-mcp-inspector PATCH] Persistent history (#121).
+  connectionId = "ephemeral",
 }: UseConnectionOptions) {
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
@@ -153,6 +167,17 @@ export function useConnection({
   );
   const [serverImplementation, setServerImplementation] =
     useState<Implementation | null>(null);
+
+  // [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectAutoRef = useRef(false);
+  const reconnectAbortRef = useRef(false);
+  const [reconnectTrigger, setReconnectTrigger] = useState(0);
+  // Track the current transport and client in refs so unmount cleanup
+  // can access the latest values without stale closures.
+  const clientTransportRef = useRef<Transport | null>(null);
+  const mcpClientRef = useRef<Client | null>(null);
 
   type ReceiverTaskRecord = {
     task: Task;
@@ -199,14 +224,23 @@ export function useConnection({
     saveScopeToSessionStorage(sseUrl, oauthScope);
   }, [oauthScope, sseUrl]);
 
+  // [spring-ai-mcp-inspector PATCH] Load persistent history on connection change (#121).
+  useEffect(() => {
+    setRequestHistory(loadHistory(connectionId));
+  }, [connectionId]);
+
   const pushHistory = (request: object, response?: object) => {
-    setRequestHistory((prev) => [
-      ...prev,
-      {
-        request: JSON.stringify(request),
-        response: response !== undefined ? JSON.stringify(response) : undefined,
-      },
-    ]);
+    const entry = {
+      request: JSON.stringify(request),
+      response: response !== undefined ? JSON.stringify(response) : undefined,
+    };
+    setRequestHistory((prev) => [...prev, entry]);
+    // Persist to localStorage
+    appendHistory(connectionId, {
+      request: entry.request,
+      response: entry.response,
+      at: Date.now(),
+    });
   };
 
   const makeRequest = async <T extends AnySchema>(
@@ -495,6 +529,7 @@ export function useConnection({
       CLIENT_IDENTITY,
       clientCapabilities,
     );
+    mcpClientRef.current = client;
 
     // Only check proxy health for proxy connections
     if (connectionType === "proxy") {
@@ -841,6 +876,47 @@ export function useConnection({
         }
 
         setClientTransport(transport);
+        clientTransportRef.current = transport;
+
+        // [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+        // Detect remote disconnection via transport.onclose/onerror,
+        // switching to disconnected-remote status so the UI shows the
+        // reconnect banner. Auto-retry is handled by the setTimeout
+        // chain in the reconnect effect.
+        // Preserve the SDK's own callbacks (installed by client.connect)
+        // so its cleanup path (pending request rejection, transport state
+        // reset) still runs before the UI handler.
+        const handleDisconnect = () => {
+          setConnectionStatus((prev) => {
+            if (prev === "connected" || prev === "disconnected-remote") {
+              return "disconnected-remote";
+            }
+            return prev;
+          });
+          // Bump the reconnect trigger so the auto-retry effect re-fires
+          // even when the status value does not change (already
+          // disconnected-remote from a previous attempt).
+          if (reconnectAutoRef.current) {
+            setReconnectTrigger((n) => n + 1);
+          }
+        };
+        const sdkOnClose = transport.onclose;
+        transport.onclose = () => {
+          sdkOnClose?.();
+          handleDisconnect();
+        };
+        const sdkOnError = transport.onerror;
+        transport.onerror = (error) => {
+          sdkOnError?.(error);
+          handleDisconnect();
+        };
+        // Cancel any pending auto-retry on a successful reconnect
+        if (reconnectTimerRef.current !== null) {
+          clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = null;
+        }
+        reconnectAttemptRef.current = 0;
+        reconnectAbortRef.current = false;
 
         capabilities = client.getServerCapabilities();
         const serverInfo = client.getServerVersion();
@@ -869,6 +945,8 @@ export function useConnection({
               "Please enter the session token from the proxy server console in the Configuration settings.",
             variant: "destructive",
           });
+          // Abort the auto-retry chain: proxy auth errors are non-retriable.
+          reconnectAbortRef.current = true;
           setConnectionStatus("error");
           return;
         }
@@ -880,10 +958,12 @@ export function useConnection({
         if (isConnectionAuthError(error)) {
           // [spring-ai-mcp-inspector PATCH] OAuth already failed
           // (handleAuthError returned false above). Don't return silently
-          // — set the connection error so the UI shows an unauthorized
+          // set the connection error so the UI shows an unauthorized
           // banner instead of a blank disconnected state, giving the user
           // a path forward (custom auth header, token from server log).
           // See NOTICE.d/connect-401-banner.txt.
+          // Also abort the auto-retry chain: auth errors are non-retriable.
+          reconnectAbortRef.current = true;
           setConnectionError(connectionFailureFromError(error));
           setConnectionStatus("error");
           return;
@@ -1227,6 +1307,74 @@ export function useConnection({
     }
   };
 
+  // [spring-ai-mcp-inspector PATCH] Auto-retry reconnect with exponential backoff
+  // when the server disconnects remotely and auto-retry is enabled (#121).
+  useEffect(() => {
+    if (connectionStatus !== "disconnected-remote" || !reconnectAutoRef.current) {
+      return;
+    }
+    // Don't start a new chain if one is already pending
+    if (reconnectTimerRef.current !== null) {
+      return;
+    }
+    const attempt = reconnectAttemptRef.current;
+    if (attempt >= MAX_AUTO_RETRY_ATTEMPTS || reconnectAbortRef.current) {
+      return;
+    }
+    const delay = AUTO_RETRY_DELAYS[attempt] ?? AUTO_RETRY_DELAYS[AUTO_RETRY_DELAYS.length - 1];
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null;
+      reconnectAttemptRef.current++;
+      void connect().then(() => {
+        // After the connect attempt completes, continue the retry chain
+        // if the connection is still not established and auto-retry is
+        // still active and we haven't exhausted all attempts.
+        // Auth errors set reconnectAbortRef.current = true which is
+        // checked by the effect at line 1313 to stop further retries.
+        if (reconnectAutoRef.current && !reconnectAbortRef.current &&
+            attempt < MAX_AUTO_RETRY_ATTEMPTS) {
+          setConnectionStatus((prev) => {
+            if (prev === "connected") return prev;
+            // Bump reconnectTrigger so the effect re-arms even when
+            // the connectionStatus value did not change (connect()
+            // caught its own error, set status to 'error', then this
+            // functional update sets it back to 'disconnected-remote'
+            // in the same React batch, leaving the net dependency
+            // value unchanged).
+            setReconnectTrigger((n) => n + 1);
+            return "disconnected-remote";
+          });
+        }
+      });
+    }, delay);
+    return () => {
+      if (reconnectTimerRef.current !== null) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionStatus, reconnectTrigger]);
+
+  // [spring-ai-mcp-inspector PATCH] Unmount cleanup: remove transport
+  // handlers and close the client if the component unmounts while
+  // connected (#121).
+  useEffect(() => {
+    return () => {
+      const transport = clientTransportRef.current;
+      const client = mcpClientRef.current;
+      if (transport) {
+        transport.onclose = undefined;
+        transport.onerror = undefined;
+        clientTransportRef.current = null;
+      }
+      if (client) {
+        void client.close();
+        mcpClientRef.current = null;
+      }
+    };
+  }, []);
+
   const cancelTask = async (taskId: string) => {
     return makeRequest(
       {
@@ -1248,6 +1396,21 @@ export function useConnection({
   };
 
   const disconnect = async () => {
+    // [spring-ai-mcp-inspector PATCH] Cancel any pending auto-retry (#121).
+    if (reconnectTimerRef.current !== null) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    reconnectAbortRef.current = true;
+    reconnectAutoRef.current = false;
+    reconnectAttemptRef.current = 0;
+    // Remove transport close/error hooks so the intentional disconnect
+    // does not trigger disconnected-remote.
+    if (clientTransport) {
+      clientTransport.onclose = undefined;
+      clientTransport.onerror = undefined;
+    }
+
     // Clear any receiver-side tasks + cleanup timers
     receiverTasksRef.current.forEach((record) => {
       if (record.cleanupTimeoutId) {
@@ -1275,6 +1438,15 @@ export function useConnection({
   const clearRequestHistory = () => {
     setRequestHistory([]);
     setServerImplementation(null);
+    // [spring-ai-mcp-inspector PATCH] Clear persistent history (#121).
+    clearHistory(connectionId);
+  };
+
+  // [spring-ai-mcp-inspector PATCH] Clear all history: React state only, no
+  // per-connection persistence (clearAllHistory already removed the key).
+  const clearAllRequestHistory = () => {
+    setRequestHistory([]);
+    setServerImplementation(null);
   };
 
   return {
@@ -1285,12 +1457,29 @@ export function useConnection({
     mcpClient,
     requestHistory,
     clearRequestHistory,
+    clearAllRequestHistory,
     makeRequest,
     cancelTask,
     listTasks,
     sendNotification,
     handleCompletion,
     completionsSupported,
+    // [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+    setAutoReconnect: (enabled: boolean) => {
+      reconnectAutoRef.current = enabled;
+      if (!enabled) {
+        reconnectAttemptRef.current = 0;
+        if (reconnectTimerRef.current !== null) {
+          clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = null;
+        }
+      } else {
+        // Bump the trigger to re-arm the auto-retry effect even if
+        // connectionStatus hasn't changed (e.g. toggle enabled while
+        // already disconnected-remote).
+        setReconnectTrigger((prev) => prev + 1);
+      }
+    },
     connect,
     disconnect,
   };

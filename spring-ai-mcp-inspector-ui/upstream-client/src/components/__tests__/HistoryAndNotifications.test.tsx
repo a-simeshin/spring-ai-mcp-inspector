@@ -286,4 +286,4 @@ describe("HistoryAndNotifications", () => {
     // Notifications should now be empty
     expect(screen.getByText("No notifications yet")).toBeTruthy();
   });
-});
+  });

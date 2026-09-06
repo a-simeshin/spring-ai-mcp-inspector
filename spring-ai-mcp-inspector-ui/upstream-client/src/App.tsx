@@ -45,6 +45,7 @@ import React, {
   useState,
 } from "react";
 import { useConnection } from "./lib/hooks/useConnection";
+import { clearAllHistory } from "./lib/persistentHistory";
 import {
   useDraggablePane,
   useDraggableSidebar,
@@ -109,6 +110,16 @@ import {
   CustomHeaders,
   migrateFromLegacyAuth,
 } from "./lib/types/customHeaders";
+// [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+import type { SavedConnection } from "./lib/types/savedConnection";
+import {
+  loadSavedConnections,
+  saveConnection,
+  deleteSavedConnection,
+  findConnectionByName,
+  stripSecrets,
+  touchSavedConnection,
+} from "./lib/savedConnections";
 import MetadataTab from "./components/MetadataTab";
 
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
@@ -408,6 +419,14 @@ const App = () => {
     selectedTaskRef.current = selectedTask;
   }, [selectedTask]);
 
+  // [spring-ai-mcp-inspector PATCH] Saved connections state (#121).
+  const [savedConnections, setSavedConnections] = useState<SavedConnection[]>(
+    () => loadSavedConnections(),
+  );
+  const [activeConnectionId, setActiveConnectionId] = useState<
+    string | undefined
+  >(undefined);
+
   const {
     connectionStatus,
     connectionError,
@@ -416,6 +435,7 @@ const App = () => {
     mcpClient,
     requestHistory,
     clearRequestHistory,
+    clearAllRequestHistory,
     makeRequest,
     cancelTask: cancelMcpTask,
     listTasks: listMcpTasks,
@@ -424,6 +444,8 @@ const App = () => {
     completionsSupported,
     connect: connectMcpServer,
     disconnect: disconnectMcpServer,
+    // [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+    setAutoReconnect,
   } = useConnection({
     transportType,
     command,
@@ -436,6 +458,8 @@ const App = () => {
     oauthScope,
     config,
     connectionType,
+    // [spring-ai-mcp-inspector PATCH] Persistent history connection id (#121).
+    connectionId: activeConnectionId ?? "ephemeral",
     onNotification: (notification) => {
       setNotifications((prev) => [...prev, notification as ServerNotification]);
 
@@ -513,6 +537,107 @@ const App = () => {
     defaultLoggingLevel: logLevel,
     metadata,
   });
+
+const handleSaveConnection = useCallback(
+    (name: string): SavedConnection | undefined => {
+      const draft = stripSecrets({
+        name,
+        transport: transportType,
+        connectionType,
+        url: transportType !== "stdio" ? sseUrl : undefined,
+        command: transportType === "stdio" ? command : undefined,
+        args: transportType === "stdio" ? args : undefined,
+        env: transportType === "stdio" ? env : undefined,
+        customHeaders,
+      });
+      // [spring-ai-mcp-inspector PATCH] Check for duplicate name before
+      // saving. The caller expects SavedConnection | undefined and
+      // keeps the save dialog open when undefined is returned.
+      const existing = findConnectionByName(name);
+      let targetId = activeConnectionId;
+      if (existing && existing.id !== targetId) {
+        if (
+          !window.confirm(
+            `Connection "${name}" already exists. Overwrite?`,
+          )
+        ) {
+          return undefined;
+        }
+        targetId = existing.id;
+      }
+      const saved = saveConnection(draft, targetId);
+      setActiveConnectionId(saved.id);
+      setSavedConnections(loadSavedConnections());
+      return saved;
+    },
+    [
+      transportType,
+      connectionType,
+      sseUrl,
+      command,
+      args,
+      env,
+      customHeaders,
+      activeConnectionId,
+    ],
+  );
+
+  const handleDeleteConnection = useCallback(
+    (id: string) => {
+      deleteSavedConnection(id);
+      if (activeConnectionId === id) {
+        setActiveConnectionId(undefined);
+      }
+      setSavedConnections(loadSavedConnections());
+    },
+    [activeConnectionId],
+  );
+
+  // [spring-ai-mcp-inspector PATCH] Saved connections: reset fields
+  // absent from the entry so stale values (e.g. stdio fields leaking
+  // into an sse entry) don't persist across selections.
+  const handleSelectConnection = useCallback(
+    (connection: SavedConnection) => {
+      setTransportType(connection.transport);
+      if (connection.connectionType) {
+        setConnectionType(connection.connectionType);
+      }
+      if (connection.url !== undefined) {
+        setSseUrl(connection.url);
+      } else {
+        setSseUrl("");
+      }
+      if (connection.command !== undefined) {
+        setCommand(connection.command);
+      } else {
+        setCommand("");
+      }
+      if (connection.args !== undefined) {
+        setArgs(connection.args);
+      } else {
+        setArgs("");
+      }
+      if (connection.env !== undefined) {
+        setEnv(connection.env);
+      } else {
+        setEnv({});
+      }
+      if (connection.customHeaders) {
+        setCustomHeaders(connection.customHeaders);
+      }
+      setActiveConnectionId(connection.id);
+      touchSavedConnection(connection.id);
+    },
+    [
+      setTransportType,
+      setConnectionType,
+      setSseUrl,
+      setCommand,
+      setArgs,
+      setEnv,
+      setCustomHeaders,
+    ],
+  );
 
   useEffect(() => {
     if (serverCapabilities) {
@@ -1435,6 +1560,14 @@ const App = () => {
           connectionType={connectionType}
           setConnectionType={setConnectionType}
           serverImplementation={serverImplementation}
+          // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+          savedConnections={savedConnections}
+          activeConnectionId={activeConnectionId}
+          onSaveConnection={handleSaveConnection}
+          onDeleteConnection={handleDeleteConnection}
+          onSelectConnection={handleSelectConnection}
+          // [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+          setAutoReconnect={setAutoReconnect}
         />
         {!isCompactLayout && (
           <div
@@ -1885,6 +2018,12 @@ const App = () => {
               requestHistory={requestHistory}
               serverNotifications={notifications}
               onClearHistory={clearRequestHistory}
+              onClearAllHistory={() => {
+                if (window.confirm("Clear all history across all connections? This cannot be undone.")) {
+                  clearAllHistory();
+                  clearAllRequestHistory();
+                }
+              }}
               onClearNotifications={handleClearNotifications}
             />
           </div>

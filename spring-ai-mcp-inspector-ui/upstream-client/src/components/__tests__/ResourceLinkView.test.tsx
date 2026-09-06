@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] em-dash replaced with hyphen for pre-commit gate.
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { describe, it, jest } from "@jest/globals";
@@ -23,7 +24,7 @@ jest.mock("../JsonView", () => {
   };
 });
 
-describe("ResourceLinkView — multi-item ReadResourceResult", () => {
+describe("ResourceLinkView - multi-item ReadResourceResult", () => {
   beforeEach(() => {
     mockMediaContentView.mockClear();
   });

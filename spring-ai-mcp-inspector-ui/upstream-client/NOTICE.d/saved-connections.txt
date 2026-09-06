@@ -1,0 +1,70 @@
+src/lib/types/savedConnection.ts + src/lib/savedConnections.ts +
+ src/components/Sidebar.tsx + src/App.tsx - persist connection
+ configurations (transport type, URL/command, args, custom headers,
+ env vars) in localStorage under a single schema-versioned key
+ `mcp-inspector.savedConnections.v1`. Users can save the current form
+ state under a name, recall it with one click to fill all form fields,
+ and delete saved entries. The list is sorted by last-used date, caps
+ at 20 entries, and shows a security warning when the saved
+ configuration includes Authorization headers or env vars. Upstream
+ had no save/restore feature at all: each page reload or server
+ restart required full manual re-entry of the connection parameters.
+ Local fix: new `SavedConnection` type in `src/lib/types/`,
+ `savedConnections.ts` storage layer with CRUD, `loadSavedConnections`,
+ `saveConnection`, `deleteSavedConnection`, `touchSavedConnection`,
+ and `migrateSavedConnections` for schema versioning; the Sidebar
+ renders a collapsible "Saved Connections" section with a "Save
+ Current" button and click-to-fill entries; App.tsx wires the state.
+ Covered by `src/lib/__tests__/savedConnections.test.ts` (34 unit
+ tests: CRUD, eviction, duplicate name, findConnectionByName,
+ isValidConnection, filterValidConnections, corrupt-data migration,
+ edge cases).
+
+REVIEW FIXES (PR #149 review findings):
+- `saveConnection` no longer silently overwrites duplicate-name
+  entries. Added `findConnectionByName(name)` for the UI layer to
+  check before saving. App.tsx's `handleSaveConnection` now prompts
+  with `window.confirm` for overwrite-or-cancel when the name is
+  taken with a different id (including when an entry is selected).
+  Sidebar.tsx handles the `undefined` return (cancel) by keeping the
+  save dialog open.
+- Added `isValidConnection(c)` runtime type guard and
+  `filterValidConnections(entries)` to filter out corrupt persisted
+  entries (null, missing fields, wrong types) during migration
+  and load. Previously `connections:[null]` would pass through
+  `as SavedConnection[]` and break the UI on render.
+- `isValidConnection` now validates nested header objects (name,
+  value, enabled types), env keys/values (string values), and
+  transport-specific optional fields (url, command, args).
+- REVISED: `stripSecrets` now clears ALL custom header values (not
+  just known secret header names). Previously only `Authorization`,
+  `Proxy-Authorization`, and `X-API-Key` were filtered out, which
+  allowed arbitrary headers like `X-Token` and `Cookie` to persist
+  in plaintext. The new approach strips every header value to empty
+  string (names and enabled state preserved), matching the env
+  pattern. This is the only sound approach because ANY header can
+  carry a secret. On restore, the user re-enters values.
+- Secret headers are stripped on save: `stripSecrets(draft)` clears
+  all custom header values (names preserved with empty string) and
+  clears env values (keys preserved with empty string). Secrets are
+  never persisted in localStorage. On restore, the user re-enters
+  secrets.
+- `handleSelectConnection` now resets fields absent from the entry
+  (stdio fields no longer leak into sse entries) and calls
+  `touchSavedConnection` so sorting by last-used works correctly.
+- Duplicate-name check in `handleSaveConnection` now also triggers
+  when `activeConnectionId` is set (not only when unset).
+- Added App-level integration tests covering the full save flow:
+  save with localStorage verification, duplicate-name confirm/cancel
+  with both entries preserved, and select-to-populate form fields.
+  Regression tests verify that arbitrary header values (X-Token,
+  Cookie, X-Session-Id) are stripped on save.
+
+STORAGE KEY ALIGNMENT WITH #89 (auth profiles):
+- PR #89 (NOTICE.d/auth-profiles.txt D10) purges six legacy
+  secret-bearing localStorage keys on first mount.
+- `mcp-inspector.savedConnections.v1` is intentionally NOT included
+  in that purge list: it is not a secret-bearing key (secrets are
+  stripped before persistence). The key holds only non-secret
+  connection metadata (name, transport type, URL, header names
+  without values, env keys with empty values).

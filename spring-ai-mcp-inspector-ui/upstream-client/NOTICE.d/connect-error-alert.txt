@@ -1,5 +1,5 @@
 src/lib/connectErrors.ts + src/lib/hooks/useConnection.ts +
- src/components/Sidebar.tsx + src/App.tsx — surface connect failures
+ src/components/Sidebar.tsx + src/App.tsx - surface connect failures
 with a reason and a Retry button. When the Java proxy answers
 POST /mcp-inspector-api/mcp with the structured non-2xx contract
 `{"error":{"code":"MCP_CONNECT_FAILED","reason":"<timeout|connection_refused|dns|not_found|unknown>","message":"...","retryable":true}}`,
