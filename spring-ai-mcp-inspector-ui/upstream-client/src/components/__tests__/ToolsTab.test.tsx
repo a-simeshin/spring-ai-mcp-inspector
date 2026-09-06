@@ -1372,6 +1372,9 @@ describe("ToolsTab", () => {
     // viewport. The local fix stacks the grid into one column below the
     // `sm` (640px) breakpoint and keeps two columns at and above it; the
     // testid anchors let Selenide assert geometry deterministically.
+    // Also covers client-side parameter validation tests (see
+    // NOTICE.d/param-validation.txt): untouched sum tool disabled,
+    // submit payload regression (a=2,b=3 sends exactly {a:2,b:3}).
     it("should stack the tools list/detail grid below the sm breakpoint", () => {
       renderToolsTab({ selectedTool: mockTools[0] });
 

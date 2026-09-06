@@ -1,3 +1,9 @@
+// [spring-ai-mcp-inspector PATCH] Client-side required/type validation for tool
+// and prompt forms. Pure functions validateToolParams() and validatePromptArgs()
+// are imported by ToolsTab.tsx and PromptsTab.tsx to derive the disabled state
+// of the Run Tool / Get Prompt buttons and to block submit on validation errors.
+// [spring-ai-mcp-inspector PATCH] Client-side tool/prompt parameter validation
+// (see NOTICE.d/param-validation.txt).
 import type { JsonSchemaType } from "./jsonUtils";
 import { resolveRef, normalizeUnionType } from "./schemaUtils";
 

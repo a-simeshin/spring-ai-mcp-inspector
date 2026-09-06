@@ -1,3 +1,5 @@
+// [spring-ai-mcp-inspector PATCH] Client-side prompt argument validation
+// (see NOTICE.d/param-validation.txt).
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
@@ -10,6 +12,10 @@ import {
   ResourceReference,
 } from "@modelcontextprotocol/sdk/types.js";
 import { AlertCircle, ChevronRight } from "lucide-react";
+// [spring-ai-mcp-inspector PATCH] Client-side required/type validation for
+// prompt forms. The Get Prompt button is derived-disabled on every render
+// via validatePromptArgs(), and submit is blocked by validateAll().
+// fieldErrors state is only for showing hints after blur/submit.
 import { cn } from "@/lib/utils";
 import { validatePromptArgs } from "@/utils/paramValidation";
 import { useEffect, useState, useCallback } from "react";
@@ -69,8 +75,9 @@ const PromptsTab = ({
   const { completions, clearCompletions, requestCompletions } =
     useCompletionState(handleCompletion, completionsSupported);
 
-  // Derived field errors: computed from prompt args + arg definitions on every render
-  // so the button is disabled immediately on untouched forms with required arguments
+  // [spring-ai-mcp-inspector PATCH] Derived field errors: computed from
+  // prompt args + arg definitions on every render so the button is disabled
+  // immediately on untouched forms with required arguments
   const derivedFieldErrors = selectedPrompt?.arguments
     ? validatePromptArgs(selectedPrompt.arguments, promptArgs)
     : [];
