@@ -36,7 +36,7 @@ import {
   Copy,
   CheckCheck,
 } from "lucide-react";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import ListPane from "./ListPane";
 import JsonView from "./JsonView";
 import ToolResults from "./ToolResults";
@@ -44,6 +44,7 @@ import { useToast } from "@/lib/hooks/useToast";
 import useCopy from "@/lib/hooks/useCopy";
 import IconDisplay, { WithIcons } from "./IconDisplay";
 import { cn } from "@/lib/utils";
+import { validateToolParams } from "@/utils/paramValidation";
 import {
   META_NAME_RULES_MESSAGE,
   META_PREFIX_RULES_MESSAGE,
@@ -238,6 +239,7 @@ const ToolsTab = ({
     { id: string; key: string; value: string }[]
   >([]);
   const [hasValidationErrors, setHasValidationErrors] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const formRefs = useRef<Record<string, DynamicJsonFormRef | null>>({});
   const { toast } = useToast();
   const { copied, setCopied } = useCopy();
@@ -252,6 +254,38 @@ const ToolsTab = ({
     setHasValidationErrors(errors);
     return errors;
   };
+
+  // Validate a single field against the tool's inputSchema
+  const validateField = useCallback(
+    (fieldKey: string) => {
+      if (!selectedTool?.inputSchema) return;
+      const schema = selectedTool.inputSchema as JsonSchemaType;
+      const result = validateToolParams(schema, params);
+      const error = result.find((e) => e.field === fieldKey);
+      setFieldErrors((prev) => {
+        if (error) {
+          return { ...prev, [fieldKey]: error.message };
+        }
+        const next = { ...prev };
+        delete next[fieldKey];
+        return next;
+      });
+    },
+    [selectedTool, params],
+  );
+
+  // Validate all fields against the tool's inputSchema
+  const validateAll = useCallback(() => {
+    if (!selectedTool?.inputSchema) return true;
+    const schema = selectedTool.inputSchema as JsonSchemaType;
+    const result = validateToolParams(schema, params);
+    const errors: Record<string, string> = {};
+    for (const e of result) {
+      errors[e.field] = e.message;
+    }
+    setFieldErrors(errors);
+    return errors;
+  }, [selectedTool, params]);
 
   useEffect(() => {
     const params = Object.entries(
@@ -428,7 +462,12 @@ const ToolsTab = ({
                                 id={key}
                                 name={key}
                                 checked={params[key] === null}
-                                onCheckedChange={(checked: boolean) =>
+                                onCheckedChange={(checked: boolean) => {
+                                  setFieldErrors((prev) => {
+                                    const next = { ...prev };
+                                    delete next[key];
+                                    return next;
+                                  });
                                   setParams({
                                     ...params,
                                     [key]: checked
@@ -445,7 +484,8 @@ const ToolsTab = ({
                                                   prop.type === "integer"
                                                 ? undefined
                                                 : undefined,
-                                  })
+                                  });
+                                }
                                 }
                               />
                               <label
@@ -474,6 +514,7 @@ const ToolsTab = ({
                                     [key]: checked,
                                   })
                                 }
+                                onBlur={() => validateField(key)}
                               />
                               <label
                                 htmlFor={key}
@@ -490,6 +531,11 @@ const ToolsTab = ({
                                   : String(params[key])
                               }
                               onValueChange={(value) => {
+                                setFieldErrors((prev) => {
+                                  const next = { ...prev };
+                                  delete next[key];
+                                  return next;
+                                });
                                 if (value === "") {
                                   setParams({
                                     ...params,
@@ -502,8 +548,18 @@ const ToolsTab = ({
                                   });
                                 }
                               }}
+                              onOpenChange={(open) => {
+                                if (!open) validateField(key);
+                              }}
                             >
-                              <SelectTrigger id={key} className="mt-1">
+                              <SelectTrigger
+                                id={key}
+                                className={cn(
+                                  "mt-1",
+                                  fieldErrors[key] &&
+                                    "border-red-500 focus-visible:ring-red-500 focus-visible:ring-1",
+                                )}
+                              >
                                 <SelectValue
                                   placeholder={
                                     prop.description || "Select an option"
@@ -530,6 +586,11 @@ const ToolsTab = ({
                               }
                               onChange={(e) => {
                                 const value = e.target.value;
+                                setFieldErrors((prev) => {
+                                  const next = { ...prev };
+                                  delete next[key];
+                                  return next;
+                                });
                                 if (value === "") {
                                   // Field cleared - set to undefined
                                   setParams({
@@ -544,7 +605,13 @@ const ToolsTab = ({
                                   });
                                 }
                               }}
-                              className="mt-1"
+                              onBlur={() => validateField(key)}
+                              className={cn(
+                                "mt-1",
+                                fieldErrors[key] &&
+                                  "border-red-500 focus-visible:ring-red-500 focus-visible:ring-1",
+                              )}
+                              aria-invalid={!!fieldErrors[key]}
                             />
                           ) : prop.type === "object" ||
                             prop.type === "array" ? (
@@ -585,6 +652,11 @@ const ToolsTab = ({
                               }
                               onChange={(e) => {
                                 const value = e.target.value;
+                                setFieldErrors((prev) => {
+                                  const next = { ...prev };
+                                  delete next[key];
+                                  return next;
+                                });
                                 if (value === "") {
                                   // Field cleared - set to undefined
                                   setParams({
@@ -608,7 +680,13 @@ const ToolsTab = ({
                                   }
                                 }
                               }}
-                              className="mt-1"
+                              onBlur={() => validateField(key)}
+                              className={cn(
+                                "mt-1",
+                                fieldErrors[key] &&
+                                  "border-red-500 focus-visible:ring-red-500 focus-visible:ring-1",
+                              )}
+                              aria-invalid={!!fieldErrors[key]}
                             />
                           ) : (
                             <div className="mt-1">
@@ -633,6 +711,13 @@ const ToolsTab = ({
                             </div>
                           )}
                         </div>
+                        {fieldErrors[key] && (
+                          <p className="text-xs text-red-500 mt-1">
+                            {fieldErrors[key] === "required"
+                              ? "This field is required"
+                              : fieldErrors[key]}
+                          </p>
+                        )}
                       </div>
                     );
                   },
@@ -869,6 +954,10 @@ const ToolsTab = ({
                     // Validate JSON inputs before calling tool
                     if (checkValidationErrors(true)) return;
 
+                    // Validate required fields and types
+                    const fieldErrors = validateAll();
+                    if (Object.keys(fieldErrors).length > 0) return;
+
                     try {
                       setIsToolRunning(true);
                       const metadata = metadataEntries.reduce<
@@ -899,6 +988,7 @@ const ToolsTab = ({
                     isToolRunning ||
                     isPollingTask ||
                     hasValidationErrors ||
+                    Object.keys(fieldErrors).length > 0 ||
                     hasReservedMetadataEntry ||
                     hasInvalidMetaPrefixEntry ||
                     hasInvalidMetaNameEntry
