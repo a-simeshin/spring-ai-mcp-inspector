@@ -242,11 +242,17 @@ const PromptsTab = ({
                         onFocus={() => handleFocus(arg.name)}
                         onBlur={() => handleBlur(arg.name)}
                         options={completions[arg.name] || []}
+                        aria-invalid={!!fieldErrors[arg.name]}
+                        aria-describedby={fieldErrors[arg.name] ? `${arg.name}-error` : undefined}
                       />
                     </div>
 
                     {fieldErrors[arg.name] && (
-                      <p className="text-xs text-red-500 mt-1">
+                      <p
+                        id={`${arg.name}-error`}
+                        role="alert"
+                        className="text-xs text-red-500 mt-1"
+                      >
                         This field is required
                       </p>
                     )}

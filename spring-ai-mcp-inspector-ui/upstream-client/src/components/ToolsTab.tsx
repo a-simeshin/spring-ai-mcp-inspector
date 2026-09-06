@@ -557,6 +557,8 @@ const ToolsTab = ({
                                   })
                                 }
                                 onBlur={() => validateField(key)}
+                                aria-invalid={!!fieldErrors[key]}
+                                aria-describedby={fieldErrors[key] ? `${key}-error` : undefined}
                               />
                               <label
                                 htmlFor={key}
@@ -601,6 +603,8 @@ const ToolsTab = ({
                                   fieldErrors[key] &&
                                     "border-red-500 focus-visible:ring-red-500 focus-visible:ring-1",
                                 )}
+                                aria-invalid={!!fieldErrors[key]}
+                                aria-describedby={fieldErrors[key] ? `${key}-error` : undefined}
                               >
                                 <SelectValue
                                   placeholder={
@@ -654,10 +658,15 @@ const ToolsTab = ({
                                   "border-red-500 focus-visible:ring-red-500 focus-visible:ring-1",
                               )}
                               aria-invalid={!!fieldErrors[key]}
+                              aria-describedby={fieldErrors[key] ? `${key}-error` : undefined}
                             />
                           ) : prop.type === "object" ||
                             prop.type === "array" ? (
-                            <div className="mt-1">
+                            <div
+                              className="mt-1"
+                              aria-invalid={!!fieldErrors[key]}
+                              aria-describedby={fieldErrors[key] ? `${key}-error` : undefined}
+                            >
                               <DynamicJsonForm
                                 ref={(ref) => (formRefs.current[key] = ref)}
                                 schema={{
@@ -734,9 +743,14 @@ const ToolsTab = ({
                                   "border-red-500 focus-visible:ring-red-500 focus-visible:ring-1",
                               )}
                               aria-invalid={!!fieldErrors[key]}
+                              aria-describedby={fieldErrors[key] ? `${key}-error` : undefined}
                             />
                           ) : (
-                            <div className="mt-1">
+                            <div
+                              className="mt-1"
+                              aria-invalid={!!fieldErrors[key]}
+                              aria-describedby={fieldErrors[key] ? `${key}-error` : undefined}
+                            >
                               <DynamicJsonForm
                                 ref={(ref) => (formRefs.current[key] = ref)}
                                 schema={{
@@ -763,7 +777,11 @@ const ToolsTab = ({
                           )}
                         </div>
                         {fieldErrors[key] && (
-                          <p className="text-xs text-red-500 mt-1">
+                          <p
+                            id={`${key}-error`}
+                            role="alert"
+                            className="text-xs text-red-500 mt-1"
+                          >
                             {fieldErrors[key] === "required"
                               ? "This field is required"
                               : fieldErrors[key]}

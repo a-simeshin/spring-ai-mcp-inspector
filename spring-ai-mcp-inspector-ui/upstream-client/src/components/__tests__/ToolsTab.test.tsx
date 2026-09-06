@@ -1498,4 +1498,41 @@ describe("ToolsTab", () => {
       expect(screen.getByTestId("run-tool-button")).toBeInTheDocument();
     });
   });
+
+  it("should set aria-invalid and aria-describedby on textarea after blur of empty required field", async () => {
+    const toolWithRequiredString = {
+      name: "reqStringTool",
+      description: "Tool with required string",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          name: { type: "string" as const },
+        },
+        required: ["name"],
+      },
+    } as unknown as Tool;
+
+    renderToolsTab({
+      tools: [toolWithRequiredString],
+      selectedTool: toolWithRequiredString,
+    });
+
+    const textarea = screen.getByRole("textbox");
+    // Blur empty required field
+    await act(async () => {
+      fireEvent.blur(textarea);
+    });
+
+    // Verify aria-invalid is set to true
+    expect(textarea).toHaveAttribute("aria-invalid", "true");
+
+    // Verify aria-describedby points to the error element
+    const describedBy = textarea.getAttribute("aria-describedby");
+    expect(describedBy).toBe("name-error");
+
+    // Verify the error element exists with the expected id
+    const errorEl = screen.getByRole("alert");
+    expect(errorEl).toHaveAttribute("id", "name-error");
+    expect(errorEl).toHaveTextContent("This field is required");
+  });
 });
