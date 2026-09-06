@@ -90,7 +90,7 @@ describe("ToolsTab", () => {
     });
 
     // Enter a value in the first tool's input
-    const input = screen.getByRole("spinbutton") as HTMLInputElement;
+    const input = screen.getByRole("textbox") as HTMLInputElement;
     await act(async () => {
       fireEvent.change(input, { target: { value: "42" } });
     });
@@ -104,7 +104,7 @@ describe("ToolsTab", () => {
     );
 
     // Verify input is reset
-    const newInput = screen.getByRole("spinbutton") as HTMLInputElement;
+    const newInput = screen.getByRole("textbox") as HTMLInputElement;
     expect(newInput.value).toBe("");
   });
 
@@ -250,10 +250,10 @@ describe("ToolsTab", () => {
       selectedTool: mockTools[1], // Use the tool with integer type
     });
 
-    const input = screen.getByRole("spinbutton", {
+    const input = screen.getByRole("textbox", {
       name: /count/i,
     }) as HTMLInputElement;
-    expect(input).toHaveProperty("type", "number");
+    expect(input).toHaveProperty("type", "text");
     fireEvent.change(input, { target: { value: "42" } });
     expect(input.value).toBe("42");
 
@@ -277,7 +277,7 @@ describe("ToolsTab", () => {
       selectedTool: mockTools[0],
     });
 
-    const input = screen.getByRole("spinbutton") as HTMLInputElement;
+    const input = screen.getByRole("textbox") as HTMLInputElement;
 
     // Complete the negative number
     fireEvent.change(input, { target: { value: "-42" } });
@@ -1206,8 +1206,8 @@ describe("ToolsTab", () => {
       });
 
       // Fill in the simple parameters
-      const messageInput = screen.getByRole("textbox");
-      const countInput = screen.getByRole("spinbutton");
+      const messageInput = screen.getByRole("textbox", { name: /message/i });
+      const countInput = screen.getByRole("textbox", { name: /count/i });
 
       fireEvent.change(messageInput, { target: { value: "test message" } });
       fireEvent.change(countInput, { target: { value: "5" } });
@@ -1362,8 +1362,9 @@ describe("ToolsTab", () => {
       expect(runButton).toBeDisabled();
 
       // Fill both required fields
-      const inputs = screen.getAllByRole("spinbutton");
+      const inputs = screen.getAllByRole("textbox");
       expect(inputs).toHaveLength(2);
+
       await act(async () => {
         fireEvent.change(inputs[0], { target: { value: "2" } });
         fireEvent.change(inputs[1], { target: { value: "3" } });
@@ -1390,7 +1391,7 @@ describe("ToolsTab", () => {
       expect(runButton).toBeDisabled();
 
       // Fill only one field
-      const inputs = screen.getAllByRole("spinbutton");
+      const inputs = screen.getAllByRole("textbox");
       await act(async () => {
         fireEvent.change(inputs[0], { target: { value: "2" } });
       });
@@ -1402,7 +1403,7 @@ describe("ToolsTab", () => {
       const mockCallTool = jest.fn();
       renderToolsTab({ selectedTool: sumTool, callTool: mockCallTool });
 
-      const inputs = screen.getAllByRole("spinbutton");
+      const inputs = screen.getAllByRole("textbox");
       await act(async () => {
         fireEvent.change(inputs[0], { target: { value: "2" } });
         fireEvent.change(inputs[1], { target: { value: "3" } });
@@ -1420,6 +1421,59 @@ describe("ToolsTab", () => {
         undefined,
         false,
       );
+    });
+
+    it("should show 'must be a number' hint for non-numeric input in integer field", async () => {
+      // Use a tool with an integer field - the string draft "abc" triggers
+      // validateToolParams to report "must be a number", and the error
+      // message appears as a hint below the field. The submit button stays
+      // disabled and the non-numeric key is absent from the payload.
+      const toolWithIntField: Tool = {
+        name: "intTool",
+        description: "Tool with integer field",
+        inputSchema: {
+          type: "object" as const,
+          required: ["a"],
+          properties: {
+            a: { type: "integer" as const, description: "First number" },
+          },
+        },
+      };
+
+      const mockCallTool = jest.fn();
+      renderToolsTab({
+        tools: [toolWithIntField],
+        selectedTool: toolWithIntField,
+        callTool: mockCallTool,
+      });
+
+      // Type "abc" into the integer field
+      const input = screen.getByRole("textbox", { name: /a/i });
+      await act(async () => {
+        fireEvent.change(input, { target: { value: "abc" } });
+      });
+
+      // Blur to trigger validateField
+      await act(async () => {
+        fireEvent.blur(input);
+      });
+
+      // The hint "must be a number" should appear
+      expect(screen.getByText("must be a number")).toBeInTheDocument();
+
+      // Submit button should be disabled (invalid field)
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      expect(runButton).toBeDisabled();
+
+      // Also verify that when we type a valid number, the hint disappears
+      await act(async () => {
+        fireEvent.change(input, { target: { value: "42" } });
+      });
+      await act(async () => {
+        fireEvent.blur(input);
+      });
+      expect(screen.queryByText("must be a number")).not.toBeInTheDocument();
+      expect(runButton).not.toBeDisabled();
     });
   });
 

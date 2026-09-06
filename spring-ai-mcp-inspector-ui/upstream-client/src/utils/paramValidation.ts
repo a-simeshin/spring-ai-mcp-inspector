@@ -74,7 +74,11 @@ export function validateToolParams(
 
     switch (propType) {
       case "integer":
-        if (typeof value !== "number" || !Number.isInteger(value)) {
+        if (typeof value !== "number") {
+          // Non-numeric draft (e.g. "abc") - not a number at all
+          errors.push({ field: key, message: "must be a number" });
+        } else if (!Number.isInteger(value)) {
+          // Number but not an integer (e.g. 1.5)
           errors.push({ field: key, message: "must be an integer" });
         }
         break;
