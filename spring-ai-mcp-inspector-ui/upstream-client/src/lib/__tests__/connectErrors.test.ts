@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] owner-session isolation and auth-profile tests
 import {
   ConnectFailedError,
   CONNECT_FAILED_ERROR_CODE,
@@ -7,7 +8,7 @@ import {
   isHttp401Error,
   parseConnectFailureResponse,
   type ConnectFailure,
-} from "../connectErrors";
+} from "../connectionErrors";
 
 /** Minimal Response-shaped object; the parser only touches clone().json(). */
 const responseWithBody = (body: unknown): Response => {

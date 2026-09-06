@@ -46,11 +46,17 @@ import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.BearerProfile;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.webmvc.InspectorServerPortHolder;
+import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -108,6 +114,22 @@ class StreamableHttpProxyControllerTests {
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
 		return new ProxySession(id, target, browserToTarget, targetToBrowser);
+	}
+
+	/**
+	 * Builds a controller with the D8/D9 auth wiring: a signed-cookie owner resolver and
+	 * an owner-scoped auth-profile store plus the OAuth2 managers.
+	 * @param store the auth-profile store
+	 * @param resolver the session-owner resolver
+	 * @return the wired controller
+	 */
+	private StreamableHttpProxyController authController(final AuthProfileStore store,
+			final ServletSessionOwnerResolver resolver) {
+		return new StreamableHttpProxyController(StreamableHttpProxyControllerTests.this.registry,
+				StreamableHttpProxyControllerTests.this.transportFactory,
+				StreamableHttpProxyControllerTests.this.mcpProxy, StreamableHttpProxyControllerTests.this.objectMapper,
+				new McpInspectorProperties(), null, resolver, store, mock(OAuth2ClientCredentialsTokenManager.class),
+				mock(OAuth2AuthCodeTokenExchanger.class));
 	}
 
 	@Nested
@@ -562,6 +584,8 @@ class StreamableHttpProxyControllerTests {
 		@Description("deleteMcp() returns 200 when the registry removed an existing session")
 		void deleteMcp_whenRemoved_returns200() {
 			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 			given(StreamableHttpProxyControllerTests.this.registry.removeAndClose("s1")).willReturn(true);
 
 			// when
@@ -757,6 +781,37 @@ class StreamableHttpProxyControllerTests {
 		}
 
 		@Test
+		@Story("Auth failure")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() existing-session request whose upstream answers 302 returns the structured redirect DTO (D3 streamable)")
+		void postMcp_existingSessionRedirect_returnsStructuredRedirectDto() throws Exception {
+			// given: a short await budget so the tryEmitError lands before the block
+			// times out, and a session whose upstream answers with a 302 redirect failure
+			final McpInspectorProperties props = new McpInspectorProperties();
+			props.getTimeouts().setStreamableRequest(Duration.ofSeconds(5));
+			final StreamableHttpProxyController shortTimeoutController = new StreamableHttpProxyController(
+					StreamableHttpProxyControllerTests.this.registry,
+					StreamableHttpProxyControllerTests.this.transportFactory,
+					StreamableHttpProxyControllerTests.this.mcpProxy,
+					StreamableHttpProxyControllerTests.this.objectMapper, props);
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			session.targetToBrowser()
+				.tryEmitError(new RuntimeException("Sending message failed with a non-OK HTTP code: 302"));
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
+
+			// when
+			final ResponseEntity<Object> entity = shortTimeoutController.postMcp("s1", null, body);
+
+			// then: the live-server 302 becomes the structured redirect DTO on streamable
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.FOUND);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
+				.path("code");
+			assertThat(error.asText()).isEqualTo("redirect");
+		}
+
+		@Test
 		@Story("New session")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("postMcp() new-session request whose upstream dies with ConnectException fails fast with a structured 502 connection_refused")
@@ -808,6 +863,254 @@ class StreamableHttpProxyControllerTests {
 			// then
 			assertThat(c).isNotNull();
 			verify(StreamableHttpProxyControllerTests.this.mcpProxy, never()).start(any());
+		}
+
+		@Test
+		@Story("Construction")
+		@Severity(SeverityLevel.MINOR)
+		@Description("the portHolder-aware constructor keeps the supplied loopback port")
+		void constructor_withPortHolder_usesGivenPort() {
+			// given / when
+			final StreamableHttpProxyController c = new StreamableHttpProxyController(
+					StreamableHttpProxyControllerTests.this.registry,
+					StreamableHttpProxyControllerTests.this.transportFactory,
+					StreamableHttpProxyControllerTests.this.mcpProxy,
+					StreamableHttpProxyControllerTests.this.objectMapper, new McpInspectorProperties(),
+					mock(InspectorServerPortHolder.class));
+
+			// then
+			assertThat(c).isNotNull();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("D8 auth-profile session bring-up")
+	class AuthProfileSession {
+
+		@Test
+		@Story("Auth profile")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with a foreign/unknown profileId returns a structured 400 bad_request and opens no session")
+		void postMcp_withForeignProfile_returnsStructured400() throws Exception {
+			// given — the owner is resolved but the store has no such profile
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-1");
+			given(store.resolve(any(), any())).willReturn(java.util.Optional.empty());
+			final StreamableHttpProxyController wired = authController(store, resolver);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> response = wired.postMcp(null, null, "foreign", body);
+
+			// then — structured 400, no session opened
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(response.getBody())
+				.path("code");
+			assertThat(error.asText()).isEqualTo("bad_request");
+			verify(StreamableHttpProxyControllerTests.this.registry, never()).put(any());
+		}
+
+		@Test
+		@Story("Auth profile")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with an owned profile whose one-time bind is rejected falls back to 502")
+		void postMcp_withOwnedProfileButBindRejected_returns502() throws Exception {
+			// given — the profile resolves (owned) but the one-time bind is rejected
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-1");
+			given(store.resolve(any(), any())).willReturn(java.util.Optional.of(new BearerProfile("p", "tok")));
+			given(store.bind(any(), any(), any())).willReturn(false);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamableWithAuth(any(), any(), any()))
+				.willReturn(mock(McpClientTransport.class));
+			final StreamableHttpProxyController wired = authController(store, resolver);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> response = wired.postMcp(null, null, "p", body);
+
+			// then — owned profile means no 400; the null session surfaces as legacy 502
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			verify(StreamableHttpProxyControllerTests.this.transportFactory).openStreamableWithAuth(any(), any(),
+					any());
+			verify(StreamableHttpProxyControllerTests.this.registry, never()).put(any());
+		}
+
+		@Test
+		@Story("Auth profile")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() with an owned profile applies auth headers to the upstream transport and opens the session")
+		void postMcp_withOwnedProfile_appliesAuthHeadersAndOpensSession() throws Exception {
+			// given — the profile resolves and binds; the proxy echoes a matching
+			// response
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-1");
+			given(store.resolve(any(), any())).willReturn(java.util.Optional.of(new BearerProfile("p", "tok")));
+			given(store.bind(any(), any(), any())).willReturn(true);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamableWithAuth(any(), any(), any()))
+				.willReturn(mock(McpClientTransport.class));
+			final JsonNode answer = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}");
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(answer);
+				return Mono.empty();
+			});
+			final StreamableHttpProxyController wired = authController(store, resolver);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> response = wired.postMcp(null, null, "p", body);
+
+			// then — the auth-bearing transport is used, the session binds and the
+			// response relays
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(response.getHeaders().getFirst(ProxyConstants.MCP_SESSION_ID_HEADER)).isNotBlank();
+			verify(StreamableHttpProxyControllerTests.this.transportFactory).openStreamableWithAuth(any(), any(),
+					any());
+			verify(store).bind(any(), any(), any());
+			verify(StreamableHttpProxyControllerTests.this.registry).put(any(ProxySession.class));
+		}
+
+	}
+
+	@Nested
+	@DisplayName("D3 auth-failure mapping")
+	class AuthFailureMapping {
+
+		@Test
+		@Story("Auth failure")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() existing-session request whose upstream answers with 401 returns the structured unauthorized DTO")
+		void postMcp_existingSessionAuthFailure_returnsStructured401() throws Exception {
+			// given — the replay sink carries an authorization failure as the upstream
+			// answer
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			session.targetToBrowser().tryEmitError(new RuntimeException("401 Unauthorized"));
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
+
+			// when
+			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp("s1", null,
+					body);
+
+			// then — the live-server 401 becomes the structured DTO, not a connect
+			// failure
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
+				.path("code");
+			assertThat(error.asText()).isEqualTo("unauthorized");
+		}
+
+		@Test
+		@Story("Auth failure")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() new-session request whose upstream answers with 401 tears down the orphaned session and returns the structured DTO")
+		void postMcp_newSessionAuthFailure_closesSessionAndReturns401() throws Exception {
+			// given — a new session whose proxy immediately fails the handshake with 401
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitError(new RuntimeException("401 Unauthorized"));
+				return Mono.empty();
+			});
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", body);
+
+			// then — structured 401 and the never-returned session is cleaned up
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
+				.path("code");
+			assertThat(error.asText()).isEqualTo("unauthorized");
+			// D5: the redacted target url is attached — scheme/host/path present, the
+			// query (with its secret) absent.
+			final JsonNode url = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
+				.path("url");
+			assertThat(url.asText()).isEqualTo("http://target/mcp");
+			verify(StreamableHttpProxyControllerTests.this.registry).removeAndClose(any(String.class));
+		}
+
+		@Test
+		@Story("Existing session")
+		@Severity(SeverityLevel.MINOR)
+		@Description("postMcp() request whose emit into a terminated sink fails returns 500")
+		void postMcp_existingSessionRequestEmitFails_returns500() throws Exception {
+			// given — the browserToTarget sink is already terminated
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.browserToTarget().tryEmitComplete();
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
+
+			// when
+			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp("s1",
+					null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("D8 owner-check on delete")
+	class DeleteOwnerCheck {
+
+		@Test
+		@Story("Teardown")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("deleteMcp() returns 404 when the session owner differs from the caller")
+		void deleteMcp_foreignOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.bindProfile("owner-A", "profile-1");
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-B");
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final StreamableHttpProxyController wired = authController(store, resolver);
+
+			// when
+			final ResponseEntity<Void> response = wired.deleteMcp("s1");
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+			verify(StreamableHttpProxyControllerTests.this.registry, never()).removeAndClose(any());
+		}
+
+		@Test
+		@Story("Teardown")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("deleteMcp() returns 404 when the caller owner cannot be resolved")
+		void deleteMcp_nullCallerOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.bindProfile("owner-A", "profile-1");
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn(null);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final StreamableHttpProxyController wired = authController(store, resolver);
+
+			// when
+			final ResponseEntity<Void> response = wired.deleteMcp("s1");
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+			verify(StreamableHttpProxyControllerTests.this.registry, never()).removeAndClose(any());
 		}
 
 	}

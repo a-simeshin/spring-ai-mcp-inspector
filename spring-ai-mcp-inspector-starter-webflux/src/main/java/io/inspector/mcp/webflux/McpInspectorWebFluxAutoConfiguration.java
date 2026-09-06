@@ -28,13 +28,20 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplicat
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.Ordered;
 import org.springframework.core.env.Environment;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.web.reactive.config.CorsRegistry;
 import org.springframework.web.reactive.config.WebFluxConfigurer;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.auth.AuthProfilePrefillProvider;
+import io.inspector.mcp.core.auth.AuthProfileProperties;
+import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
+import io.inspector.mcp.core.auth.OwnerTokenCodec;
 import io.inspector.mcp.core.bootstrap.BootstrapHtmlRenderer;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapAssembler;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapCustomizer;
@@ -49,6 +56,8 @@ import io.inspector.mcp.core.shutdown.McpServerTransportDrain;
 import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 import io.inspector.mcp.core.timeline.TimelineService;
 import io.inspector.mcp.core.transport.TransportDetector;
+import io.inspector.mcp.webflux.auth.AuthProfileHandler;
+import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
 import io.inspector.mcp.webflux.filter.InspectorAuthWebFilter;
 import io.inspector.mcp.webflux.proxy.ProxyAuthWebFilter;
 import io.inspector.mcp.webflux.proxy.ProxyHandler;
@@ -79,7 +88,7 @@ import io.inspector.mcp.webflux.router.TimelineHandler;
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.REACTIVE)
 @ConditionalOnProperty(prefix = "spring.ai.mcp.inspector", name = "enabled", havingValue = "true",
 		matchIfMissing = true)
-@EnableConfigurationProperties(McpInspectorProperties.class)
+@EnableConfigurationProperties({ McpInspectorProperties.class, AuthProfileProperties.class })
 @EnableScheduling
 @Import(InspectorRouterConfig.class)
 public class McpInspectorWebFluxAutoConfiguration {
@@ -116,6 +125,58 @@ public class McpInspectorWebFluxAutoConfiguration {
 	@ConditionalOnMissingBean
 	public ExternalStdioClientFactory mcpInspectorExternalStdioClientFactory(final JsonMapper objectMapper) {
 		return new ExternalStdioClientFactory(objectMapper);
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public OwnerTokenCodec mcpInspectorOwnerTokenCodec() {
+		return new OwnerTokenCodec();
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public ReactiveSessionOwnerResolver mcpInspectorReactiveSessionOwnerResolver(
+			final OwnerTokenCodec ownerTokenCodec) {
+		return new ReactiveSessionOwnerResolver(ownerTokenCodec);
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public AuthProfileStore mcpInspectorAuthProfileStore() {
+		return new AuthProfileStore();
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public OAuth2ClientCredentialsTokenManager mcpInspectorTokenManager(final AuthProfileStore authProfileStore) {
+		final OAuth2ClientCredentialsTokenManager manager = new OAuth2ClientCredentialsTokenManager();
+		// D9A: the manager is wired as the store's TokenEvictor so every removal path
+		// (delete/clear/clearBySession/removeExpired/update) drops the cached token AND
+		// the stored credentials together with the profile.
+		authProfileStore.setTokenEvictor(manager);
+		return manager;
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public OAuth2AuthCodeTokenExchanger mcpInspectorAuthCodeTokenExchanger() {
+		return new OAuth2AuthCodeTokenExchanger();
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public AuthProfilePrefillProvider mcpInspectorAuthProfilePrefillProvider(final AuthProfileProperties properties) {
+		return new AuthProfilePrefillProvider(properties);
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public AuthProfileHandler mcpInspectorAuthProfileHandler(final AuthProfileStore store,
+			final AuthProfilePrefillProvider prefillProvider, final OAuth2ClientCredentialsTokenManager tokenManager,
+			final OAuth2AuthCodeTokenExchanger exchanger, final ReactiveSessionOwnerResolver sessionOwnerResolver,
+			final JsonMapper objectMapper) {
+		return new AuthProfileHandler(store, prefillProvider, tokenManager, exchanger, sessionOwnerResolver,
+				objectMapper);
 	}
 
 	@Bean
@@ -158,15 +219,20 @@ public class McpInspectorWebFluxAutoConfiguration {
 	@Bean
 	@ConditionalOnMissingBean
 	public InspectorAuthWebFilter mcpInspectorAuthWebFilter(final McpInspectorProperties properties,
-			final InspectorAuthTokenProvider tokenProvider) {
-		return new InspectorAuthWebFilter(properties, tokenProvider);
+			final InspectorAuthTokenProvider tokenProvider, final ReactiveSessionOwnerResolver sessionOwnerResolver) {
+		return new InspectorAuthWebFilter(properties, tokenProvider, Ordered.HIGHEST_PRECEDENCE + 100,
+				sessionOwnerResolver);
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxySessionRegistry mcpInspectorProxySessionRegistry(final McpInspectorProperties properties) {
+	public ProxySessionRegistry mcpInspectorProxySessionRegistry(final McpInspectorProperties properties,
+			final AuthProfileStore authProfileStore) {
 		final ProxySessionRegistry registry = new ProxySessionRegistry();
 		registry.setInactivityBudget(properties.getTimeouts().getSessionReaper());
+		// D4: session teardown clears the bound profile; the reaper sweeps expired
+		// profiles.
+		registry.setAuthProfileStore(authProfileStore);
 		return registry;
 	}
 
@@ -193,15 +259,19 @@ public class McpInspectorWebFluxAutoConfiguration {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxyTransportFactory mcpInspectorProxyTransportFactory(final JsonMapper objectMapper) {
-		return new ProxyTransportFactory(objectMapper);
+	public ProxyTransportFactory mcpInspectorProxyTransportFactory(final JsonMapper objectMapper,
+			final McpInspectorProperties properties) {
+		return new ProxyTransportFactory(objectMapper, properties.getTimeouts().getSseRequest());
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public McpProxy mcpInspectorMcpProxy(final JsonMapper objectMapper,
+	public McpProxy mcpInspectorMcpProxy(final JsonMapper objectMapper, final AuthProfileStore authProfileStore,
+			final OAuth2ClientCredentialsTokenManager tokenManager,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger,
 			final ObjectProvider<McpTrafficRecorder> trafficRecorder) {
-		return new McpProxy(objectMapper, trafficRecorder.getIfAvailable());
+		return new McpProxy(objectMapper, authProfileStore, tokenManager, authCodeExchanger,
+				trafficRecorder.getIfAvailable());
 	}
 
 	@Bean
@@ -209,8 +279,11 @@ public class McpInspectorWebFluxAutoConfiguration {
 	public ProxyHandler mcpInspectorProxyHandler(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy,
 			final TransportDetector transportDetector, final JsonMapper objectMapper,
-			final McpInspectorProperties properties) {
-		return new ProxyHandler(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties);
+			final McpInspectorProperties properties, final ReactiveSessionOwnerResolver sessionOwnerResolver,
+			final AuthProfileStore authProfileStore, final OAuth2ClientCredentialsTokenManager ccTokenManager,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
+		return new ProxyHandler(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties,
+				sessionOwnerResolver, authProfileStore, ccTokenManager, authCodeExchanger);
 	}
 
 	@Bean

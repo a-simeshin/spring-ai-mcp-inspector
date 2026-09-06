@@ -50,14 +50,14 @@ import { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/lib/hooks/useToast";
 import { ConnectionStatus, CLIENT_IDENTITY } from "../constants";
-import { isConnectionAuthError } from "../connectionAuthErrors";
+import { isConnectionAuthError } from "../connectionErrors";
 import {
   ConnectFailedError,
   CONNECT_FAILED_ERROR_CODE,
   connectionFailureFromError,
   parseConnectFailureResponse,
   type ConnectFailure,
-} from "../connectErrors";
+} from "../connectionErrors";
 import { Notification } from "../notificationTypes";
 import {
   auth,
@@ -85,6 +85,10 @@ import { InspectorConfig } from "../configurationTypes";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CustomHeaders } from "../types/customHeaders";
 import { resolveRefsInMessage } from "@/utils/schemaUtils";
+// [spring-ai-mcp-inspector PATCH] D3 structured error contract (issue #54):
+// the backend proxy emits `ProxyErrorDto` bodies on streamable 401/403 and
+// named SSE `error` events on the SSE path; parsed here for the error banner.
+import { ProxyErrorDto, parseProxyErrorDto } from "../connectionErrors";
 
 interface UseConnectionOptions {
   transportType: "stdio" | "sse" | "streamable-http";
@@ -97,6 +101,10 @@ interface UseConnectionOptions {
   oauthClientId?: string;
   oauthClientSecret?: string;
   oauthScope?: string;
+  // [spring-ai-mcp-inspector PATCH] Active named auth profile (issue #54, D2):
+  // appended as `?profileId=` to the proxy transport URL so the backend
+  // applies the owner-scoped profile to every proxied request.
+  activeProfileId?: string | null;
   config: InspectorConfig;
   connectionType?: "direct" | "proxy";
   onNotification?: (notification: Notification) => void;
@@ -112,6 +120,38 @@ interface UseConnectionOptions {
   metadata?: Record<string, string>;
 }
 
+/**
+ * [spring-ai-mcp-inspector PATCH] Merge HeadersInit sources into a plain
+ * record, later sources overriding earlier keys on name collision (issue #54).
+ * The SDK hands the proxied streamable/SSE fetch a real `Headers` instance
+ * (content-type: application/json, accept, session/protocol headers); spreading
+ * it as `{...init.headers}` silently yields an empty object, so a naive merge
+ * would drop every SDK header. Normalizing each source first keeps the SDK
+ * headers and lets our auth + proxy headers win on collision.
+ */
+const mergeRequestHeaders = (
+  ...sources: Array<HeadersInit | undefined>
+): Record<string, string> => {
+  const merged: Record<string, string> = {};
+  for (const source of sources) {
+    if (!source) {
+      continue;
+    }
+    if (typeof Headers !== "undefined" && source instanceof Headers) {
+      source.forEach((value, key) => {
+        merged[key] = value;
+      });
+    } else if (Array.isArray(source)) {
+      for (const [key, value] of source) {
+        merged[key] = value;
+      }
+    } else {
+      Object.assign(merged, source);
+    }
+  }
+  return merged;
+};
+
 export function useConnection({
   transportType,
   command,
@@ -122,6 +162,7 @@ export function useConnection({
   oauthClientId,
   oauthClientSecret,
   oauthScope,
+  activeProfileId,
   config,
   connectionType = "proxy",
   onNotification,
@@ -153,6 +194,16 @@ export function useConnection({
   );
   const [serverImplementation, setServerImplementation] =
     useState<Implementation | null>(null);
+
+  // [spring-ai-mcp-inspector PATCH] D3 structured authorization error surfaced
+  // by the proxy (SSE named `error` event / streamable 401/403 body). Named
+  // authError, not connectionError: that one carries the transport failure from
+  // issue #56, and a server that answered 401 is a server that was reached.
+  const [authError, setAuthError] = useState<ProxyErrorDto | null>(null);
+  /** Tracks whether the current response was already parsed as a D3 DTO by
+   * streamableFetchWithDtoParse, so the fallback ConnectFailedError throw is
+   * skipped (avoids the double 401 banner — issue #54, owner review round 2). */
+  const authDtoConsumedRef = useRef(false);
 
   type ReceiverTaskRecord = {
     task: Task;
@@ -458,10 +509,109 @@ export function useConnection({
     }
   };
 
-  const connect = async (_e?: unknown, retryCount: number = 0) => {
-    // Clear any previous failure so a new attempt starts fresh.
-    setConnectionError(null);
+  // [spring-ai-mcp-inspector PATCH] D3: the backend emits the structured error
+  // DTO as a NAMED SSE `error` event. The SDK's EventSource (eventsource pkg)
+  // only dispatches named events to addEventListener listeners, so the DTO
+  // would be silently dropped. Tee the handshake stream and scan it ourselves.
+  const observeSseErrorStream = async (stream: ReadableStream<Uint8Array>) => {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let currentEvent = "";
+    let currentData: string[] = [];
+    const flushEvent = () => {
+      if (currentEvent === "error" && currentData.length > 0) {
+        const dto = parseProxyErrorDto(currentData.join("\n"));
+        if (dto) {
+          setAuthError(dto);
+        }
+      }
+      currentEvent = "";
+      currentData = [];
+    };
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) {
+              currentEvent = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              currentData.push(line.slice(5).trimStart());
+            }
+          }
+          flushEvent();
+        }
+      }
+      if (buffer.trim()) {
+        for (const line of buffer.split("\n")) {
+          if (line.startsWith("event:")) {
+            currentEvent = line.slice(6).trim();
+          } else if (line.startsWith("data:")) {
+            currentData.push(line.slice(5).trimStart());
+          }
+        }
+        flushEvent();
+      }
+    } catch {
+      // Observation is best-effort; the transport still surfaces the failure.
+    }
+  };
 
+  /** Wraps the SSE EventSource fetch: observe named `error` events, pass the stream through. */
+  const sseFetchWithErrorObservation = (
+    url: string | URL | globalThis.Request,
+    init?: RequestInit,
+  ): Promise<Response> =>
+    fetch(url, init).then((response) => {
+      if (response.body) {
+        const [transportStream, observationStream] = response.body.tee();
+        void observeSseErrorStream(observationStream);
+        return new Response(transportStream, response);
+      }
+      return response;
+    });
+
+  /**
+   * Wraps the streamable transport fetch: a 401/403/3xx response body carries the
+   * D3 DTO (streamable 400/404 are legacy 502/504 — no DTO per D3).
+   */
+  const streamableFetchWithDtoParse = (
+    url: string | URL | globalThis.Request,
+    init?: RequestInit,
+  ): Promise<Response> =>
+    fetch(url, init).then((response) => {
+      if (
+        response.ok ||
+        (response.status !== 401 && response.status !== 403 && (response.status < 300 || response.status >= 400))
+      ) {
+        return response;
+      }
+      return response.text().then((text) => {
+        const dto = parseProxyErrorDto(text);
+        if (dto) {
+          setAuthError(dto);
+          authDtoConsumedRef.current = true;
+        }
+        return new Response(text, response);
+      });
+    });
+
+  const connect = async (
+    _e?: unknown,
+    retryCount: number = 0,
+    profileIdOverride?: string | null,
+  ) => {
+    // [spring-ai-mcp-inspector PATCH] Both failure banners reset on every attempt:
+    // the transport one (issue #56) and the authorization one (issue #54).
+    setConnectionError(null);
+    setAuthError(null);
     const clientCapabilities = {
       capabilities: {
         sampling: {},
@@ -688,7 +838,11 @@ export function useConnection({
                 ) =>
                   fetch(url, {
                     ...init,
-                    headers: { ...headers, ...proxyHeaders },
+                    headers: mergeRequestHeaders(
+                      init?.headers,
+                      headers,
+                      proxyHeaders,
+                    ),
                   }),
               },
               requestInit: {
@@ -712,14 +866,17 @@ export function useConnection({
             }
             transportOptions = {
               authProvider: serverAuthProvider,
+              // [spring-ai-mcp-inspector PATCH] Tee the handshake stream so the
+              // named SSE `error` event (D3 DTO) is observed (issue #54).
               eventSourceInit: {
-                fetch: (
-                  url: string | URL | globalThis.Request,
-                  init?: RequestInit,
-                ) =>
-                  fetch(url, {
+                fetch: (url, init) =>
+                  sseFetchWithErrorObservation(url, {
                     ...init,
-                    headers: { ...headers, ...proxyHeaders },
+                    headers: mergeRequestHeaders(
+                      init?.headers,
+                      headers,
+                      proxyHeaders,
+                    ),
                   }),
               },
               requestInit: {
@@ -734,25 +891,39 @@ export function useConnection({
             mcpProxyServerUrl.searchParams.append("url", sseUrl);
             transportOptions = {
               authProvider: serverAuthProvider,
-              // [spring-ai-mcp-inspector PATCH] Surface the proxy's structured
-              // MCP_CONNECT_FAILED error (non-2xx JSON on POST /mcp) as a
-              // ConnectFailedError instead of letting the SDK swallow the body
-              // into an opaque HTTP-status error. HTTP 401 from the fork
-              // server's own auth filter (missing/mismatched X-MCP-Inspector-Auth
-              // header) is caught here and thrown as unauthorized so the UI
-              // renders the dedicated auth banner instead of falling through to
-              // the generic connection-error alert.
+              // [spring-ai-mcp-inspector PATCH] One wrapper, two contracts, in this
+              // order. streamableFetchWithDtoParse reads the proxy's structured
+              // authorization DTO out of a 401/403/3xx from a LIVE server (issue #54)
+              // and records it without throwing. When the DTO was already consumed
+              // (authDtoConsumedRef is true), the fallback ConnectFailedError throw is
+              // skipped to avoid the double 401 banner (owner review round 2, issue #54).
+              // What survives that and is still not ok may carry the
+              // MCP_CONNECT_FAILED contract (issue #56), which means the server was
+              // never reached; it throws, because the SDK would otherwise collapse the
+              // body into an opaque status error.
+              // HTTP 401 from the fork server's own auth filter (missing/mismatched
+              // X-MCP-Inspector-Auth header) is caught here and thrown as
+              // unauthorized so the UI renders the dedicated auth banner instead of
+              // falling through to the generic connection-error alert (issue #54).
               fetch: async (
                 url: string | URL | globalThis.Request,
                 init?: RequestInit,
               ) => {
-                const response = await fetch(url, init);
+                authDtoConsumedRef.current = false;
+                const response = await streamableFetchWithDtoParse(url, {
+                  ...init,
+                  headers: mergeRequestHeaders(
+                    init?.headers,
+                    headers,
+                    proxyHeaders,
+                  ),
+                });
                 if (!response.ok) {
                   const failure = await parseConnectFailureResponse(response);
                   if (failure) {
                     throw new ConnectFailedError(failure);
                   }
-                  if (response.status === 401) {
+                  if (response.status === 401 && !authDtoConsumedRef.current) {
                     throw new ConnectFailedError({
                       code: CONNECT_FAILED_ERROR_CODE,
                       reason: "unauthorized",
@@ -773,7 +944,11 @@ export function useConnection({
                 ) =>
                   fetch(url, {
                     ...init,
-                    headers: { ...headers, ...proxyHeaders },
+                    headers: mergeRequestHeaders(
+                      init?.headers,
+                      headers,
+                      proxyHeaders,
+                    ),
                   }),
               },
               requestInit: {
@@ -790,6 +965,18 @@ export function useConnection({
             break;
         }
         serverUrl = mcpProxyServerUrl as URL;
+        // [spring-ai-mcp-inspector PATCH] Active named auth profile (issue #54,
+        // D2): the proxy applies the owner-scoped profile server-side. The
+        // profileIdOverride lets a freshly authorized OAuth2 callback connect
+        // with the just-returned profileId on the very first attempt, before the
+        // state update has re-rendered the hook (issue #54, D9B).
+        const effectiveProfileId =
+          profileIdOverride !== undefined
+            ? profileIdOverride
+            : activeProfileId;
+        if (effectiveProfileId) {
+          serverUrl.searchParams.append("profileId", effectiveProfileId);
+        }
         serverUrl.searchParams.append("transportType", transportType);
       }
 
@@ -1248,6 +1435,8 @@ export function useConnection({
   };
 
   const disconnect = async () => {
+    // [spring-ai-mcp-inspector PATCH] Clear the D3 error banner on disconnect.
+    setConnectionError(null);
     // Clear any receiver-side tasks + cleanup timers
     receiverTasksRef.current.forEach((record) => {
       if (record.cleanupTimeoutId) {
@@ -1279,7 +1468,10 @@ export function useConnection({
 
   return {
     connectionStatus,
+    // [spring-ai-mcp-inspector PATCH] Transport failure (issue #56); the
+    // authorization DTO travels separately as authError (issue #54).
     connectionError,
+    authError,
     serverCapabilities,
     serverImplementation,
     mcpClient,

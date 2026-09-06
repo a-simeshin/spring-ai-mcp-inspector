@@ -36,7 +36,7 @@ import { ConnectionStatus } from "@/lib/constants";
 import {
   humanReadableReason,
   type ConnectFailure,
-} from "@/lib/connectErrors";
+} from "@/lib/connectionErrors";
 import useTheme from "../lib/hooks/useTheme";
 // Vendored: upstream imports version from monorepo root package.json
 // (../../../package.json). In our vendored layout we point at the client's
@@ -51,8 +51,12 @@ import CustomHeaders from "./CustomHeaders";
 import { CustomHeaders as CustomHeadersType } from "@/lib/types/customHeaders";
 import { useToast } from "../lib/hooks/useToast";
 import IconDisplay, { WithIcons } from "./IconDisplay";
-// [spring-ai-mcp-inspector PATCH] validateServerUrl for client-side URL format validation (see NOTICE.d/url-validation.txt).
 import { validateRedirectUrl, validateServerUrl } from "@/utils/urlValidation";
+// [spring-ai-mcp-inspector PATCH] Named auth profiles + D3 error banner
+// (issue #54).
+import AuthProfiles from "./AuthProfiles";
+import { AuthProfileSummary } from "@/lib/auth-profiles";
+import { ProxyErrorDto } from "@/lib/connectionErrors";
 
 interface SidebarProps {
   connectionStatus: ConnectionStatus;
@@ -76,6 +80,15 @@ interface SidebarProps {
   setOauthClientSecret: (secret: string) => void;
   oauthScope: string;
   setOauthScope: (scope: string) => void;
+  // [spring-ai-mcp-inspector PATCH] Named auth profiles (issue #54).
+  profiles?: AuthProfileSummary[];
+  onProfilesChange?: (profiles: AuthProfileSummary[]) => void;
+  activeProfileId?: string | null;
+  onActiveProfileChange?: (profileId: string | null) => void;
+  /** D3 structured error DTO surfaced by the proxy (issue #54). */
+  // D3 authorization DTO (issue #54): the server answered and refused.
+  // Distinct from connectionError, which means the server was never reached.
+  authError?: ProxyErrorDto | null;
   onConnect: () => void;
   onDisconnect: () => void;
   logLevel: LoggingLevel;
@@ -111,6 +124,11 @@ const Sidebar = ({
   setOauthClientSecret,
   oauthScope,
   setOauthScope,
+  profiles,
+  onProfilesChange,
+  activeProfileId,
+  onActiveProfileChange,
+  authError,
   onConnect,
   onDisconnect,
   logLevel,
@@ -576,6 +594,22 @@ const Sidebar = ({
             </Tooltip>
           </div>
 
+          {/* [spring-ai-mcp-inspector PATCH] Named auth profiles panel
+              (issue #54): editor/selector for the four profile kinds, list /
+              rename / delete, prefill selection, auth-code PKCE flow. */}
+          {profiles && onProfilesChange && onActiveProfileChange && (
+            <div className="space-y-2 p-3 rounded border">
+              <AuthProfiles
+                config={config}
+                profiles={profiles}
+                onProfilesChange={onProfilesChange}
+                activeProfileId={activeProfileId ?? null}
+                onActiveProfileChange={onActiveProfileChange}
+                transportType={transportType}
+              />
+            </div>
+          )}
+
           <div className="space-y-2">
             <Button
               variant="outline"
@@ -935,6 +969,32 @@ const Sidebar = ({
                 })()}
               </span>
             </div>
+
+            {/* [spring-ai-mcp-inspector PATCH] D3 structured error banner
+                (issue #54): exact code/reason/guidance/url from the proxy's
+                `ProxyErrorDto` (SSE named `error` event / streamable body). */}
+            {authError && (
+              <div
+                role="alert"
+                data-testid="connection-error-dto"
+                className="mb-4 rounded border border-red-300 bg-red-50 dark:bg-red-950 dark:border-red-800 p-3 text-xs space-y-1"
+              >
+                <div className="font-semibold text-red-700 dark:text-red-300">
+                  {authError.status} {authError.code}
+                </div>
+                <div className="text-red-700 dark:text-red-300">
+                  {authError.reason}
+                </div>
+                <div className="text-red-600 dark:text-red-400">
+                  {authError.guidance}
+                </div>
+                {authError.url && (
+                  <div className="break-all font-mono text-red-600 dark:text-red-400">
+                    URL: {authError.url}
+                  </div>
+                )}
+              </div>
+            )}
 
             {connectionStatus === "connected" &&
               serverImplementation &&

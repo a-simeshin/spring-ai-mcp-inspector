@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] owner-session isolation and auth-profile tests
 import { renderHook, act } from "@testing-library/react";
 import { useConnection } from "../useConnection";
 import { z } from "zod/v3";
@@ -28,13 +29,15 @@ import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import { discoverScopes } from "../../auth";
 import { CustomHeaders } from "../../types/customHeaders";
 
-// Mock fetch
-global.fetch = jest.fn().mockResolvedValue({
-  json: () => Promise.resolve({ status: "ok" }),
-  headers: {
-    get: jest.fn().mockReturnValue(null),
-  },
-});
+// Mock fetch - return a fresh Response for each call
+global.fetch = jest.fn().mockImplementation(() =>
+  Promise.resolve(
+    new Response(JSON.stringify({ status: "ok" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })
+  )
+);
 
 // Mock the SDK dependencies
 const mockRequest = jest.fn().mockResolvedValue({ test: "response" });
@@ -1221,6 +1224,69 @@ describe("useConnection", () => {
         mockStreamableHTTPTransport.options?.requestInit?.headers,
       ).toHaveProperty("X-MCP-Proxy-Auth", "Bearer test-proxy-token");
     });
+
+    test("preserves SDK Headers instance through the streamable fetch wrapper", async () => {
+      const propsWithStreamableHttp = {
+        ...defaultProps,
+        connectionType: "proxy" as const,
+        transportType: "streamable-http" as const,
+        config: {
+          ...DEFAULT_INSPECTOR_CONFIG,
+          MCP_PROXY_AUTH_TOKEN: {
+            ...DEFAULT_INSPECTOR_CONFIG.MCP_PROXY_AUTH_TOKEN,
+            value: "test-proxy-token",
+          },
+        },
+      };
+
+      const { result } = renderHook(() =>
+        useConnection(propsWithStreamableHttp),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const streamableFetch = mockStreamableHTTPTransport.options
+        ?.fetch as
+        | ((
+            url: string | URL | globalThis.Request,
+            init?: RequestInit,
+          ) => Promise<Response>)
+        | undefined;
+      expect(streamableFetch).toBeDefined();
+
+      // The SDK hands the proxied streamable fetch an init whose headers is a
+      // real Headers instance (content-type, accept, session/protocol). A plain
+      // `{...init.headers}` spread silently drops every entry; the wrapper must
+      // normalize it and keep the SDK headers while merging our auth + proxy
+      // headers in.
+      (global.fetch as jest.Mock).mockClear();
+      const sdkHeaders = new Headers({
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-session-id": "abc",
+      });
+
+      const testUrl = "http://test.com/mcp";
+      await streamableFetch?.(testUrl, {
+        method: "POST",
+        headers: sdkHeaders,
+        body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list" }),
+      });
+
+      const sent = (global.fetch as jest.Mock).mock.calls.at(-1)?.[1].headers;
+      expect(sent).toHaveProperty("content-type", "application/json");
+      expect(sent).toHaveProperty(
+        "accept",
+        "application/json, text/event-stream",
+      );
+      expect(sent).toHaveProperty("mcp-session-id", "abc");
+      expect(sent).toHaveProperty(
+        "X-MCP-Proxy-Auth",
+        "Bearer test-proxy-token",
+      );
+    });
   });
 
   describe("Custom Headers", () => {
@@ -1440,6 +1506,63 @@ describe("useConnection", () => {
       expect(mockSSETransport.url?.searchParams.get("transportType")).toBe(
         "sse",
       );
+    });
+
+    test("appends the activeProfileId to the first proxy connect URL", async () => {
+      // given — a named auth profile is active
+      const profileProps = {
+        ...defaultProps,
+        activeProfileId: "pid-active",
+      };
+
+      const { result } = renderHook(() => useConnection(profileProps));
+
+      // when — the first connect happens
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      // then — the very first proxy URL carries the active profileId
+      expect(mockSSETransport.url?.searchParams.get("profileId")).toBe(
+        "pid-active",
+      );
+    });
+
+    test("D9B callback wire: profileIdOverride wins over the stale activeProfileId on the first connect", async () => {
+      // given — the hook still holds a stale/previous active id, and the OAuth2
+      // callback has just returned a brand-new profileId before the state
+      // re-rendered
+      const profileProps = {
+        ...defaultProps,
+        activeProfileId: "pid-stale",
+      };
+
+      const { result } = renderHook(() => useConnection(profileProps));
+
+      // when — the very first connect is issued with the freshly returned
+      // profileId override
+      await act(async () => {
+        await result.current.connect(undefined, 0, "pid-new");
+      });
+
+      // then — the first proxy URL carries the newly returned profileId, NOT
+      // the stale active id
+      expect(mockSSETransport.url?.searchParams.get("profileId")).toBe(
+        "pid-new",
+      );
+      expect(mockSSETransport.url?.searchParams.get("profileId")).not.toBe(
+        "pid-stale",
+      );
+    });
+
+    test("no profileId is appended when neither activeProfileId nor an override is present", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(mockSSETransport.url?.searchParams.get("profileId")).toBeNull();
     });
   });
 
@@ -1865,6 +1988,58 @@ describe("useConnection", () => {
           message: "connection to the MCP server was refused",
         }),
       );
+    });
+  });
+
+  describe("Auth profile connect override (issue #54, D9B)", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockClient.connect.mockResolvedValue(undefined);
+    });
+
+    test("connect applies a freshly authorized profileId override to the streamable URL even before the hook re-renders", async () => {
+      const propsWithStreamableHttp = {
+        ...defaultProps,
+        transportType: "streamable-http" as const,
+        sseUrl: "http://localhost:8080",
+        activeProfileId: null as string | null,
+      };
+
+      const { result } = renderHook(() =>
+        useConnection(propsWithStreamableHttp),
+      );
+
+      await act(async () => {
+        // The OAuth2 callback fires this with the just-returned profileId, before
+        // the activeProfileId state update has re-rendered the hook (closure still
+        // carries null). The override must win so the first connect is authorized.
+        await result.current.connect(undefined, 0, "fresh-profile-id");
+      });
+
+      expect(
+        mockStreamableHTTPTransport.url?.searchParams.get("profileId"),
+      ).toBe("fresh-profile-id");
+    });
+
+    test("connect without an override falls back to the closure activeProfileId", async () => {
+      const propsWithStreamableHttp = {
+        ...defaultProps,
+        transportType: "streamable-http" as const,
+        sseUrl: "http://localhost:8080",
+        activeProfileId: "closure-profile-id",
+      };
+
+      const { result } = renderHook(() =>
+        useConnection(propsWithStreamableHttp),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(
+        mockStreamableHTTPTransport.url?.searchParams.get("profileId"),
+      ).toBe("closure-profile-id");
     });
   });
 });
