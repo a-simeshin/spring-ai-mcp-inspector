@@ -3,6 +3,9 @@ import { useState } from "react";
 import { describe, it, expect, jest } from "@jest/globals";
 import HistoryAndNotifications from "../HistoryAndNotifications";
 import { ServerNotification } from "@modelcontextprotocol/sdk/types.js";
+// [spring-ai-mcp-inspector PATCH] App/UI Clear All regression imports (#121).
+import { clearAllHistory, HISTORY_KEY } from "@/lib/persistentHistory";
+import "@testing-library/jest-dom";
 
 // Mock JsonView component
 jest.mock("../JsonView", () => {
@@ -285,5 +288,85 @@ describe("HistoryAndNotifications", () => {
 
     // Notifications should now be empty
     expect(screen.getByText("No notifications yet")).toBeTruthy();
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Real App/UI Clear All regression (#121).
+  // Tests the production callback path: clearAllHistory() removes the
+  // localStorage key, then React state is cleared.  Covers multi-bucket
+  // history with an empty current bucket, and asserts the key is gone
+  // after the full callback.  Would fail if the callback recreated the
+  // key (old clearRequestHistory path) or if the button was disabled
+  // when only other buckets exist.
+  it("clears all history across all connections via Clear All button, including empty current bucket with other buckets present", () => {
+    // Populate localStorage with multiple buckets; current bucket is empty
+    const store = {
+      schemaVersion: 1,
+      byConnection: {
+        "conn-other": [
+          {
+            request: JSON.stringify({ method: "other/method", params: {} }),
+            response: JSON.stringify({ result: "ok" }),
+            at: 100,
+          },
+        ],
+        "conn-another": [
+          {
+            request: JSON.stringify({ method: "another/method", params: {} }),
+            response: JSON.stringify({ result: "done" }),
+            at: 200,
+          },
+        ],
+      },
+    };
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(store));
+
+    // Mock window.confirm to return true
+    const originalConfirm = window.confirm;
+    window.confirm = jest.fn(() => true) as unknown as typeof window.confirm;
+
+    const Wrapper = () => {
+      const [history, setHistory] = useState<
+        Array<{ request: string; response?: string }>
+      >([]);
+      return (
+        <HistoryAndNotifications
+          requestHistory={history}
+          serverNotifications={[]}
+          // Production callback pattern: clearAllHistory() removes the
+          // localStorage key, then clear React state.
+          onClearAllHistory={() => {
+            if (
+              window.confirm(
+                "Clear all history across all connections? This cannot be undone.",
+              )
+            ) {
+              clearAllHistory();
+              setHistory([]);
+            }
+          }}
+        />
+      );
+    };
+
+    render(<Wrapper />);
+
+    const historyHeader = screen.getByText("History");
+    const historyHeaderContainer = historyHeader.parentElement as HTMLElement;
+    const clearAllButton = within(historyHeaderContainer).getByRole("button", {
+      name: "Clear All",
+    });
+
+    // Clear All should be enabled because other buckets exist in the store
+    expect(clearAllButton).not.toBeDisabled();
+
+    // Click Clear All
+    fireEvent.click(clearAllButton);
+
+    // After the full callback, localStorage key must be null
+    expect(localStorage.getItem(HISTORY_KEY)).toBeNull();
+
+    // Cleanup
+    window.confirm = originalConfirm;
+    localStorage.removeItem(HISTORY_KEY);
   });
 });
