@@ -1,5 +1,3 @@
-// [spring-ai-mcp-inspector PATCH] Client-side prompt argument validation
-// (see NOTICE.d/param-validation.txt).
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
