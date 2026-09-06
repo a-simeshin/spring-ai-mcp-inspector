@@ -295,6 +295,48 @@ describe("validateToolParams", () => {
       { field: "count", message: "must be an integer" },
     ]);
   });
+
+  it("reports required error for undefined on required nullable field", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      required: ["count"],
+      properties: {
+        count: { type: "integer", nullable: true },
+      },
+    };
+    // undefined means the field was never set - still blocks submit
+    expect(
+      validateToolParams(schema, {}),
+    ).toEqual([{ field: "count", message: "required" }]);
+  });
+
+  it("reports required error for undefined on required nested object field", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      required: ["nested"],
+      properties: {
+        nested: { type: "object" },
+      },
+    };
+    // undefined means the field was never set - blocks submit
+    expect(
+      validateToolParams(schema, {}),
+    ).toEqual([{ field: "nested", message: "required" }]);
+  });
+
+  it("reports required error for undefined on required nested array field", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      required: ["items"],
+      properties: {
+        items: { type: "array" },
+      },
+    };
+    // undefined means the field was never set - blocks submit
+    expect(
+      validateToolParams(schema, {}),
+    ).toEqual([{ field: "items", message: "required" }]);
+  });
 });
 
 describe("validatePromptArgs", () => {

@@ -349,15 +349,21 @@ const ToolsTab = ({
 
   // [spring-ai-mcp-inspector PATCH] Derived field errors: computed from schema +
   // current params on every render so the button is disabled immediately on
-  // untouched forms with required fields. Only simple types (string, number,
-  // integer, boolean) are checked here; object/array types rendered by
-  // DynamicJsonForm have their own ref-based validation (hasValidationErrors)
-  // that is checked in the onClick handler.
+  // untouched forms with required fields. "required" errors propagate for all
+  // types including object/array. Type-validation errors (must be a number,
+  // etc.) are only checked client-side for simple types (string, number,
+  // integer, boolean); object/array types rendered by DynamicJsonForm have
+  // their own ref-based validation (hasValidationErrors) that is checked in
+  // the onClick handler.
   const derivedFieldErrors = selectedTool?.inputSchema
     ? validateToolParams(
         selectedTool.inputSchema as JsonSchemaType,
         params,
       ).filter((e) => {
+          // "required" errors propagate for all types including object/array;
+          // type-validation errors (must be a number, etc.) are only checked
+          // client-side for simple types; object/array types go to server.
+          if (e.message === "required") return true;
           // Filter out errors for object/array fields that are handled by DynamicJsonForm
           const prop = selectedTool.inputSchema.properties?.[e.field];
           if (!prop) return true;
