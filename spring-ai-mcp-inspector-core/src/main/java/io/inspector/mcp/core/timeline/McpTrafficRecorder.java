@@ -30,6 +30,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
+
+import io.inspector.mcp.core.protocol.ProtocolRevision;
+import io.inspector.mcp.core.protocol.ProtocolRevision.CompatibilityResult;
 
 public final class McpTrafficRecorder {
 
@@ -101,8 +106,10 @@ public final class McpTrafficRecorder {
 		if (message instanceof JSONRPCRequest request) {
 			final Object id = request.id();
 			final String correlationId = UUID.randomUUID().toString();
+			final String requestedProtocolVersion = requestedProtocolVersionOf(rawFrame);
 			if (id != null) {
-				storePending(new CorrelationKey(sessionId, id), correlationId, progressTokenOf(rawFrame));
+				storePending(new CorrelationKey(sessionId, id), correlationId, progressTokenOf(rawFrame),
+						requestedProtocolVersion);
 			}
 			final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
 					TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), rawFrame);
@@ -152,8 +159,11 @@ public final class McpTrafficRecorder {
 			}
 			final String effectiveCorrelationId = (correlationId != null) ? correlationId
 					: UUID.randomUUID().toString();
+			final JsonNode enrichedFrame = (pending != null && pending.requestedProtocolVersion() != null
+					&& rawFrame instanceof ObjectNode objFrame)
+							? enrichProtocolNegotiation(objFrame, pending.requestedProtocolVersion()) : rawFrame;
 			final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), effectiveCorrelationId,
-					sessionId, TimelineEventType.MCP_JSONRPC_RESPONSE, Instant.now(), rawFrame);
+					sessionId, TimelineEventType.MCP_JSONRPC_RESPONSE, Instant.now(), enrichedFrame);
 			appendWithMdc(effectiveCorrelationId, event);
 		}
 		else if (message instanceof JSONRPCNotification notification) {
@@ -247,9 +257,12 @@ public final class McpTrafficRecorder {
 	 * @param key the session-scoped request key
 	 * @param correlationId the generated correlation id
 	 * @param progressToken the request's progress token text, may be {@code null}
+	 * @param requestedProtocolVersion the protocol version the client requested in the
+	 * initialize params, or {@code null} for non-initialize requests
 	 */
-	private void storePending(final CorrelationKey key, final String correlationId, final String progressToken) {
-		final PendingCorrelation value = new PendingCorrelation(correlationId, progressToken);
+	private void storePending(final CorrelationKey key, final String correlationId, final String progressToken,
+			final String requestedProtocolVersion) {
+		final PendingCorrelation value = new PendingCorrelation(correlationId, progressToken, requestedProtocolVersion);
 		synchronized (this.pendingLock) {
 			this.requestCorrelations.put(key, value);
 		}
@@ -303,6 +316,61 @@ public final class McpTrafficRecorder {
 	}
 
 	/**
+	 * Extracts {@code params.protocolVersion} from a raw JSON-RPC request frame. Only the
+	 * {@code initialize} method carries this field, so a non-null result identifies an
+	 * initialize request.
+	 * @param frame the raw frame (may be {@code null})
+	 * @return the protocol version text, or {@code null} when absent or non-scalar
+	 */
+	private static String requestedProtocolVersionOf(final JsonNode frame) {
+		if (frame == null) {
+			return null;
+		}
+		if (!"initialize".equals(frame.path("method").asText())) {
+			return null;
+		}
+		final JsonNode version = frame.path("params").path("protocolVersion");
+		return version.isValueNode() ? version.asText() : null;
+	}
+
+	/**
+	 * Enriches a deep copy of a raw JSON-RPC response frame with a synthetic
+	 * {@code _protocolNegotiation} key when the response carries a negotiated protocol
+	 * version. The enrichment is additive and cannot collide with real JSON-RPC fields
+	 * (which never use the {@code _} prefix). The original frame is never mutated: the
+	 * caller forwards the same {@code ObjectNode} to the browser, and the MCP SDK
+	 * validates responses with a strict schema that rejects unknown fields.
+	 * @param responseFrame the raw response frame (must be an {@code ObjectNode})
+	 * @param requestedVersion the protocol version the client requested
+	 * @return a deep copy enriched when applicable, or the original when enrichment does
+	 * not apply
+	 */
+	private static ObjectNode enrichProtocolNegotiation(final ObjectNode responseFrame, final String requestedVersion) {
+		final JsonNode resultNode = responseFrame.get("result");
+		if (resultNode == null || !resultNode.isObject()) {
+			return responseFrame;
+		}
+		final JsonNode negotiatedNode = resultNode.get("protocolVersion");
+		if (negotiatedNode == null || !negotiatedNode.isValueNode()) {
+			return responseFrame;
+		}
+		final String negotiatedVersion = negotiatedNode.asText();
+		final CompatibilityResult compatibility = ProtocolRevision.check(requestedVersion, negotiatedVersion);
+		final ObjectNode copy = responseFrame.deepCopy();
+		final ObjectNode negotiation = JsonNodeFactory.instance.objectNode();
+		negotiation.put("requested", requestedVersion);
+		negotiation.put("negotiated", negotiatedVersion);
+		negotiation.put("severity", compatibility.severity().name());
+		final var affectedArray = negotiation.putArray("affectedMethods");
+		for (final String method : compatibility.affectedMethods()) {
+			affectedArray.add(method);
+		}
+		negotiation.put("summary", compatibility.summary());
+		copy.set("_protocolNegotiation", negotiation);
+		return copy;
+	}
+
+	/**
 	 * Looks up the correlation registered for a progress token; falls back to the
 	 * per-session map when no session id is known.
 	 * @param sessionId the proxy session identifier (may be {@code null})
@@ -348,8 +416,10 @@ public final class McpTrafficRecorder {
 	 * @param correlationId the generated correlation id
 	 * @param progressToken the request's {@code params._meta.progressToken} text, may be
 	 * {@code null}
+	 * @param requestedProtocolVersion the protocol version the client requested in the
+	 * initialize params, or {@code null} for non-initialize requests
 	 */
-	record PendingCorrelation(String correlationId, String progressToken) {
+	record PendingCorrelation(String correlationId, String progressToken, String requestedProtocolVersion) {
 
 	}
 

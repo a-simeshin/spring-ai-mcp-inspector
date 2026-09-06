@@ -2,6 +2,9 @@ import { TabsContent } from "@/components/ui/tabs";
 import { useEffect, useState, useCallback, useRef } from "react";
 
 // [spring-ai-mcp-inspector PATCH] New TimelineTab — MCP event timeline panel (#112).
+// [spring-ai-mcp-inspector PATCH] Protocol-version negotiation badge on initialize
+// response rows (#129, #130). Renders _protocolNegotiation enrichment from
+// McpTrafficRecorder as a severity-colored badge and expanded detail block.
 
 type TimelineEventType =
   | "MCP_JSONRPC_REQUEST"
@@ -22,6 +25,16 @@ interface TimelineEvent {
   payload: Record<string, unknown> | null;
 }
 
+// Shape of the _protocolNegotiation enrichment attached by McpTrafficRecorder.
+// Mirrors io.inspector.mcp.core.protocol.ProtocolRevision.CompatibilityResult.
+interface ProtocolNegotiation {
+  requested: string;
+  negotiated: string;
+  severity: "OK" | "DOWNGRADE" | "INCOMPATIBLE" | "UNKNOWN";
+  affectedMethods: string[];
+  summary: string;
+}
+
 const EVENT_COLORS: Record<TimelineEventType, string> = {
   MCP_JSONRPC_REQUEST: "text-blue-400 border-l-blue-500",
   MCP_JSONRPC_RESPONSE: "text-green-400 border-l-green-500",
@@ -38,9 +51,82 @@ const EVENT_BG: Record<TimelineEventType, string> = {
   APP_LOG: "bg-gray-950/30",
 };
 
+// Badge color per severity, per the decision record (t_9315a78c).
+const SEVERITY_BADGE: Record<ProtocolNegotiation["severity"], { text: string; color: string }> = {
+  OK: { text: "", color: "bg-gray-700 text-gray-300" },
+  DOWNGRADE: { text: "v (downgrade)", color: "bg-amber-800 text-amber-200" },
+  INCOMPATIBLE: { text: "! (incompatible)", color: "bg-red-800 text-red-200" },
+  UNKNOWN: { text: "? (unknown)", color: "bg-gray-700 text-gray-400 border border-gray-500" },
+};
+
 function formatTimestamp(ts: string): string {
   const d = new Date(ts);
   return d.toLocaleTimeString("en-US", { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0");
+}
+
+// Extracts the _protocolNegotiation enrichment from a response payload, if present.
+function protocolNegotiationOf(payload: Record<string, unknown>): ProtocolNegotiation | null {
+  const raw = payload["_protocolNegotiation"];
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const severity = obj["severity"];
+  if (typeof severity !== "string") return null;
+  const requested = obj["requested"];
+  const negotiated = obj["negotiated"];
+  const summary = obj["summary"];
+  if (typeof requested !== "string" || typeof negotiated !== "string" || typeof summary !== "string") {
+    return null;
+  }
+  const affectedMethods = Array.isArray(obj["affectedMethods"])
+    ? (obj["affectedMethods"] as unknown[]).filter((m): m is string => typeof m === "string")
+    : [];
+  return {
+    requested,
+    negotiated,
+    severity: severity as ProtocolNegotiation["severity"],
+    affectedMethods,
+    summary,
+  };
+}
+
+function ProtocolBadge({ negotiation }: { negotiation: ProtocolNegotiation }) {
+  const badge = SEVERITY_BADGE[negotiation.severity] ?? SEVERITY_BADGE.OK;
+  const label = badge.text ? `protocol: ${negotiation.negotiated} ${badge.text}` : `protocol: ${negotiation.negotiated}`;
+  return (
+    <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono ${badge.color}`}>
+      {label}
+    </span>
+  );
+}
+
+function ProtocolNegotiationBlock({ negotiation }: { negotiation: ProtocolNegotiation }) {
+  // Silent-positive: OK severity does not render the expanded block.
+  if (negotiation.severity === "OK") return null;
+  return (
+    <div className="mt-1 p-2 border border-gray-700 rounded text-[11px] bg-gray-900/50">
+      <div className="font-semibold text-gray-300 mb-1">Protocol negotiation:</div>
+      <div className="font-mono text-gray-400">
+        <div>requested: {negotiation.requested} (client)</div>
+        <div>negotiated: {negotiation.negotiated} (server)</div>
+        <div>severity: {negotiation.severity}</div>
+        {negotiation.affectedMethods.length > 0 && (
+          <div>affected: {negotiation.affectedMethods.join(", ")}</div>
+        )}
+        <div className="mt-1 text-gray-500">{negotiation.summary}</div>
+        <div className="mt-1">
+          <a
+            href="https://github.com/a-simeshin/spring-ai-mcp-inspector/issues/129"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-400 hover:text-blue-300 underline"
+            onClick={(e) => e.stopPropagation()}
+          >
+            See compatibility matrix: issue #129
+          </a>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function TimelineEventRow({ event }: { event: TimelineEvent }) {
@@ -57,6 +143,9 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
     (typeof payload.logLevel === "string" && payload.logLevel) ||
     typeLabel;
 
+  // [spring-ai-mcp-inspector PATCH] Protocol negotiation badge on initialize response rows.
+  const negotiation = type === "MCP_JSONRPC_RESPONSE" ? protocolNegotiationOf(payload) : null;
+
   return (
     <div
       className={`border-l-2 pl-3 py-1.5 mb-1 rounded-r cursor-pointer hover:opacity-80 ${bgClass} ${colorClass}`}
@@ -65,7 +154,8 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
       <div className="flex items-center gap-2 text-xs">
         <span className="font-mono opacity-70 shrink-0 w-14">{formatTimestamp(event.timestamp)}</span>
         <span className="font-semibold shrink-0 w-20">{typeLabel}</span>
-        <span className="truncate">{label}</span>
+        <span className="truncate min-w-0 flex-1">{label}</span>
+        {negotiation && <ProtocolBadge negotiation={negotiation} />}
         {event.correlationId && (
           <span className="opacity-50 ml-auto shrink-0 font-mono text-[10px]">
             {event.correlationId.substring(0, 8)}
@@ -74,6 +164,7 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
       </div>
       {expanded ? (
         <div className="mt-1 text-[11px] font-mono opacity-80 overflow-x-auto whitespace-pre-wrap max-h-40 overflow-y-auto">
+          {negotiation && <ProtocolNegotiationBlock negotiation={negotiation} />}
           {Object.keys(payload).length > 0 ? (
             <div className="mb-1">{JSON.stringify(payload, null, 2)}</div>
           ) : (
