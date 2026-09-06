@@ -58,6 +58,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import io.inspector.mcp.demo.DemoApplication;
 
 import static com.codeborne.selenide.Condition.attributeMatching;
+import static com.codeborne.selenide.Condition.disabled;
 import static com.codeborne.selenide.Condition.exactText;
 import static com.codeborne.selenide.Condition.text;
 import static com.codeborne.selenide.Condition.visible;
@@ -863,6 +864,30 @@ class InspectorUiIT {
 			// then
 			// ToolResults block prints the result somewhere — assert visible text "15".
 			activePanel().shouldHave(text("15"), Duration.ofSeconds(15));
+		}
+
+		@Test
+		@Story("Tool call validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Sum tool with empty required fields: submit button disabled, hint shown.")
+		@DisplayName("sumToolEmptyRequired — submit disabled, hint shown")
+		void sumToolEmptyRequired_submitDisabled_hintShown() {
+			// given
+			selectRow("sum");
+
+			// then
+			// Run Tool button should be disabled when required fields are empty
+			SelenideElement runButton = activePanel().$("[data-testid='run-tool-button']");
+			runButton.shouldBe(disabled);
+
+			// Clicking the disabled button should not produce a result
+			runButton.click();
+			activePanel().shouldNotHave(text("0"));
+
+			// Blurring a required field should show a hint — focus then tab out
+			$("#a").shouldBe(visible).click();
+			$("#b").shouldBe(visible).click();
+			activePanel().shouldHave(text("This field is required"));
 		}
 
 		@Test
