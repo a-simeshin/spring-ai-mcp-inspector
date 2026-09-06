@@ -108,6 +108,63 @@ describe("ToolsTab", () => {
     expect(newInput.value).toBe("");
   });
 
+  it("should reset fieldErrors when switching tools", async () => {
+    // Use a tool with a required field
+    const toolWithRequired = {
+      name: "requiredTool",
+      description: "Tool with required field",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          req: { type: "string" as const },
+        },
+        required: ["req"],
+      },
+    } as unknown as Tool;
+    // Use a tool without required fields
+    const toolNoRequired = {
+      name: "noRequiredTool",
+      description: "Tool without required fields",
+      inputSchema: {
+        type: "object" as const,
+        properties: {},
+      },
+    } as unknown as Tool;
+
+    const { rerender } = renderToolsTab({
+      tools: [toolWithRequired, toolNoRequired],
+      selectedTool: toolWithRequired,
+    });
+
+    // Blur the empty required field to trigger validateField,
+    // which sets fieldErrors
+    const requiredInput = screen.getByRole("textbox") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.blur(requiredInput);
+    });
+
+    // Button should be disabled (stale fieldErrors from required field)
+    const runToolButton = screen.getByRole("button", { name: /run tool/i });
+    expect(runToolButton.getAttribute("disabled")).not.toBeNull();
+
+    // Switch to tool without required fields
+    rerender(
+      <Tabs defaultValue="tools">
+        <ToolsTab
+          {...defaultProps}
+          tools={[toolWithRequired, toolNoRequired]}
+          selectedTool={toolNoRequired}
+        />
+      </Tabs>,
+    );
+
+    // Verify button is now enabled (fieldErrors was cleared by the effect)
+    const newRunToolButton = screen.getByRole("button", {
+      name: /run tool/i,
+    });
+    expect(newRunToolButton.getAttribute("disabled")).toBeNull();
+  });
+
   it("should show/hide/disable run-as-task checkbox based on taskSupport", async () => {
     const forbiddenTool: ExtendedTool = {
       ...mockTools[0],

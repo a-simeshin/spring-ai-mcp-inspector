@@ -108,6 +108,23 @@ const PromptsTab = ({
     triggerCompletions(argName, currentValue);
   };
 
+  const handleBlur = (argName: string) => {
+    if (!selectedPrompt?.arguments) return;
+    const result = validatePromptArgs(
+      selectedPrompt.arguments,
+      promptArgs,
+    );
+    const error = result.find((e) => e.field === argName);
+    setFieldErrors((prev) => {
+      if (error) {
+        return { ...prev, [argName]: error.message };
+      }
+      const next = { ...prev };
+      delete next[argName];
+      return next;
+    });
+  };
+
   const validateAll = useCallback(() => {
     if (!selectedPrompt?.arguments) return true;
     const result = validatePromptArgs(
@@ -223,6 +240,7 @@ const PromptsTab = ({
                           handleInputChange(arg.name, value);
                         }}
                         onFocus={() => handleFocus(arg.name)}
+                        onBlur={() => handleBlur(arg.name)}
                         options={completions[arg.name] || []}
                       />
                     </div>
