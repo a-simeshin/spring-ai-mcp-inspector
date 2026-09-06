@@ -70,6 +70,7 @@ public class ReactiveSessionOwnerResolver {
 			.sameSite("Lax")
 			.path("/")
 			.maxAge(COOKIE_MAX_AGE)
+			.secure("https".equals(exchange.getRequest().getURI().getScheme()))
 			.build();
 		exchange.getResponse().addCookie(cookie);
 		return ownerId;
