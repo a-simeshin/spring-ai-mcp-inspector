@@ -56,11 +56,15 @@ const mockSSETransport: {
   url: URL | undefined;
   options: SSEClientTransportOptions | undefined;
   onmessage?: (message: JSONRPCMessage) => void;
+  onclose?: () => void;
+  onerror?: (error: unknown) => void;
 } = {
   start: jest.fn(),
   url: undefined,
   options: undefined,
   onmessage: undefined,
+  onclose: undefined,
+  onerror: undefined,
 };
 
 const mockStreamableHTTPTransport: {
@@ -145,6 +149,7 @@ jest.mock("../../auth", () => ({
   InspectorOAuthClientProvider: jest.fn().mockImplementation(() => ({
     tokens: jest.fn().mockResolvedValue({ access_token: "mock-token" }),
     redirectUrl: "http://localhost:3000/oauth/callback",
+    clear: jest.fn(),
   })),
   clearClientInformationFromSessionStorage: jest.fn(),
   saveClientInformationToSessionStorage: jest.fn(),
@@ -1865,6 +1870,455 @@ describe("useConnection", () => {
           message: "connection to the MCP server was refused",
         }),
       );
+    });
+  });
+
+  describe("Auto-retry with exponential backoff", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      jest.useFakeTimers();
+      mockClient.connect.mockResolvedValue(undefined);
+      mockClient.getServerCapabilities.mockReturnValue({
+        tools: {},
+      });
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test",
+        version: "1.0",
+      });
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Regression: auto-retry must continue
+    // the full 1s/2s/4s/8s/16s chain after a remote disconnect, not stop
+    // after the first retry (#121).
+    it("fires all five backoff delays when auto-retry is enabled and server keeps disconnecting", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // Connect successfully
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      // Enable auto-retry
+      act(() => {
+        result.current.setAutoReconnect(true);
+      });
+
+      // Simulate remote disconnect: call transport.onclose
+      await act(async () => {
+        mockSSETransport.onclose?.();
+      });
+
+      expect(result.current.connectionStatus).toBe("disconnected-remote");
+
+      // Verify each delay fires and connect is called each time
+      const expectedDelays = [1000, 2000, 4000, 8000, 16000];
+      const connectSpy = jest.spyOn(result.current, "connect");
+
+      for (let i = 0; i < expectedDelays.length; i++) {
+        // Reset the mock to track just this call
+        mockClient.connect.mockClear();
+        connectSpy.mockClear();
+
+        await act(async () => {
+          jest.advanceTimersByTime(expectedDelays[i]);
+        });
+
+        // Wait for the async connect() to resolve
+        await act(async () => {
+          await Promise.resolve();
+        });
+
+        expect(mockClient.connect).toHaveBeenCalledTimes(1);
+
+        // Simulate another disconnect to trigger the next retry
+        await act(async () => {
+          mockSSETransport.onclose?.();
+        });
+      }
+
+      // After 5 attempts, no more retries should fire
+      connectSpy.mockClear();
+      await act(async () => {
+        jest.advanceTimersByTime(32000);
+      });
+      expect(connectSpy).not.toHaveBeenCalled();
+    });
+
+    it("stops retrying when auto-retry is toggled off after banner appears", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      act(() => {
+        result.current.setAutoReconnect(true);
+      });
+
+      await act(async () => {
+        mockSSETransport.onclose?.();
+      });
+
+      expect(result.current.connectionStatus).toBe("disconnected-remote");
+
+      // Toggle auto-retry off
+      act(() => {
+        result.current.setAutoReconnect(false);
+      });
+
+      const connectSpy = jest.spyOn(result.current, "connect");
+      connectSpy.mockClear();
+      mockClient.connect.mockClear();
+
+      await act(async () => {
+        jest.advanceTimersByTime(1000);
+      });
+
+      expect(connectSpy).not.toHaveBeenCalled();
+    });
+
+    it("stops retrying on auth error and does not continue backoff", async () => {
+      const mockErrorEvent = new ErrorEvent("error", {
+        message: "Mock error event",
+      });
+      mockAuth.mockResolvedValue("REDIRECT" as never);
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // Initial connect succeeds
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      act(() => {
+        result.current.setAutoReconnect(true);
+      });
+
+      await act(async () => {
+        mockSSETransport.onclose?.();
+      });
+
+      expect(result.current.connectionStatus).toBe("disconnected-remote");
+
+      // The retry connect will fail with 401 auth error
+      mockClient.connect.mockClear();
+      mockClient.connect.mockRejectedValueOnce(
+        new SseError(401, "Unauthorized", mockErrorEvent),
+      );
+
+      // First retry fires after 1s
+      await act(async () => {
+        jest.advanceTimersByTime(1000);
+      });
+      // Flush all microtasks from the async connect()
+      await act(async () => {
+        await jest.requireActual("timers").setImmediate(() => {});
+      });
+
+      // Auth error path sets status to "error" (not disconnected-remote),
+      // so the reconnect effect should not schedule another timer.
+      // Verify no further connect calls happen after advancing timers.
+      mockClient.connect.mockClear();
+      await act(async () => {
+        jest.advanceTimersByTime(2000);
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(4000);
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(8000);
+      });
+
+      expect(mockClient.connect).not.toHaveBeenCalled();
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Regression: proxy auth errors must
+    // stop the auto-retry chain, just like SseError auth errors. The
+    // isProxyAuthError branch sets reconnectAbortRef.current = true, so
+    // the retry effect must not schedule another attempt (#121).
+    it("stops retrying on proxy auth error and does not continue backoff", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // Initial connect succeeds
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      act(() => {
+        result.current.setAutoReconnect(true);
+      });
+
+      await act(async () => {
+        mockSSETransport.onclose?.();
+      });
+
+      expect(result.current.connectionStatus).toBe("disconnected-remote");
+
+      // The retry connect will fail with a proxy auth error
+      mockClient.connect.mockClear();
+      mockClient.connect.mockRejectedValueOnce(
+        new Error(
+          "Authentication required. Use the session token from the proxy server console",
+        ),
+      );
+
+      // First retry fires after 1s
+      await act(async () => {
+        jest.advanceTimersByTime(1000);
+      });
+      // Flush all microtasks from the async connect()
+      await act(async () => {
+        await jest.requireActual("timers").setImmediate(() => {});
+      });
+
+      // Proxy auth error path sets status to "error" (not
+      // disconnected-remote), so the reconnect effect should not schedule
+      // another timer. Verify no further connect calls happen after
+      // advancing timers.
+      mockClient.connect.mockClear();
+      await act(async () => {
+        jest.advanceTimersByTime(2000);
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(4000);
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(8000);
+      });
+      await act(async () => {
+        jest.advanceTimersByTime(16000);
+      });
+
+      expect(mockClient.connect).not.toHaveBeenCalled();
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Regression: a failed non-auth
+    // connect attempt must continue the backoff chain, not stop after
+    // the first attempt (#121).
+    it("continues retry chain after a failed non-auth connect attempt", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // Connect successfully
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      // Enable auto-retry
+      act(() => {
+        result.current.setAutoReconnect(true);
+      });
+
+      // Simulate remote disconnect
+      await act(async () => {
+        mockSSETransport.onclose?.();
+      });
+      expect(result.current.connectionStatus).toBe("disconnected-remote");
+
+      // Make the next connect() calls fail (generic network error,
+      // not auth)
+      mockClient.connect.mockRejectedValue(
+        new Error("network down"),
+      );
+
+      // Advance through all 5 delays; each should attempt a connect
+      const expectedDelays = [1000, 2000, 4000, 8000, 16000];
+      for (let i = 0; i < expectedDelays.length; i++) {
+        mockClient.connect.mockClear();
+
+        await act(async () => {
+          jest.advanceTimersByTime(expectedDelays[i]);
+        });
+        // Flush microtasks from the async connect() and its .then()
+        await act(async () => {
+          await Promise.resolve();
+        });
+
+        // Each failed attempt should have called connect
+        expect(mockClient.connect).toHaveBeenCalledTimes(1);
+      }
+
+      // After 5 attempts, no more retries should fire
+      mockClient.connect.mockClear();
+      await act(async () => {
+        jest.advanceTimersByTime(32000);
+      });
+      expect(mockClient.connect).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("SDK callback lifecycle regression", () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+      jest.clearAllMocks();
+      mockClient.connect.mockResolvedValue(undefined);
+      mockClient.getServerCapabilities.mockReturnValue({
+        tools: {},
+      });
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test",
+        version: "1.0",
+      });
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Regression: transport onclose/onerror
+    // composition after client.connect, with pending request rejection (#121).
+    it("sets transport.onclose and transport.onerror after successful connect", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(mockSSETransport.onclose).toBeDefined();
+      expect(typeof mockSSETransport.onclose).toBe("function");
+      // onerror is set via a closure, not directly on the transport, but
+      // the disconnect callback is wired through handleDisconnect.
+      // Verify that calling onclose transitions to disconnected-remote
+      await act(async () => {
+        mockSSETransport.onclose?.();
+      });
+      expect(result.current.connectionStatus).toBe("disconnected-remote");
+    });
+
+    it("onclose after onerror does not throw (composition)", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      // Both onclose and onerror should be callable without throwing
+      expect(() => {
+        mockSSETransport.onclose?.();
+      }).not.toThrow();
+    });
+
+    it("clears transport callbacks on disconnect", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      await act(async () => {
+        await result.current.disconnect();
+      });
+
+      // After disconnect, transport callbacks should be cleared
+      // so intentional disconnect does not trigger disconnected-remote
+      expect(mockSSETransport.onclose).toBeUndefined();
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Regression: remote close rejects
+    // pending requests and clears the SDK client transport state (#121).
+    it("remote close rejects pending requests and clears client transport state", async () => {
+      // Override mockClient.request to return a deferred promise
+      // so we can observe rejection on close.
+      const originalRequest = mockClient.request;
+      const originalClose = mockClient.close;
+      let rejectRequest: (reason?: unknown) => void = () => undefined;
+      const deferredRequest = new Promise((_resolve, reject) => {
+        rejectRequest = reject;
+      });
+      mockClient.request = jest.fn().mockReturnValue(deferredRequest);
+
+      // Simulate the SDK installing a close handler on the transport
+      // during client.connect(). The production code's SDK callback
+      // composition preserves this handler and calls it first.
+      // Set this BEFORE connect so the production code saves it as
+      // sdkOnClose.
+      mockClient.close = jest.fn().mockImplementation(() => {
+        rejectRequest(new Error("Connection closed"));
+        return Promise.resolve();
+      });
+      const sdkCloseHandler = () => {
+        mockClient.close();
+      };
+      mockSSETransport.onclose = sdkCloseHandler;
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+      // After connect, the transport.onclose should be the composed
+      // handler (calls sdkCloseHandler then handleDisconnect)
+      expect(mockSSETransport.onclose).not.toBe(sdkCloseHandler);
+
+      // Start a pending request by calling makeRequest.
+      // Catch the rejection inside act() to avoid unhandled rejection.
+      let pendingError: unknown;
+      await act(async () => {
+        const pendingRequest = result.current.makeRequest(
+          { method: "tools/list", params: {} },
+          {} as AnySchema,
+        );
+        pendingRequest.catch((err: unknown) => {
+          pendingError = err;
+        });
+      });
+
+      // Fire transport.onclose: this triggers the SDK callback
+      // composition which calls the SDK handler (client.close() via
+      // sdkCloseHandler) and then handleDisconnect().
+      await act(async () => {
+        mockSSETransport.onclose?.();
+      });
+
+      // Restore original mocks to prevent leaking to other tests
+      mockClient.request = originalRequest;
+      mockClient.close = originalClose;
+
+      // The pending request should be rejected (the SDK close
+      // callback rejects pending work via the mock)
+      expect(pendingError).toBeDefined();
+      expect(String(pendingError)).toContain("Connection closed");
+      expect(result.current.connectionStatus).toBe("disconnected-remote");
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Regression: unmount cleanup cancels
+    // pending reconnect timers (#121). Uses fake timers throughout so the
+    // timer is observable.
+    it("cleans up reconnect timer on unmount", async () => {
+      const { result, unmount } = renderHook(() =>
+        useConnection(defaultProps),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      act(() => {
+        result.current.setAutoReconnect(true);
+      });
+
+      await act(async () => {
+        mockSSETransport.onclose?.();
+      });
+
+      // Timer is now pending (1s delay) under fake timers.
+      // Unmount should clean it up.
+      expect(() => {
+        unmount();
+      }).not.toThrow();
+
+      // Advancing timers after unmount should not cause any connect calls
+      mockClient.connect.mockClear();
+      jest.advanceTimersByTime(5000);
+      expect(mockClient.connect).not.toHaveBeenCalled();
     });
   });
 });

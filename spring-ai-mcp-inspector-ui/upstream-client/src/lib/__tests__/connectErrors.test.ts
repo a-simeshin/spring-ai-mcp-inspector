@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] em-dash replaced with hyphen for pre-commit gate.
 import {
   ConnectFailedError,
   CONNECT_FAILED_ERROR_CODE,
@@ -168,7 +169,7 @@ describe("isHttp401Error", () => {
   });
 });
 
-describe("connectionFailureFromError — unauthorized detection", () => {
+describe("connectionFailureFromError - unauthorized detection", () => {
   it("maps SDK-level errors with code 401 to unauthorized reason", () => {
     const sdk401 = new Error("HTTP 401 Unauthorized");
     (sdk401 as unknown as Record<string, unknown>).code = 401;

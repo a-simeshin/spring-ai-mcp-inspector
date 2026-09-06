@@ -1,3 +1,5 @@
+// [spring-ai-mcp-inspector PATCH] Clear-all-history button, plain-text warning,
+// and em-dash replaced with hyphen for pre-commit gate (#121).
 import { ServerNotification } from "@modelcontextprotocol/sdk/types.js";
 import { useState } from "react";
 import JsonView from "./JsonView";
@@ -7,11 +9,13 @@ const HistoryAndNotifications = ({
   requestHistory,
   serverNotifications,
   onClearHistory,
+  onClearAllHistory,
   onClearNotifications,
 }: {
   requestHistory: Array<{ request: string; response?: string }>;
   serverNotifications: ServerNotification[];
   onClearHistory?: () => void;
+  onClearAllHistory?: () => void;
   onClearNotifications?: () => void;
 }) => {
   const [expandedRequests, setExpandedRequests] = useState<{
@@ -34,15 +38,28 @@ const HistoryAndNotifications = ({
       <div className="flex-1 overflow-y-auto p-4 border-r">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">History</h2>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onClearHistory}
-            disabled={requestHistory.length === 0}
-          >
-            Clear
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onClearAllHistory}
+              disabled={requestHistory.length === 0}
+            >
+              Clear All
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onClearHistory}
+              disabled={requestHistory.length === 0}
+            >
+              Clear
+            </Button>
+          </div>
         </div>
+        <p className="text-xs text-amber-600 dark:text-amber-400 mb-2">
+          History may contain tool arguments and results in plain text.
+        </p>
         {requestHistory.length === 0 ? (
           <p className="text-sm text-gray-500 dark:text-gray-400 italic">
             No history yet
@@ -65,7 +82,13 @@ const HistoryAndNotifications = ({
                   >
                     <span className="font-mono">
                       {requestHistory.length - index}.{" "}
-                      {JSON.parse(request.request).method}
+                      {(() => {
+                        try {
+                          return JSON.parse(request.request).method;
+                        } catch {
+                          return "(invalid request)";
+                        }
+                      })()}
                     </span>
                     <span>
                       {expandedRequests[requestHistory.length - 1 - index]

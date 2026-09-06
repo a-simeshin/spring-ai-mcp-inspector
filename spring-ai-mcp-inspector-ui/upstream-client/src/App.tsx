@@ -45,6 +45,7 @@ import React, {
   useState,
 } from "react";
 import { useConnection } from "./lib/hooks/useConnection";
+import { clearAllHistory } from "./lib/persistentHistory";
 import {
   useDraggablePane,
   useDraggableSidebar,
@@ -418,6 +419,14 @@ const App = () => {
     selectedTaskRef.current = selectedTask;
   }, [selectedTask]);
 
+  // [spring-ai-mcp-inspector PATCH] Saved connections state (#121).
+  const [savedConnections, setSavedConnections] = useState<SavedConnection[]>(
+    () => loadSavedConnections(),
+  );
+  const [activeConnectionId, setActiveConnectionId] = useState<
+    string | undefined
+  >(undefined);
+
   const {
     connectionStatus,
     connectionError,
@@ -434,6 +443,8 @@ const App = () => {
     completionsSupported,
     connect: connectMcpServer,
     disconnect: disconnectMcpServer,
+    // [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+    setAutoReconnect,
   } = useConnection({
     transportType,
     command,
@@ -446,6 +457,8 @@ const App = () => {
     oauthScope,
     config,
     connectionType,
+    // [spring-ai-mcp-inspector PATCH] Persistent history connection id (#121).
+    connectionId: activeConnectionId ?? "ephemeral",
     onNotification: (notification) => {
       setNotifications((prev) => [...prev, notification as ServerNotification]);
 
@@ -524,15 +537,7 @@ const App = () => {
     metadata,
   });
 
-  // [spring-ai-mcp-inspector PATCH] Saved connections state (#121).
-  const [savedConnections, setSavedConnections] = useState<SavedConnection[]>(
-    () => loadSavedConnections(),
-  );
-  const [activeConnectionId, setActiveConnectionId] = useState<
-    string | undefined
-  >(undefined);
-
-  const handleSaveConnection = useCallback(
+const handleSaveConnection = useCallback(
     (name: string): SavedConnection | undefined => {
       const draft = stripSecrets({
         name,
@@ -1560,6 +1565,8 @@ const App = () => {
           onSaveConnection={handleSaveConnection}
           onDeleteConnection={handleDeleteConnection}
           onSelectConnection={handleSelectConnection}
+          // [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+          setAutoReconnect={setAutoReconnect}
         />
         {!isCompactLayout && (
           <div
@@ -2010,6 +2017,12 @@ const App = () => {
               requestHistory={requestHistory}
               serverNotifications={notifications}
               onClearHistory={clearRequestHistory}
+              onClearAllHistory={() => {
+                if (window.confirm("Clear all history across all connections? This cannot be undone.")) {
+                  clearAllHistory();
+                  clearRequestHistory();
+                }
+              }}
               onClearNotifications={handleClearNotifications}
             />
           </div>
