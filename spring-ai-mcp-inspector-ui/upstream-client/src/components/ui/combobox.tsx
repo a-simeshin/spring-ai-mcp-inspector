@@ -20,10 +20,15 @@ interface ComboboxProps {
   onChange: (value: string) => void;
   onInputChange: (value: string) => void;
   onFocus?: () => void;
+  // [spring-ai-mcp-inspector PATCH] Optional blur handler for validation
+  onBlur?: () => void;
   options: string[];
   placeholder?: string;
   emptyMessage?: string;
   id?: string;
+  // [spring-ai-mcp-inspector PATCH] aria attributes for validation hints
+  "aria-invalid"?: boolean;
+  "aria-describedby"?: string;
 }
 
 export function Combobox({
@@ -31,10 +36,13 @@ export function Combobox({
   onChange,
   onInputChange,
   onFocus,
+  onBlur,
   options = [],
   placeholder = "Select...",
   emptyMessage = "No results found.",
   id,
+  "aria-invalid": ariaInvalid,
+  "aria-describedby": ariaDescribedBy,
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false);
 
@@ -71,6 +79,9 @@ export function Combobox({
           role="combobox"
           aria-expanded={open}
           aria-controls={id}
+          aria-invalid={ariaInvalid}
+          aria-describedby={ariaDescribedBy}
+          onBlur={onBlur}
           className="w-full justify-between"
         >
           {value || placeholder}
