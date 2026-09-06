@@ -1184,11 +1184,12 @@ describe("ToolsTab", () => {
       const textareas = screen.getAllByRole("textbox");
       expect(textareas.length).toBe(2);
 
-      // Clear both textareas (empty JSON should be valid)
-      fireEvent.change(textareas[0], { target: { value: "{}" } });
-      fireEvent.change(textareas[1], { target: { value: "[]" } });
+      // Enter non-empty JSON first to trigger DynamicJsonForm onChange,
+      // then clear to empty (empty JSON should be valid)
+      fireEvent.change(textareas[0], { target: { value: '{ "x": 1 }' } });
+      fireEvent.change(textareas[1], { target: { value: '["a"]' } });
 
-      // Wait for debounced updates
+      // Wait for debounced updates to propagate
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 350));
       });
@@ -1199,7 +1200,7 @@ describe("ToolsTab", () => {
         fireEvent.click(runButton);
       });
 
-      // Tool should have been called (empty JSON is considered valid)
+      // Tool should have been called (JSON is considered valid)
       expect(mockCallTool).toHaveBeenCalled();
     });
   });
@@ -1272,6 +1273,96 @@ describe("ToolsTab", () => {
       expect(destructiveBadge).toBeInTheDocument();
       expect(destructiveBadge.textContent).not.toContain("(default)");
       expect(destructiveBadge).toHaveAttribute("title", expect.stringContaining("explicitly set"));
+    });
+  });
+
+  describe("Derived disabled state and submit payload", () => {
+    const sumTool: Tool = {
+      name: "sum",
+      description: "Adds two integers",
+      inputSchema: {
+        type: "object" as const,
+        required: ["a", "b"],
+        properties: {
+          a: { type: "integer" as const, description: "First number" },
+          b: { type: "integer" as const, description: "Second number" },
+        },
+      },
+    };
+
+    it("should disable Run Tool on untouched form with required fields", () => {
+      renderToolsTab({ selectedTool: sumTool });
+
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      expect(runButton).toBeDisabled();
+    });
+
+    it("should enable Run Tool after filling all required fields", async () => {
+      const mockCallTool = jest.fn();
+      renderToolsTab({ selectedTool: sumTool, callTool: mockCallTool });
+
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      expect(runButton).toBeDisabled();
+
+      // Fill both required fields
+      const inputs = screen.getAllByRole("spinbutton");
+      expect(inputs).toHaveLength(2);
+      await act(async () => {
+        fireEvent.change(inputs[0], { target: { value: "2" } });
+        fireEvent.change(inputs[1], { target: { value: "3" } });
+      });
+
+      expect(runButton).not.toBeDisabled();
+
+      await act(async () => {
+        fireEvent.click(runButton);
+      });
+
+      expect(mockCallTool).toHaveBeenCalledWith(
+        sumTool.name,
+        { a: 2, b: 3 },
+        undefined,
+        false,
+      );
+    });
+
+    it("should keep Run Tool disabled when only one required field is filled", async () => {
+      renderToolsTab({ selectedTool: sumTool });
+
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      expect(runButton).toBeDisabled();
+
+      // Fill only one field
+      const inputs = screen.getAllByRole("spinbutton");
+      await act(async () => {
+        fireEvent.change(inputs[0], { target: { value: "2" } });
+      });
+
+      expect(runButton).toBeDisabled();
+    });
+
+    it("should not include omitted required fields in submit payload", async () => {
+      const mockCallTool = jest.fn();
+      renderToolsTab({ selectedTool: sumTool, callTool: mockCallTool });
+
+      const inputs = screen.getAllByRole("spinbutton");
+      await act(async () => {
+        fireEvent.change(inputs[0], { target: { value: "2" } });
+        fireEvent.change(inputs[1], { target: { value: "3" } });
+      });
+
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      await act(async () => {
+        fireEvent.click(runButton);
+      });
+
+      // Verify payload is exactly {a: 2, b: 3} with no extra keys
+      expect(mockCallTool).toHaveBeenCalledWith(
+        sumTool.name,
+        { a: 2, b: 3 },
+        undefined,
+        false,
+      );
     });
   });
 

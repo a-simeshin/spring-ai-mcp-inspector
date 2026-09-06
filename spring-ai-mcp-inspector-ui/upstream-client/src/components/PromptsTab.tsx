@@ -69,6 +69,12 @@ const PromptsTab = ({
   const { completions, clearCompletions, requestCompletions } =
     useCompletionState(handleCompletion, completionsSupported);
 
+  // Derived field errors: computed from prompt args + arg definitions on every render
+  // so the button is disabled immediately on untouched forms with required arguments
+  const derivedFieldErrors = selectedPrompt?.arguments
+    ? validatePromptArgs(selectedPrompt.arguments, promptArgs)
+    : [];
+
   useEffect(() => {
     clearCompletions();
   }, [clearCompletions, selectedPrompt]);
@@ -117,8 +123,6 @@ const PromptsTab = ({
       getPrompt(selectedPrompt.name, promptArgs);
     }
   };
-
-  const hasFieldErrors = Object.keys(fieldErrors).length > 0;
 
   return (
     <TabsContent value="prompts">
@@ -235,7 +239,7 @@ const PromptsTab = ({
                 ))}
                 <Button
                   onClick={handleGetPrompt}
-                  disabled={hasFieldErrors}
+                  disabled={derivedFieldErrors.length > 0}
                   className="w-full"
                 >
                   Get Prompt
