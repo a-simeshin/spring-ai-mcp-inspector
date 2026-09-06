@@ -442,13 +442,13 @@ export function useConnection({
         });
         return result === "AUTHORIZED";
       } catch (authError) {
-        // Show user-friendly error message for OAuth failures
-        toast({
-          title: "OAuth Authentication Failed",
-          description:
-            authError instanceof Error ? authError.message : String(authError),
-          variant: "destructive",
-        });
+        // [spring-ai-mcp-inspector PATCH] OAuth failure notification is
+        // handled by the Sidebar effect on connectionError (Sidebar.tsx:147),
+        // which is set by the caller after handleAuthError returns false.
+        // This is the single authoritative notification path; remove the
+        // duplicate toast here so one OAuth failure does not produce two
+        // toasts. Refs #157.
+        void authError;
         return false;
       }
     }
@@ -503,7 +503,9 @@ export function useConnection({
     // started while we were waiting for terminateSession/close, skip the
     // shared cleanup so we don't clobber the new session's state. Refs #157.
     if (generation !== connectAttemptRef.current) {
-      connectingRef.current = false;
+      // [spring-ai-mcp-inspector PATCH] Don't clear connectingRef here:
+      // it belongs to the current generation. A stale attempt clearing it
+      // would let a newer attempt's guard be bypassed. Refs #157.
       return;
     }
 
@@ -986,6 +988,13 @@ export function useConnection({
           setConnectionStatus("error");
           return;
         }
+        // [spring-ai-mcp-inspector PATCH] Guard against stale handshake:
+        // if a newer connect attempt has already started, skip setting
+        // the error state so the old failure cannot overwrite the active
+        // session's status. Refs #157.
+        if (generation !== connectAttemptRef.current) {
+          return;
+        }
         // [spring-ai-mcp-inspector PATCH] Surface connection failures in the
         // UI instead of throwing into an unhandled rejection: the sidebar
         // renders a role=alert with the failure reason and a Retry button.
@@ -1308,6 +1317,13 @@ export function useConnection({
       if (capabilities?.logging && defaultLoggingLevel) {
         lastRequest = "logging/setLevel";
         await client.setLoggingLevel(defaultLoggingLevel);
+        // [spring-ai-mcp-inspector PATCH] Check generation before mutating
+        // state after await, so a stale attempt cannot append history to
+        // the new session. Refs #157.
+        if (generation !== connectAttemptRef.current) {
+          void client.close().catch(() => {});
+          return;
+        }
         pushHistory(
           {
             method: "logging/setLevel",
