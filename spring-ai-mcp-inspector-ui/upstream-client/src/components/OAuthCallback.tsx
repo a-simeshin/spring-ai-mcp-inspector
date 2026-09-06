@@ -85,11 +85,12 @@ const OAuthCallback = ({
         } catch (error) {
           clearPendingAuthCodeFlow();
           console.error("Auth-code profile exchange error:", error);
-          return notifyError(
-            `Failed to exchange the authorization code: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
+          const msg = error instanceof Error ? error.message : String(error);
+          const friendly = msg
+            .replace("Failed to fetch", "Unable to reach the server. Check that it is running.")
+            .replace("NetworkError", "Network error. Please check your connection.")
+            .replace("timeout", "Request timed out. Try again.");
+          return notifyError(`Failed to exchange the authorization code: ${friendly}`);
         }
       }
 

@@ -195,12 +195,15 @@ export function useConnection({
   const [serverImplementation, setServerImplementation] =
     useState<Implementation | null>(null);
 
-  // [spring-ai-mcp-inspector PATCH] D3 structured error surfaced by the proxy
-  // (SSE named `error` event / streamable 401/403 body). Rendered by the
-  // Sidebar error banner with the exact code/reason/guidance/url.
-  const [connectionError, setConnectionError] = useState<ProxyErrorDto | null>(
-    null,
-  );
+  // [spring-ai-mcp-inspector PATCH] D3 structured authorization error surfaced
+  // by the proxy (SSE named `error` event / streamable 401/403 body). Named
+  // authError, not connectionError: that one carries the transport failure from
+  // issue #56, and a server that answered 401 is a server that was reached.
+  const [authError, setAuthError] = useState<ProxyErrorDto | null>(null);
+  /** Tracks whether the current response was already parsed as a D3 DTO by
+   * streamableFetchWithDtoParse, so the fallback ConnectFailedError throw is
+   * skipped (avoids the double 401 banner — issue #54, owner review round 2). */
+  const authDtoConsumedRef = useRef(false);
 
   type ReceiverTaskRecord = {
     task: Task;
@@ -576,21 +579,25 @@ export function useConnection({
     });
 
   /**
-   * Wraps the streamable transport fetch: a 401/403 response body carries the
-   * D3 DTO (streamable 3xx/400/404 are legacy 502/504 — no DTO per D3).
+   * Wraps the streamable transport fetch: a 401/403/3xx response body carries the
+   * D3 DTO (streamable 400/404 are legacy 502/504 — no DTO per D3).
    */
   const streamableFetchWithDtoParse = (
     url: string | URL | globalThis.Request,
     init?: RequestInit,
   ): Promise<Response> =>
     fetch(url, init).then((response) => {
-      if (response.ok || (response.status !== 401 && response.status !== 403)) {
+      if (
+        response.ok ||
+        (response.status !== 401 && response.status !== 403 && (response.status < 300 || response.status >= 400))
+      ) {
         return response;
       }
       return response.text().then((text) => {
         const dto = parseProxyErrorDto(text);
         if (dto) {
-          setConnectionError(dto);
+          setAuthError(dto);
+          authDtoConsumedRef.current = true;
         }
         return new Response(text, response);
       });
@@ -886,15 +893,23 @@ export function useConnection({
               authProvider: serverAuthProvider,
               // [spring-ai-mcp-inspector PATCH] One wrapper, two contracts, in this
               // order. streamableFetchWithDtoParse reads the proxy's structured
-              // authorization DTO out of a 401/403 from a LIVE server (issue #54)
-              // and records it without throwing. What survives that and is still
-              // not ok may carry the MCP_CONNECT_FAILED contract (issue #56),
-              // which means the server was never reached; it throws, because the
-              // SDK would otherwise collapse the body into an opaque status error.
+              // authorization DTO out of a 401/403/3xx from a LIVE server (issue #54)
+              // and records it without throwing. When the DTO was already consumed
+              // (authDtoConsumedRef is true), the fallback ConnectFailedError throw is
+              // skipped to avoid the double 401 banner (owner review round 2, issue #54).
+              // What survives that and is still not ok may carry the
+              // MCP_CONNECT_FAILED contract (issue #56), which means the server was
+              // never reached; it throws, because the SDK would otherwise collapse the
+              // body into an opaque status error.
+              // HTTP 401 from the fork server's own auth filter (missing/mismatched
+              // X-MCP-Inspector-Auth header) is caught here and thrown as
+              // unauthorized so the UI renders the dedicated auth banner instead of
+              // falling through to the generic connection-error alert (issue #54).
               fetch: async (
                 url: string | URL | globalThis.Request,
                 init?: RequestInit,
               ) => {
+                authDtoConsumedRef.current = false;
                 const response = await streamableFetchWithDtoParse(url, {
                   ...init,
                   headers: mergeRequestHeaders(
@@ -907,6 +922,17 @@ export function useConnection({
                   const failure = await parseConnectFailureResponse(response);
                   if (failure) {
                     throw new ConnectFailedError(failure);
+                  }
+                  if (response.status === 401 && !authDtoConsumedRef.current) {
+                    throw new ConnectFailedError({
+                      code: CONNECT_FAILED_ERROR_CODE,
+                      reason: "unauthorized",
+                      message:
+                        "The inspector server requires authentication via X-MCP-Inspector-Auth header. " +
+                        "The auth token is generated at server start. Find it in the server log or configuration, " +
+                        "then add it as a custom header in the Configuration panel.",
+                      retryable: true,
+                    });
                   }
                 }
                 return response;
