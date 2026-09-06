@@ -10,7 +10,13 @@ import {
   ResourceReference,
 } from "@modelcontextprotocol/sdk/types.js";
 import { AlertCircle, ChevronRight } from "lucide-react";
-import { useEffect, useState } from "react";
+// [spring-ai-mcp-inspector PATCH] Client-side required/type validation for
+// prompt forms. The Get Prompt button is derived-disabled on every render
+// via validatePromptArgs(), and submit is blocked by validateAll().
+// fieldErrors state is only for showing hints after blur/submit.
+import { cn } from "@/lib/utils";
+import { validatePromptArgs } from "@/utils/paramValidation";
+import { useEffect, useState, useCallback } from "react";
 import ListPane from "./ListPane";
 import { useCompletionState } from "@/lib/hooks/useCompletionState";
 import JsonView from "./JsonView";
@@ -63,8 +69,16 @@ const PromptsTab = ({
   error: string | null;
 }) => {
   const [promptArgs, setPromptArgs] = useState<Record<string, string>>({});
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const { completions, clearCompletions, requestCompletions } =
     useCompletionState(handleCompletion, completionsSupported);
+
+  // [spring-ai-mcp-inspector PATCH] Derived field errors: computed from
+  // prompt args + arg definitions on every render so the button is disabled
+  // immediately on untouched forms with required arguments
+  const derivedFieldErrors = selectedPrompt?.arguments
+    ? validatePromptArgs(selectedPrompt.arguments, promptArgs)
+    : [];
 
   useEffect(() => {
     clearCompletions();
@@ -94,8 +108,40 @@ const PromptsTab = ({
     triggerCompletions(argName, currentValue);
   };
 
+  const handleBlur = (argName: string) => {
+    if (!selectedPrompt?.arguments) return;
+    const result = validatePromptArgs(
+      selectedPrompt.arguments,
+      promptArgs,
+    );
+    const error = result.find((e) => e.field === argName);
+    setFieldErrors((prev) => {
+      if (error) {
+        return { ...prev, [argName]: error.message };
+      }
+      const next = { ...prev };
+      delete next[argName];
+      return next;
+    });
+  };
+
+  const validateAll = useCallback(() => {
+    if (!selectedPrompt?.arguments) return true;
+    const result = validatePromptArgs(
+      selectedPrompt.arguments,
+      promptArgs,
+    );
+    const errors: Record<string, string> = {};
+    for (const e of result) {
+      errors[e.field] = e.message;
+    }
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  }, [selectedPrompt, promptArgs]);
+
   const handleGetPrompt = () => {
     if (selectedPrompt) {
+      if (!validateAll()) return;
       getPrompt(selectedPrompt.name, promptArgs);
     }
   };
@@ -113,6 +159,7 @@ const PromptsTab = ({
           setSelectedItem={(prompt) => {
             setSelectedPrompt(prompt);
             setPromptArgs({});
+            setFieldErrors({});
           }}
           renderItem={(prompt) => (
             <div className="flex items-start w-full gap-2">
@@ -166,19 +213,50 @@ const PromptsTab = ({
                 {selectedPrompt.arguments?.map((arg) => (
                   <div key={arg.name}>
                     <Label htmlFor={arg.name}>{arg.name}</Label>
-                    <Combobox
-                      id={arg.name}
-                      placeholder={`Enter ${arg.name}`}
-                      value={promptArgs[arg.name] || ""}
-                      onChange={(value) => handleInputChange(arg.name, value)}
-                      onInputChange={(value) =>
-                        handleInputChange(arg.name, value)
-                      }
-                      onFocus={() => handleFocus(arg.name)}
-                      options={completions[arg.name] || []}
-                    />
+                    <div
+                      className={cn(
+                        fieldErrors[arg.name] &&
+                          "ring-1 ring-red-500 rounded-md",
+                      )}
+                    >
+                      <Combobox
+                        id={arg.name}
+                        placeholder={`Enter ${arg.name}`}
+                        value={promptArgs[arg.name] || ""}
+                        onChange={(value) => {
+                          setFieldErrors((prev) => {
+                            const next = { ...prev };
+                            delete next[arg.name];
+                            return next;
+                          });
+                          handleInputChange(arg.name, value);
+                        }}
+                        onInputChange={(value) => {
+                          setFieldErrors((prev) => {
+                            const next = { ...prev };
+                            delete next[arg.name];
+                            return next;
+                          });
+                          handleInputChange(arg.name, value);
+                        }}
+                        onFocus={() => handleFocus(arg.name)}
+                        onBlur={() => handleBlur(arg.name)}
+                        options={completions[arg.name] || []}
+                        aria-invalid={!!fieldErrors[arg.name]}
+                        aria-describedby={fieldErrors[arg.name] ? `${arg.name}-error` : undefined}
+                      />
+                    </div>
 
-                    {arg.description && (
+                    {fieldErrors[arg.name] && (
+                      <p
+                        id={`${arg.name}-error`}
+                        role="alert"
+                        className="text-xs text-red-500 mt-1"
+                      >
+                        This field is required
+                      </p>
+                    )}
+                    {!fieldErrors[arg.name] && arg.description && (
                       <p className="text-xs text-gray-500 mt-1">
                         {arg.description}
                         {arg.required && (
@@ -188,7 +266,11 @@ const PromptsTab = ({
                     )}
                   </div>
                 ))}
-                <Button onClick={handleGetPrompt} className="w-full">
+                <Button
+                  onClick={handleGetPrompt}
+                  disabled={derivedFieldErrors.length > 0}
+                  className="w-full"
+                >
                   Get Prompt
                 </Button>
                 {promptContent && (

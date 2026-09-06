@@ -36,7 +36,7 @@ import {
   Copy,
   CheckCheck,
 } from "lucide-react";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import ListPane from "./ListPane";
 import JsonView from "./JsonView";
 import ToolResults from "./ToolResults";
@@ -44,6 +44,7 @@ import { useToast } from "@/lib/hooks/useToast";
 import useCopy from "@/lib/hooks/useCopy";
 import IconDisplay, { WithIcons } from "./IconDisplay";
 import { cn } from "@/lib/utils";
+import { validateToolParams } from "@/utils/paramValidation";
 import {
   META_NAME_RULES_MESSAGE,
   META_PREFIX_RULES_MESSAGE,
@@ -238,7 +239,12 @@ const ToolsTab = ({
     { id: string; key: string; value: string }[]
   >([]);
   const [hasValidationErrors, setHasValidationErrors] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const formRefs = useRef<Record<string, DynamicJsonFormRef | null>>({});
+  // [spring-ai-mcp-inspector PATCH] Ref to track the latest params, updated
+  // inside setParams functional updates to avoid stale closure in onClick handler
+  const paramsRef = useRef(params);
+  paramsRef.current = params;
   const { toast } = useToast();
   const { copied, setCopied } = useCopy();
 
@@ -253,6 +259,40 @@ const ToolsTab = ({
     return errors;
   };
 
+  // Validate a single field against the tool's inputSchema
+  const validateField = useCallback(
+    (fieldKey: string) => {
+      if (!selectedTool?.inputSchema) return;
+      const schema = selectedTool.inputSchema as JsonSchemaType;
+      const result = validateToolParams(schema, params);
+      const error = result.find((e) => e.field === fieldKey);
+      setFieldErrors((prev) => {
+        if (error) {
+          return { ...prev, [fieldKey]: error.message };
+        }
+        const next = { ...prev };
+        delete next[fieldKey];
+        return next;
+      });
+    },
+    [selectedTool, params],
+  );
+
+  // [spring-ai-mcp-inspector PATCH] Validate all fields against the tool's
+  // inputSchema. Accepts an optional currentParams parameter to avoid stale
+  // closure issues when called after DynamicJsonForm's validateJson updates params
+  const validateAll = useCallback((currentParams?: Record<string, unknown>) => {
+    if (!selectedTool?.inputSchema) return true;
+    const schema = selectedTool.inputSchema as JsonSchemaType;
+    const result = validateToolParams(schema, currentParams ?? params);
+    const errors: Record<string, string> = {};
+    for (const e of result) {
+      errors[e.field] = e.message;
+    }
+    setFieldErrors(errors);
+    return errors;
+  }, [selectedTool, params]);
+
   useEffect(() => {
     const params = Object.entries(
       selectedTool?.inputSchema.properties ?? [],
@@ -262,6 +302,16 @@ const ToolsTab = ({
         value as JsonSchemaType,
         selectedTool?.inputSchema as JsonSchemaType,
       );
+      // [spring-ai-mcp-inspector PATCH] Only initialize fields that have a schema.default.
+      // Required fields without a default stay undefined so that:
+      // 1. Derived validation sees them as empty and disables the button
+      // 2. They don't appear in the submit payload
+      const hasDefault =
+        "default" in resolvedValue &&
+        resolvedValue.default !== undefined;
+      if (!hasDefault) {
+        return [key, undefined];
+      }
       return [
         key,
         generateDefaultValue(
@@ -270,7 +320,7 @@ const ToolsTab = ({
           selectedTool?.inputSchema as JsonSchemaType,
         ),
       ];
-    });
+    }).filter(([, v]) => v !== undefined);
     setParams(Object.fromEntries(params));
     const toolTaskSupport = serverSupportsTaskRequests
       ? getTaskSupport(selectedTool)
@@ -279,9 +329,7 @@ const ToolsTab = ({
 
     // Reset validation errors when switching tools
     setHasValidationErrors(false);
-
-    // Clear form refs for the previous tool
-    formRefs.current = {};
+    setFieldErrors({});
   }, [selectedTool, serverSupportsTaskRequests]);
 
   const hasReservedMetadataEntry = metadataEntries.some(({ key }) => {
@@ -298,6 +346,40 @@ const ToolsTab = ({
     const trimmedKey = key.trim();
     return trimmedKey !== "" && !hasValidMetaName(trimmedKey);
   });
+
+  // [spring-ai-mcp-inspector PATCH] Derived field errors: computed from schema +
+  // current params on every render so the button is disabled immediately on
+  // untouched forms with required fields. "required" errors propagate for all
+  // types including object/array. Type-validation errors (must be a number,
+  // etc.) are only checked client-side for simple types (string, number,
+  // integer, boolean); object/array types rendered by DynamicJsonForm have
+  // their own ref-based validation (hasValidationErrors) that is checked in
+  // the onClick handler.
+  const derivedFieldErrors = selectedTool?.inputSchema
+    ? validateToolParams(
+        selectedTool.inputSchema as JsonSchemaType,
+        params,
+      ).filter((e) => {
+          // "required" errors propagate for all types including object/array;
+          // type-validation errors (must be a number, etc.) are only checked
+          // client-side for simple types; object/array types go to server.
+          if (e.message === "required") return true;
+          // Filter out errors for object/array fields that are handled by DynamicJsonForm
+          const prop = selectedTool.inputSchema.properties?.[e.field];
+          if (!prop) return true;
+          const resolved = resolveRef(
+            prop as JsonSchemaType,
+            selectedTool.inputSchema as JsonSchemaType,
+          );
+          const normalized = normalizeUnionType(resolved);
+          return (
+            normalized.type === "string" ||
+            normalized.type === "number" ||
+            normalized.type === "integer" ||
+            normalized.type === "boolean"
+          );
+        })
+    : [];
 
   const taskSupport = serverSupportsTaskRequests
     ? getTaskSupport(selectedTool)
@@ -428,7 +510,12 @@ const ToolsTab = ({
                                 id={key}
                                 name={key}
                                 checked={params[key] === null}
-                                onCheckedChange={(checked: boolean) =>
+                                onCheckedChange={(checked: boolean) => {
+                                  setFieldErrors((prev) => {
+                                    const next = { ...prev };
+                                    delete next[key];
+                                    return next;
+                                  });
                                   setParams({
                                     ...params,
                                     [key]: checked
@@ -445,7 +532,8 @@ const ToolsTab = ({
                                                   prop.type === "integer"
                                                 ? undefined
                                                 : undefined,
-                                  })
+                                  });
+                                }
                                 }
                               />
                               <label
@@ -474,6 +562,9 @@ const ToolsTab = ({
                                     [key]: checked,
                                   })
                                 }
+                                onBlur={() => validateField(key)}
+                                aria-invalid={!!fieldErrors[key]}
+                                aria-describedby={fieldErrors[key] ? `${key}-error` : undefined}
                               />
                               <label
                                 htmlFor={key}
@@ -490,6 +581,11 @@ const ToolsTab = ({
                                   : String(params[key])
                               }
                               onValueChange={(value) => {
+                                setFieldErrors((prev) => {
+                                  const next = { ...prev };
+                                  delete next[key];
+                                  return next;
+                                });
                                 if (value === "") {
                                   setParams({
                                     ...params,
@@ -502,8 +598,20 @@ const ToolsTab = ({
                                   });
                                 }
                               }}
+                              onOpenChange={(open) => {
+                                if (!open) validateField(key);
+                              }}
                             >
-                              <SelectTrigger id={key} className="mt-1">
+                              <SelectTrigger
+                                id={key}
+                                className={cn(
+                                  "mt-1",
+                                  fieldErrors[key] &&
+                                    "border-red-500 focus-visible:ring-red-500 focus-visible:ring-1",
+                                )}
+                                aria-invalid={!!fieldErrors[key]}
+                                aria-describedby={fieldErrors[key] ? `${key}-error` : undefined}
+                              >
                                 <SelectValue
                                   placeholder={
                                     prop.description || "Select an option"
@@ -530,6 +638,11 @@ const ToolsTab = ({
                               }
                               onChange={(e) => {
                                 const value = e.target.value;
+                                setFieldErrors((prev) => {
+                                  const next = { ...prev };
+                                  delete next[key];
+                                  return next;
+                                });
                                 if (value === "") {
                                   // Field cleared - set to undefined
                                   setParams({
@@ -544,11 +657,22 @@ const ToolsTab = ({
                                   });
                                 }
                               }}
-                              className="mt-1"
+                              onBlur={() => validateField(key)}
+                              className={cn(
+                                "mt-1",
+                                fieldErrors[key] &&
+                                  "border-red-500 focus-visible:ring-red-500 focus-visible:ring-1",
+                              )}
+                              aria-invalid={!!fieldErrors[key]}
+                              aria-describedby={fieldErrors[key] ? `${key}-error` : undefined}
                             />
                           ) : prop.type === "object" ||
                             prop.type === "array" ? (
-                            <div className="mt-1">
+                            <div
+                              className="mt-1"
+                              aria-invalid={!!fieldErrors[key]}
+                              aria-describedby={fieldErrors[key] ? `${key}-error` : undefined}
+                            >
                               <DynamicJsonForm
                                 ref={(ref) => (formRefs.current[key] = ref)}
                                 schema={{
@@ -559,12 +683,16 @@ const ToolsTab = ({
                                 }}
                                 value={
                                   (params[key] as JsonValue) ??
-                                  generateDefaultValue(prop)
+                                  generateDefaultValue(prop, key, inputSchema)
                                 }
                                 onChange={(newValue: JsonValue) => {
-                                  setParams({
-                                    ...params,
-                                    [key]: newValue,
+                                  setParams((prev) => {
+                                    const next = {
+                                      ...prev,
+                                      [key]: newValue,
+                                    };
+                                    paramsRef.current = next;
+                                    return next;
                                   });
                                   // Check validation after a short delay to allow form to update
                                   setTimeout(checkValidationErrors, 100);
@@ -574,7 +702,8 @@ const ToolsTab = ({
                           ) : prop.type === "number" ||
                             prop.type === "integer" ? (
                             <Input
-                              type="number"
+                              type="text"
+                              inputMode="decimal"
                               id={key}
                               name={key}
                               placeholder={prop.description}
@@ -585,6 +714,11 @@ const ToolsTab = ({
                               }
                               onChange={(e) => {
                                 const value = e.target.value;
+                                setFieldErrors((prev) => {
+                                  const next = { ...prev };
+                                  delete next[key];
+                                  return next;
+                                });
                                 if (value === "") {
                                   // Field cleared - set to undefined
                                   setParams({
@@ -608,10 +742,21 @@ const ToolsTab = ({
                                   }
                                 }
                               }}
-                              className="mt-1"
+                              onBlur={() => validateField(key)}
+                              className={cn(
+                                "mt-1",
+                                fieldErrors[key] &&
+                                  "border-red-500 focus-visible:ring-red-500 focus-visible:ring-1",
+                              )}
+                              aria-invalid={!!fieldErrors[key]}
+                              aria-describedby={fieldErrors[key] ? `${key}-error` : undefined}
                             />
                           ) : (
-                            <div className="mt-1">
+                            <div
+                              className="mt-1"
+                              aria-invalid={!!fieldErrors[key]}
+                              aria-describedby={fieldErrors[key] ? `${key}-error` : undefined}
+                            >
                               <DynamicJsonForm
                                 ref={(ref) => (formRefs.current[key] = ref)}
                                 schema={{
@@ -622,9 +767,13 @@ const ToolsTab = ({
                                 }}
                                 value={params[key] as JsonValue}
                                 onChange={(newValue: JsonValue) => {
-                                  setParams({
-                                    ...params,
-                                    [key]: newValue,
+                                  setParams((prev) => {
+                                    const next = {
+                                      ...prev,
+                                      [key]: newValue,
+                                    };
+                                    paramsRef.current = next;
+                                    return next;
                                   });
                                   // Check validation after a short delay to allow form to update
                                   setTimeout(checkValidationErrors, 100);
@@ -633,6 +782,17 @@ const ToolsTab = ({
                             </div>
                           )}
                         </div>
+                        {fieldErrors[key] && (
+                          <p
+                            id={`${key}-error`}
+                            role="alert"
+                            className="text-xs text-red-500 mt-1"
+                          >
+                            {fieldErrors[key] === "required"
+                              ? "This field is required"
+                              : fieldErrors[key]}
+                          </p>
+                        )}
                       </div>
                     );
                   },
@@ -862,12 +1022,23 @@ const ToolsTab = ({
                   </div>
                 )}
                 {/* [spring-ai-mcp-inspector PATCH] Run Tool button (#58):
-                    data-testid anchor for the Selenide critical-path click. */}
+                    data-testid anchor for the Selenide critical-path click.
+                    Also covers client-side parameter validation (see
+                    NOTICE.d/param-validation.txt): validateField, validateAll,
+                    derivedFieldErrors, fieldErrors state for blur/submit hints,
+                    paramsRef for stale-closure fixes, button disabled state
+                    derived from validateToolParams on every render, and the
+                    initialization effect that only seeds fields with a schema
+                    default (required fields without default stay absent). */}
                 <Button
                   data-testid="run-tool-button"
                   onClick={async () => {
                     // Validate JSON inputs before calling tool
                     if (checkValidationErrors(true)) return;
+
+                    // Validate required fields and types using latest params
+                    const fieldErrors = validateAll(paramsRef.current);
+                    if (Object.keys(fieldErrors).length > 0) return;
 
                     try {
                       setIsToolRunning(true);
@@ -887,7 +1058,7 @@ const ToolsTab = ({
                       }, {});
                       await callTool(
                         selectedTool.name,
-                        params,
+                        paramsRef.current,
                         Object.keys(metadata).length ? metadata : undefined,
                         runAsTask,
                       );
@@ -899,6 +1070,8 @@ const ToolsTab = ({
                     isToolRunning ||
                     isPollingTask ||
                     hasValidationErrors ||
+                    derivedFieldErrors.length > 0 ||
+                    Object.keys(fieldErrors).length > 0 ||
                     hasReservedMetadataEntry ||
                     hasInvalidMetaPrefixEntry ||
                     hasInvalidMetaNameEntry

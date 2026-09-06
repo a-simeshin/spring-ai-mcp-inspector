@@ -90,7 +90,7 @@ describe("ToolsTab", () => {
     });
 
     // Enter a value in the first tool's input
-    const input = screen.getByRole("spinbutton") as HTMLInputElement;
+    const input = screen.getByRole("textbox") as HTMLInputElement;
     await act(async () => {
       fireEvent.change(input, { target: { value: "42" } });
     });
@@ -104,8 +104,65 @@ describe("ToolsTab", () => {
     );
 
     // Verify input is reset
-    const newInput = screen.getByRole("spinbutton") as HTMLInputElement;
+    const newInput = screen.getByRole("textbox") as HTMLInputElement;
     expect(newInput.value).toBe("");
+  });
+
+  it("should reset fieldErrors when switching tools", async () => {
+    // Use a tool with a required field
+    const toolWithRequired = {
+      name: "requiredTool",
+      description: "Tool with required field",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          req: { type: "string" as const },
+        },
+        required: ["req"],
+      },
+    } as unknown as Tool;
+    // Use a tool without required fields
+    const toolNoRequired = {
+      name: "noRequiredTool",
+      description: "Tool without required fields",
+      inputSchema: {
+        type: "object" as const,
+        properties: {},
+      },
+    } as unknown as Tool;
+
+    const { rerender } = renderToolsTab({
+      tools: [toolWithRequired, toolNoRequired],
+      selectedTool: toolWithRequired,
+    });
+
+    // Blur the empty required field to trigger validateField,
+    // which sets fieldErrors
+    const requiredInput = screen.getByRole("textbox") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.blur(requiredInput);
+    });
+
+    // Button should be disabled (stale fieldErrors from required field)
+    const runToolButton = screen.getByRole("button", { name: /run tool/i });
+    expect(runToolButton.getAttribute("disabled")).not.toBeNull();
+
+    // Switch to tool without required fields
+    rerender(
+      <Tabs defaultValue="tools">
+        <ToolsTab
+          {...defaultProps}
+          tools={[toolWithRequired, toolNoRequired]}
+          selectedTool={toolNoRequired}
+        />
+      </Tabs>,
+    );
+
+    // Verify button is now enabled (fieldErrors was cleared by the effect)
+    const newRunToolButton = screen.getByRole("button", {
+      name: /run tool/i,
+    });
+    expect(newRunToolButton.getAttribute("disabled")).toBeNull();
   });
 
   it("should show/hide/disable run-as-task checkbox based on taskSupport", async () => {
@@ -193,10 +250,10 @@ describe("ToolsTab", () => {
       selectedTool: mockTools[1], // Use the tool with integer type
     });
 
-    const input = screen.getByRole("spinbutton", {
+    const input = screen.getByRole("textbox", {
       name: /count/i,
     }) as HTMLInputElement;
-    expect(input).toHaveProperty("type", "number");
+    expect(input).toHaveProperty("type", "text");
     fireEvent.change(input, { target: { value: "42" } });
     expect(input.value).toBe("42");
 
@@ -220,7 +277,7 @@ describe("ToolsTab", () => {
       selectedTool: mockTools[0],
     });
 
-    const input = screen.getByRole("spinbutton") as HTMLInputElement;
+    const input = screen.getByRole("textbox") as HTMLInputElement;
 
     // Complete the negative number
     fireEvent.change(input, { target: { value: "-42" } });
@@ -1149,8 +1206,8 @@ describe("ToolsTab", () => {
       });
 
       // Fill in the simple parameters
-      const messageInput = screen.getByRole("textbox");
-      const countInput = screen.getByRole("spinbutton");
+      const messageInput = screen.getByRole("textbox", { name: /message/i });
+      const countInput = screen.getByRole("textbox", { name: /count/i });
 
       fireEvent.change(messageInput, { target: { value: "test message" } });
       fireEvent.change(countInput, { target: { value: "5" } });
@@ -1184,11 +1241,12 @@ describe("ToolsTab", () => {
       const textareas = screen.getAllByRole("textbox");
       expect(textareas.length).toBe(2);
 
-      // Clear both textareas (empty JSON should be valid)
-      fireEvent.change(textareas[0], { target: { value: "{}" } });
-      fireEvent.change(textareas[1], { target: { value: "[]" } });
+      // Enter non-empty JSON first to trigger DynamicJsonForm onChange,
+      // then clear to empty (empty JSON should be valid)
+      fireEvent.change(textareas[0], { target: { value: '{ "x": 1 }' } });
+      fireEvent.change(textareas[1], { target: { value: '["a"]' } });
 
-      // Wait for debounced updates
+      // Wait for debounced updates to propagate
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 350));
       });
@@ -1199,7 +1257,7 @@ describe("ToolsTab", () => {
         fireEvent.click(runButton);
       });
 
-      // Tool should have been called (empty JSON is considered valid)
+      // Tool should have been called (JSON is considered valid)
       expect(mockCallTool).toHaveBeenCalled();
     });
   });
@@ -1275,12 +1333,159 @@ describe("ToolsTab", () => {
     });
   });
 
+  describe("Derived disabled state and submit payload", () => {
+    const sumTool: Tool = {
+      name: "sum",
+      description: "Adds two integers",
+      inputSchema: {
+        type: "object" as const,
+        required: ["a", "b"],
+        properties: {
+          a: { type: "integer" as const, description: "First number" },
+          b: { type: "integer" as const, description: "Second number" },
+        },
+      },
+    };
+
+    it("should disable Run Tool on untouched form with required fields", () => {
+      renderToolsTab({ selectedTool: sumTool });
+
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      expect(runButton).toBeDisabled();
+    });
+
+    it("should enable Run Tool after filling all required fields", async () => {
+      const mockCallTool = jest.fn();
+      renderToolsTab({ selectedTool: sumTool, callTool: mockCallTool });
+
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      expect(runButton).toBeDisabled();
+
+      // Fill both required fields
+      const inputs = screen.getAllByRole("textbox");
+      expect(inputs).toHaveLength(2);
+
+      await act(async () => {
+        fireEvent.change(inputs[0], { target: { value: "2" } });
+        fireEvent.change(inputs[1], { target: { value: "3" } });
+      });
+
+      expect(runButton).not.toBeDisabled();
+
+      await act(async () => {
+        fireEvent.click(runButton);
+      });
+
+      expect(mockCallTool).toHaveBeenCalledWith(
+        sumTool.name,
+        { a: 2, b: 3 },
+        undefined,
+        false,
+      );
+    });
+
+    it("should keep Run Tool disabled when only one required field is filled", async () => {
+      renderToolsTab({ selectedTool: sumTool });
+
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      expect(runButton).toBeDisabled();
+
+      // Fill only one field
+      const inputs = screen.getAllByRole("textbox");
+      await act(async () => {
+        fireEvent.change(inputs[0], { target: { value: "2" } });
+      });
+
+      expect(runButton).toBeDisabled();
+    });
+
+    it("should not include omitted required fields in submit payload", async () => {
+      const mockCallTool = jest.fn();
+      renderToolsTab({ selectedTool: sumTool, callTool: mockCallTool });
+
+      const inputs = screen.getAllByRole("textbox");
+      await act(async () => {
+        fireEvent.change(inputs[0], { target: { value: "2" } });
+        fireEvent.change(inputs[1], { target: { value: "3" } });
+      });
+
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      await act(async () => {
+        fireEvent.click(runButton);
+      });
+
+      // Verify payload is exactly {a: 2, b: 3} with no extra keys
+      expect(mockCallTool).toHaveBeenCalledWith(
+        sumTool.name,
+        { a: 2, b: 3 },
+        undefined,
+        false,
+      );
+    });
+
+    it("should show 'must be a number' hint for non-numeric input in integer field", async () => {
+      // Use a tool with an integer field - the string draft "abc" triggers
+      // validateToolParams to report "must be a number", and the error
+      // message appears as a hint below the field. The submit button stays
+      // disabled and the non-numeric key is absent from the payload.
+      const toolWithIntField: Tool = {
+        name: "intTool",
+        description: "Tool with integer field",
+        inputSchema: {
+          type: "object" as const,
+          required: ["a"],
+          properties: {
+            a: { type: "integer" as const, description: "First number" },
+          },
+        },
+      };
+
+      const mockCallTool = jest.fn();
+      renderToolsTab({
+        tools: [toolWithIntField],
+        selectedTool: toolWithIntField,
+        callTool: mockCallTool,
+      });
+
+      // Type "abc" into the integer field
+      const input = screen.getByRole("textbox", { name: /a/i });
+      await act(async () => {
+        fireEvent.change(input, { target: { value: "abc" } });
+      });
+
+      // Blur to trigger validateField
+      await act(async () => {
+        fireEvent.blur(input);
+      });
+
+      // The hint "must be a number" should appear
+      expect(screen.getByText("must be a number")).toBeInTheDocument();
+
+      // Submit button should be disabled (invalid field)
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      expect(runButton).toBeDisabled();
+
+      // Also verify that when we type a valid number, the hint disappears
+      await act(async () => {
+        fireEvent.change(input, { target: { value: "42" } });
+      });
+      await act(async () => {
+        fireEvent.blur(input);
+      });
+      expect(screen.queryByText("must be a number")).not.toBeInTheDocument();
+      expect(runButton).not.toBeDisabled();
+    });
+  });
+
   describe("Responsive layout", () => {
     // [spring-ai-mcp-inspector PATCH] Responsive Tools list/detail grid
     // (#58): upstream hard-codes two columns, which overlap at a 375px
     // viewport. The local fix stacks the grid into one column below the
     // `sm` (640px) breakpoint and keeps two columns at and above it; the
     // testid anchors let Selenide assert geometry deterministically.
+    // Also covers client-side parameter validation tests (see
+    // NOTICE.d/param-validation.txt): untouched sum tool disabled,
+    // submit payload regression (a=2,b=3 sends exactly {a:2,b:3}).
     it("should stack the tools list/detail grid below the sm breakpoint", () => {
       renderToolsTab({ selectedTool: mockTools[0] });
 
@@ -1292,5 +1497,42 @@ describe("ToolsTab", () => {
       expect(screen.getByTestId("tools-detail-pane")).toBeInTheDocument();
       expect(screen.getByTestId("run-tool-button")).toBeInTheDocument();
     });
+  });
+
+  it("should set aria-invalid and aria-describedby on textarea after blur of empty required field", async () => {
+    const toolWithRequiredString = {
+      name: "reqStringTool",
+      description: "Tool with required string",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          name: { type: "string" as const },
+        },
+        required: ["name"],
+      },
+    } as unknown as Tool;
+
+    renderToolsTab({
+      tools: [toolWithRequiredString],
+      selectedTool: toolWithRequiredString,
+    });
+
+    const textarea = screen.getByRole("textbox");
+    // Blur empty required field
+    await act(async () => {
+      fireEvent.blur(textarea);
+    });
+
+    // Verify aria-invalid is set to true
+    expect(textarea).toHaveAttribute("aria-invalid", "true");
+
+    // Verify aria-describedby points to the error element
+    const describedBy = textarea.getAttribute("aria-describedby");
+    expect(describedBy).toBe("name-error");
+
+    // Verify the error element exists with the expected id
+    const errorEl = screen.getByRole("alert");
+    expect(errorEl).toHaveAttribute("id", "name-error");
+    expect(errorEl).toHaveTextContent("This field is required");
   });
 });
