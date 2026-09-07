@@ -50,6 +50,7 @@ import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.proxy.ProxyUpstreamProber;
 import io.inspector.mcp.core.shutdown.McpServerTransportDrain;
 import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 import io.inspector.mcp.core.timeline.TimelineService;
@@ -237,6 +238,15 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 	public McpProxy mcpInspectorMcpProxy(final JsonMapper objectMapper,
 			final ObjectProvider<McpTrafficRecorder> trafficRecorder) {
 		return new McpProxy(objectMapper, trafficRecorder.getIfAvailable());
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector", name = "upstream-liveness-probe-enabled",
+			havingValue = "true", matchIfMissing = true)
+	public ProxyUpstreamProber mcpInspectorProxyUpstreamProber(final ProxySessionRegistry registry,
+			final McpInspectorProperties properties) {
+		return new ProxyUpstreamProber(registry, properties.getTimeouts());
 	}
 
 	@Bean

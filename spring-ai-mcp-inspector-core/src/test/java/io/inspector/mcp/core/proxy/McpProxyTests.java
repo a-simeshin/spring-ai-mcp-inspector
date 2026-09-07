@@ -131,7 +131,7 @@ class McpProxyTests {
 				.willReturn(Mono.error(new RuntimeException("send failed")), Mono.empty());
 			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
 
-			// when — two valid frames; the first send errors, the second must still be
+			// when: two valid frames; the first send errors, the second must still be
 			// relayed
 			McpProxyTests.this.browserToTarget
 				.tryEmitNext(McpProxyTests.this.mapper.createObjectNode().put("jsonrpc", "2.0").put("method", "ping"));
@@ -149,7 +149,7 @@ class McpProxyTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("a sendMessage failure (e.g. connection refused) fails the session upstream so per-request awaiters and the SSE backchannel wake fast")
 		void start_whenSendMessageFails_terminatesUpstream() {
-			// given — the SDK masks sendMessage errors and re-surfaces them on the
+			// given: the SDK masks sendMessage errors and re-surfaces them on the
 			// pump as a wrapped completion failure
 			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
 			final java.util.concurrent.CompletionException connectError = new java.util.concurrent.CompletionException(
@@ -163,7 +163,7 @@ class McpProxyTests {
 				.put("id", 1)
 				.put("method", "ping"));
 
-			// then — the upstream failure is propagated to the browser side instead of
+			// then: the upstream failure is propagated to the browser side instead of
 			// being swallowed until the streamable-request timeout
 			verify(McpProxyTests.this.transport, timeout(1000)).sendMessage(any());
 			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
@@ -198,7 +198,7 @@ class McpProxyTests {
 					McpProxyTests.this.mapper.createObjectNode().put("ok", true), null);
 			final Mono<JSONRPCMessage> reply = handler.apply(Mono.just(inbound));
 
-			// then — handler returns empty (proxy never originates a reply)
+			// then: handler returns empty (proxy never originates a reply)
 			StepVerifier.create(reply).verifyComplete();
 			// and the inbound frame was emitted to the browser sink
 			StepVerifier.create(McpProxyTests.this.targetToBrowser.asFlux().next())
@@ -215,7 +215,7 @@ class McpProxyTests {
 				+ "and still returns an empty reply")
 		@SuppressWarnings("unchecked")
 		void start_whenBrowserSinkComplete_handlerSwallowsEmitFailure() {
-			// given — complete the browser sink so tryEmitNext reports a failure result
+			// given: complete the browser sink so tryEmitNext reports a failure result
 			McpProxyTests.this.targetToBrowser.tryEmitComplete();
 			final ArgumentCaptor<Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>>> handlerCaptor = ArgumentCaptor
 				.forClass(Function.class);
@@ -228,8 +228,113 @@ class McpProxyTests {
 			// when
 			final Mono<JSONRPCMessage> reply = handler.apply(Mono.just(inbound));
 
-			// then — the handler never originates a reply even when emission fails
+			// then: the handler never originates a reply even when emission fails
 			StepVerifier.create(reply).verifyComplete();
+		}
+
+		@Test
+		@Story("Probe response is filtered")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a JSON-RPC response whose id is a registered probe id is removed from the probe set, "
+				+ "never forwarded to the browser, and does not touch session activity")
+		@SuppressWarnings("unchecked")
+		void start_whenProbeResponse_filteredAndRemovedFromProbeSet() {
+			// given
+			final String probeId = McpProxyTests.this.session.nextProbeId();
+			final ArgumentCaptor<Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>>> handlerCaptor = ArgumentCaptor
+				.forClass(Function.class);
+			given(McpProxyTests.this.transport.connect(handlerCaptor.capture())).willReturn(Mono.never());
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+			final Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>> handler = handlerCaptor.getValue();
+			final java.time.Instant before = McpProxyTests.this.session.lastActivity();
+			final McpSchema.JSONRPCResponse probeResponse = new McpSchema.JSONRPCResponse("2.0", probeId,
+					McpProxyTests.this.mapper.createObjectNode(), null);
+
+			// when
+			StepVerifier.create(handler.apply(Mono.just(probeResponse))).verifyComplete();
+
+			// then: the probe id is gone (its removal cancels the answer deadline)
+			assertThat(McpProxyTests.this.session.isProbeId(probeId)).isFalse();
+			// and nothing reached the browser sink (subscribe after the fact: the
+			// replay sink would still hold a frame if one had been emitted)
+			StepVerifier.create(McpProxyTests.this.targetToBrowser.asFlux().next())
+				.thenAwait(Duration.ofMillis(200))
+				.thenCancel()
+				.verify(Duration.ofSeconds(1));
+			// and probe traffic does not count as activity
+			assertThat(McpProxyTests.this.session.lastActivity()).isEqualTo(before);
+		}
+
+		@Test
+		@Story("Negative-integer user response is NOT filtered")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a user frame with a negative integer id collides with nothing: probe ids are "
+				+ "strings, so the response is relayed to the browser (no 504 for the POST awaiter)")
+		@SuppressWarnings("unchecked")
+		void start_whenNegativeIntegerIdUserResponse_relayedToBrowser() {
+			// given
+			final ArgumentCaptor<Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>>> handlerCaptor = ArgumentCaptor
+				.forClass(Function.class);
+			given(McpProxyTests.this.transport.connect(handlerCaptor.capture())).willReturn(Mono.never());
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+			final Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>> handler = handlerCaptor.getValue();
+			final McpSchema.JSONRPCResponse userResponse = new McpSchema.JSONRPCResponse("2.0", -1,
+					McpProxyTests.this.mapper.createObjectNode().put("ok", true), null);
+
+			// when
+			StepVerifier.create(handler.apply(Mono.just(userResponse))).verifyComplete();
+
+			// then: relayed verbatim; the probe filter only swallows mcpi-probe-* ids
+			StepVerifier.create(McpProxyTests.this.targetToBrowser.asFlux().next())
+				.assertNext((node) -> assertThat(node.get("id").asInt()).isEqualTo(-1))
+				.thenCancel()
+				.verify(Duration.ofSeconds(1));
+		}
+
+		@Test
+		@Story("Inbound stream completion fails upstream")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("an upstream disconnect that terminates the inbound message stream is propagated "
+				+ "via failUpstream so awaiters and the SSE subscriber are released promptly. The "
+				+ "per-frame flux terminates after every relayed frame, so this hook fires constantly; "
+				+ "failUpstream's idempotence absorbs the repeats")
+		@SuppressWarnings("unchecked")
+		void start_whenInboundStreamTerminates_failsUpstream() {
+			// given
+			final ArgumentCaptor<Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>>> handlerCaptor = ArgumentCaptor
+				.forClass(Function.class);
+			given(McpProxyTests.this.transport.connect(handlerCaptor.capture())).willReturn(Mono.never());
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+			final Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>> handler = handlerCaptor.getValue();
+
+			// when: the SDK hands an empty (already complete) inbound stream
+			StepVerifier.create(handler.apply(Mono.empty())).verifyComplete();
+
+			// then
+			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
+		}
+
+		@Test
+		@Story("Inbound stream error fails upstream")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("an upstream disconnect that errors the inbound message stream is propagated "
+				+ "via failUpstream")
+		@SuppressWarnings("unchecked")
+		void start_whenInboundStreamErrors_failsUpstream() {
+			// given
+			final ArgumentCaptor<Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>>> handlerCaptor = ArgumentCaptor
+				.forClass(Function.class);
+			given(McpProxyTests.this.transport.connect(handlerCaptor.capture())).willReturn(Mono.never());
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+			final Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>> handler = handlerCaptor.getValue();
+
+			// when
+			final Mono<JSONRPCMessage> reply = handler
+				.apply(Mono.error(new RuntimeException("upstream connection dropped")));
+			StepVerifier.create(reply).expectError(RuntimeException.class).verify(Duration.ofSeconds(1));
+
+			// then
+			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
 		}
 
 	}
@@ -255,6 +360,23 @@ class McpProxyTests {
 		}
 
 		@Test
+		@Story("Connect success is not upstream death")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("per the McpClientTransport contract, connect() completes as soon as the client "
+				+ "is set up (for the SSE transport that is the endpoint prologue): a successful connect "
+				+ "must NOT fail the upstream")
+		void start_whenConnectSucceeds_upstreamStaysAlive() {
+			// given
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+
+			// when
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session).block(Duration.ofSeconds(1));
+
+			// then: the session must NOT be torn down just because connect() completed
+			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isFalse();
+		}
+
+		@Test
 		@Story("Connect failure")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("a connect() failure is surfaced through the returned Mono")
@@ -271,6 +393,8 @@ class McpProxyTests {
 				.expectErrorMatches(
 						(err) -> err instanceof IllegalStateException && err.getMessage().equals("connect failed"))
 				.verify(Duration.ofSeconds(1));
+			// and the upstream is marked terminated so awaiters are released
+			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
 		}
 
 	}

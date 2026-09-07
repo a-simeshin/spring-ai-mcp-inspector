@@ -83,6 +83,20 @@ public final class ProxyAppHarness {
 		if (authToken != null) {
 			args.add("--spring.ai.mcp.inspector.auth-token=" + authToken);
 		}
+		// Disable the liveness probe by default in harness-driven ITs: the probe's
+		// idle threshold fires during long test waits and kills sessions mid-test.
+		// Tests that specifically verify the probe (ProxySseLivenessIT) re-enable it
+		// via extraArgs.
+		boolean probeConfigured = false;
+		for (final String arg : extraArgs) {
+			if (arg.contains("upstream-liveness-probe-enabled")) {
+				probeConfigured = true;
+				break;
+			}
+		}
+		if (!probeConfigured) {
+			args.add("--spring.ai.mcp.inspector.upstream-liveness-probe-enabled=false");
+		}
 		java.util.Collections.addAll(args, extraArgs);
 
 		return new SpringApplicationBuilder(DemoApplication.class).run(args.toArray(new String[0]));

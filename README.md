@@ -278,6 +278,9 @@ fast). All values use Spring's relaxed `Duration` syntax — e.g. `30s`, `2m`, `
 | `spring.ai.mcp.inspector.timeouts.fetch-connect` | `10s` | Connect timeout for the outbound `/fetch` HTTP client. |
 | `spring.ai.mcp.inspector.timeouts.fetch-request` | `30s` | Per-request timeout for outbound `/fetch` calls. |
 | `spring.ai.mcp.inspector.timeouts.server-request` | `120s` | How long a server→UI request (sampling / elicitation / roots) waits for the browser to answer. |
+| `spring.ai.mcp.inspector.timeouts.upstream-probe-interval` | `10s` | Interval between liveness probes: every idle proxied session is pinged on this cadence. |
+| `spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold` | `15s` | How long a session may see no browser-initiated traffic before the first probe is sent. |
+| `spring.ai.mcp.inspector.timeouts.upstream-probe-timeout` | `5s` | Budget for one probe, applied to both the ping POST and the JSON-RPC answer deadline. A half-open upstream that accepts the POST but never answers is detected too. Worst-case upstream-death detection is idle-threshold + interval + timeout. |
 
 ```yaml
 spring:
@@ -287,6 +290,23 @@ spring:
         timeouts:
           streamable-request: 60s
           server-request: 5m
+```
+
+### Upstream liveness probe
+
+Idle proxied sessions are pinged with a JSON-RPC `ping` so a dead upstream closes the
+downstream stream (the amber `disconnected-remote` banner) instead of hanging until the
+next user action. Probe traffic is internal: its responses never reach the browser and do
+not reset the session's activity clock. Only transport-level failures (connection refused,
+DNS, timeout) tear a session down; a live upstream that rejects the ping (e.g. with an
+HTTP 4xx before `initialize`) keeps its session. Disable with:
+
+```yaml
+spring:
+  ai:
+    mcp:
+      inspector:
+        upstream-liveness-probe-enabled: false
 ```
 
 ### Upstream connection stalls
