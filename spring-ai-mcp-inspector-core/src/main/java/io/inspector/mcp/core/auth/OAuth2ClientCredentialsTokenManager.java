@@ -27,8 +27,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -91,6 +93,9 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 
 	/** Per-profile locks for the single-flight contract. */
 	private final ConcurrentMap<String, Object> profileLocks = new ConcurrentHashMap<>();
+
+	/** Orphan-lock sweeps performed (ADR t_98c7a72a). */
+	private final AtomicLong orphanLockCleanups = new AtomicLong();
 
 	public OAuth2ClientCredentialsTokenManager() {
 		this(HttpClient.newBuilder().connectTimeout(REQUEST_TIMEOUT).build(), new JsonMapper());
@@ -190,6 +195,20 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 		}
 		this.tokenCache.remove(profileId);
 		this.credentials.remove(profileId);
+		this.profileLocks.remove(profileId);
+		// Fallback orphan sweep: if the lock map grows unboundedly, drop keys with no
+		// stored credentials (ADR t_98c7a72a). A lock for a live profile is never
+		// orphaned: its credentials entry exists until evict() removes it.
+		if (this.profileLocks.size() >= 10_000) {
+			final Set<String> liveKeys = this.credentials.keySet();
+			final int before = this.profileLocks.size();
+			this.profileLocks.keySet().retainAll(liveKeys);
+			final int removed = before - this.profileLocks.size();
+			if (removed > 0) {
+				this.orphanLockCleanups.addAndGet(removed);
+				LOG.info("oauth2-cc: orphan profileLock sweep removed {} entries", removed);
+			}
+		}
 		LOG.debug("oauth2-cc[{}] evicted token and stored credentials", profileId);
 	}
 
@@ -207,6 +226,22 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 	 */
 	public int cacheSize() {
 		return this.tokenCache.size();
+	}
+
+	/**
+	 * Visible profile-lock map size for tests / metrics.
+	 * @return the number of profile-lock entries
+	 */
+	public int profileLockCount() {
+		return this.profileLocks.size();
+	}
+
+	/**
+	 * Cumulative orphan-lock sweeps performed: intended for tests / metrics.
+	 * @return the orphan cleanup count
+	 */
+	public long orphanLockCleanups() {
+		return this.orphanLockCleanups.get();
 	}
 
 	private boolean expired(final TokenEntry entry) {

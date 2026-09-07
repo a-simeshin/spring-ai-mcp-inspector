@@ -237,12 +237,15 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxySessionRegistry mcpInspectorProxySessionRegistry(final AuthProfileStore authProfileStore) {
+	public ProxySessionRegistry mcpInspectorProxySessionRegistry(final AuthProfileStore authProfileStore,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
 		final ProxySessionRegistry registry = new ProxySessionRegistry();
 		registry.setInactivityBudget(this.properties.getTimeouts().getSessionReaper());
 		// D4: session teardown clears the bound profile; the reaper sweeps expired
 		// profiles.
 		registry.setAuthProfileStore(authProfileStore);
+		// ADR t_98c7a72a: the reaper sweeps expired auth-code states and orphaned tokens.
+		registry.setAuthCodeExchanger(authCodeExchanger);
 		return registry;
 	}
 

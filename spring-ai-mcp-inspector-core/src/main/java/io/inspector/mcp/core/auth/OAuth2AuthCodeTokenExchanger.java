@@ -25,11 +25,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -79,6 +81,9 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 
 	/** Exchanged tokens keyed by profile id (never returned to the browser). */
 	private final ConcurrentMap<String, TokenHandle> tokens = new ConcurrentHashMap<>();
+
+	/** Expired states removed by the sweeper (ADR t_98c7a72a). */
+	private final AtomicLong expiredStatesRemoved = new AtomicLong();
 
 	/** Outbound HTTP client (JDK). */
 	private final java.net.http.HttpClient httpClient;
@@ -241,6 +246,46 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 		this.states.remove(profileId);
 		this.tokens.remove(profileId);
 		LOG.debug("oauth2-authcode[{}] evicted state and tokens", profileId);
+	}
+
+	/**
+	 * Removes every pending state whose TTL has passed, plus any orphaned expired tokens.
+	 * Called by the {@code ProxySessionRegistry} reaper sweep (ADR t_98c7a72a).
+	 * @param now the sweep timestamp
+	 * @return the number of removed states
+	 */
+	public int removeExpiredStates(final Instant now) {
+		if (now == null) {
+			return 0;
+		}
+		final List<String> expired = this.states.entrySet()
+			.stream()
+			.filter((e) -> !e.getValue().expiresAt().isAfter(now))
+			.map(Map.Entry::getKey)
+			.toList();
+		expired.forEach(this.states::remove);
+		// Orphaned expired tokens (no live state, token expired): drop them too so the
+		// token map does not grow unboundedly between evict() calls.
+		final int tokensBefore = this.tokens.size();
+		this.tokens.entrySet().removeIf((e) -> {
+			final TokenHandle handle = e.getValue();
+			return handle.expiresAt() != null && !handle.expiresAt().isAfter(now);
+		});
+		final int tokensRemoved = tokensBefore - this.tokens.size();
+		if (!expired.isEmpty() || tokensRemoved > 0) {
+			this.expiredStatesRemoved.addAndGet(expired.size());
+			LOG.info("oauth2-authcode: expired-state sweep removed {} states, {} orphaned tokens", expired.size(),
+					tokensRemoved);
+		}
+		return expired.size();
+	}
+
+	/**
+	 * Cumulative expired states removed by the sweeper: intended for tests / metrics.
+	 * @return the expired-state removal count
+	 */
+	public long expiredStatesRemoved() {
+		return this.expiredStatesRemoved.get();
 	}
 
 	/**

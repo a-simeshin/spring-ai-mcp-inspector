@@ -23,6 +23,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,11 +66,17 @@ public class AuthProfileStore {
 	/** All stored profiles keyed by profileId. */
 	private final ConcurrentMap<String, Entry> entries = new ConcurrentHashMap<>();
 
-	/** Optional eviction hook into the OAuth2 token machinery. */
-	private volatile TokenEvictor tokenEvictor;
+	/** Maximum number of profiles per owner (ADR t_98c7a72a). */
+	public static final int MAX_PROFILES_PER_OWNER = 50;
 
 	/** Bounded lifetime of a stored profile entry. */
 	private volatile Duration profileTtl = DEFAULT_PROFILE_TTL;
+
+	/** Rejections by the per-owner profile cap. */
+	private final AtomicLong profileLimitRejections = new AtomicLong();
+
+	/** Optional eviction hook into the OAuth2 token machinery. */
+	private volatile TokenEvictor tokenEvictor;
 
 	/**
 	 * Registers {@code profile} under {@code ownerId} and returns the new server-issued
@@ -93,6 +100,13 @@ public class AuthProfileStore {
 			if (findByName(ownerId, profile.name()).isPresent()) {
 				throw new IllegalArgumentException(
 						"a profile named '" + profile.name() + "' already exists for this session");
+			}
+			final int ownerSize = sizeForOwner(ownerId);
+			if (ownerSize >= MAX_PROFILES_PER_OWNER) {
+				this.profileLimitRejections.incrementAndGet();
+				LOG.info("auth-profile: owner {} rejected at cap {}/{}", ownerId, ownerSize, MAX_PROFILES_PER_OWNER);
+				throw new IllegalArgumentException(
+						"profile limit reached for this session (" + MAX_PROFILES_PER_OWNER + ")");
 			}
 			final String profileId = UUID.randomUUID().toString();
 			final ProfileState state = isPendingAuthCode(profile) ? ProfileState.PENDING : ProfileState.REGISTERED;
@@ -360,6 +374,32 @@ public class AuthProfileStore {
 	 */
 	public int size() {
 		return this.entries.size();
+	}
+
+	/**
+	 * Number of profiles owned by {@code ownerId}: intended for tests / metrics.
+	 * @param ownerId the owner id
+	 * @return the owner's profile count
+	 */
+	public int sizeForOwner(final String ownerId) {
+		if (ownerId == null) {
+			return 0;
+		}
+		int count = 0;
+		for (final Entry entry : this.entries.values()) {
+			if (entry.ownerId().equals(ownerId)) {
+				count++;
+			}
+		}
+		return count;
+	}
+
+	/**
+	 * Cumulative rejections by the per-owner cap: intended for tests / metrics.
+	 * @return the rejection count
+	 */
+	public long profileLimitRejections() {
+		return this.profileLimitRejections.get();
 	}
 
 	/**

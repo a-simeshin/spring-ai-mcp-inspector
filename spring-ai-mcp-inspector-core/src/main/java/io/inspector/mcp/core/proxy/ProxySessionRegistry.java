@@ -32,6 +32,7 @@ import org.springframework.core.annotation.Order;
 import org.springframework.scheduling.annotation.Scheduled;
 
 import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.shutdown.ShutdownDrain;
 
 /**
@@ -110,12 +111,27 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	private volatile AuthProfileStore authProfileStore;
 
 	/**
+	 * Optional auth-code exchanger; when present, the reaper sweeps expired states and
+	 * orphaned tokens (ADR t_98c7a72a).
+	 */
+	private volatile OAuth2AuthCodeTokenExchanger authCodeExchanger;
+
+	/**
 	 * Sets the optional auth-profile store whose bound profiles are cleared with the
 	 * session and whose expired entries are swept by {@link #reap()}.
 	 * @param authProfileStore the store, or {@code null} to disable the hooks
 	 */
 	public void setAuthProfileStore(final AuthProfileStore authProfileStore) {
 		this.authProfileStore = authProfileStore;
+	}
+
+	/**
+	 * Sets the optional auth-code exchanger whose expired states are swept by
+	 * {@link #reap()}.
+	 * @param authCodeExchanger the exchanger, or {@code null} to disable the sweep
+	 */
+	public void setAuthCodeExchanger(final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
+		this.authCodeExchanger = authCodeExchanger;
 	}
 
 	/**
@@ -301,6 +317,10 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 		final AuthProfileStore store = this.authProfileStore;
 		if (store != null) {
 			store.removeExpired(now);
+		}
+		final OAuth2AuthCodeTokenExchanger exchanger = this.authCodeExchanger;
+		if (exchanger != null) {
+			exchanger.removeExpiredStates(now);
 		}
 		final Duration budget = this.inactivityBudget;
 		for (final ProxySession session : this.sessions.values()) {
