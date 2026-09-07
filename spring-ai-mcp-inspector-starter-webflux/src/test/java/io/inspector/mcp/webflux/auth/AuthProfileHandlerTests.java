@@ -31,6 +31,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.reactive.server.WebTestClient;
+import reactor.core.publisher.Mono;
 
 import io.inspector.mcp.core.auth.ApiKeyPlacement;
 import io.inspector.mcp.core.auth.AuthProfile;
@@ -470,9 +471,11 @@ class AuthProfileHandlerTests {
 				.willReturn(Optional.of(pending));
 			given(AuthProfileHandlerTests.this.exchanger.verifyAndConsumeState(OWNER_A, "pid-ac", "server-state-1"))
 				.willReturn(true);
-			given(AuthProfileHandlerTests.this.exchanger.exchange(pending, "auth-code-1", "verifier-1")).willReturn(
-					new OAuth2AuthCodeTokenExchanger.TokenHandle("at-1", "rt-1", Instant.now().plusSeconds(60)));
+			given(AuthProfileHandlerTests.this.exchanger.exchangeAsync(pending, "auth-code-1", "verifier-1"))
+				.willReturn(Mono
+					.just(new OAuth2AuthCodeTokenExchanger.TokenHandle("at-1", "rt-1", Instant.now().plusSeconds(60))));
 			given(AuthProfileHandlerTests.this.store.markActive(OWNER_A, "pid-ac")).willReturn(true);
+			given(AuthProfileHandlerTests.this.store.currentGeneration()).willReturn(0L);
 
 			// when/then
 			withOwner(AuthProfileHandlerTests.this.client.post()
@@ -484,7 +487,7 @@ class AuthProfileHandlerTests {
 				.expectBody()
 				.jsonPath("$.profileId")
 				.isEqualTo("pid-ac");
-			verify(AuthProfileHandlerTests.this.exchanger).storeTokens(eq("pid-ac"),
+			verify(AuthProfileHandlerTests.this.exchanger).storeTokensIfCurrent(eq("pid-ac"), eq(0L),
 					any(OAuth2AuthCodeTokenExchanger.TokenHandle.class));
 			verify(AuthProfileHandlerTests.this.store).markActive(OWNER_A, "pid-ac");
 		}
@@ -542,9 +545,9 @@ class AuthProfileHandlerTests {
 				.willReturn(Optional.of(pending));
 			given(AuthProfileHandlerTests.this.exchanger.verifyAndConsumeState(OWNER_A, "pid-ac", "server-state-1"))
 				.willReturn(true);
-			given(AuthProfileHandlerTests.this.exchanger.exchange(pending, "auth-code-1", "verifier-1"))
-				.willThrow(new IllegalArgumentException(
-						"PKCE verification failed: S256(codeVerifier) does not match codeChallenge"));
+			given(AuthProfileHandlerTests.this.exchanger.exchangeAsync(pending, "auth-code-1", "verifier-1"))
+				.willReturn(Mono.error(new IllegalArgumentException(
+						"PKCE verification failed: S256(codeVerifier) does not match codeChallenge")));
 
 			// when/then
 			withOwner(AuthProfileHandlerTests.this.client.post()
