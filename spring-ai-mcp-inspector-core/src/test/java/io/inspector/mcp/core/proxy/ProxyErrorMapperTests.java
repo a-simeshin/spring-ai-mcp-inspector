@@ -684,6 +684,69 @@ class ProxyErrorMapperTests {
 			assertThat(dto.code()).isEqualTo("forbidden");
 		}
 
+		@Test
+		@Story("Port safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("extractStatus returns empty for ?code:404 in URI query string (colon, not equals)")
+		void extractStatus_queryCodeColon_returnsEmpty() {
+			// when/then - ?code:404 in query string is NOT an HTTP status
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("GET https://host/path?code:404")))
+				.isEmpty();
+		}
+
+		@Test
+		@Story("Port safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("extractStatus returns empty for /status:404 in URI path")
+		void extractStatus_pathStatusColon_returnsEmpty() {
+			// when/then - /status:404 in URI path is NOT an HTTP status
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("GET https://host/status:404"))).isEmpty();
+		}
+
+		@Test
+		@Story("Port safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("?code:404 in URI query does NOT map to a DTO")
+		void map_queryCodeColon_returnsNull() {
+			// when/then
+			assertThat(ProxyErrorMapper.map(new RuntimeException("GET https://host/path?code:404"), TransportKind.SSE))
+				.isNull();
+		}
+
+		@Test
+		@Story("Port safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("/status:404 in URI path does NOT map to a DTO")
+		void map_pathStatusColon_returnsNull() {
+			// when/then
+			assertThat(
+					ProxyErrorMapper.map(new RuntimeException("GET https://host/status:404"), TransportKind.STREAMABLE))
+				.isNull();
+		}
+
+		@Test
+		@Story("Port safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("extractStatus returns empty for boundary port numbers host:100 and host:599")
+		void extractStatus_boundaryPorts_returnsEmpty() {
+			// when/then
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("Connection refused: host:100"))).isEmpty();
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("Connection refused: host:599"))).isEmpty();
+		}
+
+		@Test
+		@Story("Port safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("boundary port numbers host:100 and host:599 do NOT map to a DTO")
+		void map_boundaryPorts_returnsNull() {
+			// when/then
+			assertThat(ProxyErrorMapper.map(new RuntimeException("Connection refused: host:100"), TransportKind.SSE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("Connection refused: host:599"),
+					TransportKind.STREAMABLE))
+				.isNull();
+		}
+
 	}
 
 }
