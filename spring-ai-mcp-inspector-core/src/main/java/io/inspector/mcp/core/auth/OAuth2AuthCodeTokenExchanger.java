@@ -269,14 +269,12 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 	public void storeTokensIfCurrent(final String profileId, final long expectedGeneration, final TokenHandle handle) {
 		Assert.hasText(profileId, "profileId must not be blank");
 		Assert.notNull(handle, "handle must not be null");
-		synchronized (this.tokens) {
-			final long currentGeneration = this.generationGuard.getAsLong();
-			if (currentGeneration != expectedGeneration) {
-				throw new StaleProfileGenerationException(profileId, expectedGeneration, currentGeneration);
-			}
-			this.tokens.put(profileId, handle);
-			LOG.debug("oauth2-authcode[{}] generation match ({}), tokens stored", profileId, expectedGeneration);
+		final long currentGeneration = this.generationGuard.getAsLong();
+		if (currentGeneration != expectedGeneration) {
+			throw new StaleProfileGenerationException(profileId, expectedGeneration, currentGeneration);
 		}
+		this.tokens.put(profileId, handle);
+		LOG.debug("oauth2-authcode[{}] generation match ({}), tokens stored", profileId, expectedGeneration);
 	}
 
 	/**
