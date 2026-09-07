@@ -156,17 +156,21 @@ class OAuth2AuthCodeTokenExchangerTests {
 		@Test
 		@Story("State verify")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("verifyAndConsumeState() rejects a cross-owner presentation")
+		@Description("verifyAndConsumeState() rejects a cross-owner presentation and consumes the state (one-time semantics)")
 		void verifyAndConsumeState_crossOwner_returnsFalse() {
 			// given
 			final String state = OAuth2AuthCodeTokenExchangerTests.this.exchanger.mintState("owner-a", "pid-1");
 
-			// when
+			// when: wrong owner presents the correct state
 			final boolean result = OAuth2AuthCodeTokenExchangerTests.this.exchanger.verifyAndConsumeState("owner-b",
 					"pid-1", state);
 
-			// then
+			// then: rejected AND state consumed (no retry with correct owner)
 			assertThat(result).isFalse();
+			final boolean retry = OAuth2AuthCodeTokenExchangerTests.this.exchanger.verifyAndConsumeState("owner-a",
+					"pid-1", state);
+			assertThat(retry).isFalse();
+			assertThat(OAuth2AuthCodeTokenExchangerTests.this.exchanger.stateCount()).isZero();
 		}
 
 		@Test
