@@ -16,7 +16,9 @@
 
 package io.inspector.mcp.core.proxy;
 
+import java.lang.reflect.Field;
 import java.time.Duration;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -60,6 +62,42 @@ class ProxySessionRegistryTests {
 		final McpClientTransport transport = mock(McpClientTransport.class);
 		given(transport.closeGracefully()).willReturn(Mono.empty());
 		return transport;
+	}
+
+	/**
+	 * Test-only map that lets a caller block inside {@link #put} until released, so the
+	 * lost-race between {@code put()} and {@code closeAll()} can be reproduced
+	 * deterministically.
+	 */
+	private static final class BlockingConcurrentHashMap<K, V> extends ConcurrentHashMap<K, V> {
+
+		private final CountDownLatch blockPutOnKey;
+
+		private final CountDownLatch putReleased;
+
+		private final K keyToBlock;
+
+		private BlockingConcurrentHashMap(final K keyToBlock, final CountDownLatch blockPutOnKey,
+				final CountDownLatch putReleased) {
+			this.keyToBlock = keyToBlock;
+			this.blockPutOnKey = blockPutOnKey;
+			this.putReleased = putReleased;
+		}
+
+		@Override
+		public V put(final K key, final V value) {
+			if (this.keyToBlock.equals(key)) {
+				this.blockPutOnKey.countDown();
+				try {
+					this.putReleased.await(5, TimeUnit.SECONDS);
+				}
+				catch (final InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+			}
+			return super.put(key, value);
+		}
+
 	}
 
 	@Nested
@@ -443,49 +481,58 @@ class ProxySessionRegistryTests {
 		@Test
 		@Story("Shutdown lost-race")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("put() that passes the first closed check but lands after closeAll() sweep removes "
-				+ "the registry entry so the registry does not retain a closed session")
-		void put_lostRaceWithCloseAll_removesRegistryEntry() throws InterruptedException {
-			// given: thread A calls put() while thread B calls closeAll() concurrently;
-			// orchestrate so thread A passes the first closed-check before thread B flips
-			// the flag, then thread A's put lands after closeAll()'s sweep completes.
-			final CountDownLatch closeAllDone = new CountDownLatch(1);
-			final CountDownLatch putDone = new CountDownLatch(1);
+		@Description("put() that passes the first closed check but is blocked inside sessions.put while "
+				+ "closeAll() sweeps; on resume, the lost-race branch removes the registry entry and closes "
+				+ "the session")
+		void put_lostRaceWithCloseAll_removesRegistryEntry() throws Exception {
+			// given: fresh registry with a blocking map so put() can be frozen between
+			// the first closed check and the actual insertion
+			final ProxySessionRegistry freshRegistry = new ProxySessionRegistry();
+			final CountDownLatch putBlocked = new CountDownLatch(1);
+			final CountDownLatch putRelease = new CountDownLatch(1);
+			final BlockingConcurrentHashMap<String, ProxySession> blockingMap = new BlockingConcurrentHashMap<>(
+					"late-race", putBlocked, putRelease);
+			final Field sessionsField = ProxySessionRegistry.class.getDeclaredField("sessions");
+			sessionsField.setAccessible(true);
+			sessionsField.set(freshRegistry, blockingMap);
+			assertThat(freshRegistry.size()).as("injection: map is empty").isZero();
 
 			final McpClientTransport lateTransport = mockTransport();
 			final ProxySession late = sessionWith("late-race", lateTransport);
 
-			final Thread closeAllThread = new Thread(() -> {
-				ProxySessionRegistryTests.this.registry.closeAll();
-				closeAllDone.countDown();
-			}, "closeAll");
+			final CountDownLatch closeAllDone = new CountDownLatch(1);
+			final CountDownLatch putDone = new CountDownLatch(1);
 
 			final Thread putThread = new Thread(() -> {
-				// Wait until closeAll() has fully completed (sessions swept + cleared),
-				// then put(), simulating the lost-race interleaving where put's first
-				// closed-check already passed before closeAll flipped the flag.
+				freshRegistry.put(late);
+				putDone.countDown();
+			}, "late-put");
+
+			final Thread closeAllThread = new Thread(() -> {
 				try {
-					closeAllDone.await(5, TimeUnit.SECONDS);
-					ProxySessionRegistryTests.this.registry.put(late);
+					putBlocked.await(5, TimeUnit.SECONDS);
 				}
 				catch (final InterruptedException ex) {
 					Thread.currentThread().interrupt();
 				}
-				finally {
-					putDone.countDown();
-				}
-			}, "late-put");
+				freshRegistry.closeAll();
+				closeAllDone.countDown();
+			}, "closeAll");
 
-			closeAllThread.start();
 			putThread.start();
-			assertThat(putDone.await(5, TimeUnit.SECONDS)).as("put thread finished").isTrue();
-			closeAllThread.join(5000);
+			closeAllThread.start();
+
+			// when: wait until closeAll() has fully swept, then let put() resume
+			assertThat(closeAllDone.await(5, TimeUnit.SECONDS)).as("closeAll() completed").isTrue();
+			assertThat(freshRegistry.size()).as("sweep cleared registry").isZero();
+			putRelease.countDown();
+			assertThat(putDone.await(5, TimeUnit.SECONDS)).as("put() finished").isTrue();
 			putThread.join(5000);
+			closeAllThread.join(5000);
 
 			// then: the registry does not retain the closed late session
-			assertThat(ProxySessionRegistryTests.this.registry.size()).as("registry does not retain closed late entry")
-				.isZero();
-			assertThat(ProxySessionRegistryTests.this.registry.get("late-race")).isNull();
+			assertThat(freshRegistry.size()).as("registry does not retain closed late entry").isZero();
+			assertThat(freshRegistry.get("late-race")).isNull();
 			assertThat(late.isClosed()).as("late session transport closed").isTrue();
 			verify(lateTransport).closeGracefully();
 		}
