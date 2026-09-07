@@ -96,6 +96,42 @@ class ReactiveSessionOwnerResolverTests {
 		}
 
 		@Test
+		@Story("Secure flag")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("resolve() sets Secure flag on HTTPS request")
+		void resolve_httpsScheme_setsSecureFlag() {
+			// given
+			final MockServerWebExchange exchange = MockServerWebExchange
+				.from(MockServerHttpRequest.get("https://localhost/mcp-inspector/api/config"));
+
+			// when
+			ReactiveSessionOwnerResolverTests.this.resolver.resolve(exchange);
+
+			// then
+			final ResponseCookie cookie = exchange.getResponse().getCookies().getFirst(OwnerTokenCodec.COOKIE_NAME);
+			assertThat(cookie).isNotNull();
+			assertThat(cookie.isSecure()).isTrue();
+		}
+
+		@Test
+		@Story("Secure flag")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("resolve() omits Secure flag on plain HTTP request")
+		void resolve_httpScheme_omitsSecureFlag() {
+			// given
+			final MockServerWebExchange exchange = MockServerWebExchange
+				.from(MockServerHttpRequest.get("http://localhost/mcp-inspector/api/config"));
+
+			// when
+			ReactiveSessionOwnerResolverTests.this.resolver.resolve(exchange);
+
+			// then
+			final ResponseCookie cookie = exchange.getResponse().getCookies().getFirst(OwnerTokenCodec.COOKIE_NAME);
+			assertThat(cookie).isNotNull();
+			assertThat(cookie.isSecure()).isFalse();
+		}
+
+		@Test
 		@Story("Forged cookie")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("resolve() re-mints a NEW owner for a forged (bad-HMAC) cookie — old scope NOT inherited")
