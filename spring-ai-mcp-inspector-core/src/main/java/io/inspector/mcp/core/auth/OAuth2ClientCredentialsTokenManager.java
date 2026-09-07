@@ -26,9 +26,11 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -77,6 +79,9 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 	/** Assumed token lifetime when the token response omits {@code expires_in}. */
 	private static final Duration DEFAULT_TOKEN_TTL = Duration.ofMinutes(5);
 
+	/** Lock-map size threshold that triggers the orphan sweep. */
+	private static final int MAX_PROFILE_LOCKS = 10_000;
+
 	/** Outbound HTTP client (JDK). */
 	private final HttpClient httpClient;
 
@@ -91,6 +96,9 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 
 	/** Per-profile locks for the single-flight contract. */
 	private final ConcurrentMap<String, Object> profileLocks = new ConcurrentHashMap<>();
+
+	/** Cumulative count of orphaned locks removed by the fallback sweep. */
+	private final AtomicLong profileLocksOrphanedTotal = new AtomicLong();
 
 	public OAuth2ClientCredentialsTokenManager() {
 		this(HttpClient.newBuilder().connectTimeout(REQUEST_TIMEOUT).build(), new JsonMapper());
@@ -138,12 +146,15 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 	 * evicted / deleted) — fails closed, never a stale re-exchange
 	 * @throws ProxyUpstreamException on a failed re-exchange
 	 */
+
 	public TokenHandle getAccessToken(final String profileId, final boolean forceRefresh) {
 		Assert.hasText(profileId, "profileId must not be blank");
+		sweepOrphanedLocks();
 		final Object lock = this.profileLocks.computeIfAbsent(profileId, (key) -> new Object());
 		synchronized (lock) {
 			final StoredClientCredentials stored = this.credentials.get(profileId);
 			if (stored == null) {
+				this.profileLocks.remove(profileId);
 				throw new IllegalStateException(
 						"no stored client credentials for profile " + profileId + " (profile deleted or evicted)");
 			}
@@ -183,6 +194,7 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 	 * After this call the profile cannot re-exchange.
 	 * @param profileId the store profile id
 	 */
+
 	@Override
 	public void evict(final String profileId) {
 		if (profileId == null) {
@@ -190,6 +202,7 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 		}
 		this.tokenCache.remove(profileId);
 		this.credentials.remove(profileId);
+		this.profileLocks.remove(profileId);
 		LOG.debug("oauth2-cc[{}] evicted token and stored credentials", profileId);
 	}
 
@@ -207,6 +220,39 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 	 */
 	public int cacheSize() {
 		return this.tokenCache.size();
+	}
+
+	/**
+	 * Removes lock-map entries whose profile has no stored credentials (orphans). Runs
+	 * outside any profile lock; only removes keys absent from {@code credentials}.
+	 * Triggers only when the map crosses the {@code MAX_PROFILE_LOCKS} threshold.
+	 */
+	private void sweepOrphanedLocks() {
+		if (this.profileLocks.size() < MAX_PROFILE_LOCKS) {
+			return;
+		}
+		final List<String> orphans = this.profileLocks.keySet()
+			.stream()
+			.filter((key) -> !this.credentials.containsKey(key))
+			.toList();
+		orphans.forEach(this.profileLocks::remove);
+		this.profileLocksOrphanedTotal.addAndGet(orphans.size());
+	}
+
+	/**
+	 * Number of per-profile locks currently held — intended for tests / metrics.
+	 * @return the lock count
+	 */
+	public int profileLockCount() {
+		return this.profileLocks.size();
+	}
+
+	/**
+	 * Cumulative count of orphaned locks removed by the fallback sweep.
+	 * @return the orphan cleanup total
+	 */
+	public long profileLocksOrphanedTotal() {
+		return this.profileLocksOrphanedTotal.get();
 	}
 
 	private boolean expired(final TokenEntry entry) {

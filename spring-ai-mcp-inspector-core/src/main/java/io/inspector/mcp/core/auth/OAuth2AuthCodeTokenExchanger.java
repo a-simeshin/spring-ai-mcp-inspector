@@ -25,11 +25,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -79,6 +81,12 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 
 	/** Exchanged tokens keyed by profile id (never returned to the browser). */
 	private final ConcurrentMap<String, TokenHandle> tokens = new ConcurrentHashMap<>();
+
+	/** Cumulative count of expired states removed by removeExpiredStates. */
+	private final AtomicLong statesExpiredTotal = new AtomicLong();
+
+	/** Cumulative count of expired tokens removed by removeExpiredStates. */
+	private final AtomicLong tokensExpiredTotal = new AtomicLong();
 
 	/** Outbound HTTP client (JDK). */
 	private final java.net.http.HttpClient httpClient;
@@ -249,6 +257,51 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 	 */
 	public int tokenCount() {
 		return this.tokens.size();
+	}
+
+	/**
+	 * Removes expired states and orphaned expired tokens (D3 sweeper). Called by
+	 * {@link ProxySessionRegistry#reap()} on its 1-minute schedule; also removes tokens
+	 * whose {@code expiresAt <= now} (orphaned tokens are useless without a live
+	 * profile).
+	 * @param now the sweep timestamp
+	 * @return the number of removed entries (states + tokens)
+	 */
+	public int removeExpiredStates(final Instant now) {
+		if (now == null) {
+			return 0;
+		}
+		final List<String> expiredStates = this.states.entrySet()
+			.stream()
+			.filter((e) -> !e.getValue().expiresAt().isAfter(now))
+			.map(Map.Entry::getKey)
+			.toList();
+		expiredStates.forEach(this.states::remove);
+		final List<String> expiredTokens = this.tokens.entrySet()
+			.stream()
+			.filter((e) -> e.getValue().expiresAt() != null && !e.getValue().expiresAt().isAfter(now))
+			.map(Map.Entry::getKey)
+			.toList();
+		expiredTokens.forEach(this.tokens::remove);
+		this.statesExpiredTotal.addAndGet(expiredStates.size());
+		this.tokensExpiredTotal.addAndGet(expiredTokens.size());
+		return expiredStates.size() + expiredTokens.size();
+	}
+
+	/**
+	 * Cumulative count of expired states removed by removeExpiredStates.
+	 * @return the states expired total
+	 */
+	public long statesExpiredTotal() {
+		return this.statesExpiredTotal.get();
+	}
+
+	/**
+	 * Cumulative count of expired tokens removed by removeExpiredStates.
+	 * @return the tokens expired total
+	 */
+	public long tokensExpiredTotal() {
+		return this.tokensExpiredTotal.get();
 	}
 
 	/**

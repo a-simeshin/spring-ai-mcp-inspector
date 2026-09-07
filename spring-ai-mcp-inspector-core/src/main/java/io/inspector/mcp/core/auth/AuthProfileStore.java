@@ -23,6 +23,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -62,6 +63,9 @@ public class AuthProfileStore {
 	/** Default profile TTL when none is configured. */
 	public static final Duration DEFAULT_PROFILE_TTL = Duration.ofHours(24);
 
+	/** Default profiles-per-owner cap when none is configured. */
+	public static final int DEFAULT_MAX_PROFILES_PER_OWNER = 50;
+
 	/** All stored profiles keyed by profileId. */
 	private final ConcurrentMap<String, Entry> entries = new ConcurrentHashMap<>();
 
@@ -70,6 +74,15 @@ public class AuthProfileStore {
 
 	/** Bounded lifetime of a stored profile entry. */
 	private volatile Duration profileTtl = DEFAULT_PROFILE_TTL;
+
+	/** Profiles-per-owner cap; non-positive falls back to the default. */
+	private volatile int maxProfilesPerOwner = DEFAULT_MAX_PROFILES_PER_OWNER;
+
+	/** Cumulative counter of rejected register attempts due to the per-owner cap. */
+	private final AtomicLong profileLimitRejections = new AtomicLong();
+
+	/** Cumulative counter of profiles removed by removeExpired. */
+	private final AtomicLong profilesExpiredTotal = new AtomicLong();
 
 	/**
 	 * Registers {@code profile} under {@code ownerId} and returns the new server-issued
@@ -93,6 +106,11 @@ public class AuthProfileStore {
 			if (findByName(ownerId, profile.name()).isPresent()) {
 				throw new IllegalArgumentException(
 						"a profile named '" + profile.name() + "' already exists for this session");
+			}
+			if (sizeForOwner(ownerId) >= this.maxProfilesPerOwner) {
+				this.profileLimitRejections.incrementAndGet();
+				throw new IllegalArgumentException(
+						"profile limit reached for this session (" + this.maxProfilesPerOwner + ")");
 			}
 			final String profileId = UUID.randomUUID().toString();
 			final ProfileState state = isPendingAuthCode(profile) ? ProfileState.PENDING : ProfileState.REGISTERED;
@@ -230,6 +248,7 @@ public class AuthProfileStore {
 				.toList();
 			expired.forEach(this.entries::remove);
 			expired.forEach(this::evict);
+			this.profilesExpiredTotal.addAndGet(expired.size());
 			if (!expired.isEmpty()) {
 				LOG.debug("auth-profile: removed {} expired profiles", expired.size());
 			}
@@ -352,6 +371,43 @@ public class AuthProfileStore {
 	public void setProfileTtl(final Duration profileTtl) {
 		this.profileTtl = (profileTtl != null && !profileTtl.isNegative() && !profileTtl.isZero()) ? profileTtl
 				: DEFAULT_PROFILE_TTL;
+	}
+
+	/**
+	 * Sets the profiles-per-owner cap. Non-positive values fall back to the default.
+	 * @param maxProfiles the cap value
+	 */
+	public void setMaxProfilesPerOwner(final int maxProfiles) {
+		this.maxProfilesPerOwner = (maxProfiles > 0) ? maxProfiles : DEFAULT_MAX_PROFILES_PER_OWNER;
+	}
+
+	/**
+	 * Returns the number of profiles owned by {@code ownerId} — intended for tests /
+	 * metrics.
+	 * @param ownerId the owner id
+	 * @return the owner's profile count
+	 */
+	public int sizeForOwner(final String ownerId) {
+		if (ownerId == null) {
+			return 0;
+		}
+		return (int) this.entries.values().stream().filter((entry) -> entry.ownerId().equals(ownerId)).count();
+	}
+
+	/**
+	 * Cumulative count of register attempts rejected by the per-owner cap.
+	 * @return the rejection count
+	 */
+	public long profileLimitRejections() {
+		return this.profileLimitRejections.get();
+	}
+
+	/**
+	 * Cumulative count of profiles removed by removeExpired.
+	 * @return the expired total
+	 */
+	public long profilesExpiredTotal() {
+		return this.profilesExpiredTotal.get();
 	}
 
 	/**
