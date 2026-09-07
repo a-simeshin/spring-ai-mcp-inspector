@@ -87,8 +87,8 @@ public final class ProxyErrorMapper {
 	 * Bare numbers without context (ports, IPs, IDs) are never treated as a status.
 	 */
 	private static final Pattern HTTP_STATUS_STRICT = Pattern.compile(
-			"(?:HTTP\\s+(?:status|code)?\\s*:?\\s*|status(?:\\s+code)?\\s*:?\\s*|code\\s*:?\\s*|\\[)([1-5][0-9][0-9])(?=[\\s\\]\\.,;:!?)]|$)",
-			Pattern.CASE_INSENSITIVE);
+			"(?:HTTP\\s+(?:status|code)?\\s*:?\\s*|status(?:\\s+code)?\\s*:?\\s*|code\\s*:?\\s*|\\[|^)([1-5][0-9][0-9])(?=[\\s\\]\\.,;:!?)]|$)",
+			Pattern.CASE_INSENSITIVE | Pattern.MULTILINE);
 
 	private static final String CODE_BAD_REQUEST = "bad_request";
 

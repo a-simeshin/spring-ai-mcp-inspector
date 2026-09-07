@@ -37,7 +37,7 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 
 /**
- * Unit tests for {@link ProxyErrorMapper} — the exact D3 literal table and status
+ * Unit tests for {@link ProxyErrorMapper} - the exact D3 literal table and status
  * extraction (incl. handshake).
  */
 @Epic("MCP Inspector Core")
@@ -227,7 +227,7 @@ class ProxyErrorMapperTests {
 		@Test
 		@Story("TransportKind gate")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("STREAMABLE 404 NEVER yields a DTO — null")
+		@Description("STREAMABLE 404 NEVER yields a DTO - null")
 		void streamable_404_returnsNull() {
 			// when
 			final ProxyErrorDto dto = ProxyErrorMapper.map(
@@ -241,7 +241,7 @@ class ProxyErrorMapperTests {
 		@Test
 		@Story("TransportKind gate")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("STREAMABLE 400 NEVER yields a DTO — null")
+		@Description("STREAMABLE 400 NEVER yields a DTO - null")
 		void streamable_400_returnsNull() {
 			// when
 			final ProxyErrorDto dto = ProxyErrorMapper.map(
@@ -280,7 +280,7 @@ class ProxyErrorMapperTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("extracts the status from the SSE initial-handshake message text (mcp-core connect() style)")
 		void extractStatus_handshakeMessage_returnsStatus() {
-			// given — HttpClientSseClientTransport.connect() surfaces the response event
+			// given - HttpClientSseClientTransport.connect() surfaces the response event
 			// in the message
 			final RuntimeException error = new RuntimeException(
 					"Failed to send message: [401 Unauthorized] POST https://target/mcp");
@@ -365,7 +365,7 @@ class ProxyErrorMapperTests {
 		@Test
 		@Story("Unknown failures")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("failures without any HTTP status yield null — never a fabricated DTO")
+		@Description("failures without any HTTP status yield null - never a fabricated DTO")
 		void map_withoutStatus_returnsNull() {
 			// when/then
 			assertThat(ProxyErrorMapper.map(new RuntimeException("connection refused"), TransportKind.SSE)).isNull();
@@ -395,7 +395,7 @@ class ProxyErrorMapperTests {
 		@Test
 		@Story("Unknown failures")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("2xx statuses carry no DTO on either transport — legacy fallback")
+		@Description("2xx statuses carry no DTO on either transport - legacy fallback")
 		void map_2xxStatus_returnsNull() {
 			// when/then
 			assertThat(ProxyErrorMapper.map(new RuntimeException("Sending message failed with a non-OK HTTP code: 200"),
@@ -447,7 +447,7 @@ class ProxyErrorMapperTests {
 		@Test
 		@Story("Unknown failures")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("a throwable with a null message is skipped — the cause chain is still walked")
+		@Description("a throwable with a null message is skipped - the cause chain is still walked")
 		void extractStatus_nullMessage_walksCauseChain() {
 			// given
 			final Throwable error = new RuntimeException(null,
@@ -525,6 +525,163 @@ class ProxyErrorMapperTests {
 			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("status code: 503"))).contains(503);
 			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("status: 401"))).contains(401);
 			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("code: 302"))).contains(302);
+		}
+
+		@Test
+		@Story("Bare status + reason phrase")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("bare status code at start of message followed by reason phrase maps to the DTO")
+		void map_bareStatusWithReasonPhrase_mapsToDto() {
+			// when/then - format used by controller tests: "401 Unauthorized"
+			assertThat(ProxyErrorMapper.map(new RuntimeException("401 Unauthorized"), TransportKind.SSE)).isNotNull()
+				.satisfies((dto) -> {
+					assertThat(dto.status()).isEqualTo(401);
+					assertThat(dto.code()).isEqualTo("unauthorized");
+				});
+			assertThat(ProxyErrorMapper.map(new RuntimeException("403 Forbidden"), TransportKind.STREAMABLE))
+				.isNotNull()
+				.satisfies((dto) -> {
+					assertThat(dto.status()).isEqualTo(403);
+					assertThat(dto.code()).isEqualTo("forbidden");
+				});
+		}
+
+		@Test
+		@Story("Bare status + reason phrase")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("bare status code at start of message with reason phrase is extracted")
+		void extractStatus_bareStatusWithReasonPhrase_returnsStatus() {
+			// when/then
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("401 Unauthorized"))).contains(401);
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("403 Forbidden"))).contains(403);
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("302 Found"))).contains(302);
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("404 Not Found"))).contains(404);
+		}
+
+		@Test
+		@Story("Port safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("host:port patterns do NOT map to a DTO - both host:404 and host:500 are safe")
+		void map_hostPort_returnsNull() {
+			// when/then - port numbers are NOT HTTP status codes
+			assertThat(ProxyErrorMapper.map(new RuntimeException("Connection refused: host:404"), TransportKind.SSE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("Connection refused: host:500"),
+					TransportKind.STREAMABLE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("http://host:404/timeout"), TransportKind.SSE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("http://host:500/timeout"), TransportKind.STREAMABLE))
+				.isNull();
+		}
+
+		@Test
+		@Story("Port safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("extractStatus returns empty for host:port patterns - both host:404 and host:500 are safe")
+		void extractStatus_hostPort_returnsEmpty() {
+			// when/then - port numbers are NOT HTTP status codes; extractStatus must not
+			// extract them even when map() would return null for an unmapped status
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("Connection refused: host:404"))).isEmpty();
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("Connection refused: host:500"))).isEmpty();
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("http://host:404/timeout"))).isEmpty();
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("http://host:500/timeout"))).isEmpty();
+		}
+
+		@Test
+		@Story("Port safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("extractStatus returns empty for numbers in URL path and query")
+		void extractStatus_urlPathAndQuery_returnsEmpty() {
+			// when/then
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("GET https://host/api/404"))).isEmpty();
+			assertThat(
+					ProxyErrorMapper.extractStatus(new RuntimeException("Failed to call https://host/api/500/status")))
+				.isEmpty();
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("GET https://host/path?code=404&page=500")))
+				.isEmpty();
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("POST https://host/path?id=302"))).isEmpty();
+		}
+
+		@Test
+		@Story("Port safety")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("extractStatus returns empty for multipart messages with multiple non-status numbers")
+		void extractStatus_multipartNumbers_returnsEmpty() {
+			// when/then
+			assertThat(ProxyErrorMapper
+				.extractStatus(new RuntimeException("boundary=----WebKitFormBoundary404; part=2 of 500; total=404")))
+				.isEmpty();
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("part=1 size=403 content-length=302")))
+				.isEmpty();
+		}
+
+		@Test
+		@Story("Port safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("numbers in URL path and query are NOT treated as HTTP status codes")
+		void map_urlPathAndQuery_returnsNull() {
+			// when/then
+			assertThat(ProxyErrorMapper.map(new RuntimeException("GET https://host/api/404"), TransportKind.SSE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("Failed to call https://host/api/500/status"),
+					TransportKind.STREAMABLE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("GET https://host/path?code=404&page=500"),
+					TransportKind.SSE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("POST https://host/path?id=302"),
+					TransportKind.STREAMABLE))
+				.isNull();
+		}
+
+		@Test
+		@Story("Port safety")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("multipart messages with multiple non-status numbers do NOT produce a false positive")
+		void map_multipartNumbers_returnsNull() {
+			// when/then - boundary, part numbers, etc. inside a multipart message
+			assertThat(ProxyErrorMapper.map(
+					new RuntimeException("boundary=----WebKitFormBoundary404; part=2 of 500; total=404"),
+					TransportKind.SSE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("part=1 size=403 content-length=302"),
+					TransportKind.STREAMABLE))
+				.isNull();
+		}
+
+		@Test
+		@Story("Cause chain")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a deeply nested cause chain with a bare status at the root is extracted")
+		void extractStatus_nestedCauseChain_bareStatus() {
+			// given
+			final Throwable error = new RuntimeException("outer wrapper",
+					new RuntimeException("middle layer", new RuntimeException("401 Unauthorized")));
+
+			// when
+			final java.util.Optional<Integer> status = ProxyErrorMapper.extractStatus(error);
+
+			// then
+			assertThat(status).contains(401);
+		}
+
+		@Test
+		@Story("Cause chain")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a deeply nested cause chain with bare status maps to the DTO")
+		void map_nestedCauseChain_bareStatus_mapsToDto() {
+			// given
+			final Throwable error = new RuntimeException("outer wrapper",
+					new RuntimeException("middle layer", new RuntimeException("403 Forbidden")));
+
+			// when
+			final ProxyErrorDto dto = ProxyErrorMapper.map(error, TransportKind.STREAMABLE);
+
+			// then
+			assertThat(dto).isNotNull();
+			assertThat(dto.status()).isEqualTo(403);
+			assertThat(dto.code()).isEqualTo("forbidden");
 		}
 
 	}
