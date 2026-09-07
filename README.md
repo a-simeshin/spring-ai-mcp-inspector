@@ -499,6 +499,28 @@ Every session is bound to the owner who created it. The owner is a string derive
 the `MCP_INSPECTOR_SESSION` cookie. Sessions without a bound profile (no owner) remain
 accessible to all callers, matching the pre-auth-profile behaviour.
 
+### Owner cookie `Secure` attribute
+
+The `MCP_INSPECTOR_SESSION` cookie is minted with the `Secure` attribute **only when the
+incoming request is effectively HTTPS**. The attribute is derived at mint time from the
+request's scheme; there is no configuration property to toggle it.
+
+| Deployment | Effective request scheme | Cookie minted with `Secure`? | Browser sends cookie back? |
+|---|---|---|---|
+| Production HTTPS (direct TLS, or TLS-terminated proxy with forwarded headers) | `https` | Yes | Yes, over HTTPS only |
+| Local HTTP demo (`127.0.0.1:8080`) | `http` | No | Yes (no `Secure` requirement) |
+
+The local HTTP demo keeps working with zero configuration: the demo stand runs plain
+HTTP, so the minted cookie carries no `Secure`. This is a deliberate exception: forcing
+`Secure` unconditionally would break the demo and local development, and there is no
+threat to mitigate on a loopback-only dev tool.
+
+For production deployments behind a TLS-terminated reverse proxy, the container must
+honour forwarded headers (`server.forward-headers-strategy=framework` or `native`).
+Without it, `request.isSecure()` reports `false` at the inner HTTP connector and the
+cookie is minted without `Secure`. This is standard Spring Boot behaviour for every
+request-time scheme check, not a new requirement of this feature.
+
 ### Predefined profiles (Spring configuration)
 
 You can pre-populate auth profiles from `application.yml` under the
