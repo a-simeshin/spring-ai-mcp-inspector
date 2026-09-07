@@ -21,6 +21,7 @@ import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
+import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpTransportException;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -74,6 +75,8 @@ class SsePreflightStreamCountTests {
 		}
 		if (this.stub != null) {
 			this.stub.close();
+			assertThat(this.stub.activeExchangeCount()).as("No leaked exchanges after teardown").isEqualTo(0);
+			assertThat(this.stub.pendingExchangeCount()).as("No pending exchanges after teardown").isEqualTo(0);
 			this.stub = null;
 		}
 	}
@@ -332,6 +335,44 @@ class SsePreflightStreamCountTests {
 		// stub's loop to exit.
 		Thread.sleep(500);
 		assertThat(this.stub.activeExchangeCount()).as("No leaked exchanges after closeGracefully").isEqualTo(0);
+	}
+
+	@Test
+	@Story("Post 401 rejection")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("When the stub rejects the first POST with 401, the transport's sendMessage "
+			+ "propagates the error. No SSE streams are leaked across the sequence.")
+	@DisplayName("Post 401 rejection: error propagated, no leaked exchanges")
+	void post401Rejection_whenPostReturns401_errorPropagatedAndNoLeak() throws Exception {
+		// given
+		this.stub = new SseStreamCountingStub();
+		this.stub.rejectPosts(1);
+		final ProxyTransportFactory factory = new ProxyTransportFactory(new JsonMapper());
+		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()));
+
+		// when : connect succeeds (HEAD preflight returns 200, delegate SSE stream opens)
+		this.transport.connect((inbound) -> inbound).then(Mono.fromRunnable(() -> {
+			try {
+				Thread.sleep(500);
+			}
+			catch (final InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+		})).block(Duration.ofSeconds(10));
+
+		// then : send a notification, which should be rejected with 401
+		final McpSchema.JSONRPCNotification testMessage = new McpSchema.JSONRPCNotification("test");
+
+		assertThatThrownBy(() -> this.transport.sendMessage(testMessage).block(Duration.ofSeconds(5)))
+			.isInstanceOf(Exception.class);
+
+		// then : no SSE streams leaked
+		// HEAD preflight returned 200, so no fallback was needed.
+		// Only the delegate's SSE stream is active.
+		assertThat(this.stub.headCount()).as("HEAD preflight probes").isEqualTo(1);
+		assertThat(this.stub.sseStreamCount()).as("SSE streams opened (delegate only)").isEqualTo(1);
+		assertThat(this.stub.activeExchangeCount()).as("Active exchanges (the real SSE stream)").isEqualTo(1);
+		assertThat(this.stub.postCount()).as("POST requests received (1 rejected)").isGreaterThanOrEqualTo(1);
 	}
 
 }

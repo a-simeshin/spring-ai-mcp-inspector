@@ -21,7 +21,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -58,7 +58,7 @@ final class SseStreamCountingStub implements AutoCloseable {
 
 	private final HttpServer server;
 
-	private final Executor executor;
+	private final ExecutorService executor;
 
 	/** Number of SSE streams opened (GET /sse that sent the endpoint prologue). */
 	private final AtomicInteger sseStreamCount = new AtomicInteger();
@@ -71,6 +71,13 @@ final class SseStreamCountingStub implements AutoCloseable {
 
 	/** Number of SSE streams currently active (writing loop still running). */
 	private final AtomicInteger activeExchangeCount = new AtomicInteger();
+
+	/** Number of exchanges currently pending (HEAD or GET, opened but not yet closed). */
+	private final AtomicInteger pendingExchangeCount = new AtomicInteger();
+
+	int pendingExchangeCount() {
+		return this.pendingExchangeCount.get();
+	}
 
 	/** HTTP status to return on HEAD /sse. 200 = accept preflight. */
 	private volatile int headStatus = 200;
@@ -151,36 +158,62 @@ final class SseStreamCountingStub implements AutoCloseable {
 	public void close() {
 		this.stopped.set(true);
 		this.server.stop(1);
+		this.executor.shutdown();
+		try {
+			this.executor.awaitTermination(2, TimeUnit.SECONDS);
+		}
+		catch (final InterruptedException ex) {
+			Thread.currentThread().interrupt();
+		}
 	}
 
 	private void handleSse(final HttpExchange exchange) throws IOException {
+		this.pendingExchangeCount.incrementAndGet();
 		final String method = exchange.getRequestMethod().toUpperCase();
-		switch (method) {
-			case "HEAD" -> {
-				this.headCount.incrementAndGet();
-				if (this.hangOnHead) {
-					return;
-				}
-				exchange.sendResponseHeaders(this.headStatus, -1);
-				exchange.close();
-			}
-			case "GET" -> {
-				if (this.sseStatus != 200) {
-					exchange.sendResponseHeaders(this.sseStatus, -1);
+		try {
+			switch (method) {
+				case "HEAD" -> {
+					this.headCount.incrementAndGet();
+					if (this.hangOnHead) {
+						// Block until the exchange is closed by the client
+						// disconnect. The transport's timeout or cancellation
+						// will close the TCP connection; the JDK HttpServer
+						// will then close the exchange, and read() returns -1.
+						try {
+							while (!this.stopped.get()) {
+								Thread.sleep(50);
+							}
+						}
+						catch (final InterruptedException ex) {
+							Thread.currentThread().interrupt();
+						}
+						exchange.close();
+						return;
+					}
+					exchange.sendResponseHeaders(this.headStatus, -1);
 					exchange.close();
-					return;
 				}
-				this.sseStreamCount.incrementAndGet();
-				this.activeExchangeCount.incrementAndGet();
-				exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
-				exchange.sendResponseHeaders(200, 0);
-				runSseLoop(exchange.getResponseBody());
-				this.activeExchangeCount.decrementAndGet();
+				case "GET" -> {
+					if (this.sseStatus != 200) {
+						exchange.sendResponseHeaders(this.sseStatus, -1);
+						exchange.close();
+						return;
+					}
+					this.sseStreamCount.incrementAndGet();
+					this.activeExchangeCount.incrementAndGet();
+					exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+					exchange.sendResponseHeaders(200, 0);
+					runSseLoop(exchange.getResponseBody());
+					this.activeExchangeCount.decrementAndGet();
+				}
+				default -> {
+					exchange.sendResponseHeaders(405, -1);
+					exchange.close();
+				}
 			}
-			default -> {
-				exchange.sendResponseHeaders(405, -1);
-				exchange.close();
-			}
+		}
+		finally {
+			this.pendingExchangeCount.decrementAndGet();
 		}
 	}
 

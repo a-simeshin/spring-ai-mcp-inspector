@@ -147,7 +147,7 @@ public class ProxyTransportFactory {
 	 * <p>
 	 * The returned transport performs an HTTP HEAD-based preflight before delegating to
 	 * the inner {@link HttpClientSseClientTransport}. This avoids creating an orphaned
-	 * upstream SSE session — the HEAD probe never opens a stream. If the server rejects
+	 * upstream SSE session: the HEAD probe never opens a stream. If the server rejects
 	 * HEAD with 405, a GET fallback is used with a header-only body handler that cancels
 	 * immediately on response headers.
 	 * @param sseUri the full SSE endpoint URI (must not be {@code null})

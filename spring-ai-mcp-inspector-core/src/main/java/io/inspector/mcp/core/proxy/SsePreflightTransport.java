@@ -27,6 +27,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow.Subscription;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -45,7 +46,7 @@ import reactor.core.publisher.Mono;
  * <p>
  * The MCP SDK's {@code HttpClientSseClientTransport.connect()} only maps a 2xx answer to
  * readiness. On a non-2xx handshake whose body produces no SSE event (empty, whitespace
- * or comment-only — e.g. a bare {@code 401} from a misconfigured server) the SDK parses
+ * or comment-only, e.g. a bare {@code 401} from a misconfigured server) the SDK parses
  * the body as an SSE stream, never emits an {@code endpoint} event, and the
  * {@code connect()} {@link Mono} never completes: {@code sendMessage(initialize)} then
  * hangs until the request timeout instead of surfacing the real reason. A non-SSE line
@@ -82,6 +83,12 @@ final class SsePreflightTransport implements McpClientTransport {
 
 	private final HttpClient preflightClient;
 
+	/**
+	 * Tracks the in-flight preflight HTTP exchange so it can be cancelled on timeout,
+	 * downstream cancellation, or {@link #closeGracefully()}.
+	 */
+	private volatile CompletableFuture<?> pendingPreflight;
+
 	SsePreflightTransport(final McpClientTransport delegate, final URI targetUri,
 			final HttpRequest.Builder requestTemplate, final McpSyncHttpClientRequestCustomizer requestCustomizer,
 			final HttpClient preflightClient) {
@@ -117,7 +124,12 @@ final class SsePreflightTransport implements McpClientTransport {
 
 	@Override
 	public Mono<Void> closeGracefully() {
-		return this.delegate.closeGracefully();
+		return Mono.fromRunnable(() -> {
+			final CompletableFuture<?> pending = this.pendingPreflight;
+			if (pending != null && !pending.isDone()) {
+				pending.cancel(true);
+			}
+		}).then(this.delegate.closeGracefully());
 	}
 
 	@Override
@@ -125,23 +137,35 @@ final class SsePreflightTransport implements McpClientTransport {
 		return this.delegate.unmarshalFrom(data, typeRef);
 	}
 
-	/**
-	 * Sends the lightweight handshake probe and completes when the status is 2xx, or
-	 * errors with the status embedded in the message otherwise.
-	 *
-	 * <p>
-	 * The primary probe uses HTTP HEAD, which never creates a server-side SSE session. If
-	 * the server rejects HEAD with 405, falls back to a GET probe whose body handler
-	 * cancels on response headers so the connection is never held open.
-	 * @return a {@link Mono} completing on a 2xx preflight, erroring on any other status
-	 */
 	private Mono<Void> preflight() {
 		return Mono.deferContextual((context) -> {
 			final HttpRequest headRequest = buildRequest("HEAD", context);
-			final CompletableFuture<HttpResponse<Void>> headFuture = this.preflightClient
-				.sendAsync(headRequest, HttpResponse.BodyHandlers.discarding())
-				.orTimeout(PREFLIGHT_TIMEOUT.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
-			return Mono.fromFuture(headFuture).flatMap((response) -> {
+			final CompletableFuture<HttpResponse<Void>> future = this.preflightClient.sendAsync(headRequest,
+					HttpResponse.BodyHandlers.discarding());
+			this.pendingPreflight = future;
+			final AtomicBoolean cancelled = new AtomicBoolean();
+			return Mono.<HttpResponse<Void>>create((sink) -> {
+				sink.onCancel(() -> {
+					cancelled.set(true);
+					final CompletableFuture<?> pending = this.pendingPreflight;
+					if (pending != null && !pending.isDone()) {
+						pending.cancel(true);
+					}
+					this.pendingPreflight = null;
+				});
+				future.whenComplete((result, error) -> {
+					if (cancelled.get()) {
+						return;
+					}
+					if (error != null) {
+						sink.error(error);
+					}
+					else {
+						sink.success(result);
+					}
+				});
+			}).timeout(PREFLIGHT_TIMEOUT).flatMap((response) -> {
+				this.pendingPreflight = null;
 				final int status = response.statusCode();
 				if (status >= 200 && status < 300) {
 					return Mono.<Void>empty();
@@ -151,31 +175,57 @@ final class SsePreflightTransport implements McpClientTransport {
 				}
 				return Mono.<Void>error(
 						new McpTransportException("SSE handshake rejected by upstream with HTTP status " + status));
-			})
-				.onErrorMap(TimeoutException.class,
-						(e) -> new McpTransportException("SSE preflight HEAD timed out after " + PREFLIGHT_TIMEOUT));
+			}).onErrorResume(TimeoutException.class, (e) -> {
+				final CompletableFuture<?> pending = this.pendingPreflight;
+				if (pending != null && !pending.isDone()) {
+					pending.cancel(true);
+				}
+				this.pendingPreflight = null;
+				return Mono.error(new McpTransportException("SSE preflight HEAD timed out after " + PREFLIGHT_TIMEOUT));
+			});
 		});
 	}
 
-	/**
-	 * GET-based fallback for servers that reject the HEAD probe. Sends the same handshake
-	 * {@code GET} the SDK would, with a header-only body handler that cancels on the
-	 * first response chunk so the stream is never consumed.
-	 * @param context the reactor context carrying the transport context
-	 * @return a {@link Mono} completing on a 2xx preflight, erroring on any other status
-	 */
 	private Mono<Void> preflightGet(final reactor.util.context.ContextView context) {
 		final HttpRequest getRequest = buildRequest("GET", context);
-		final CompletableFuture<HttpResponse<Void>> getFuture = this.preflightClient
-			.sendAsync(getRequest, headerOnlyBodyHandler())
-			.orTimeout(PREFLIGHT_TIMEOUT.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
-		return Mono.fromFuture(getFuture)
+		final CompletableFuture<HttpResponse<Void>> future = this.preflightClient.sendAsync(getRequest,
+				headerOnlyBodyHandler());
+		this.pendingPreflight = future;
+		final AtomicBoolean cancelled = new AtomicBoolean();
+		return Mono.<HttpResponse<Void>>create((sink) -> {
+			sink.onCancel(() -> {
+				cancelled.set(true);
+				final CompletableFuture<?> pending = this.pendingPreflight;
+				if (pending != null && !pending.isDone()) {
+					pending.cancel(true);
+				}
+				this.pendingPreflight = null;
+			});
+			future.whenComplete((result, error) -> {
+				if (cancelled.get()) {
+					return;
+				}
+				if (error != null) {
+					sink.error(error);
+				}
+				else {
+					sink.success(result);
+				}
+			});
+		})
+			.timeout(PREFLIGHT_TIMEOUT)
 			.map((response) -> response.statusCode())
 			.flatMap((status) -> (status >= 200 && status < 300) ? Mono.empty()
 					: Mono.<Void>error(
 							new McpTransportException("SSE handshake rejected by upstream with HTTP status " + status)))
-			.onErrorMap(TimeoutException.class,
-					(e) -> new McpTransportException("SSE preflight GET timed out after " + PREFLIGHT_TIMEOUT));
+			.onErrorResume(TimeoutException.class, (e) -> {
+				final CompletableFuture<?> pending = this.pendingPreflight;
+				if (pending != null && !pending.isDone()) {
+					pending.cancel(true);
+				}
+				this.pendingPreflight = null;
+				return Mono.error(new McpTransportException("SSE preflight GET timed out after " + PREFLIGHT_TIMEOUT));
+			});
 	}
 
 	/**
