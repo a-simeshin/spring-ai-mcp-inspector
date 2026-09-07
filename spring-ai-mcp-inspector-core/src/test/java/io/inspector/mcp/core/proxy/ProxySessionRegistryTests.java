@@ -17,6 +17,8 @@
 package io.inspector.mcp.core.proxy;
 
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
@@ -102,6 +104,66 @@ class ProxySessionRegistryTests {
 
 			// then
 			assertThat(found).isNull();
+		}
+
+		@Test
+		@Story("Concurrent same-key registration")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Two threads concurrently put() sessions with the same session id; the loser is closed")
+		void put_concurrentSameKey_orphanedSessionIsClosed() throws InterruptedException {
+			// given
+			final McpClientTransport loserTransport = mockTransport();
+			final McpClientTransport winnerTransport = mockTransport();
+			final ProxySession loser = sessionWith("s-race", loserTransport);
+			final ProxySession winner = sessionWith("s-race", winnerTransport);
+
+			// Both threads line up before the registry, then race to put the same key
+			final CountDownLatch bothReady = new CountDownLatch(2);
+			final CountDownLatch go = new CountDownLatch(1);
+
+			final Thread threadA = new Thread(() -> {
+				bothReady.countDown();
+				try {
+					go.await();
+					ProxySessionRegistryTests.this.registry.put(loser);
+				}
+				catch (final InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+			}, "put-loser");
+
+			final Thread threadB = new Thread(() -> {
+				bothReady.countDown();
+				try {
+					go.await();
+					ProxySessionRegistryTests.this.registry.put(winner);
+				}
+				catch (final InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+			}, "put-winner");
+
+			threadA.start();
+			threadB.start();
+			assertThat(bothReady.await(5, TimeUnit.SECONDS)).as("both threads ready").isTrue();
+			go.countDown();
+			threadA.join(5000);
+			threadB.join(5000);
+
+			// then: exactly one session survives, the loser was closed
+			assertThat(ProxySessionRegistryTests.this.registry.size()).isEqualTo(1);
+			final ProxySession survivor = ProxySessionRegistryTests.this.registry.get("s-race");
+			assertThat(survivor).isNotNull();
+
+			// The loser (whichever was displaced) must have been closed via the
+			// displaced-session path in put()
+			final McpClientTransport survivorTransport = (survivor == loser) ? loserTransport : winnerTransport;
+			if (survivor == loser) {
+				verify(winnerTransport).closeGracefully();
+			}
+			else {
+				verify(loserTransport).closeGracefully();
+			}
 		}
 
 	}
@@ -362,7 +424,7 @@ class ProxySessionRegistryTests {
 		@Story("Shutdown ordering")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("A session registered after the shutdown sweep is closed immediately instead of being "
-				+ "silently kept — a GET /sse still connecting upstream when ContextClosedEvent fires used to "
+				+ "silently kept. A GET /sse still connecting upstream when ContextClosedEvent fires used to "
 				+ "land in the map afterwards and hold its stream open for the whole graceful phase")
 		void put_afterCloseAll_closesTheLateSessionAndDoesNotRegisterIt() {
 			// given
@@ -376,6 +438,56 @@ class ProxySessionRegistryTests {
 			assertThat(late.isClosed()).as("late session closed on arrival").isTrue();
 			assertThat(ProxySessionRegistryTests.this.registry.size()).as("late session not registered").isZero();
 			assertThat(ProxySessionRegistryTests.this.registry.get("late")).isNull();
+		}
+
+		@Test
+		@Story("Shutdown lost-race")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("put() that passes the first closed check but lands after closeAll() sweep removes "
+				+ "the registry entry so the registry does not retain a closed session")
+		void put_lostRaceWithCloseAll_removesRegistryEntry() throws InterruptedException {
+			// given: thread A calls put() while thread B calls closeAll() concurrently;
+			// orchestrate so thread A passes the first closed-check before thread B flips
+			// the flag, then thread A's put lands after closeAll()'s sweep completes.
+			final CountDownLatch closeAllDone = new CountDownLatch(1);
+			final CountDownLatch putDone = new CountDownLatch(1);
+
+			final McpClientTransport lateTransport = mockTransport();
+			final ProxySession late = sessionWith("late-race", lateTransport);
+
+			final Thread closeAllThread = new Thread(() -> {
+				ProxySessionRegistryTests.this.registry.closeAll();
+				closeAllDone.countDown();
+			}, "closeAll");
+
+			final Thread putThread = new Thread(() -> {
+				// Wait until closeAll() has fully completed (sessions swept + cleared),
+				// then put(), simulating the lost-race interleaving where put's first
+				// closed-check already passed before closeAll flipped the flag.
+				try {
+					closeAllDone.await(5, TimeUnit.SECONDS);
+					ProxySessionRegistryTests.this.registry.put(late);
+				}
+				catch (final InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+				finally {
+					putDone.countDown();
+				}
+			}, "late-put");
+
+			closeAllThread.start();
+			putThread.start();
+			assertThat(putDone.await(5, TimeUnit.SECONDS)).as("put thread finished").isTrue();
+			closeAllThread.join(5000);
+			putThread.join(5000);
+
+			// then: the registry does not retain the closed late session
+			assertThat(ProxySessionRegistryTests.this.registry.size()).as("registry does not retain closed late entry")
+				.isZero();
+			assertThat(ProxySessionRegistryTests.this.registry.get("late-race")).isNull();
+			assertThat(late.isClosed()).as("late session transport closed").isTrue();
+			verify(lateTransport).closeGracefully();
 		}
 
 	}
