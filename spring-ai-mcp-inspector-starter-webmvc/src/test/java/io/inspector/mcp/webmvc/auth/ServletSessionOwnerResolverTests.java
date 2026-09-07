@@ -104,6 +104,39 @@ class ServletSessionOwnerResolverTests {
 		}
 
 		@Test
+		@Story("Secure flag")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("resolve() sets Secure flag on HTTPS request")
+		void resolve_secureRequest_setsSecureFlag() {
+			// given
+			final MockHttpServletRequest request = requestWithCookie(null);
+			request.setSecure(true);
+			final MockHttpServletResponse response = new MockHttpServletResponse();
+
+			// when
+			ServletSessionOwnerResolverTests.this.resolver.resolve(request, response);
+
+			// then
+			assertThat(response.getHeader("Set-Cookie")).contains("Secure");
+		}
+
+		@Test
+		@Story("Secure flag")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("resolve() omits Secure flag on plain HTTP request")
+		void resolve_httpRequest_omitsSecureFlag() {
+			// given
+			final MockHttpServletRequest request = requestWithCookie(null);
+			final MockHttpServletResponse response = new MockHttpServletResponse();
+
+			// when
+			ServletSessionOwnerResolverTests.this.resolver.resolve(request, response);
+
+			// then
+			assertThat(response.getHeader("Set-Cookie")).doesNotContain("Secure");
+		}
+
+		@Test
 		@Story("Forged cookie")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("resolve() re-mints a NEW owner for a forged (bad-HMAC) cookie — the old scope is NOT inherited")
