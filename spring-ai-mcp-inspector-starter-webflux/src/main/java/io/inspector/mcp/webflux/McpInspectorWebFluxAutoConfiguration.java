@@ -42,6 +42,7 @@ import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.auth.OwnerTokenCodec;
+import io.inspector.mcp.core.auth.TokenEvictor;
 import io.inspector.mcp.core.bootstrap.BootstrapHtmlRenderer;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapAssembler;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapCustomizer;
@@ -148,12 +149,20 @@ public class McpInspectorWebFluxAutoConfiguration {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public OAuth2ClientCredentialsTokenManager mcpInspectorTokenManager(final AuthProfileStore authProfileStore) {
+	public OAuth2ClientCredentialsTokenManager mcpInspectorTokenManager(final AuthProfileStore authProfileStore,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
 		final OAuth2ClientCredentialsTokenManager manager = new OAuth2ClientCredentialsTokenManager();
 		// D9A: the manager is wired as the store's TokenEvictor so every removal path
 		// (delete/clear/clearBySession/removeExpired/update) drops the cached token AND
-		// the stored credentials together with the profile.
-		authProfileStore.setTokenEvictor(manager);
+		// the stored credentials together with the profile. Composite: both the CC
+		// manager and the auth-code exchanger evict tokens on profile removal.
+		final TokenEvictor compositeEvictor = (profileId) -> {
+			manager.evict(profileId);
+			authCodeExchanger.evict(profileId);
+		};
+		authProfileStore.setTokenEvictor(compositeEvictor);
+		// Generation guard: async token exchanges detect stale profile mutations.
+		manager.setGenerationGuard(authProfileStore::currentGeneration);
 		return manager;
 	}
 

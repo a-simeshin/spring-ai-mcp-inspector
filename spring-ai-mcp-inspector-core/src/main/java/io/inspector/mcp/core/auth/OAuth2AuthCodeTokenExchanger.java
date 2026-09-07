@@ -30,10 +30,13 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.LongSupplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.util.Assert;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.json.JsonMapper;
 
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
@@ -86,13 +89,22 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 	/** JSON mapper for token responses. */
 	private final JsonMapper objectMapper;
 
+	/** Generation guard for atomic token storage. */
+	private LongSupplier generationGuard = () -> 0L;
+
 	public OAuth2AuthCodeTokenExchanger() {
-		this(java.net.http.HttpClient.newBuilder().connectTimeout(REQUEST_TIMEOUT).build(), new JsonMapper());
+		this(java.net.http.HttpClient.newBuilder().connectTimeout(REQUEST_TIMEOUT).build(), new JsonMapper(), () -> 0L);
 	}
 
 	public OAuth2AuthCodeTokenExchanger(final java.net.http.HttpClient httpClient, final JsonMapper objectMapper) {
+		this(httpClient, objectMapper, () -> 0L);
+	}
+
+	public OAuth2AuthCodeTokenExchanger(final java.net.http.HttpClient httpClient, final JsonMapper objectMapper,
+			final LongSupplier generationGuard) {
 		this.httpClient = (httpClient != null) ? httpClient : java.net.http.HttpClient.newHttpClient();
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
+		this.generationGuard = generationGuard;
 	}
 
 	/**
@@ -212,6 +224,59 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 		Assert.notNull(handle, "handle must not be null");
 		this.tokens.put(profileId, handle);
 		LOG.debug("oauth2-authcode[{}] tokens stored", profileId);
+	}
+
+	/**
+	 * Sets the generation guard used by {@link #storeTokensIfCurrent}.
+	 * @param generationGuard the generation supplier
+	 */
+	public void setGenerationGuard(final LongSupplier generationGuard) {
+		Assert.notNull(generationGuard, "generationGuard must not be null");
+		this.generationGuard = generationGuard;
+	}
+
+	/**
+	 * Performs an async authorization_code exchange without storing the result. The
+	 * caller captures the generation at registration time, then calls
+	 * {@link #storeTokensIfCurrent(String, long, TokenHandle)} to atomically persist the
+	 * token only if the generation is still current.
+	 * @param pendingProfile the PENDING OAuth2 profile
+	 * @param code the authorization code
+	 * @param codeVerifier the PKCE verifier
+	 * @return a {@link Mono} that emits the exchanged token handle
+	 */
+	public Mono<TokenHandle> exchangeAsync(final OAuth2Profile pendingProfile, final String code,
+			final String codeVerifier) {
+		Assert.notNull(pendingProfile, "pendingProfile must not be null");
+		Assert.isTrue(pendingProfile.grantMode() == OAuth2GrantMode.AUTHORIZATION_CODE,
+				"exchangeAsync requires an AUTHORIZATION_CODE profile");
+		Assert.hasText(code, "code must not be blank");
+		Assert.hasText(codeVerifier, "codeVerifier must not be blank");
+		Assert.hasText(pendingProfile.codeChallenge(), "pending profile must carry a codeChallenge");
+		return Mono.fromCallable(() -> exchange(pendingProfile, code, codeVerifier))
+			.subscribeOn(Schedulers.boundedElastic());
+	}
+
+	/**
+	 * Atomically stores the exchanged tokens under {@code profileId} only when the
+	 * current generation matches the expected generation captured at verification time.
+	 * Synchronized on the {@code tokens} map.
+	 * @param profileId the profile id
+	 * @param expectedGeneration the generation captured at verification time
+	 * @param handle the exchanged token handle
+	 * @throws StaleProfileGenerationException when the generation does not match
+	 */
+	public void storeTokensIfCurrent(final String profileId, final long expectedGeneration, final TokenHandle handle) {
+		Assert.hasText(profileId, "profileId must not be blank");
+		Assert.notNull(handle, "handle must not be null");
+		synchronized (this.tokens) {
+			final long currentGeneration = this.generationGuard.getAsLong();
+			if (currentGeneration != expectedGeneration) {
+				throw new StaleProfileGenerationException(profileId, expectedGeneration, currentGeneration);
+			}
+			this.tokens.put(profileId, handle);
+			LOG.debug("oauth2-authcode[{}] generation match ({}), tokens stored", profileId, expectedGeneration);
+		}
 	}
 
 	/**

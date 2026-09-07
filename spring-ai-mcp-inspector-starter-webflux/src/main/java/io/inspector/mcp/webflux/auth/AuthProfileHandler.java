@@ -34,6 +34,7 @@ import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.auth.OAuth2GrantMode;
 import io.inspector.mcp.core.auth.OAuth2Profile;
+import io.inspector.mcp.core.auth.StaleProfileGenerationException;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
 import io.inspector.mcp.core.proxy.ProxyUpstreamException;
 
@@ -226,21 +227,32 @@ public class AuthProfileHandler {
 					return ServerResponse.badRequest()
 						.bodyValue(Map.of("error", "state mismatch, expired or already consumed"));
 				}
-				try {
-					final OAuth2AuthCodeTokenExchanger.TokenHandle handle = this.exchanger
-						.exchange((OAuth2Profile) pending.get(), body.code(), body.codeVerifier());
-					this.exchanger.storeTokens(profileId, handle);
-					this.store.markActive(ownerId, profileId);
-				}
-				catch (final IllegalArgumentException ex) {
-					return ServerResponse.badRequest().bodyValue(Map.of("error", ex.getMessage()));
-				}
-				catch (final ProxyUpstreamException ex) {
-					return ServerResponse.status(HttpStatus.BAD_GATEWAY)
-						.bodyValue(new ProxyErrorDto(502, CODE_TOKEN_EXCHANGE_FAILED, ex.getMessage(),
-								"Verify the token URL and client credentials, then retry.", null));
-				}
-				return ServerResponse.ok().bodyValue(AuthProfileRegistrationResponse.of(profileId));
+				final long expectedGeneration = this.store.currentGeneration();
+				return this.exchanger.exchangeAsync((OAuth2Profile) pending.get(), body.code(), body.codeVerifier())
+					.flatMap((handle) -> {
+						try {
+							this.exchanger.storeTokensIfCurrent(profileId, expectedGeneration, handle);
+						}
+						catch (final StaleProfileGenerationException ex) {
+							return ServerResponse.status(HttpStatus.NOT_FOUND)
+								.bodyValue(new ProxyErrorDto(404, CODE_TOKEN_EXCHANGE_FAILED, ex.getMessage(),
+										"Profile was removed during exchange; re-register.", null));
+						}
+						if (!this.store.markActive(ownerId, profileId)) {
+							this.exchanger.evict(profileId);
+							return ServerResponse.status(HttpStatus.NOT_FOUND)
+								.bodyValue(new ProxyErrorDto(404, CODE_TOKEN_EXCHANGE_FAILED,
+										"Profile was removed during exchange; re-register.",
+										"Re-register and complete the exchange again.", null));
+						}
+						return ServerResponse.ok().bodyValue(AuthProfileRegistrationResponse.of(profileId));
+					})
+					.onErrorResume(ProxyUpstreamException.class,
+							(ex) -> ServerResponse.status(HttpStatus.BAD_GATEWAY)
+								.bodyValue(new ProxyErrorDto(502, CODE_TOKEN_EXCHANGE_FAILED, ex.getMessage(),
+										"Verify the token URL and client credentials, then retry.", null)))
+					.onErrorResume(IllegalArgumentException.class,
+							(ex) -> ServerResponse.badRequest().bodyValue(Map.of("error", ex.getMessage())));
 			}
 			catch (final IllegalArgumentException ex) {
 				return ServerResponse.badRequest().bodyValue(Map.of("error", ex.getMessage()));

@@ -63,6 +63,7 @@ import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.proxy.ProxyUpstreamException;
 import io.inspector.mcp.core.proxy.TransportKind;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
@@ -78,12 +79,12 @@ import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
  * Endpoint layout under {@link ProxyConstants#BASE}:
  *
  * <ul>
- * <li>{@code GET /sse} / {@code GET /stdio} — opens a session, returns SSE stream</li>
- * <li>{@code POST /message} — pushes a frame into an open SSE session</li>
- * <li>{@code POST/GET/DELETE /mcp} — Streamable-HTTP transport</li>
- * <li>{@code GET /config} — defaults for the client form</li>
- * <li>{@code GET /health} — liveness</li>
- * <li>{@code POST /fetch} — outbound HTTP proxy</li>
+ * <li>{@code GET /sse} / {@code GET /stdio} : opens a session, returns SSE stream</li>
+ * <li>{@code POST /message} : pushes a frame into an open SSE session</li>
+ * <li>{@code POST/GET/DELETE /mcp} : Streamable-HTTP transport</li>
+ * <li>{@code GET /config} : defaults for the client form</li>
+ * <li>{@code GET /health} : liveness</li>
+ * <li>{@code POST /fetch} : outbound HTTP proxy</li>
  * </ul>
  *
  * @author Artem Simeshin
@@ -219,7 +220,7 @@ public class ProxyHandler {
 	}
 
 	public Mono<ServerResponse> fetch(final ServerRequest request) {
-		// doFetch() ends in a blocking HttpClient.send() — keep it off the event loop.
+		// doFetch() ends in a blocking HttpClient.send() : keep it off the event loop.
 		return readJsonBody(request).flatMap((body) -> Mono.fromCallable(() -> doFetch(body))
 			.subscribeOn(Schedulers.boundedElastic())
 			.flatMap((envelope) -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(envelope))
@@ -285,7 +286,7 @@ public class ProxyHandler {
 		final String env = request.queryParam("env").orElse(null);
 		final String profileId = request.queryParam("profileId").orElse(null);
 		return openProxiedSession(transportType, url, command, args, env, profileId, inboundAuthorization(request),
-				inboundCustomHeaders(request), request);
+				inboundCustomHeaders(request), request, contextPath(request));
 	}
 
 	public Mono<ServerResponse> openStdio(final ServerRequest request) {
@@ -294,12 +295,12 @@ public class ProxyHandler {
 		final String env = request.queryParam("env").orElse(null);
 		final String profileId = request.queryParam("profileId").orElse(null);
 		return openProxiedSession("stdio", null, command, args, env, profileId, inboundAuthorization(request),
-				inboundCustomHeaders(request), request);
+				inboundCustomHeaders(request), request, contextPath(request));
 	}
 
 	/**
-	 * Returns the request's deployment prefix — the WebFlux base path or a forwarded
-	 * proxy prefix — normalised so a root-mounted application contributes nothing.
+	 * Returns the request's deployment prefix : the WebFlux base path or a forwarded
+	 * proxy prefix : normalised so a root-mounted application contributes nothing.
 	 * @param request the incoming request
 	 * @return the prefix, or an empty string when the application is root-mounted
 	 */
@@ -365,14 +366,12 @@ public class ProxyHandler {
 
 	private Mono<ServerResponse> openProxiedSession(final String transportType, final String url, final String command,
 			final String args, final String env, final String profileId, final String authorization,
-			final Map<String, String> customHeaders, final ServerRequest request) {
+			final Map<String, String> customHeaders, final ServerRequest request, final String contextPath) {
 		final String sessionId = UUID.randomUUID().toString();
-		final String contextPath = contextPath(request);
 		// D8: resolve the owner from the signed session cookie (mint on demand) and the
 		// bound profile when a profileId is supplied. A foreign/unknown profileId is a
-		// structured 400 — existence is not leaked.
+		// structured 400 : existence is not leaked.
 		final String ownerId = resolveOwner(request);
-		final AuthHeaders headers;
 		if (profileId != null && !profileId.isBlank()) {
 			if (this.authProfileStore == null || this.sessionOwnerResolver == null) {
 				return ServerResponse.badRequest().bodyValue(Map.of("error", "auth-profile support is not wired"));
@@ -384,14 +383,118 @@ public class ProxyHandler {
 							"Invalid or missing auth profile or session reference.",
 							"Check the profile fields and profileId, then reconnect.", null));
 			}
-			headers = AuthHeaders.resolve(profile.get(), profileId, this.ccTokenManager, this.authCodeExchanger);
-		}
-		else {
-			headers = null;
-		}
+			final AuthProfile resolvedProfile = profile.get();
+			final Mono<AuthHeaders> headersMono = Mono
+				.fromCallable(() -> AuthHeaders.resolve(resolvedProfile, profileId, this.ccTokenManager,
+						this.authCodeExchanger))
+				.subscribeOn(Schedulers.boundedElastic())
+				.onErrorResume(ProxyUpstreamException.class, (ex) -> Mono.just(null))
+				.onErrorResume(IllegalStateException.class, (ex) -> Mono.just(null));
+			return headersMono.flatMap((resolvedHeaders) -> {
+				if (resolvedHeaders == null) {
+					return ServerResponse.status(HttpStatus.BAD_GATEWAY)
+						.bodyValue(new ProxyErrorDto(502, "token_exchange_failed",
+								"OAuth2 token acquisition failed for profile " + profileId,
+								"Check the token endpoint, then reconnect.", null));
+				}
+				final AtomicReference<String> authorizationRef = new AtomicReference<>(resolvedHeaders.authorization());
+				final McpClientTransport target;
+				try {
+					target = buildTargetTransport(transportType, url, command, args, env, resolvedHeaders,
+							authorizationRef, authorization, customHeaders);
+				}
+				catch (final Exception ex) {
+					LOG.warn("proxy[{}] failed to build target transport: {}", sessionId, ex.toString());
+					return ServerResponse.badRequest().bodyValue(Map.of("error", ex.getMessage()));
+				}
+				// browserToTarget stays unicast (single consumer in McpProxy);
+				// targetToBrowser is multicast-replay so per-request awaiters in the
+				// Streamable-HTTP path can attach while keeping this long-lived SSE
+				// subscriber working.
+				final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
+				final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
+				final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser,
+						authorizationRef);
+				// One-time bind: rejected reuse / foreign ids close the handoff (D4/D8).
+				if (!this.authProfileStore.bind(ownerId, profileId, sessionId)) {
+					return ServerResponse.badRequest()
+						.bodyValue(new ProxyErrorDto(400, "bad_request",
+								"Invalid or missing auth profile or session reference.",
+								"Check the profile fields and profileId, then reconnect.", null));
+				}
+				session.bindProfile(ownerId, profileId);
+				this.registry.put(session);
 
-		final AtomicReference<String> authorizationRef = new AtomicReference<>(
-				(headers != null) ? headers.authorization() : null);
+				final String proxyBase = (this.properties != null) ? this.properties.getProxyPath()
+						: "/mcp-inspector-api";
+				// The prologue must carry the deployment prefix: the browser resolves it
+				// with
+				// new URL(data, sseUrl), and a path-absolute value replaces the whole
+				// path, so
+				// without the prefix every first client->server frame would 404.
+				final ServerSentEvent<String> prologue = ServerSentEvent.<String>builder()
+					.event("endpoint")
+					.data(contextPath + proxyBase + "/message?sessionId=" + sessionId)
+					.build();
+
+				// D3 outbox: structured error events (SSE-only redirect/401/403 mapping)
+				// are
+				// merged into the stream ahead of the session teardown so the browser
+				// sees the
+				// DTO, not a silent cut.
+				final Sinks.Many<ServerSentEvent<String>> errorEvents = Sinks.many()
+					.multicast()
+					.onBackpressureBuffer(8);
+
+				// takeUntilOther: the stream ends when the session closes, whether or not
+				// close() managed to complete the sink (it cannot when another thread
+				// owns it).
+				final var flux = Flux.merge(errorEvents.asFlux(),
+						targetToBrowser.asFlux()
+							.takeUntilOther(session.closeSignal())
+							.doOnTerminate(() -> errorEvents.tryEmitComplete())
+							.map((frame) -> {
+								try {
+									return ServerSentEvent.<String>builder()
+										.event("message")
+										.data(this.objectMapper.writeValueAsString(frame))
+										.build();
+								}
+								catch (final Exception ex) {
+									return ServerSentEvent.<String>builder()
+										.event("error")
+										.data(ex.getMessage())
+										.build();
+								}
+							})
+							.startWith(prologue))
+					.doOnCancel(() -> this.registry.removeAndClose(sessionId))
+					.doOnTerminate(() -> this.registry.removeAndClose(sessionId));
+
+				this.mcpProxy.start(session).subscribe((ignored) -> {
+				}, (err) -> {
+					LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+					// D3: emit the structured error event BEFORE the session teardown :
+					// the
+					// close signal terminates the merged flux, so the DTO must land
+					// first.
+					final ProxyErrorDto dto = ProxyErrorMapper.map(err, TransportKind.SSE);
+					if (dto != null) {
+						errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
+							.event("error")
+							.data(toErrorJson(dto, targetUri(transportType, url)))
+							.build());
+					}
+					errorEvents.tryEmitComplete();
+					this.registry.removeAndClose(sessionId);
+				});
+
+				return ServerResponse.ok().contentType(MediaType.TEXT_EVENT_STREAM).body(flux, ServerSentEvent.class);
+			});
+		}
+		// No profileId : existing synchronous path
+		final AuthHeaders headers = null;
+		final AtomicReference<String> authorizationRef = new AtomicReference<>(null);
 		final McpClientTransport target;
 		try {
 			target = buildTargetTransport(transportType, url, command, args, env, headers, authorizationRef,
@@ -459,7 +562,7 @@ public class ProxyHandler {
 		this.mcpProxy.start(session).subscribe((ignored) -> {
 		}, (err) -> {
 			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
-			// D3: emit the structured error event BEFORE the session teardown — the
+			// D3: emit the structured error event BEFORE the session teardown : the
 			// close signal terminates the merged flux, so the DTO must land first.
 			final ProxyErrorDto dto = ProxyErrorMapper.map(err, TransportKind.SSE);
 			if (dto != null) {
@@ -619,7 +722,7 @@ public class ProxyHandler {
 	 * Spec-compliant POST /mcp dispatcher.
 	 *
 	 * <p>
-	 * If {@code mcpSessionId} is missing — opens a new session, then routes the frame
+	 * If {@code mcpSessionId} is missing : opens a new session, then routes the frame
 	 * through {@link #relayAndAwait}. Otherwise looks up the existing session.
 	 * @param mcpSessionId the {@code mcp-session-id} header value, may be {@code null}
 	 * @param url the upstream URL query parameter, may be {@code null}
@@ -660,7 +763,7 @@ public class ProxyHandler {
 	 */
 	private Mono<ServerResponse> openSessionAndRelay(final String url, final JsonNode body, final String authorization,
 			final Map<String, String> customHeaders, final String profileId, final ServerRequest request) {
-		// Blank/relative url is the WAF-safe same-origin default — resolved to the
+		// Blank/relative url is the WAF-safe same-origin default : resolved to the
 		// loopback MCP endpoint server-side (ProxyTargetResolver); only an explicit
 		// absolute url targets a non-loopback server.
 		final String sessionId = UUID.randomUUID().toString();
@@ -816,7 +919,7 @@ public class ProxyHandler {
 	}
 
 	/**
-	 * Returns the {@code id} node iff {@code body} is a JSON-RPC <em>request</em> — i.e.
+	 * Returns the {@code id} node iff {@code body} is a JSON-RPC <em>request</em> : i.e.
 	 * it carries both a {@code method} and an {@code id}.
 	 *
 	 * <p>
@@ -864,7 +967,7 @@ public class ProxyHandler {
 			return ServerResponse.status(HttpStatus.NOT_FOUND)
 				.bodyValue(Map.of("error", "unknown mcp-session-id: " + mcpSessionId));
 		}
-		// takeUntilOther: see openProxiedSession — the sink's own completion can be lost.
+		// takeUntilOther: see openProxiedSession : the sink's own completion can be lost.
 		final var flux = session.targetToBrowser().asFlux().takeUntilOther(session.closeSignal()).map((frame) -> {
 			try {
 				return ServerSentEvent.<String>builder()
@@ -919,7 +1022,7 @@ public class ProxyHandler {
 		}
 		// Relative same-origin path (e.g. "/mcp"), not an absolute
 		// http://localhost:<port>
-		// — keeps the proxy ?url= WAF-safe; the proxy resolves it to loopback
+		// : keeps the proxy ?url= WAF-safe; the proxy resolves it to loopback
 		// server-side.
 		return path;
 	}

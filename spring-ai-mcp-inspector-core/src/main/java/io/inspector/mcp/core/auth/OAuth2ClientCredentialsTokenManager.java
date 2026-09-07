@@ -29,10 +29,13 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.LongSupplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.util.Assert;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.json.JsonMapper;
 
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
@@ -92,13 +95,32 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 	/** Per-profile locks for the single-flight contract. */
 	private final ConcurrentMap<String, Object> profileLocks = new ConcurrentHashMap<>();
 
+	/** Generation guard to detect stale profile mutations. */
+	private LongSupplier generationGuard = () -> 0L;
+
 	public OAuth2ClientCredentialsTokenManager() {
-		this(HttpClient.newBuilder().connectTimeout(REQUEST_TIMEOUT).build(), new JsonMapper());
+		this(HttpClient.newBuilder().connectTimeout(REQUEST_TIMEOUT).build(), new JsonMapper(), () -> 0L);
 	}
 
 	public OAuth2ClientCredentialsTokenManager(final HttpClient httpClient, final JsonMapper objectMapper) {
+		this(httpClient, objectMapper, () -> 0L);
+	}
+
+	public OAuth2ClientCredentialsTokenManager(final HttpClient httpClient, final JsonMapper objectMapper,
+			final LongSupplier generationGuard) {
 		this.httpClient = (httpClient != null) ? httpClient : HttpClient.newHttpClient();
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
+		this.generationGuard = generationGuard;
+	}
+
+	/**
+	 * Sets the generation guard supplier for bean wiring scenarios where the supplier is
+	 * not available at construction time.
+	 * @param generationGuard the generation guard supplier
+	 */
+	public void setGenerationGuard(final LongSupplier generationGuard) {
+		Assert.notNull(generationGuard, "generationGuard must not be null");
+		this.generationGuard = generationGuard;
 	}
 
 	/**
@@ -124,6 +146,56 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 		this.tokenCache.put(profileId, new TokenEntry(handle.accessToken(), handle.expiresAt()));
 		LOG.debug("oauth2-cc[{}] acquired token expiring {}", profileId, handle.expiresAt());
 		return handle;
+	}
+
+	/**
+	 * Performs an async client_credentials exchange without storing the result. The
+	 * caller captures the generation at registration time, then calls
+	 * {@link #storeIfCurrent(String, long, TokenHandle)} to atomically persist the token
+	 * only if the generation is still current.
+	 * @param profileId the store profile id (used for logging only)
+	 * @param profile the client-credentials profile
+	 * @return a {@link Mono} that emits the exchanged token handle
+	 */
+	public Mono<TokenHandle> acquireAsync(final String profileId, final OAuth2Profile profile) {
+		Assert.hasText(profileId, "profileId must not be blank");
+		Assert.notNull(profile, "profile must not be null");
+		Assert.isTrue(profile.grantMode() == OAuth2GrantMode.CLIENT_CREDENTIALS,
+				"acquireAsync requires a CLIENT_CREDENTIALS profile");
+		Assert.hasText(profile.clientSecret(), "clientSecret is required for CLIENT_CREDENTIALS profiles");
+		return Mono
+			.fromCallable(
+					() -> exchange(profile.tokenUrl(), profile.clientId(), profile.clientSecret(), profile.scopes()))
+			.subscribeOn(Schedulers.boundedElastic());
+	}
+
+	/**
+	 * Atomically stores credentials and token under {@code profileId} only when the
+	 * current generation matches the expected generation captured at registration time.
+	 * <p>
+	 * Under the per-profile lock (same single-flight contract as
+	 * {@link #getAccessToken(String, boolean)}), checks
+	 * {@code generationGuard.getAsLong() == expectedGeneration}. On mismatch throws
+	 * {@link StaleProfileGenerationException} without storing anything. On match stores
+	 * both credentials and the cached token entry.
+	 * @param profileId the store profile id
+	 * @param expectedGeneration the generation captured at registration time
+	 * @param handle the exchanged token handle
+	 * @throws StaleProfileGenerationException when the generation does not match
+	 */
+	public void storeIfCurrent(final String profileId, final long expectedGeneration, final TokenHandle handle) {
+		Assert.hasText(profileId, "profileId must not be blank");
+		Assert.notNull(handle, "handle must not be null");
+		final Object lock = this.profileLocks.computeIfAbsent(profileId, (key) -> new Object());
+		synchronized (lock) {
+			final long currentGeneration = this.generationGuard.getAsLong();
+			if (currentGeneration != expectedGeneration) {
+				throw new StaleProfileGenerationException(profileId, expectedGeneration, currentGeneration);
+			}
+			LOG.debug("oauth2-cc[{}] generation match ({}), storing token expiring {}", profileId, expectedGeneration,
+					handle.expiresAt());
+			this.tokenCache.put(profileId, new TokenEntry(handle.accessToken(), handle.expiresAt()));
+		}
 	}
 
 	/**
