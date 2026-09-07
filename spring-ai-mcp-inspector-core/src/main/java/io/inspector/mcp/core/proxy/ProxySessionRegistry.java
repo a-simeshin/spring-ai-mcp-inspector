@@ -32,6 +32,7 @@ import org.springframework.core.annotation.Order;
 import org.springframework.scheduling.annotation.Scheduled;
 
 import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.shutdown.ShutdownDrain;
 
 /**
@@ -109,6 +110,9 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	 */
 	private volatile AuthProfileStore authProfileStore;
 
+	/** Optional auth-code exchanger whose expired states are swept by {@link #reap()}. */
+	private volatile OAuth2AuthCodeTokenExchanger authCodeExchanger;
+
 	/**
 	 * Sets the optional auth-profile store whose bound profiles are cleared with the
 	 * session and whose expired entries are swept by {@link #reap()}.
@@ -116,6 +120,15 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	 */
 	public void setAuthProfileStore(final AuthProfileStore authProfileStore) {
 		this.authProfileStore = authProfileStore;
+	}
+
+	/**
+	 * Sets the optional auth-code exchanger whose expired states are swept by
+	 * {@link #reap()} (D3 sweeper wiring).
+	 * @param authCodeExchanger the exchanger, or {@code null} to disable the sweep
+	 */
+	public void setAuthCodeExchanger(final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
+		this.authCodeExchanger = authCodeExchanger;
 	}
 
 	/**
@@ -295,12 +308,17 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	 * {@link #removeAndClose(String)} so the upstream transport is torn down and the
 	 * sinks are completed.
 	 */
+
 	@Scheduled(fixedDelayString = "${spring.ai.mcp.inspector.timeouts.reaper-interval:PT1M}")
 	public void reap() {
 		final Instant now = Instant.now();
 		final AuthProfileStore store = this.authProfileStore;
 		if (store != null) {
 			store.removeExpired(now);
+		}
+		final OAuth2AuthCodeTokenExchanger exchanger = this.authCodeExchanger;
+		if (exchanger != null) {
+			exchanger.removeExpiredStates(now);
 		}
 		final Duration budget = this.inactivityBudget;
 		for (final ProxySession session : this.sessions.values()) {
