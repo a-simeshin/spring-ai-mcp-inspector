@@ -94,6 +94,9 @@ final class SseStreamCountingStub implements AutoCloseable {
 	/** Whether to hang on HEAD /sse (never respond). */
 	private volatile boolean hangOnHead;
 
+	/** Whether to hang on GET /sse (never respond). */
+	private volatile boolean hangOnSse;
+
 	private final AtomicBoolean stopped = new AtomicBoolean();
 
 	SseStreamCountingStub() throws IOException {
@@ -154,6 +157,10 @@ final class SseStreamCountingStub implements AutoCloseable {
 		this.hangOnHead = hang;
 	}
 
+	void setHangOnSse(final boolean hang) {
+		this.hangOnSse = hang;
+	}
+
 	@Override
 	public void close() {
 		this.stopped.set(true);
@@ -194,6 +201,18 @@ final class SseStreamCountingStub implements AutoCloseable {
 					exchange.close();
 				}
 				case "GET" -> {
+					if (this.hangOnSse) {
+						try {
+							while (!this.stopped.get()) {
+								Thread.sleep(50);
+							}
+						}
+						catch (final InterruptedException ex) {
+							Thread.currentThread().interrupt();
+						}
+						exchange.close();
+						return;
+					}
 					if (this.sseStatus != 200) {
 						exchange.sendResponseHeaders(this.sseStatus, -1);
 						exchange.close();

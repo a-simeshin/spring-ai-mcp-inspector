@@ -375,4 +375,29 @@ class SsePreflightStreamCountTests {
 		assertThat(this.stub.postCount()).as("POST requests received (1 rejected)").isGreaterThanOrEqualTo(1);
 	}
 
+	@Test
+	@Story("Preflight GET fallback timeout")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("When the HEAD returns 405 and the GET fallback hangs, the transport "
+			+ "times out and cancels the in-flight exchange. No leaked exchanges.")
+	@DisplayName("Preflight GET fallback: timeout, no leaked exchanges")
+	void preflightGetFallbackTimeout_whenGetHangs_errorsWithTimeoutAndNoLeak() throws Exception {
+		// given
+		this.stub = new SseStreamCountingStub();
+		this.stub.setHeadStatus(405);
+		this.stub.setHangOnSse(true);
+		final ProxyTransportFactory factory = new ProxyTransportFactory(new JsonMapper());
+		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()));
+
+		// when : the HEAD returns 405, triggering the GET fallback which hangs
+		assertThatThrownBy(() -> this.transport.connect((inbound) -> inbound).block(Duration.ofSeconds(15)))
+			.isInstanceOf(McpTransportException.class)
+			.hasMessageContaining("timed out");
+
+		// then : no SSE streams leaked
+		assertThat(this.stub.headCount()).as("HEAD preflight probes").isEqualTo(1);
+		assertThat(this.stub.sseStreamCount()).as("No SSE stream opened on timeout").isEqualTo(0);
+		assertThat(this.stub.activeExchangeCount()).as("No leaked exchanges after timeout").isEqualTo(0);
+	}
+
 }
