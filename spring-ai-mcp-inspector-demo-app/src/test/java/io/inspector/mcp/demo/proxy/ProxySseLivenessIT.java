@@ -118,6 +118,7 @@ class ProxySseLivenessIT {
 		// given
 		// Use fast probe intervals to keep the test bounded
 		inspectorApp = ProxyAppHarness.start("SSE", false, null,
+				"--spring.ai.mcp.inspector.upstream-liveness-probe-enabled=true",
 				"--spring.ai.mcp.inspector.timeouts.upstream-probe-interval=PT2S",
 				"--spring.ai.mcp.inspector.timeouts.upstream-probe-timeout=PT3S",
 				"--spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold=PT3S");
@@ -352,6 +353,7 @@ class ProxySseLivenessIT {
 		// Use default probe intervals (10s interval, 15s idle threshold) to ensure
 		// the probe does NOT trigger during the 5s observation window.
 		inspectorApp = ProxyAppHarness.start("SSE", false, null,
+				"--spring.ai.mcp.inspector.upstream-liveness-probe-enabled=true",
 				"--spring.ai.mcp.inspector.timeouts.upstream-probe-interval=PT2S",
 				"--spring.ai.mcp.inspector.timeouts.upstream-probe-timeout=PT2S",
 				"--spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold=PT2S");

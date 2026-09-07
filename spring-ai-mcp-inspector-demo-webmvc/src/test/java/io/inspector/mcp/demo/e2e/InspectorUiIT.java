@@ -365,7 +365,10 @@ class InspectorUiIT {
 	private void startApp(Combo combo) {
 		String[] args = new String[] { "--server.port=0",
 				"--spring.ai.mcp.server.protocol=" + combo.protocol.toUpperCase(),
-				"--spring.ai.mcp.inspector.auth-enabled=false", };
+				"--spring.ai.mcp.inspector.auth-enabled=false",
+				// Disable the liveness probe in E2E: the 30s+ browser waits would
+				// trigger the probe and kill the session mid-test.
+				"--spring.ai.mcp.inspector.upstream-liveness-probe-enabled=false", };
 		app = new SpringApplicationBuilder(DemoApplication.class).run(args);
 
 		int port = ((WebServerApplicationContext) app).getWebServer().getPort();
