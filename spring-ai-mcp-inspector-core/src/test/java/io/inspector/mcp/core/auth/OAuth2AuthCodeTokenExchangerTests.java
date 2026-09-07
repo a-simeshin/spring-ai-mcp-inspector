@@ -203,6 +203,79 @@ class OAuth2AuthCodeTokenExchangerTests {
 				.isFalse();
 		}
 
+		@Test
+		@Story("State verify")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("mismatch state is rejected; one-time consume semantics preserved (state removed on presentation)")
+		void verifyAndConsumeState_mismatchState_rejectedAndConsumed() {
+			// given
+			final String validState = OAuth2AuthCodeTokenExchangerTests.this.exchanger.mintState("owner-a", "pid-1");
+
+			// when: wrong state presented (consumes the entry, one-time semantics)
+			final boolean wrong = OAuth2AuthCodeTokenExchangerTests.this.exchanger.verifyAndConsumeState("owner-a",
+					"pid-1", "attacker-state");
+
+			// then: rejected AND state consumed (no retry possible)
+			assertThat(wrong).isFalse();
+			final boolean retry = OAuth2AuthCodeTokenExchangerTests.this.exchanger.verifyAndConsumeState("owner-a",
+					"pid-1", validState);
+			assertThat(retry).isFalse();
+			assertThat(OAuth2AuthCodeTokenExchangerTests.this.exchanger.stateCount()).isZero();
+		}
+
+		@Test
+		@Story("State verify")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("mismatch owner is rejected (constant-time comparison prevents timing leak)")
+		void verifyAndConsumeState_mismatchOwner_rejected() {
+			// given
+			final String state = OAuth2AuthCodeTokenExchangerTests.this.exchanger.mintState("owner-a", "pid-1");
+
+			// when: different owner presents the state
+			final boolean result = OAuth2AuthCodeTokenExchangerTests.this.exchanger.verifyAndConsumeState("owner-b",
+					"pid-1", state);
+
+			// then: rejected
+			assertThat(result).isFalse();
+		}
+
+		@Test
+		@Story("State verify")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("replay of an already-consumed state is rejected")
+		void verifyAndConsumeState_replay_rejected() {
+			// given
+			final String state = OAuth2AuthCodeTokenExchangerTests.this.exchanger.mintState("owner-a", "pid-1");
+
+			// when: first use succeeds
+			final boolean first = OAuth2AuthCodeTokenExchangerTests.this.exchanger.verifyAndConsumeState("owner-a",
+					"pid-1", state);
+			// replay
+			final boolean replay = OAuth2AuthCodeTokenExchangerTests.this.exchanger.verifyAndConsumeState("owner-a",
+					"pid-1", state);
+
+			// then
+			assertThat(first).isTrue();
+			assertThat(replay).isFalse();
+		}
+
+		@Test
+		@Story("State verify")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("happy path is not broken by constant-time comparison")
+		void verifyAndConsumeState_happyPath_works() {
+			// given
+			final String state = OAuth2AuthCodeTokenExchangerTests.this.exchanger.mintState("owner-a", "pid-1");
+
+			// when
+			final boolean result = OAuth2AuthCodeTokenExchangerTests.this.exchanger.verifyAndConsumeState("owner-a",
+					"pid-1", state);
+
+			// then
+			assertThat(result).isTrue();
+			assertThat(OAuth2AuthCodeTokenExchangerTests.this.exchanger.stateCount()).isZero();
+		}
+
 		/** Replaces the stored state with an expired entry via reflection (test seam). */
 		private void expireState(final String profileId, final String state) throws Exception {
 			final java.lang.reflect.Field statesField = OAuth2AuthCodeTokenExchanger.class.getDeclaredField("states");
