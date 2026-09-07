@@ -128,7 +128,7 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 		if (pending == null) {
 			return false;
 		}
-		if (!pending.ownerId().equals(ownerId) || !pending.state().equals(state)) {
+		if (!constantTimeEquals(pending.ownerId(), ownerId) || !constantTimeEquals(pending.state(), state)) {
 			return false;
 		}
 		if (pending.expiresAt().isBefore(Instant.now())) {
@@ -267,6 +267,23 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 			final byte[] digest = MessageDigest.getInstance("SHA-256")
 				.digest(codeVerifier.getBytes(StandardCharsets.UTF_8));
 			return Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
+		}
+		catch (final java.security.NoSuchAlgorithmException ex) {
+			throw new IllegalStateException("SHA-256 unavailable", ex);
+		}
+	}
+
+	/**
+	 * Constant-time comparison of two strings via SHA-256 digest.
+	 * @param a the first string
+	 * @param b the second string
+	 * @return {@code true} when the strings are equal
+	 */
+	private static boolean constantTimeEquals(final String a, final String b) {
+		try {
+			final byte[] digestA = MessageDigest.getInstance("SHA-256").digest(a.getBytes(StandardCharsets.UTF_8));
+			final byte[] digestB = MessageDigest.getInstance("SHA-256").digest(b.getBytes(StandardCharsets.UTF_8));
+			return MessageDigest.isEqual(digestA, digestB);
 		}
 		catch (final java.security.NoSuchAlgorithmException ex) {
 			throw new IllegalStateException("SHA-256 unavailable", ex);
