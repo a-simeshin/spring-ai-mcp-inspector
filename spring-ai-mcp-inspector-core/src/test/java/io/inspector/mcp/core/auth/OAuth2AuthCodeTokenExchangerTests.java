@@ -280,6 +280,32 @@ class OAuth2AuthCodeTokenExchangerTests {
 			assertThat(OAuth2AuthCodeTokenExchangerTests.this.exchanger.stateCount()).isZero();
 		}
 
+		@Test
+		@Story("State verify")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("owner mismatch still executes state comparison; exactly 4 digest calls (two per constantTimeEquals invocation)")
+		void verifyAndConsumeState_ownerMismatch_bothComparisonsExecute() {
+			// given: mint state BEFORE installing the counting provider (mintState uses
+			// UUID only, no SHA-256)
+			final String state = OAuth2AuthCodeTokenExchangerTests.this.exchanger.mintState("owner-a", "pid-1");
+			try {
+				CountingMessageDigest.install();
+				CountingMessageDigest.resetDigestCallCount();
+
+				// when: wrong owner presents the correct state
+				final boolean result = OAuth2AuthCodeTokenExchangerTests.this.exchanger.verifyAndConsumeState("owner-b",
+						"pid-1", state);
+
+				// then: rejected AND both comparisons executed (4 digest calls, 2 per
+				// constantTimeEquals)
+				assertThat(result).isFalse();
+				assertThat(CountingMessageDigest.getDigestCallCount()).isEqualTo(4);
+			}
+			finally {
+				CountingMessageDigest.uninstall();
+			}
+		}
+
 		/** Replaces the stored state with an expired entry via reflection (test seam). */
 		private void expireState(final String profileId, final String state) throws Exception {
 			final java.lang.reflect.Field statesField = OAuth2AuthCodeTokenExchanger.class.getDeclaredField("states");
