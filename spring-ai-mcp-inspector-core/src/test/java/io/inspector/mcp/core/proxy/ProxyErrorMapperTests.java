@@ -527,6 +527,152 @@ class ProxyErrorMapperTests {
 			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("code: 302"))).contains(302);
 		}
 
+		// ========== Regression tests (task t_4528e10e) ==========
+		// Group 1: false positives - port/URL numbers must NOT map to HTTP status.
+		// On the OLD implementation (loose \b([1-5][0-9][0-9])\b pattern), each of these
+		// messages would incorrectly extract a port number as an HTTP status.
+
+		@Test
+		@Story("Port safety regression")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("'Connection refused: 127.0.0.1:8080' does NOT map to a DTO (port 8080 in IP:port)")
+		void map_connectionRefusedIpPort_returnsNull() {
+			// old regex would match "808" from "8080" (word boundary at '0' before ':')
+			assertThat(
+					ProxyErrorMapper.map(new RuntimeException("Connection refused: 127.0.0.1:8080"), TransportKind.SSE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("Connection refused: 127.0.0.1:8080"),
+					TransportKind.STREAMABLE))
+				.isNull();
+		}
+
+		@Test
+		@Story("Port safety regression")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("'http://backend:5000/api timeout' does NOT map to a DTO (port in URL authority)")
+		void map_urlWithPort_returnsNull() {
+			// old regex would match "500" from "5000"
+			assertThat(ProxyErrorMapper.map(new RuntimeException("http://backend:5000/api timeout"), TransportKind.SSE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("http://backend:5000/api timeout"),
+					TransportKind.STREAMABLE))
+				.isNull();
+		}
+
+		@Test
+		@Story("Port safety regression")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("'failed to connect to host:443' does NOT map to a DTO (HTTPS port)")
+		void map_hostPort443_returnsNull() {
+			// old regex would match "443"
+			assertThat(ProxyErrorMapper.map(new RuntimeException("failed to connect to host:443"), TransportKind.SSE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("failed to connect to host:443"),
+					TransportKind.STREAMABLE))
+				.isNull();
+		}
+
+		@Test
+		@Story("Port safety regression")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("boundary ports (100, 599) in authority URLs do NOT map to a DTO")
+		void map_boundaryPortsInUrl_returnsNull() {
+			// old regex would match "100" and "599" from these URLs
+			assertThat(ProxyErrorMapper.map(new RuntimeException("http://backend:100/api timeout"), TransportKind.SSE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("http://backend:599/api timeout"), TransportKind.SSE))
+				.isNull();
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("http://backend:100/api timeout")))
+				.isEmpty();
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("http://backend:599/api timeout")))
+				.isEmpty();
+		}
+
+		@Test
+		@Story("Port safety regression")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("extractStatus returns empty for all port-only regression cases")
+		void extractStatus_portRegressionCases_returnsEmpty() {
+			// old regex would extract these as statuses
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("Connection refused: 127.0.0.1:8080")))
+				.isEmpty();
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("http://backend:5000/api timeout")))
+				.isEmpty();
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("failed to connect to host:443"))).isEmpty();
+		}
+
+		// Group 2: real statuses continue to map correctly
+
+		@Test
+		@Story("Real status regression")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("'HTTP 503 Service Unavailable' extracts status (not mapped to DTO: 503 not in D3 table)")
+		void map_http503_extractsStatusButReturnsNullDto() {
+			// status extraction works
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("HTTP 503 Service Unavailable")))
+				.contains(503);
+			// but D3 table has no 503 entry, so map returns null (legacy fallback)
+			assertThat(ProxyErrorMapper.map(new RuntimeException("HTTP 503 Service Unavailable"), TransportKind.SSE))
+				.isNull();
+		}
+
+		@Test
+		@Story("Real status regression")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("'status code: 429' extracts status (not mapped to DTO: 429 not in D3 table)")
+		void map_statusCode429_extractsStatusButReturnsNullDto() {
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("status code: 429"))).contains(429);
+			assertThat(ProxyErrorMapper.map(new RuntimeException("status code: 429"), TransportKind.SSE)).isNull();
+		}
+
+		@Test
+		@Story("Real status regression")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("'404 Not Found' maps to session_not_found DTO on SSE")
+		void map_404NotFound_mapsToSessionNotFound() {
+			final ProxyErrorDto dto = ProxyErrorMapper.map(new RuntimeException("HTTP 404 Not Found"),
+					TransportKind.SSE);
+			assertThat(dto).isNotNull();
+			assertThat(dto.status()).isEqualTo(404);
+			assertThat(dto.code()).isEqualTo("session_not_found");
+			assertThat(dto.reason()).isEqualTo(REASON_404);
+			assertThat(dto.guidance()).isEqualTo(GUIDANCE_404);
+		}
+
+		// Group 3: unknown error without recognized status -> null (legacy fallback)
+
+		@Test
+		@Story("Unknown failure regression")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("unrecognized error without status yields null DTO (legacy 502/504 path)")
+		void map_unrecognizedError_returnsNull() {
+			assertThat(ProxyErrorMapper.map(new RuntimeException("something went wrong"), TransportKind.SSE)).isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("something went wrong"), TransportKind.STREAMABLE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException(""), TransportKind.SSE)).isNull();
+		}
+
+		// Group 4: structured exception with status field -> status from exception
+
+		@Test
+		@Story("Structured exception regression")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("McpHttpClientTransportAuthorizationException status field takes priority over message parsing")
+		void map_structuredExceptionStatus_overridesMessage() {
+			// message says 500, but structured field says 401: 401 wins
+			final HttpResponse.ResponseInfo responseInfo = mock(HttpResponse.ResponseInfo.class);
+			given(responseInfo.statusCode()).willReturn(401);
+			final Throwable error = new McpHttpClientTransportAuthorizationException("HTTP 500 Internal Server Error",
+					new HttpRequestSnapshot(URI.create("https://target/mcp"), "POST",
+							HttpHeaders.of(java.util.Map.of(), (a, b) -> true)),
+					responseInfo);
+
+			final ProxyErrorDto dto = ProxyErrorMapper.map(error, TransportKind.STREAMABLE);
+			assertThat(dto).isNotNull();
+			assertThat(dto.status()).isEqualTo(401);
+			assertThat(dto.code()).isEqualTo("unauthorized");
+		}
+
 	}
 
 }
