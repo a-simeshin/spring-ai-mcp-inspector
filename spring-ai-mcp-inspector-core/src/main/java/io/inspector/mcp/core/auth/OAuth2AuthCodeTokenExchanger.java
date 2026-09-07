@@ -128,7 +128,9 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 		if (pending == null) {
 			return false;
 		}
-		if (!constantTimeEquals(pending.ownerId(), ownerId) || !constantTimeEquals(pending.state(), state)) {
+		final boolean ownerMatch = constantTimeEquals(pending.ownerId(), ownerId);
+		final boolean stateMatch = constantTimeEquals(pending.state(), state);
+		if (!ownerMatch || !stateMatch) {
 			return false;
 		}
 		if (pending.expiresAt().isBefore(Instant.now())) {
