@@ -460,6 +460,73 @@ class ProxyErrorMapperTests {
 			assertThat(status).contains(403);
 		}
 
+		@Test
+		@Story("Port safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("connection refused with port number does NOT map to a DTO")
+		void map_connectionRefusedWithPort_returnsNull() {
+			// when/then
+			assertThat(
+					ProxyErrorMapper.map(new RuntimeException("Connection refused: localhost:8443"), TransportKind.SSE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("Connection refused: localhost:443"),
+					TransportKind.STREAMABLE))
+				.isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("http://host:5000/path timeout"), TransportKind.SSE))
+				.isNull();
+		}
+
+		@Test
+		@Story("Port safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("extractStatus returns empty for port-only messages")
+		void extractStatus_portOnly_returnsEmpty() {
+			// when/then
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("Connection refused: localhost:8443")))
+				.isEmpty();
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("http://host:5000/path timeout"))).isEmpty();
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("Connection refused: 127.0.0.1:8080")))
+				.isEmpty();
+		}
+
+		@Test
+		@Story("Port safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("bare number without HTTP context does NOT map to a DTO")
+		void map_bareNumberWithoutContext_returnsNull() {
+			// when/then
+			assertThat(ProxyErrorMapper.map(new RuntimeException("Got 404 from server"), TransportKind.SSE)).isNull();
+			assertThat(ProxyErrorMapper.map(new RuntimeException("Error 500 occurred"), TransportKind.STREAMABLE))
+				.isNull();
+		}
+
+		@Test
+		@Story("Explicit context")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("HTTP status with explicit context maps correctly")
+		void map_explicitHttpContext_mapsToDto() {
+			// when/then
+			assertThat(ProxyErrorMapper.map(new RuntimeException("HTTP 404 Not Found"), TransportKind.SSE)).isNotNull()
+				.satisfies((dto) -> {
+					assertThat(dto.status()).isEqualTo(404);
+					assertThat(dto.code()).isEqualTo("session_not_found");
+				});
+			assertThat(ProxyErrorMapper.map(new RuntimeException("status code: 503"), TransportKind.STREAMABLE))
+				.isNull(); // 503 is not in the D3 mapping table, so null DTO
+		}
+
+		@Test
+		@Story("Explicit context")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("extractStatus with explicit context returns the status")
+		void extractStatus_explicitContext_returnsStatus() {
+			// when/then
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("HTTP 404 Not Found"))).contains(404);
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("status code: 503"))).contains(503);
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("status: 401"))).contains(401);
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("code: 302"))).contains(302);
+		}
+
 	}
 
 }
