@@ -84,10 +84,13 @@ public final class ProxyErrorMapper {
 	 * <li>{@code [<status> <reason>]} (HTTP status line convention used by HttpClient
 	 * messages such as {@code "[401 Unauthorized] POST https://host/path"})</li>
 	 * </ul>
-	 * Bare numbers without context (ports, IPs, IDs) are never treated as a status.
+	 * Bare numbers without context (ports, IPs, IDs) are never treated as a status. The
+	 * word-based prefixes (HTTP, status, code) are rejected when preceded by a URL
+	 * character ({@code / ? &amp; = # :}) or a word character, so numbers in URI paths
+	 * and query strings ({@code ?code:404}, {@code /status:404}) are never matched.
 	 */
 	private static final Pattern HTTP_STATUS_STRICT = Pattern.compile(
-			"(?:HTTP\\s+(?:status|code)?\\s*:?\\s*|status(?:\\s+code)?\\s*:?\\s*|code\\s*:?\\s*|\\[|^)([1-5][0-9][0-9])(?=[\\s\\]\\.,;:!?)]|$)",
+			"(?:\\[|^|(?<![\\/?&=#.:\\w])(?:HTTP\\s+(?:status|code)?\\s*:?\\s*|status(?:\\s+code)?\\s*:?\\s*|code\\s*:?\\s*))([1-5][0-9][0-9])(?=[\\s\\]\\.,;:!?)]|$)",
 			Pattern.CASE_INSENSITIVE | Pattern.MULTILINE);
 
 	private static final String CODE_BAD_REQUEST = "bad_request";
