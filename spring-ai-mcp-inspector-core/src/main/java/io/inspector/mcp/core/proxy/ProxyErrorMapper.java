@@ -72,8 +72,23 @@ import io.modelcontextprotocol.client.transport.McpHttpClientTransportAuthorizat
  */
 public final class ProxyErrorMapper {
 
-	/** Bounded status pattern used when no typed exception carries the status. */
-	private static final Pattern HTTP_STATUS = Pattern.compile("\\b([1-5][0-9][0-9])\\b");
+	/**
+	 * Strict status pattern: only matches a 3-digit number (100-599) when it carries
+	 * explicit HTTP-status context. Accepted forms:
+	 * <ul>
+	 * <li>{@code HTTP <status>} / {@code HTTP code: <status>} /
+	 * {@code HTTP status: <status>}</li>
+	 * <li>{@code status <status>} / {@code status: <status>} /
+	 * {@code status code: <status>}</li>
+	 * <li>{@code code <status>} / {@code code: <status>}</li>
+	 * <li>{@code [<status> <reason>]} (HTTP status line convention used by HttpClient
+	 * messages such as {@code "[401 Unauthorized] POST https://host/path"})</li>
+	 * </ul>
+	 * Bare numbers without context (ports, IPs, IDs) are never treated as a status.
+	 */
+	private static final Pattern HTTP_STATUS_STRICT = Pattern.compile(
+			"(?:HTTP\\s+(?:status|code)?\\s*:?\\s*|status(?:\\s+code)?\\s*:?\\s*|code\\s*:?\\s*|\\[)([1-5][0-9][0-9])(?=[\\s\\]\\.,;:!?)]|$)",
+			Pattern.CASE_INSENSITIVE);
 
 	private static final String CODE_BAD_REQUEST = "bad_request";
 
@@ -139,8 +154,10 @@ public final class ProxyErrorMapper {
 
 	/**
 	 * Extracts the HTTP status from a transport failure: the typed
-	 * {@link McpHttpClientTransportAuthorizationException} status first, then the first
-	 * {@code \b([1-5][0-9][0-9])\b} match in the message/cause chain.
+	 * {@link McpHttpClientTransportAuthorizationException} status first, then the strict
+	 * context pattern match in the message/cause chain. The strict pattern only matches
+	 * numbers carrying explicit HTTP status context ("HTTP 404", "status: 503", "[401
+	 * Unauthorized]") and never bare port numbers.
 	 * @param error the failure to inspect
 	 * @return the status, or empty when none is present
 	 */
@@ -154,7 +171,7 @@ public final class ProxyErrorMapper {
 				}
 			}
 			if (current.getMessage() != null) {
-				final Matcher matcher = HTTP_STATUS.matcher(current.getMessage());
+				final Matcher matcher = HTTP_STATUS_STRICT.matcher(current.getMessage());
 				if (matcher.find()) {
 					return Optional.of(Integer.parseInt(matcher.group(1)));
 				}
