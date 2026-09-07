@@ -101,21 +101,28 @@ public class ProxyUpstreamProber {
 					idle.toSeconds());
 
 			// Schedule the answer deadline BEFORE sending: a half-open upstream that
-			// accepts the POST but never responds must also be detected. When the
-			// timer fires, the probe id is removed and the session is failed.
+			// accepts the POST but never responds must also be detected. The timer
+			// re-checks the probe id when it fires: McpProxy removes the id the moment
+			// the matching answer arrives on the inbound flux, so a live upstream
+			// that answered in time never sees failUpstream from this timer. An id
+			// still present means the answer never came - the id is dropped (bounds
+			// the probeIds set) and the session is failed.
 			final Mono<Void> answerDeadline = Mono.delay(probeTimeout).doOnNext((ignored) -> {
-				LOG.warn("proxy[{}] liveness probe {} answer deadline expired: failing upstream", session.sessionId(),
-						probeId);
-				session.removeProbeId(probeId);
-				session.failUpstream(new java.util.concurrent.TimeoutException(
-						"liveness probe " + probeId + " timed out after " + probeTimeout));
+				if (session.isProbeId(probeId) && !session.isUpstreamTerminated()) {
+					LOG.warn("proxy[{}] liveness probe {} answer deadline expired: failing upstream",
+							session.sessionId(), probeId);
+					session.removeProbeId(probeId);
+					session.failUpstream(new java.util.concurrent.TimeoutException(
+							"liveness probe " + probeId + " timed out after " + probeTimeout));
+				}
 			}).then();
 
 			// sendMessage sends the ping frame and completes on HTTP 202.
 			// The JSON-RPC answer arrives on the inbound flux. The answer
-			// deadline runs in parallel: it is cancelled when sendMessage errors
-			// (no answer can arrive for a frame never sent) and fires on its own
-			// if the upstream accepts the POST but never responds.
+			// deadline runs in parallel: it is disposed when sendMessage errors
+			// (no answer can arrive for a frame never sent) and neutralised by the
+			// id re-check when the answer arrives; it fires only when the upstream
+			// accepted the POST but never responded.
 			final var deadlineSub = answerDeadline.subscribeOn(Schedulers.boundedElastic()).subscribe();
 			session.targetTransport()
 				.sendMessage(ping)
@@ -126,7 +133,17 @@ public class ProxyUpstreamProber {
 					LOG.warn("proxy[{}] liveness probe {} failed ({}): {}", session.sessionId(), probeId,
 							failure.reason().wire(), err.toString());
 					if (failure.reason() != ProxyConnectFailure.Reason.UNKNOWN) {
+						// Transport-level failure (refused / dns / timeout): the
+						// upstream is dead - tear the session down. The probe id is
+						// left in place deliberately: failUpstream ends the
+						// session, and close() clears the set.
 						session.failUpstream(err);
+					}
+					else {
+						// Protocol-level rejection from a LIVE upstream (e.g. HTTP
+						// 4xx on the ping POST): the session stays up, but the
+						// probe is over - drop the id so the set cannot leak.
+						session.removeProbeId(probeId);
 					}
 					return Mono.empty();
 				})

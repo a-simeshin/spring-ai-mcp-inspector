@@ -244,6 +244,104 @@ class ProxySseLivenessIT {
 	}
 
 	@Test
+	@DisplayName("With probing disabled, upstream death does NOT close the SSE stream promptly")
+	@Story("SSE liveness detection")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Red control for upstreamDeath_closesDownstreamSseWithinBound: with "
+			+ "upstream-liveness-probe-enabled=false the same kill must leave the stream open past the "
+			+ "window in which the probe-based run closes it, proving the probe (not reactor-netty "
+			+ "resource sharing) is what detects the dead upstream")
+	void upstreamDeath_probeDisabled_streamStaysOpen() throws Exception {
+		// given: probing disabled; other timeouts at defaults so nothing else fires
+		inspectorApp = ProxyAppHarness.start("SSE", false, null,
+				"--spring.ai.mcp.inspector.upstream-liveness-probe-enabled=false");
+		targetApp = ProxyAppHarness.start("SSE", false, null);
+
+		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
+		final int targetPort = ProxyAppHarness.port(targetApp);
+		final String proxyBase = "http://127.0.0.1:" + inspectorPort + "/mcp-inspector-api";
+		final String targetUrl = "http://127.0.0.1:" + targetPort + "/sse";
+
+		// Open the SSE stream and capture the endpoint prologue.
+		final AtomicBoolean streamClosed = new AtomicBoolean(false);
+		final AtomicReference<String> endpointData = new AtomicReference<>();
+		final AtomicReference<Throwable> streamError = new AtomicReference<>();
+		final Thread sseReader = new Thread(() -> {
+			try {
+				final HttpRequest sseRequest = HttpRequest
+					.newBuilder(URI.create(proxyBase + "/sse?transportType=sse&url="
+							+ URLEncoder.encode(targetUrl, StandardCharsets.UTF_8)))
+					.timeout(Duration.ofSeconds(60))
+					.header("Accept", "text/event-stream")
+					.GET()
+					.build();
+				final HttpResponse<java.io.InputStream> response = HTTP.send(sseRequest,
+						HttpResponse.BodyHandlers.ofInputStream());
+				if (response.statusCode() != 200) {
+					streamError.set(new IllegalStateException("SSE handshake HTTP " + response.statusCode()));
+					return;
+				}
+				try (var reader = new java.io.BufferedReader(
+						new java.io.InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+					String eventName = null;
+					StringBuilder dataBuf = new StringBuilder();
+					String line;
+					while ((line = reader.readLine()) != null) {
+						if (line.isEmpty()) {
+							if ("endpoint".equals(eventName) && dataBuf.length() > 0) {
+								endpointData.set(dataBuf.toString());
+							}
+							eventName = null;
+							dataBuf.setLength(0);
+							continue;
+						}
+						if (line.startsWith("event:")) {
+							eventName = line.substring(6).trim();
+						}
+						else if (line.startsWith("data:")) {
+							if (dataBuf.length() > 0) {
+								dataBuf.append('\n');
+							}
+							dataBuf.append(line.substring(5).trim());
+						}
+					}
+				}
+				streamClosed.set(true);
+			}
+			catch (java.net.http.HttpTimeoutException ex) {
+				streamClosed.set(true);
+			}
+			catch (Throwable t) {
+				streamError.set(t);
+			}
+		}, "sse-liveness-disabled-reader-" + ProxyAppHarness.stack());
+		sseReader.setDaemon(true);
+		sseReader.start();
+
+		// Wait for the endpoint prologue.
+		Awaitility.await("endpoint prologue frame (probe disabled) on " + ProxyAppHarness.stack())
+			.atMost(BUDGET)
+			.pollInterval(Duration.ofMillis(100))
+			.until(() -> endpointData.get() != null);
+
+		// when: kill the target exactly as in the positive test
+		targetApp.close();
+		targetApp = null;
+
+		// then: with no probe, nothing detects the dead upstream: the stream must
+		// still be open after 10s, well past the ~6s window in which the
+		// probe-enabled run closes it. The JDK HTTP client only surfaces the dead
+		// TCP peer on a write, and the idle SSE connection performs none.
+		Thread.sleep(Duration.ofSeconds(10).toMillis());
+		assertThat(streamClosed.get())
+			.as("SSE stream must stay open with probing disabled on %s", ProxyAppHarness.stack())
+			.isFalse();
+		assertThat(streamError.get())
+			.as("SSE stream must not error with probing disabled on %s", ProxyAppHarness.stack())
+			.isNull();
+	}
+
+	@Test
 	@DisplayName("Alive upstream keeps the SSE stream open (no false positives)")
 	@Story("SSE liveness detection")
 	@Severity(SeverityLevel.NORMAL)

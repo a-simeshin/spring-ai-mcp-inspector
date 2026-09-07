@@ -283,6 +283,15 @@ public final class ProxySession {
 	}
 
 	/**
+	 * Number of probe IDs currently awaiting an answer. Exposed for leak assertions in
+	 * tests.
+	 * @return the size of the probe-id set
+	 */
+	public int probeIdCount() {
+		return this.probeIds.size();
+	}
+
+	/**
 	 * Generates the next unique probe request ID. The ID is automatically registered so
 	 * its response will be filtered from the browser stream.
 	 * @return a unique string probe ID (mcpi-probe-N)

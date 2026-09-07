@@ -182,12 +182,14 @@ class ProxyUpstreamProberTests {
 		@Test
 		@Story("Unknown probe failure does NOT fail the session")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("when sendMessage errors with an unclassified error (e.g. HTTP 4xx), "
-				+ "the session is NOT terminated (only transport-level failures justify teardown)")
+		@Description("when the ping POST is rejected by a LIVE upstream with a protocol-level error "
+				+ "(the exact wire shape the SSE transport produces for HTTP 4xx), the session is NOT "
+				+ "terminated and the probe id is cleaned up (only transport-level failures justify teardown)")
 		void probe_unknownError_doesNotFailSession() {
-			// given
+			// given: the exact RuntimeException HttpClientSseClientTransport raises
+			// for a non-2xx ping POST (classify() maps it to UNKNOWN)
 			given(ProxyUpstreamProberTests.this.transport.sendMessage(any()))
-				.willReturn(Mono.error(new RuntimeException("unexpected 400 Bad Request")));
+				.willReturn(Mono.error(new RuntimeException("Sending message failed with a non-OK HTTP code: 404")));
 			// Wait beyond the idle threshold so the prober considers this session idle
 			ProxyUpstreamProberTests.await(FAST_IDLE_THRESHOLD.toMillis() + 50);
 
@@ -197,6 +199,43 @@ class ProxyUpstreamProberTests {
 			// then
 			verify(ProxyUpstreamProberTests.this.transport, timeout(2000)).sendMessage(any());
 			// The session must NOT be failed for UNKNOWN errors
+			assertThat(ProxyUpstreamProberTests.this.session.isUpstreamTerminated()).isFalse();
+			// and the probe id must not leak: the error path removes it (it runs
+			// async on boundedElastic - poll until the removal lands)
+			final long deadline = System.currentTimeMillis() + 2000;
+			while (ProxyUpstreamProberTests.this.session.probeIdCount() > 0 && System.currentTimeMillis() < deadline) {
+				ProxyUpstreamProberTests.await(25);
+			}
+			assertThat(ProxyUpstreamProberTests.this.session.probeIdCount()).isZero();
+		}
+
+		@Test
+		@Story("Answered probe cancels its answer deadline")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("when the probe answer arrives in time (probe id removed from the set), "
+				+ "the answer deadline fires as a no-op and the session stays alive")
+		void probe_answeredProbe_doesNotFailOnDeadline() {
+			// given: sendMessage succeeds (HTTP 202); the answer arrives on the
+			// inbound flux, which McpProxy filters out and removes the probe id.
+			// Simulate that removal directly.
+			final java.util.concurrent.atomic.AtomicReference<String> sentProbeId = new java.util.concurrent.atomic.AtomicReference<>();
+			given(ProxyUpstreamProberTests.this.transport.sendMessage(any())).willAnswer((invocation) -> {
+				final McpSchema.JSONRPCRequest req = (McpSchema.JSONRPCRequest) invocation.getArgument(0);
+				sentProbeId.set((String) req.id());
+				return Mono.empty();
+			});
+			ProxyUpstreamProberTests.await(FAST_IDLE_THRESHOLD.toMillis() + 50);
+
+			// when
+			ProxyUpstreamProberTests.this.prober.probe();
+
+			// then: simulate the inbound answer: the id is removed before the
+			// deadline (FAST_PROBE = 100ms) can fire
+			verify(ProxyUpstreamProberTests.this.transport, timeout(2000)).sendMessage(any());
+			ProxyUpstreamProberTests.this.session.removeProbeId(sentProbeId.get());
+			// Wait well beyond the probe timeout: the deadline must have fired as a
+			// no-op instead of failing the session
+			ProxyUpstreamProberTests.await(FAST_PROBE.toMillis() * 4);
 			assertThat(ProxyUpstreamProberTests.this.session.isUpstreamTerminated()).isFalse();
 		}
 

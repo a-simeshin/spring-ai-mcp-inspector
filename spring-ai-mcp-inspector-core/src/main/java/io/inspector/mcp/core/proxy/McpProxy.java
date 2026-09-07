@@ -151,13 +151,23 @@ public final class McpProxy {
 		// targetToBrowser sink. Returning Mono.empty() tells the SDK we have no
 		// further response to send.
 		//
-		// The inbound flux's terminal signals are surfaced too: an upstream
-		// disconnect that completes/errors the inbound stream is propagated via
-		// failUpstream so awaiters and the SSE subscriber are released promptly.
+		// The INBOUND flux's terminal signals are surfaced too: an upstream
+		// disconnect that completes/errors the inbound message stream is
+		// propagated via failUpstream so awaiters and the SSE subscriber are
+		// released promptly. The per-frame flux ends after every frame (each
+		// flatMap lambda returns Mono.empty()), so its terminal signal fires
+		// constantly: failUpstream's idempotence absorbs the repeats, and an
+		// upstream that already failed simply keeps its first verdict. These hooks hang
+		// on the per-frame stream the SDK
+		// hands to the handler, NOT on the connect() Mono: per the
+		// McpClientTransport contract, connect() succeeds as soon as the client
+		// is set up (for the SSE transport that is the endpoint prologue), so a
+		// doOnSuccess on the returned Mono would kill every session at birth.
 		//
 		// Internal liveness-probe responses are detected by their JSON-RPC id
 		// (registered via session.registerProbeId) and filtered out - they must
-		// never reach the browser.
+		// never reach the browser. Receiving one also cancels the probe's answer
+		// deadline (the prober re-checks the id when its timer fires).
 		return session.targetTransport().connect((inbound) -> inbound.flatMap((message) -> {
 			// Skip internal probe responses - they are not real MCP messages
 			// and must not be forwarded to the browser.
@@ -165,8 +175,9 @@ public final class McpProxy {
 				final Object id = response.id();
 				if (id instanceof String strId && session.isProbeId(strId)) {
 					// Probe responses are internal traffic - they must not count as
-					// activity for session reaping, and the probe id must be removed
-					// to prevent unbounded growth of the probeIds set.
+					// activity for session reaping. Removing the probe id both bounds
+					// the probeIds set and cancels this probe's answer deadline (the
+					// prober re-checks the id when its timer fires).
 					session.removeProbeId(strId);
 					return Mono.<JSONRPCMessage>empty();
 				}
@@ -181,8 +192,7 @@ public final class McpProxy {
 				session.touch();
 			}
 			return Mono.<JSONRPCMessage>empty();
-		}).doOnSuccess((v) -> session.failUpstream(null)).doOnError((err) -> session.failUpstream(err)))
-			.doOnSuccess((v) -> session.failUpstream(null))
+		}).doOnError((err) -> session.failUpstream(err)).doOnTerminate(() -> session.failUpstream(null)))
 			.doOnError((err) -> session.failUpstream(err));
 	}
 
