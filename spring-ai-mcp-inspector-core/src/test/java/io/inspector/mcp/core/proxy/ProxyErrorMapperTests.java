@@ -747,6 +747,70 @@ class ProxyErrorMapperTests {
 				.isNull();
 		}
 
+		@Test
+		@Story("URI safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("matrix parameter ;status:404 in URI path does NOT match - extractStatus returns empty")
+		void extractStatus_matrixParam_returnsEmpty() {
+			// when/then - ;status:404 in URI path is a matrix parameter, NOT an HTTP
+			// status
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("GET https://host/path;status:404")))
+				.isEmpty();
+		}
+
+		@Test
+		@Story("URI safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("matrix parameter ;status:404 in URI path does NOT map to a DTO")
+		void map_matrixParam_returnsNull() {
+			// when/then
+			assertThat(
+					ProxyErrorMapper.map(new RuntimeException("GET https://host/path;status:404"), TransportKind.SSE))
+				.isNull();
+		}
+
+		@Test
+		@Story("URI safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("semicolon in query string ;code:404 does NOT match - extractStatus returns empty")
+		void extractStatus_querySemicolon_returnsEmpty() {
+			// when/then - ;code:404 in query string is NOT an HTTP status
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("GET https://host/path?foo=bar;code:404")))
+				.isEmpty();
+		}
+
+		@Test
+		@Story("URI safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("semicolon in query string ;code:404 does NOT map to a DTO")
+		void map_querySemicolon_returnsNull() {
+			// when/then
+			assertThat(ProxyErrorMapper.map(new RuntimeException("GET https://host/path?foo=bar;code:404"),
+					TransportKind.STREAMABLE))
+				.isNull();
+		}
+
+		@Test
+		@Story("URI safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("plus in query string +code:404 does NOT match - extractStatus returns empty")
+		void extractStatus_queryPlus_returnsEmpty() {
+			// when/then - +code:404 in query string is NOT an HTTP status
+			assertThat(ProxyErrorMapper.extractStatus(new RuntimeException("GET https://host/path?foo=bar+code:404")))
+				.isEmpty();
+		}
+
+		@Test
+		@Story("URI safety")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("plus in query string +code:404 does NOT map to a DTO")
+		void map_queryPlus_returnsNull() {
+			// when/then
+			assertThat(ProxyErrorMapper.map(new RuntimeException("GET https://host/path?foo=bar+code:404"),
+					TransportKind.SSE))
+				.isNull();
+		}
+
 	}
 
 }
