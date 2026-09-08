@@ -93,7 +93,7 @@ class ProxyTransportFactoryTests {
 		}
 
 		@Test
-		@Story("Header forwarding — auth only")
+		@Story("Header forwarding - auth only")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("openSse() three-arg overload with an authorization value and no custom headers "
 				+ "returns a non-null SSE transport")
@@ -110,7 +110,7 @@ class ProxyTransportFactoryTests {
 		}
 
 		@Test
-		@Story("Header forwarding — custom headers only")
+		@Story("Header forwarding - custom headers only")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("openSse() three-arg overload with no authorization but with custom headers "
 				+ "returns a non-null SSE transport")
@@ -127,7 +127,7 @@ class ProxyTransportFactoryTests {
 		}
 
 		@Test
-		@Story("Header forwarding — auth and custom headers")
+		@Story("Header forwarding - auth and custom headers")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("openSse() three-arg overload with both authorization and custom headers "
 				+ "returns a non-null SSE transport")
@@ -144,7 +144,7 @@ class ProxyTransportFactoryTests {
 		}
 
 		@Test
-		@Story("Header forwarding — both null/empty")
+		@Story("Header forwarding - both null/empty")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() three-arg overload with null authorization and empty custom headers "
 				+ "behaves like the single-arg overload and returns a non-null SSE transport")
@@ -166,7 +166,7 @@ class ProxyTransportFactoryTests {
 		@Description("openSse() throws IllegalArgumentException at transport build time when a custom "
 				+ "header name is restricted - the message contains the name but never the value")
 		void openSse_withRestrictedCustomHeaderName_throwsIllegalArgument() {
-			// given — "host" is a restricted header in Java's HttpClient
+			// given - "host" is a restricted header in Java's HttpClient
 			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
 
 			// when & then
@@ -175,6 +175,56 @@ class ProxyTransportFactoryTests {
 				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("host")
 				.hasMessageNotContaining("evil.example.com");
+		}
+
+		@Test
+		@Story("Restricted header diagnostic - value secrecy")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() throws IllegalArgumentException when a restricted custom header name "
+				+ "is used; the message never leaks the header value, even a secret-looking one")
+		void openSse_withRestrictedHeaderName_neverLeaksSecretValue() {
+			// given - "host" is a restricted header and the value looks like a secret
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when & then
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+					Map.of("host", "secret-token-123")))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("host")
+				.hasMessageNotContaining("secret-token-123");
+		}
+
+		@Test
+		@Story("Restricted header diagnostic - case-insensitive")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() rejects a restricted header name regardless of case - "
+				+ "\"Host\" is treated the same as \"host\"")
+		void openSse_withCaseInsensitiveRestrictedHeaderName_throwsIllegalArgument() {
+			// given - "Host" (capitalized) is the same restricted header as "host"
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when & then
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+					Map.of("Host", "evil.example.com")))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("Host")
+				.hasMessageNotContaining("evil.example.com");
+		}
+
+		@Test
+		@Story("Restricted header diagnostic - multiple offenders")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() throws on the first restricted header name when multiple "
+				+ "restricted headers are supplied - first-one-wins")
+		void openSse_withMultipleRestrictedHeaderNames_firstOneWins() {
+			// given - both "host" and "connection" are restricted by JDK's HttpClient
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when & then
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+					Map.of("host", "evil.com", "connection", "close")))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("host");
 		}
 
 	}
@@ -225,7 +275,7 @@ class ProxyTransportFactoryTests {
 		}
 
 		@Test
-		@Story("Header forwarding — auth only")
+		@Story("Header forwarding - auth only")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("openStreamable() three-arg overload with an authorization value and no custom headers "
 				+ "returns a non-null streamable transport")
@@ -242,7 +292,7 @@ class ProxyTransportFactoryTests {
 		}
 
 		@Test
-		@Story("Header forwarding — custom headers only")
+		@Story("Header forwarding - custom headers only")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("openStreamable() three-arg overload with no authorization but with custom headers "
 				+ "returns a non-null streamable transport")
@@ -259,7 +309,7 @@ class ProxyTransportFactoryTests {
 		}
 
 		@Test
-		@Story("Header forwarding — auth and custom headers")
+		@Story("Header forwarding - auth and custom headers")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("openStreamable() three-arg overload with both authorization and custom headers "
 				+ "returns a non-null streamable transport")
@@ -276,7 +326,7 @@ class ProxyTransportFactoryTests {
 		}
 
 		@Test
-		@Story("Header forwarding — both null/empty")
+		@Story("Header forwarding - both null/empty")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("openStreamable() three-arg overload with null authorization and empty custom headers "
 				+ "behaves like the single-arg overload and returns a non-null streamable transport")
@@ -298,7 +348,7 @@ class ProxyTransportFactoryTests {
 		@Description("openStreamable() throws IllegalArgumentException at transport build time when a custom "
 				+ "header name is restricted - the message contains the name but never the value")
 		void openStreamable_withRestrictedCustomHeaderName_throwsIllegalArgument() {
-			// given — "host" is a restricted header in Java's HttpClient
+			// given - "host" is a restricted header in Java's HttpClient
 			final URI mcpUri = URI.create("http://127.0.0.1:8080/mcp");
 
 			// when & then
@@ -307,6 +357,56 @@ class ProxyTransportFactoryTests {
 				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("host")
 				.hasMessageNotContaining("evil.example.com");
+		}
+
+		@Test
+		@Story("Restricted header diagnostic - value secrecy")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openStreamable() throws IllegalArgumentException when a restricted custom header "
+				+ "name is used; the message never leaks the header value, even a secret-looking one")
+		void openStreamable_withRestrictedHeaderName_neverLeaksSecretValue() {
+			// given - "host" is a restricted header and the value looks like a secret
+			final URI mcpUri = URI.create("http://127.0.0.1:8080/mcp");
+
+			// when & then
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri, null,
+					Map.of("host", "secret-token-123")))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("host")
+				.hasMessageNotContaining("secret-token-123");
+		}
+
+		@Test
+		@Story("Restricted header diagnostic - case-insensitive")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openStreamable() rejects a restricted header name regardless of case - "
+				+ "\"Host\" is treated the same as \"host\"")
+		void openStreamable_withCaseInsensitiveRestrictedHeaderName_throwsIllegalArgument() {
+			// given - "Host" (capitalized) is the same restricted header as "host"
+			final URI mcpUri = URI.create("http://127.0.0.1:8080/mcp");
+
+			// when & then
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri, null,
+					Map.of("Host", "evil.example.com")))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("Host")
+				.hasMessageNotContaining("evil.example.com");
+		}
+
+		@Test
+		@Story("Restricted header diagnostic - multiple offenders")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openStreamable() throws on the first restricted header name when multiple "
+				+ "restricted headers are supplied - first-one-wins")
+		void openStreamable_withMultipleRestrictedHeaderNames_firstOneWins() {
+			// given - both "host" and "connection" are restricted by JDK's HttpClient
+			final URI mcpUri = URI.create("http://127.0.0.1:8080/mcp");
+
+			// when & then
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri, null,
+					Map.of("host", "evil.com", "connection", "close")))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("host");
 		}
 
 	}
@@ -366,6 +466,82 @@ class ProxyTransportFactoryTests {
 			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openStdio(List.of(), Map.of()))
 				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("command");
+		}
+
+	}
+
+	@Nested
+	@DisplayName("Header validation")
+	class HeaderValidation {
+
+		@Test
+		@Story("Allowed header passes through")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("An allowed custom header name like X-Custom passes validation without throwing")
+		void allowedCustomHeader_passesThroughValidation() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+					Map.of("X-Custom", "allowed-value"));
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Edge cases - blank header name")
+		@Severity(SeverityLevel.MINOR)
+		@Description("A blank header name is silently skipped by the validator and does not throw - "
+				+ "the transport is built successfully")
+		void blankHeaderName_skippedSilently() {
+			// given - a blank header name is not a valid header, but the validator skips
+			// it
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+					Map.of("", "some-value"));
+
+			// then - blank name is skipped, no exception, transport is built
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Edge cases - null header value")
+		@Severity(SeverityLevel.MINOR)
+		@Description("A null header value is silently skipped by the customizer lambda and does not "
+				+ "cause an exception - the transport is built successfully")
+		void nullHeaderValue_skippedSilently() {
+			// given - a null value in the map is skipped by the customizer lambda
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+			final Map<String, String> headersWithNull = new java.util.HashMap<>();
+			headersWithNull.put("X-Custom", null);
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+					headersWithNull);
+
+			// then - null value is skipped, no exception, transport is built
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Edge cases - empty header value")
+		@Severity(SeverityLevel.MINOR)
+		@Description("An empty header value does not trigger a validation error and the transport "
+				+ "is built successfully")
+		void emptyHeaderValue_doesNotThrow() {
+			// given - an empty string value is allowed by the JDK probe
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+					Map.of("X-Custom", ""));
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 	}
