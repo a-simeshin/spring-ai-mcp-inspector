@@ -166,6 +166,30 @@ class ProxyHandlerAuthProfileTests {
 		@Test
 		@Story("SSE proxy open with profile")
 		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with a CC profile whose token acquisition fails returns 502 token_exchange_failed")
+		void openSse_withCcProfile_tokenFailure_returns502() {
+			// given
+			given(ProxyHandlerAuthProfileTests.this.sessionOwnerResolver.resolve(any())).willReturn(OWNER);
+			given(ProxyHandlerAuthProfileTests.this.authProfileStore.resolve(OWNER, PROFILE_ID))
+				.willReturn(Optional.of(new io.inspector.mcp.core.auth.OAuth2Profile("cc",
+						io.inspector.mcp.core.auth.OAuth2GrantMode.CLIENT_CREDENTIALS, "http://t/token", "cid", "sec",
+						null, null, null, null, null)));
+			given(ProxyHandlerAuthProfileTests.this.ccTokenManager.getAccessToken(eq(PROFILE_ID), eq(false)))
+				.willThrow(new IllegalStateException("no stored credentials"));
+
+			// when
+			final ServerResponse response = ProxyHandlerAuthProfileTests.this.handler()
+				.openSse(sseRequest(PROFILE_ID))
+				.block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+		}
+
+		@Test
+		@Story("SSE proxy open with profile")
+		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() rejects an unknown or foreign profile with a structured 400")
 		void openSse_withUnknownProfile_returns400() {
 			// given
@@ -260,6 +284,30 @@ class ProxyHandlerAuthProfileTests {
 			verify(ProxyHandlerAuthProfileTests.this.transportFactory).openStreamableWithAuth(any(URI.class),
 					any(AuthHeaders.class), any());
 			verify(ProxyHandlerAuthProfileTests.this.registry).put(any(ProxySession.class));
+		}
+
+		@Test
+		@Story("Streamable-HTTP open with profile")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with a CC profile whose token acquisition fails returns 502 token_exchange_failed")
+		void postMcp_withCcProfile_tokenFailure_returns502() {
+			// given
+			given(ProxyHandlerAuthProfileTests.this.sessionOwnerResolver.resolve(any())).willReturn(OWNER);
+			given(ProxyHandlerAuthProfileTests.this.authProfileStore.resolve(OWNER, PROFILE_ID))
+				.willReturn(Optional.of(new io.inspector.mcp.core.auth.OAuth2Profile("cc",
+						io.inspector.mcp.core.auth.OAuth2GrantMode.CLIENT_CREDENTIALS, "http://t/token", "cid", "sec",
+						null, null, null, null, null)));
+			given(ProxyHandlerAuthProfileTests.this.ccTokenManager.getAccessToken(eq(PROFILE_ID), eq(false)))
+				.willThrow(new IllegalStateException("no stored credentials"));
+
+			// when
+			final ServerResponse response = ProxyHandlerAuthProfileTests.this.handler()
+				.postMcp(streamableRequest(PROFILE_ID))
+				.block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
 		}
 
 		@Test
