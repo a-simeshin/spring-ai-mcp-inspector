@@ -178,10 +178,18 @@ class SsePreflightStreamCountTests {
 		// The stub counts the fallback as a failed SSE stream attempt.
 		// The real delegate then sends another GET /sse which opens the real stream.
 		// Result: stub sees 2 GET /sse requests, but only 1 active exchange.
+		// The fallback GET was closed server-side (SSE loop exited).
 		assertThat(this.stub.headCount()).as("HEAD preflight probes").isEqualTo(1);
 		assertThat(this.stub.sseStreamCount()).as("Total GET /sse requests (fallback + delegate)").isEqualTo(2);
 		// Only the real delegate's stream is active: the fallback was closed.
 		assertThat(this.stub.activeExchangeCount()).as("Active exchanges (only the real SSE stream)").isEqualTo(1);
+		// The fallback GET arrived right after the rejected HEAD and was closed
+		// server-side. On the pre-fix GET-only transport no HEAD is ever sent, so
+		// no GET can be classified as a fallback: this assertion fails there with
+		// expected: 1 but was: 0, independently of the HEAD-count assertion.
+		assertThat(this.stub.closedFallbackGetCount()).as("Fallback GET closed server-side").isEqualTo(1);
+		assertThat(this.stub.closedGetCount()).as("Closed GET exchanges (fallback + delegate close)")
+			.isGreaterThanOrEqualTo(1);
 	}
 
 	@Test
@@ -213,6 +221,8 @@ class SsePreflightStreamCountTests {
 		assertThat(this.stub.sseStreamCount()).as("Total GET /sse requests (fallback + delegate)").isEqualTo(2);
 		// Only the real delegate's stream is active: the fallback was closed.
 		assertThat(this.stub.activeExchangeCount()).as("Active exchanges (only the real SSE stream)").isEqualTo(1);
+		assertThat(this.stub.closedGetCount()).as("Fallback GET closed server-side").isGreaterThanOrEqualTo(1);
+		assertThat(this.stub.closedFallbackGetCount()).as("Fallback GET closed server-side").isEqualTo(1);
 	}
 
 	@Test

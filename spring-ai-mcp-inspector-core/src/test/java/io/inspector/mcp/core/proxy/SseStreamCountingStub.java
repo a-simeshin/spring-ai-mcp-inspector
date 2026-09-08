@@ -72,6 +72,31 @@ final class SseStreamCountingStub implements AutoCloseable {
 	/** Number of SSE streams currently active (writing loop still running). */
 	private final AtomicInteger activeExchangeCount = new AtomicInteger();
 
+	/** Peak number of concurrently active SSE streams. */
+	private final AtomicInteger maxActiveExchangeCount = new AtomicInteger();
+
+	/**
+	 * Number of GET exchanges whose SSE loop was exited (closed). This proves the
+	 * fallback GET was closed server-side before the delegate stream was established.
+	 */
+	private final AtomicInteger closedGetCount = new AtomicInteger();
+
+	/**
+	 * Set when a HEAD probe has been answered with a 405/404 status. The next GET /sse
+	 * that arrives while this flag is set is the fallback probe issued by the preflight
+	 * wrapper, not the real delegate. The flag is consumed by that first GET, so the
+	 * delegate's own GET does not count as a fallback.
+	 */
+	private final AtomicBoolean headRejected = new AtomicBoolean();
+
+	/**
+	 * Number of GET /sse exchanges classified as preflight fallbacks: they arrived right
+	 * after a rejected HEAD probe and were closed server-side before the delegate stream
+	 * was established. A GET-only preflight (the pre-fix shape) never sends a HEAD, so
+	 * this stays 0 for any transport that does not perform the HEAD-based preflight.
+	 */
+	private final AtomicInteger closedFallbackGetCount = new AtomicInteger();
+
 	/** Number of exchanges currently pending (HEAD or GET, opened but not yet closed). */
 	private final AtomicInteger pendingExchangeCount = new AtomicInteger();
 
@@ -137,6 +162,27 @@ final class SseStreamCountingStub implements AutoCloseable {
 		return this.activeExchangeCount.get();
 	}
 
+	/** Peak number of concurrently active SSE streams. */
+	int maxActiveExchangeCount() {
+		return this.maxActiveExchangeCount.get();
+	}
+
+	/**
+	 * Number of GET exchanges whose SSE loop was exited (closed server-side). Proves the
+	 * fallback GET was closed before the delegate stream was established.
+	 */
+	int closedGetCount() {
+		return this.closedGetCount.get();
+	}
+
+	/**
+	 * Number of GET /sse exchanges classified as preflight fallbacks and observed closed
+	 * server-side. Zero on any transport that never issues a HEAD probe.
+	 */
+	int closedFallbackGetCount() {
+		return this.closedFallbackGetCount.get();
+	}
+
 	void setHeadStatus(final int status) {
 		this.headStatus = status;
 	}
@@ -199,6 +245,9 @@ final class SseStreamCountingStub implements AutoCloseable {
 					}
 					exchange.sendResponseHeaders(this.headStatus, -1);
 					exchange.close();
+					if (this.headStatus == 405 || this.headStatus == 404) {
+						this.headRejected.set(true);
+					}
 				}
 				case "GET" -> {
 					if (this.hangOnSse) {
@@ -219,11 +268,17 @@ final class SseStreamCountingStub implements AutoCloseable {
 						return;
 					}
 					this.sseStreamCount.incrementAndGet();
-					this.activeExchangeCount.incrementAndGet();
+					final boolean fallback = this.headRejected.getAndSet(false);
+					final int current = this.activeExchangeCount.incrementAndGet();
+					this.maxActiveExchangeCount.updateAndGet((prev) -> Math.max(prev, current));
 					exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
 					exchange.sendResponseHeaders(200, 0);
 					runSseLoop(exchange.getResponseBody());
 					this.activeExchangeCount.decrementAndGet();
+					this.closedGetCount.incrementAndGet();
+					if (fallback) {
+						this.closedFallbackGetCount.incrementAndGet();
+					}
 				}
 				default -> {
 					exchange.sendResponseHeaders(405, -1);
