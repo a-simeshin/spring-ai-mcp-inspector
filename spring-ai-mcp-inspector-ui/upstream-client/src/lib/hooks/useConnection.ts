@@ -1435,8 +1435,10 @@ export function useConnection({
   };
 
   const disconnect = async () => {
-    // [spring-ai-mcp-inspector PATCH] Clear the D3 error banner on disconnect.
+    // [spring-ai-mcp-inspector PATCH] Clear both error banners on disconnect:
+    // connectionError and the D3 authError (issue #54).
     setConnectionError(null);
+    setAuthError(null);
     // Clear any receiver-side tasks + cleanup timers
     receiverTasksRef.current.forEach((record) => {
       if (record.cleanupTimeoutId) {
