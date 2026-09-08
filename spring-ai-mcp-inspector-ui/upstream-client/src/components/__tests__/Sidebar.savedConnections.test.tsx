@@ -281,6 +281,67 @@ describe("Sidebar saved connections UI", () => {
     });
   });
 
+  describe("Restored secrets warning", () => {
+    // [spring-ai-mcp-inspector PATCH] After restoring a saved connection whose
+    // header/env values were stripped to empty strings, the warning must still
+    // appear: the presence of an Authorization header name or any env key is
+    // the trigger, not the value content. Regression test for the review
+    // finding that the warning disappeared after restore (Sidebar.tsx:475).
+    it("shows warning when restored entry has Authorization header name with empty value", () => {
+      renderSidebar({
+        customHeaders: [
+          { name: "Authorization", value: "", enabled: true },
+        ],
+        env: {},
+      });
+      expect(
+        screen.getByText(
+          "Header and environment variable values are not saved, only their names; re-enter them after restoring.",
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("shows warning when restored entry has env key with empty value", () => {
+      renderSidebar({
+        customHeaders: [],
+        env: { MY_API_KEY: "" },
+      });
+      expect(
+        screen.getByText(
+          "Header and environment variable values are not saved, only their names; re-enter them after restoring.",
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("shows warning when restored entry has both Authorization header and env key, both with empty values", () => {
+      renderSidebar({
+        customHeaders: [
+          { name: "Authorization", value: "", enabled: true },
+        ],
+        env: { TOKEN: "" },
+      });
+      expect(
+        screen.getByText(
+          "Header and environment variable values are not saved, only their names; re-enter them after restoring.",
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("does not show warning when no Authorization header and no env keys", () => {
+      renderSidebar({
+        customHeaders: [
+          { name: "X-Custom", value: "some-value", enabled: true },
+        ],
+        env: {},
+      });
+      expect(
+        screen.queryByText(
+          "Header and environment variable values are not saved, only their names; re-enter them after restoring.",
+        ),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   describe("Saved connections collapse/expand", () => {
     it("collapses and expands saved connections section", () => {
       renderSidebar();

@@ -611,4 +611,60 @@ describe("App saved connections integration", () => {
       screen.queryByLabelText("Environment variable key 1"),
     ).not.toBeInTheDocument();
   });
+
+  it("selecting an entry then saving under a new unique name preserves the original", async () => {
+    const { first } = seedTwoConnections();
+
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalled();
+    });
+
+    // Select the first entry
+    fireEvent.click(screen.getByTestId(`saved-connection-${first.id}`));
+
+    // Verify URL was populated from "first"
+    await waitFor(() => {
+      const urlInput = screen.getByLabelText("URL") as HTMLInputElement;
+      expect(urlInput.value).toBe("http://localhost:3001/sse");
+    });
+
+    // Change the URL to a different value
+    const urlInput = screen.getByLabelText("URL") as HTMLInputElement;
+    fireEvent.change(urlInput, {
+      target: { value: "http://staging-server:9090/sse" },
+    });
+
+    // Save under a new unique name "staging"
+    fireEvent.click(screen.getByTestId("save-current-connection"));
+    fireEvent.change(screen.getByTestId("save-connection-name-input"), {
+      target: { value: "staging" },
+    });
+    fireEvent.click(screen.getByTestId("confirm-save-connection"));
+
+    // Both entries must exist: "first" untouched, "staging" created
+    const stored = JSON.parse(localStorage.getItem(SAVED_CONNECTIONS_KEY)!);
+    expect(stored.connections).toHaveLength(3); // first + second + staging
+    const names = stored.connections.map((c: { name: string }) => c.name);
+    expect(names).toContain("first");
+    expect(names).toContain("second");
+    expect(names).toContain("staging");
+
+    // "first" must still have its original URL (not overwritten by the change)
+    const firstEntry = stored.connections.find(
+      (c: { name: string }) => c.name === "first",
+    );
+    expect(firstEntry.url).toBe("http://localhost:3001/sse");
+
+    // "staging" must have the new URL
+    const stagingEntry = stored.connections.find(
+      (c: { name: string }) => c.name === "staging",
+    );
+    expect(stagingEntry.url).toBe("http://staging-server:9090/sse");
+  });
 });

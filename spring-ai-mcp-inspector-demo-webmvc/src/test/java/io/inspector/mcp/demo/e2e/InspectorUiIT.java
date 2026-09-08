@@ -1940,6 +1940,15 @@ class InspectorUiIT {
 			// Verify the saved entry appears in the list
 			sidebar().$(byText("test-restore")).shouldBe(visible, Duration.ofSeconds(5));
 
+			// Capture the URL that is actually in the field after connect. The backend
+			// resolves the relative "/mcp" default to the concrete transport endpoint
+			// ("/sse" for SSE transport) during connect, so we must assert against the
+			// live value, not the initial default.
+			String savedUrl = $("#sse-url-input").getValue();
+			if (savedUrl == null || savedUrl.isEmpty()) {
+				throw new AssertionError("Expected non-empty URL in #sse-url-input after connect, got: " + savedUrl);
+			}
+
 			// Break the URL in the form BEFORE reload: proves the saved entry
 			// actually restores it (not a no-op when form already has correct value).
 			String brokenUrl = "http://localhost:1/broken-url";
@@ -1961,7 +1970,7 @@ class InspectorUiIT {
 
 			// Assert the URL field now holds the restored value, not the broken one
 			$("#sse-url-input").shouldNotHave(Condition.value(brokenUrl));
-			$("#sse-url-input").shouldHave(Condition.value("/mcp"));
+			$("#sse-url-input").shouldHave(Condition.value(savedUrl));
 
 			// Connect using the restored connection settings (hard assert: must click)
 			connectButton().shouldBe(visible).click();
