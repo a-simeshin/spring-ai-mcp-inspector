@@ -21,10 +21,13 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,15 +50,24 @@ import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.auth.AuthHeaders;
+import io.inspector.mcp.core.auth.AuthProfile;
+import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
 import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
+import io.inspector.mcp.core.proxy.ProxyErrorDto;
+import io.inspector.mcp.core.proxy.ProxyErrorMapper;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.proxy.TransportKind;
 import io.inspector.mcp.webmvc.InspectorServerPortHolder;
+import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
 
 /**
  * Streamable-HTTP transport ports.
@@ -108,27 +120,63 @@ public class StreamableHttpProxyController {
 
 	private final InspectorServerPortHolder portHolder;
 
+	private final ServletSessionOwnerResolver sessionOwnerResolver;
+
+	private final AuthProfileStore authProfileStore;
+
+	private final OAuth2ClientCredentialsTokenManager ccTokenManager;
+
+	private final OAuth2AuthCodeTokenExchanger authCodeExchanger;
+
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper) {
-		this(registry, transportFactory, mcpProxy, objectMapper, null, null);
+		this(registry, transportFactory, mcpProxy, objectMapper, null, null, null, null, null, null);
 	}
 
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
 			final McpInspectorProperties properties) {
-		this(registry, transportFactory, mcpProxy, objectMapper, properties, null);
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, null, null, null, null, null);
 	}
 
-	@Autowired
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
 			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder) {
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, null, null, null, null);
+	}
+
+	/**
+	 * Full constructor with the D8/D9 wiring: the session-owner resolver (owner id from
+	 * the signed cookie) and the owner-scoped auth-profile store + OAuth2 managers used
+	 * to resolve the bound profile into transport headers.
+	 * @param registry the proxy session registry
+	 * @param transportFactory the transport factory
+	 * @param mcpProxy the proxy pump
+	 * @param objectMapper the JSON mapper
+	 * @param properties the inspector properties
+	 * @param portHolder the loopback port holder
+	 * @param sessionOwnerResolver the signed-cookie owner resolver
+	 * @param authProfileStore the owner-scoped profile store
+	 * @param ccTokenManager the client-credentials token manager
+	 * @param authCodeExchanger the auth-code exchanger
+	 */
+	@Autowired
+	public StreamableHttpProxyController(final ProxySessionRegistry registry,
+			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
+			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,
+			final ServletSessionOwnerResolver sessionOwnerResolver, final AuthProfileStore authProfileStore,
+			final OAuth2ClientCredentialsTokenManager ccTokenManager,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.properties = properties;
 		this.portHolder = portHolder;
+		this.sessionOwnerResolver = sessionOwnerResolver;
+		this.authProfileStore = authProfileStore;
+		this.ccTokenManager = ccTokenManager;
+		this.authCodeExchanger = authCodeExchanger;
 	}
 
 	private int loopbackPort() {
@@ -143,11 +191,30 @@ public class StreamableHttpProxyController {
 	public ResponseEntity<Object> postMcp(
 			@RequestHeader(value = ProxyConstants.MCP_SESSION_ID_HEADER, required = false) final String mcpSessionId,
 			@RequestParam(value = "url", required = false) final String url, @RequestBody final JsonNode body) {
+		return postMcp(mcpSessionId, url, null, body);
+	}
+
+	/**
+	 * {@code POST /mcp} variant for a bound auth profile: the {@code profileId} query
+	 * parameter selects the owner-scoped profile whose resolved headers are applied to
+	 * every upstream request (D8).
+	 * @param mcpSessionId the {@code mcp-session-id} header value, may be {@code null}
+	 * @param url the streamable-HTTP target URL
+	 * @param profileId the owner-scoped auth profile id, or {@code null}
+	 * @param body the JSON-RPC frame to forward
+	 * @return the HTTP response entity
+	 */
+	@PostMapping(path = "/mcp", params = "profileId", consumes = MediaType.APPLICATION_JSON_VALUE)
+	public ResponseEntity<Object> postMcp(
+			@RequestHeader(value = ProxyConstants.MCP_SESSION_ID_HEADER, required = false) final String mcpSessionId,
+			@RequestParam(value = "url", required = false) final String url,
+			@RequestParam(value = "profileId", required = false) final String profileId,
+			@RequestBody final JsonNode body) {
 		if (mcpSessionId == null || mcpSessionId.isBlank()) {
-			return openSessionAndForward(url, body);
+			return openSessionAndForward(url, profileId, body);
 		}
 		final ProxySession session = this.registry.get(mcpSessionId);
-		if (session == null) {
+		if (session == null || !isOwnerOf(session)) {
 			return ResponseEntity.status(HttpStatus.NOT_FOUND).body("unknown mcp-session-id: " + mcpSessionId);
 		}
 		return forwardOnExistingSession(session, body);
@@ -157,7 +224,7 @@ public class StreamableHttpProxyController {
 	public SseEmitter getMcp(@RequestHeader(ProxyConstants.MCP_SESSION_ID_HEADER) final String mcpSessionId) {
 		final SseEmitter emitter = new SseEmitter(resolveTimeouts().getSseSession().toMillis());
 		final ProxySession session = this.registry.get(mcpSessionId);
-		if (session == null) {
+		if (session == null || !isOwnerOf(session)) {
 			return emitErrorAndComplete(emitter, "unknown mcp-session-id: " + mcpSessionId);
 		}
 		// takeUntilOther: close() cannot complete the sink while another thread owns it,
@@ -172,6 +239,10 @@ public class StreamableHttpProxyController {
 	@DeleteMapping("/mcp")
 	public ResponseEntity<Void> deleteMcp(
 			@RequestHeader(ProxyConstants.MCP_SESSION_ID_HEADER) final String mcpSessionId) {
+		final ProxySession session = this.registry.get(mcpSessionId);
+		if (session == null || !isOwnerOf(session)) {
+			return ResponseEntity.notFound().build();
+		}
 		final boolean removed = this.registry.removeAndClose(mcpSessionId);
 		return removed ? ResponseEntity.ok().build() : ResponseEntity.notFound().build();
 	}
@@ -186,22 +257,57 @@ public class StreamableHttpProxyController {
 	 * {@code spring.ai.mcp.inspector.timeouts.streamable-request} on the matching
 	 * response. Otherwise returns 202.
 	 * @param url the streamable-HTTP target URL
+	 * @param profileId the owner-scoped auth profile id, or {@code null}
 	 * @param body the JSON-RPC frame to forward
 	 * @return the HTTP response entity
 	 */
-	private ResponseEntity<Object> openSessionAndForward(final String url, final JsonNode body) {
+	private ResponseEntity<Object> openSessionAndForward(final String url, final String profileId,
+			final JsonNode body) {
 		// A blank/relative url is the WAF-safe same-origin default — the proxy resolves
 		// it
 		// to the loopback MCP endpoint server-side (see ProxyTargetResolver). Only an
 		// explicit absolute url targets a non-loopback server.
 		final ProxySession session;
 		try {
-			session = openSession(url);
+			session = openSession(url, profileId);
 		}
 		catch (final ProxyConnectFailureException ex) {
 			return connectFailureResponse(ex.failure());
 		}
+		if (session == null) {
+			// D8: a foreign/unknown profileId is a structured 400; any other bring-up
+			// failure stays the legacy 502. Transport failures never reach here: they
+			// leave openSession as ProxyConnectFailureException, caught above.
+			if (profileId != null && !profileId.isBlank() && !isOwnedProfile(profileId)) {
+				return ResponseEntity.badRequest()
+					.body(new ProxyErrorDto(400, "bad_request", "Invalid or missing auth profile or session reference.",
+							"Check the profile fields and profileId, then reconnect.", null));
+			}
+			return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body("upstream connect failed");
+		}
 		return relayWithSessionHeader(session, body, true);
+	}
+
+	private boolean isOwnedProfile(final String profileId) {
+		final String ownerId = resolveOwner();
+		return ownerId != null && this.authProfileStore != null
+				&& this.authProfileStore.resolve(ownerId, profileId).isPresent();
+	}
+
+	/**
+	 * Checks whether the current request's owner matches the session's bound owner.
+	 * Sessions without a bound profile (no ownerId) remain accessible to all callers,
+	 * matching the pre-auth-profile behaviour.
+	 * @param session the session to check
+	 * @return {@code true} when the caller owns the session or the session has no owner
+	 */
+	private boolean isOwnerOf(final ProxySession session) {
+		final String sessionOwner = session.ownerId();
+		if (sessionOwner == null) {
+			return true;
+		}
+		final String callerOwner = resolveOwner();
+		return callerOwner != null && callerOwner.equals(sessionOwner);
 	}
 
 	/**
@@ -333,6 +439,23 @@ public class StreamableHttpProxyController {
 			return builder.body(response);
 		}
 		catch (final RuntimeException ex) {
+			// D3: an authorization failure from a LIVE server (401/403 on the handshake
+			// or on a later call) becomes the structured DTO. It is checked first: the
+			// connect-failure classifier only recognises transport causes and would
+			// label this one "unknown", dropping the status the server actually sent.
+			final ProxyErrorDto dto = ProxyErrorMapper.map(ex, TransportKind.STREAMABLE);
+			if (dto != null) {
+				LOG.warn("proxy[{}] await response failed (auth {}): {}", session.sessionId(), dto.status(),
+						ex.toString());
+				// Clean up on auth error if this is the initial handshake OR the session
+				// has a bound auth profile (D3/D5: no partial connect state, no orphaned
+				// registry entry, no retained profile binding).
+				if (includeSessionHeader || session.profileId() != null) {
+					this.registry.removeAndClose(session.sessionId());
+				}
+				return ResponseEntity.status(dto.status())
+					.body(dto.withUrl(ProxyErrorDto.redactUrl(session.targetUri())));
+			}
 			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
 			LOG.warn("proxy[{}] await response failed ({}): {}", session.sessionId(), failure.reason().wire(),
 					ex.toString());
@@ -348,18 +471,38 @@ public class StreamableHttpProxyController {
 	/**
 	 * Allocates the {@link ProxySession} and kicks off the {@link McpProxy} pumps.
 	 * @param url the streamable-HTTP target URL
-	 * @return a live {@link ProxySession}
+	 * @param profileId the owner-scoped auth profile id, or {@code null}
+	 * @return a live {@link ProxySession}, or {@code null} if the profile handoff failed
 	 * @throws ProxyConnectFailureException if the transport could not be created
 	 */
-	private ProxySession openSession(final String url) {
+	private ProxySession openSession(final String url, final String profileId) {
 		final String sessionId = UUID.randomUUID().toString();
-		final String authorization = inboundAuthorization();
-		final Map<String, String> customHeaders = inboundCustomHeaders();
+		// D8: resolve the owner from the signed session cookie and the bound profile
+		// when a profileId is supplied. A foreign/unknown profileId is a structured 400.
+		final String ownerId = resolveOwner();
+		final AuthHeaders headers;
+		if (profileId != null && !profileId.isBlank()) {
+			if (this.authProfileStore == null || this.sessionOwnerResolver == null) {
+				throw new IllegalStateException("auth-profile support is not wired");
+			}
+			final Optional<AuthProfile> profile = this.authProfileStore.resolve(ownerId, profileId);
+			if (profile.isEmpty()) {
+				return null;
+			}
+			headers = AuthHeaders.resolve(profile.get(), profileId, this.ccTokenManager, this.authCodeExchanger);
+		}
+		else {
+			headers = null;
+		}
+		final AtomicReference<String> authorizationRef = new AtomicReference<>(
+				(headers != null) ? headers.authorization() : null);
 		final McpClientTransport target;
+		final URI resolved;
 		try {
-			final URI resolved = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
-			target = (authorization == null && customHeaders.isEmpty()) ? this.transportFactory.openStreamable(resolved)
-					: this.transportFactory.openStreamable(resolved, authorization, customHeaders);
+			resolved = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
+			target = (headers != null)
+					? this.transportFactory.openStreamableWithAuth(resolved, headers, authorizationRef)
+					: openStreamableWithInboundHeaders(resolved);
 		}
 		catch (final Exception ex) {
 			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
@@ -368,7 +511,18 @@ public class StreamableHttpProxyController {
 		}
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(REPLAY_BUFFER);
-		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
+		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser,
+				authorizationRef);
+		// D5: remember the resolved upstream target so streamable error DTOs can attach
+		// the redacted url (scheme://host[:port]/path, query/fragment stripped).
+		session.targetUri(resolved);
+		if (profileId != null && !profileId.isBlank()) {
+			// One-time bind: rejected reuse / foreign ids fail the handoff (D4/D8).
+			if (!this.authProfileStore.bind(ownerId, profileId, sessionId)) {
+				return null;
+			}
+			session.bindProfile(ownerId, profileId);
+		}
 		this.registry.put(session);
 		this.mcpProxy.start(session).subscribe((ignored) -> {
 		}, (err) -> {
@@ -376,6 +530,36 @@ public class StreamableHttpProxyController {
 			this.registry.removeAndClose(sessionId);
 		});
 		return session;
+	}
+
+	/**
+	 * Opens a streamable transport forwarding the inbound {@code Authorization} header
+	 * and the headers named by {@code x-custom-auth-headers} (legacy no-profile path).
+	 * @param resolved the resolved target URI
+	 * @return a configured streamable transport
+	 */
+	private McpClientTransport openStreamableWithInboundHeaders(final URI resolved) {
+		final String authorization = inboundAuthorization();
+		final Map<String, String> customHeaders = inboundCustomHeaders();
+		return (authorization == null && customHeaders.isEmpty()) ? this.transportFactory.openStreamable(resolved)
+				: this.transportFactory.openStreamable(resolved, authorization, customHeaders);
+	}
+
+	/**
+	 * Resolves the request's session owner via the signed cookie (D8); re-mints on
+	 * absent/forged/expired.
+	 * @return the validated owner id
+	 */
+	private String resolveOwner() {
+		if (this.sessionOwnerResolver == null) {
+			return null;
+		}
+		return this.sessionOwnerResolver.resolve(currentRequest(), currentResponse());
+	}
+
+	private static HttpServletResponse currentResponse() {
+		final var attrs = RequestContextHolder.getRequestAttributes();
+		return (attrs instanceof ServletRequestAttributes sra) ? sra.getResponse() : null;
 	}
 
 	/**

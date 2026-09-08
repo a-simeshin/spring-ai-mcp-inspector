@@ -252,6 +252,8 @@ All settings live under the `spring.ai.mcp.inspector` namespace:
 | `spring.ai.mcp.inspector.auth-enabled` | `true` | When `true`, requests to the proxy endpoint require the bearer token below. |
 | `spring.ai.mcp.inspector.auth-token` | _(generated)_ | Bearer token. If unset, a random token is generated at boot and injected into the SPA bootstrap automatically. |
 | `spring.ai.mcp.inspector.allowed-origins` | _(empty)_ | Origins allowed to call the inspector API and proxy cross-origin. Empty means no CORS mapping is registered at all, so only same-origin browser calls work — set it only when the UI is served from a different host than the app. Accepts a YAML list. |
+| `spring.ai.mcp.inspector.auth-profiles.profiles[0].name` |   | Pre-defined auth profile name (see examples below). |
+| `spring.ai.mcp.inspector.auth-profiles.profiles[0].type` |   | Profile type: `BEARER`, `API_KEY`, `OAUTH2` or `CUSTOM_HEADERS`. |
 
 Custom path example:
 
@@ -274,6 +276,7 @@ fast). All values use Spring's relaxed `Duration` syntax — e.g. `30s`, `2m`, `
 | Property | Default | Description |
 |----------|---------|-------------|
 | `spring.ai.mcp.inspector.timeouts.sse-session` | `30m` | Inactivity budget for a proxied SSE / streamable-HTTP browser session (servlet stack only). |
+| `spring.ai.mcp.inspector.timeouts.sse-request` | `30s` | Per-request SSE backchannel timeout before returning `504`. |
 | `spring.ai.mcp.inspector.timeouts.streamable-request` | `30s` | Per-request wait for a streamable-HTTP JSON-RPC response before returning `504`. |
 | `spring.ai.mcp.inspector.timeouts.fetch-connect` | `10s` | Connect timeout for the outbound `/fetch` HTTP client. |
 | `spring.ai.mcp.inspector.timeouts.fetch-request` | `30s` | Per-request timeout for outbound `/fetch` calls. |
@@ -467,6 +470,73 @@ The demo is split in three so that each web stack gets a classpath of its own:
 with both starters visible, Spring Boot silently runs the "reactive" setup on
 Tomcat-reactive. `-demo-app` holds the application and the stack-agnostic tests;
 the two stack modules add exactly one starter each.
+
+## Auth profiles
+
+The inspector supports named, owner-scoped auth profiles. Each profile belongs to one
+owner, identified by the signed `MCP_INSPECTOR_SESSION` cookie. The cookie is minted
+by the proxy filter on the first authenticated request and is transparent to the UI:
+the browser sends it automatically on every subsequent call.
+
+### Auth-profile REST API (six endpoints)
+
+All endpoints live under `{spring.ai.mcp.inspector.path}/auth-profile` (default:
+`/mcp-inspector-api/auth-profile`). Every endpoint is owner-scoped: the owner is
+resolved from the `MCP_INSPECTOR_SESSION` cookie.
+
+| Method | Path | Description |
+| -------| -----| ------------|
+| `GET` | `/auth-profile` | List all profiles for the current owner. |
+| `POST` | `/auth-profile` | Register a new profile. For `AUTHORIZATION_CODE` profiles returns a pending state with one-time CSRF state and `authorizationUrl`. |
+| `GET` | `/auth-profile/{profileId}` | Get a single profile summary (secrets never listed). |
+| `PUT` | `/auth-profile/{profileId}` | Update an existing profile. |
+| `DELETE` | `/auth-profile/{profileId}` | Delete a profile and evict its cached tokens. |
+| `POST` | `/auth-profile/{profileId}/exchange` | Complete an authorization-code flow (exchange the one-time code for tokens). |
+
+### Owner model
+
+Every session is bound to the owner who created it. The owner is a string derived from
+the `MCP_INSPECTOR_SESSION` cookie. Sessions without a bound profile (no owner) remain
+accessible to all callers, matching the pre-auth-profile behaviour.
+
+### Predefined profiles (Spring configuration)
+
+You can pre-populate auth profiles from `application.yml` under the
+`spring.ai.mcp.inspector.auth-profiles` namespace. The YAML example below shows
+all four supported types:
+
+```yaml
+spring:
+  ai:
+    mcp:
+      inspector:
+        auth-profiles:
+          profiles:
+            - name: prod-bearer
+              type: BEARER
+              bearer:
+                token: ${PROD_BEARER_TOKEN}
+            - name: prod-api
+              type: API_KEY
+              api-key:
+                *** X-API-Key
+                value: ${PROD_API_KEY}
+                placement: HEADER
+            - name: prod-oauth
+              type: OAUTH2
+              oauth2:
+                grant-mode: CLIENT_CREDENTIALS
+                token-url: https://auth.example.com/token
+                client-id: inspector
+                client-secret: ${PROD_CLIENT_SECRET}
+                scopes: mcp.read
+            - name: extra-headers
+              type: CUSTOM_HEADERS
+              custom-headers:
+                headers:
+                  - name: X-Tenant
+                    value: acme
+```
 
 ## Running the demo
 

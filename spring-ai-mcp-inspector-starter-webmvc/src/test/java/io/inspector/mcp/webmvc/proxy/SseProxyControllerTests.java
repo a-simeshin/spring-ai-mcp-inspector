@@ -45,13 +45,19 @@ import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.BearerProfile;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
@@ -131,6 +137,21 @@ class SseProxyControllerTests {
 			out.append(chunk.getClass().getMethod("getData").invoke(chunk));
 		}
 		return out.toString();
+	}
+
+	/**
+	 * Builds a controller with the D8/D9 auth wiring: a signed-cookie owner resolver and
+	 * an owner-scoped auth-profile store plus the OAuth2 managers.
+	 * @param store the auth-profile store
+	 * @param resolver the session-owner resolver
+	 * @return the wired controller
+	 */
+	private SseProxyController wiredController(final AuthProfileStore store,
+			final ServletSessionOwnerResolver resolver) {
+		return new SseProxyController(SseProxyControllerTests.this.registry,
+				SseProxyControllerTests.this.transportFactory, SseProxyControllerTests.this.mcpProxy,
+				SseProxyControllerTests.this.objectMapper, SseProxyControllerTests.this.properties, null, resolver,
+				store, mock(OAuth2ClientCredentialsTokenManager.class), mock(OAuth2AuthCodeTokenExchanger.class));
 	}
 
 	@Nested
@@ -578,6 +599,103 @@ class SseProxyControllerTests {
 	}
 
 	@Nested
+	@DisplayName("D8 owner-check on existing session")
+	class OwnerCheck {
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMessage() returns 404 when the session owner differs from the caller")
+		void postMessage_foreignOwner_returns404() throws Exception {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.bindProfile("owner-A", "profile-1");
+			given(SseProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-B");
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final SseProxyController wired = wiredController(store, resolver);
+			final JsonNode body = SseProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+			// when
+			final ResponseEntity<Void> response = wired.postMessage("s1", body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMessage() returns 404 when the caller owner cannot be resolved")
+		void postMessage_nullCallerOwner_returns404() throws Exception {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.bindProfile("owner-A", "profile-1");
+			given(SseProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn(null);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final SseProxyController wired = wiredController(store, resolver);
+			final JsonNode body = SseProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+			// when
+			final ResponseEntity<Void> response = wired.postMessage("s1", body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMessage() allows access when session has no bound owner")
+		void postMessage_noBoundOwner_returns202() throws Exception {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			given(SseProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-A");
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final SseProxyController wired = wiredController(store, resolver);
+			final JsonNode body = SseProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+			// when
+			final ResponseEntity<Void> response = wired.postMessage("s1", body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMessage() allows access when session owner matches caller")
+		void postMessage_sameOwner_returns202() throws Exception {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.bindProfile("owner-A", "profile-1");
+			given(SseProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-A");
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final SseProxyController wired = wiredController(store, resolver);
+			final JsonNode body = SseProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+			// when
+			final ResponseEntity<Void> response = wired.postMessage("s1", body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+		}
+
+	}
+
+	@Nested
 	@DisplayName("constructor")
 	class Constructor {
 
@@ -593,6 +711,139 @@ class SseProxyControllerTests {
 
 			// then
 			assertThat(c).isNotNull();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("D8 auth-profile session bring-up")
+	class AuthProfileSession {
+
+		@Test
+		@Story("Auth profile")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with a profileId but no wired auth store/resolver throws IllegalStateException")
+		void openSse_withProfileButUnwired_throwsIllegalState() {
+			// given — the default controller is built without an auth-profile store
+
+			// when / then
+			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, "p", REQUEST))
+				.isInstanceOf(IllegalStateException.class);
+		}
+
+		@Test
+		@Story("Auth profile")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with a foreign/unknown profileId emits a structured 400 error event and opens no session")
+		void openSse_withUnknownProfile_emitsStructured400() throws Exception {
+			// given — the owner resolves but the store has no such profile
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-1");
+			given(store.resolve(any(), any())).willReturn(java.util.Optional.empty());
+			final SseProxyController wired = wiredController(store, resolver);
+
+			// when
+			final SseEmitter emitter = wired.openSse("sse", "http://target/sse", null, null, null, "foreign", REQUEST);
+
+			// then — structured 400 and no session registered
+			assertThat(bufferedFrames(emitter)).contains("bad_request");
+			verify(SseProxyControllerTests.this.registry, never()).put(any());
+		}
+
+		@Test
+		@Story("Auth profile")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() with an owned profile applies auth headers via the header-aware transport overload")
+		void openSse_withOwnedProfile_usesAuthTransportOverload() throws Exception {
+			// given — the profile resolves and binds
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-1");
+			given(store.resolve(any(), any())).willReturn(java.util.Optional.of(new BearerProfile("p", "tok")));
+			given(store.bind(any(), any(), any())).willReturn(true);
+			given(SseProxyControllerTests.this.transportFactory.openSseWithAuth(any(), any(), any()))
+				.willReturn(mock(McpClientTransport.class));
+			final SseProxyController wired = wiredController(store, resolver);
+
+			// when
+			final SseEmitter emitter = wired.openSse("sse", "http://target/sse", null, null, null, "p", REQUEST);
+
+			// then — the auth-bearing transport is used and the session registers
+			assertThat(emitter).isNotNull();
+			verify(SseProxyControllerTests.this.transportFactory).openSseWithAuth(any(), any(), any());
+			verify(store).bind(any(), any(), any());
+			verify(SseProxyControllerTests.this.registry).put(any(ProxySession.class));
+		}
+
+		@Test
+		@Story("Auth profile")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with a profile whose one-time bind is rejected emits a structured 400 and closes the session")
+		void openSse_withBindRejected_emitsStructured400AndClosesSession() throws Exception {
+			// given — the profile resolves but the one-time bind is rejected
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-1");
+			given(store.resolve(any(), any())).willReturn(java.util.Optional.of(new BearerProfile("p", "tok")));
+			given(store.bind(any(), any(), any())).willReturn(false);
+			given(SseProxyControllerTests.this.transportFactory.openSseWithAuth(any(), any(), any()))
+				.willReturn(mock(McpClientTransport.class));
+			final SseProxyController wired = wiredController(store, resolver);
+
+			// when
+			final SseEmitter emitter = wired.openSse("sse", "http://target/sse", null, null, null, "p", REQUEST);
+
+			// then — structured 400, the freshly opened session is torn down, nothing
+			// registered
+			assertThat(bufferedFrames(emitter)).contains("bad_request");
+			verify(SseProxyControllerTests.this.registry).removeAndClose(any(String.class));
+			verify(SseProxyControllerTests.this.registry, never()).put(any());
+		}
+
+	}
+
+	@Nested
+	@DisplayName("D3 proxy-start failure mapping")
+	class ProxyStartFailure {
+
+		@Test
+		@Story("Proxy start failure")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() whose proxy fails to start with a non-mappable error completes the emitter with that error")
+		void openSse_startFailure_nonMappable_completesWithError() {
+			// given — the proxy pump fails with a failure carrying no HTTP status
+			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class)))
+				.willReturn(mock(McpClientTransport.class));
+			given(SseProxyControllerTests.this.mcpProxy.start(any()))
+				.willReturn(Mono.error(new RuntimeException("boom")));
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, REQUEST);
+
+			// then — the legacy completeWithError path is taken (no structured event)
+			assertThat(emitter).isNotNull();
+		}
+
+		@Test
+		@Story("Proxy start failure")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() whose proxy fails to start with an auth failure emits a structured unauthorized error event")
+		void openSse_startFailure_authMappable_emitsStructuredError() throws Exception {
+			// given — the proxy pump fails with a 401 authorization failure
+			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class)))
+				.willReturn(mock(McpClientTransport.class));
+			given(SseProxyControllerTests.this.mcpProxy.start(any()))
+				.willReturn(Mono.error(new RuntimeException("401 Unauthorized")));
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, REQUEST);
+
+			// then — the structured unauthorized DTO is emitted
+			assertThat(bufferedFrames(emitter)).contains("unauthorized");
 		}
 
 	}

@@ -1,10 +1,11 @@
+// [spring-ai-mcp-inspector PATCH] owner-session isolation and auth-profile tests
 // jsdom lacks MediaQueryList; useTheme calls window.matchMedia on mount.
 import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import Sidebar from "../Sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DEFAULT_INSPECTOR_CONFIG } from "@/lib/constants";
-import type { ConnectFailure } from "@/lib/connectErrors";
+import type { ConnectFailure } from "@/lib/connectionErrors";
 import { LoggingLevel } from "@modelcontextprotocol/sdk/types.js";
 
 jest.mock("@/lib/hooks/useToast", () => ({

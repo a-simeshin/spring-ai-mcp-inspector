@@ -16,10 +16,12 @@
 
 package io.inspector.mcp.core.proxy;
 
+import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
@@ -117,6 +119,63 @@ public final class ProxySession {
 	/** Optional MCP session id captured from the upstream transport's response. */
 	private volatile String upstreamSessionId;
 
+	/** Upstream target URI resolved at open time, for D5-redacted error DTO urls. */
+	private volatile URI targetUri;
+
+	/**
+	 * Owning browser-session id of the bound auth profile; {@code null} when the session
+	 * carries no profile.
+	 */
+	private volatile String ownerId;
+
+	/**
+	 * Bound auth-profile id; {@code null} when the session carries no profile.
+	 */
+	private volatile String profileId;
+
+	/**
+	 * Live {@code Authorization} header value read by the upstream transport's request
+	 * customizer; updated by the OAuth2 one-retry path after a token refresh so the
+	 * retried call carries the fresh token without rebuilding the transport.
+	 */
+	private final AtomicReference<String> authorizationRef;
+
+	/**
+	 * Binds the session to an owner-scoped auth profile (D8). Called by the proxy
+	 * controllers before the proxy pumps start; the registry uses the binding to clear
+	 * the profile when the session closes.
+	 * @param ownerId the owning browser-session id
+	 * @param profileId the bound profile id
+	 */
+	public void bindProfile(final String ownerId, final String profileId) {
+		this.ownerId = ownerId;
+		this.profileId = profileId;
+	}
+
+	/**
+	 * Returns the owning browser-session id of the bound auth profile.
+	 * @return the owner id, or {@code null} when no profile is bound
+	 */
+	public String ownerId() {
+		return this.ownerId;
+	}
+
+	/**
+	 * Returns the bound auth-profile id.
+	 * @return the profile id, or {@code null} when no profile is bound
+	 */
+	public String profileId() {
+		return this.profileId;
+	}
+
+	/**
+	 * Returns the live authorization header reference updated on token refresh.
+	 * @return the reference (never {@code null})
+	 */
+	public AtomicReference<String> authorizationRef() {
+		return this.authorizationRef;
+	}
+
 	/** Updated on every frame routed in either direction. */
 	private volatile Instant lastActivity;
 
@@ -139,10 +198,29 @@ public final class ProxySession {
 
 	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
 			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser) {
+		this(sessionId, targetTransport, browserToTarget, targetToBrowser, new AtomicReference<>());
+	}
+
+	/**
+	 * Creates a session whose live {@code Authorization} reference is shared with the
+	 * upstream transport's request customizer (D9): the OAuth2 one-retry path refreshes
+	 * the token through the same reference the transport reads, so a retried call carries
+	 * the fresh token without rebuilding the transport.
+	 * @param sessionId the proxy session identifier
+	 * @param targetTransport the upstream client transport
+	 * @param browserToTarget the browser→target sink
+	 * @param targetToBrowser the target→browser sink
+	 * @param authorizationRef the shared live authorization reference (never
+	 * {@code null})
+	 */
+	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
+			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser,
+			final AtomicReference<String> authorizationRef) {
 		this.sessionId = sessionId;
 		this.targetTransport = targetTransport;
 		this.browserToTarget = browserToTarget;
 		this.targetToBrowser = targetToBrowser;
+		this.authorizationRef = (authorizationRef != null) ? authorizationRef : new AtomicReference<>();
 		this.lastActivity = Instant.now();
 		// suppressCancel: one subscriber going away (a browser tab closing its SSE
 		// stream) must not cancel — and so terminate — the future every other
@@ -172,6 +250,14 @@ public final class ProxySession {
 
 	public void upstreamSessionId(final String value) {
 		this.upstreamSessionId = value;
+	}
+
+	public URI targetUri() {
+		return this.targetUri;
+	}
+
+	public void targetUri(final URI value) {
+		this.targetUri = value;
 	}
 
 	public Instant lastActivity() {
