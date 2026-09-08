@@ -227,12 +227,13 @@ public class McpInspectorWebFluxAutoConfiguration {
 	@Bean
 	@ConditionalOnMissingBean
 	public ProxySessionRegistry mcpInspectorProxySessionRegistry(final McpInspectorProperties properties,
-			final AuthProfileStore authProfileStore) {
+			final AuthProfileStore authProfileStore, final OAuth2AuthCodeTokenExchanger authCodeTokenExchanger) {
 		final ProxySessionRegistry registry = new ProxySessionRegistry();
 		registry.setInactivityBudget(properties.getTimeouts().getSessionReaper());
 		// D4: session teardown clears the bound profile; the reaper sweeps expired
 		// profiles.
 		registry.setAuthProfileStore(authProfileStore);
+		registry.setAuthCodeExchanger(authCodeTokenExchanger);
 		return registry;
 	}
 
