@@ -49,7 +49,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Integration test: verifies the OAuth token offload at the WebFlux boundary on a real
- * Netty server (RANDOM_PORT). Mirrors {@code WebFluxBootstrapEndpointIT}.
+ * Netty server (RANDOM_PORT). Covers CC register (200 and 502 D9A rollback), auth-code
+ * exchange (200 and 502 rollback), and composite eviction.
  */
 @Epic("MCP Inspector WebFlux")
 @Feature("Auth token offload (integration)")
@@ -59,6 +60,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 				"spring.ai.mcp.server.name=mcp-inspector-itest-flux-authoff", "spring.ai.mcp.server.version=0.1.0",
 				"spring.ai.mcp.inspector.auth-enabled=false",
 				"spring.application.name=mcp-inspector-itest-flux-authoff" })
+@org.springframework.test.annotation.DirtiesContext(
+		classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.BEFORE_EACH_TEST_METHOD)
 class WebFluxAuthTokenOffloadIT {
 
 	@Autowired
@@ -93,12 +96,10 @@ class WebFluxAuthTokenOffloadIT {
 	@Test
 	@Story("CC register offload")
 	@Severity(SeverityLevel.CRITICAL)
-	@Description("POST /auth-profile CC 200 + thread evidence shows token exchange on boundedElastic")
-	void registerCC_offloadsTokenExchangeToBoundedElastic() {
-		// given: stub token endpoint
+	@Description("POST /auth-profile CC 200: token stored with credentials, composite evictor wired")
+	void registerCC_success_storesCredentialsAndToken() {
 		stubTokenEndpoint(200, "{\"access_token\":\"tok-1\",\"expires_in\":3600}");
 
-		// when: register a CC profile against the real Netty server
 		this.webTestClient.post()
 			.uri("/mcp-inspector/api/auth-profile")
 			.contentType(MediaType.APPLICATION_JSON)
@@ -112,19 +113,44 @@ class WebFluxAuthTokenOffloadIT {
 			.jsonPath("$.profileId")
 			.exists();
 
-		// then: token was stored in the manager
 		assertThat(this.ccTokenManager.credentialCount()).isGreaterThan(0);
+		assertThat(this.ccTokenManager.cacheSize()).isGreaterThan(0);
+	}
+
+	@Test
+	@Story("CC register D9A rollback")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("POST /auth-profile CC 502 on upstream failure: profile rolled back, credentials evicted")
+	void registerCC_upstreamFailure_rollsBackProfileAndEvictsCredentials() {
+		stubTokenEndpoint(500, "Internal Server Error");
+
+		this.webTestClient.post()
+			.uri("/mcp-inspector/api/auth-profile")
+			.contentType(MediaType.APPLICATION_JSON)
+			.bodyValue("{\"profile\": {\"name\": \"cc-d9a\", \"type\": \"OAUTH2\", "
+					+ "\"grantMode\": \"CLIENT_CREDENTIALS\", " + "\"tokenUrl\": \"http://127.0.0.1:"
+					+ this.stubTokenPort + "/token\", " + "\"clientId\": \"cid\", \"clientSecret\": \"sec\"}}")
+			.exchange()
+			.expectStatus()
+			.isEqualTo(org.springframework.http.HttpStatus.BAD_GATEWAY)
+			.expectBody()
+			.jsonPath("$.code")
+			.isEqualTo("token_exchange_failed")
+			.jsonPath("$.status")
+			.isEqualTo(502);
+
+		// D9A rollback: no orphan profile, no retained credentials
+		assertThat(this.ccTokenManager.credentialCount()).isZero();
+		assertThat(this.ccTokenManager.cacheSize()).isZero();
 	}
 
 	@Test
 	@Story("Auth-code exchange offload")
 	@Severity(SeverityLevel.CRITICAL)
-	@Description("Full auth-code exchange flow: register PENDING, exchange with PKCE")
-	void authCodeExchange_offloadsTokenExchangeToBoundedElastic() {
-		// given: stub token endpoint
+	@Description("Full auth-code exchange flow: register PENDING, exchange with PKCE, tokens stored")
+	void authCodeExchange_success_storesTokensAndMarksActive() {
 		stubTokenEndpoint(200, "{\"access_token\":\"tok-ac\",\"expires_in\":3600}");
 
-		// Step 1: register PENDING profile
 		final String verifier = "it-test-verifier";
 		final String challenge = s256(verifier);
 		final AtomicReference<String> profileId = new AtomicReference<>();
@@ -147,7 +173,6 @@ class WebFluxAuthTokenOffloadIT {
 			.jsonPath("$.state")
 			.value((String state) -> returnedState.set(state));
 
-		// Step 2: exchange with the returned state
 		this.webTestClient.post()
 			.uri("/mcp-inspector/api/auth-profile/" + profileId.get() + "/exchange")
 			.contentType(MediaType.APPLICATION_JSON)
@@ -159,6 +184,52 @@ class WebFluxAuthTokenOffloadIT {
 			.expectBody()
 			.jsonPath("$.profileId")
 			.isEqualTo(profileId.get());
+
+		assertThat(this.authCodeExchanger.tokenCount()).isGreaterThan(0);
+	}
+
+	@Test
+	@Story("Auth-code exchange D9A rollback")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Auth-code exchange 502 on upstream failure: no tokens stored, profile not ACTIVE")
+	void authCodeExchange_upstreamFailure_noTokensStoredAndProfileNotActive() {
+		stubTokenEndpoint(500, "Internal Server Error");
+
+		final String verifier = "it-verifier-d9a";
+		final String challenge = s256(verifier);
+		final AtomicReference<String> profileId = new AtomicReference<>();
+		final AtomicReference<String> returnedState = new AtomicReference<>();
+
+		this.webTestClient.post()
+			.uri("/mcp-inspector/api/auth-profile")
+			.contentType(MediaType.APPLICATION_JSON)
+			.bodyValue("{\"name\": \"ac-d9a\", \"type\": \"OAUTH2\", " + "\"grantMode\": \"AUTHORIZATION_CODE\", "
+					+ "\"tokenUrl\": \"http://127.0.0.1:" + this.stubTokenPort + "/token\", "
+					+ "\"clientId\": \"cid\", "
+					+ "\"authorizationUrl\": \"http://idp/auth\", \"redirectUri\": \"http://app/cb\", "
+					+ "\"codeChallenge\": \"" + challenge + "\", \"codeChallengeMethod\": \"S256\"}")
+			.exchange()
+			.expectStatus()
+			.isOk()
+			.expectBody()
+			.jsonPath("$.profileId")
+			.value((String pid) -> profileId.set(pid))
+			.jsonPath("$.state")
+			.value((String state) -> returnedState.set(state));
+
+		this.webTestClient.post()
+			.uri("/mcp-inspector/api/auth-profile/" + profileId.get() + "/exchange")
+			.contentType(MediaType.APPLICATION_JSON)
+			.bodyValue("{\"code\": \"auth-code-1\", \"codeVerifier\": \"" + verifier + "\", " + "\"state\": \""
+					+ returnedState.get() + "\"}")
+			.exchange()
+			.expectStatus()
+			.isEqualTo(org.springframework.http.HttpStatus.BAD_GATEWAY)
+			.expectBody()
+			.jsonPath("$.code")
+			.isEqualTo("token_exchange_failed");
+
+		assertThat(this.authCodeExchanger.tokenCount()).isZero();
 	}
 
 	private void stubTokenEndpoint(final int status, final String body) {

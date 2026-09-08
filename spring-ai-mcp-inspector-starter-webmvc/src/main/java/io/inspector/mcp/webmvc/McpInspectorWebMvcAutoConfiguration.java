@@ -179,6 +179,7 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 		authProfileStore.setTokenEvictor(compositeEvictor);
 		// Generation guard: async token exchanges detect stale profile mutations.
 		manager.setGenerationGuard(authProfileStore::currentGeneration);
+		authCodeExchanger.setGenerationGuard(authProfileStore::currentGeneration);
 		return manager;
 	}
 

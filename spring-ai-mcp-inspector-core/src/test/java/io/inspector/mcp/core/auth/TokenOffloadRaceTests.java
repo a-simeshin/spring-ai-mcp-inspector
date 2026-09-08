@@ -101,7 +101,7 @@ class TokenOffloadRaceTests {
 				"tok-1", Instant.now().plusSeconds(60));
 
 		try {
-			manager.storeIfCurrent(profileId, expectedGeneration, handle);
+			manager.storeIfCurrent(profileId, expectedGeneration, handle, profile);
 		}
 		catch (final StaleProfileGenerationException ex) {
 			// expected
@@ -202,7 +202,7 @@ class TokenOffloadRaceTests {
 				"tok-1", Instant.now().plusSeconds(60));
 
 		try {
-			manager.storeIfCurrent(profileId, expectedGeneration, handle);
+			manager.storeIfCurrent(profileId, expectedGeneration, handle, profile);
 		}
 		catch (final StaleProfileGenerationException ex) {
 			// expected

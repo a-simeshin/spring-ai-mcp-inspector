@@ -109,10 +109,18 @@ public class AuthProfileHandler {
 				final String profileId = this.store.register(ownerId, profile);
 				if (profile instanceof OAuth2Profile oauth2
 						&& oauth2.grantMode() == OAuth2GrantMode.CLIENT_CREDENTIALS) {
-					try {
-						this.tokenManager.acquire(profileId, oauth2);
-					}
-					catch (final RuntimeException ex) {
+					final long expectedGeneration = this.store.currentGeneration();
+					return this.tokenManager.acquireAsync(profileId, oauth2).<ServerResponse>flatMap((handle) -> {
+						try {
+							this.tokenManager.storeIfCurrent(profileId, expectedGeneration, handle, oauth2);
+						}
+						catch (final StaleProfileGenerationException ex) {
+							return ServerResponse.status(HttpStatus.NOT_FOUND)
+								.bodyValue(new ProxyErrorDto(404, CODE_TOKEN_EXCHANGE_FAILED, ex.getMessage(),
+										"Profile was modified during registration; re-register.", null));
+						}
+						return ServerResponse.ok().bodyValue(AuthProfileRegistrationResponse.of(profileId));
+					}).onErrorResume(ProxyUpstreamException.class, (ex) -> {
 						// D9A rollback: no orphan profile, no retained client secret.
 						this.store.delete(ownerId, profileId);
 						this.tokenManager.evict(profileId);
@@ -120,7 +128,7 @@ public class AuthProfileHandler {
 							.bodyValue(new ProxyErrorDto(502, CODE_TOKEN_EXCHANGE_FAILED,
 									"OAuth2 client-credentials exchange failed: " + ex.getMessage(),
 									"Verify the token URL, client id and client secret, then re-register.", null));
-					}
+					});
 				}
 				if (profile instanceof OAuth2Profile oauth2
 						&& oauth2.grantMode() == OAuth2GrantMode.AUTHORIZATION_CODE) {

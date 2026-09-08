@@ -98,12 +98,14 @@ class OAuth2ClientCredentialsTokenManagerOffloadTests {
 				new JsonMapper(), () -> 5L);
 		final OAuth2ClientCredentialsTokenManager.TokenHandle handle = new OAuth2ClientCredentialsTokenManager.TokenHandle(
 				"tok-1", Instant.now().plusSeconds(60));
+		final OAuth2Profile profile = new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS,
+				"http://localhost/token", "cid", "sec", null, null, null, null, null);
 
 		// when
-		manager.storeIfCurrent("pid-cc", 5L, handle);
+		manager.storeIfCurrent("pid-cc", 5L, handle, profile);
 
 		// then
-		assertThat(manager.credentialCount()).isZero();
+		assertThat(manager.credentialCount()).isOne();
 		assertThat(manager.cacheSize()).isOne();
 	}
 
@@ -114,9 +116,11 @@ class OAuth2ClientCredentialsTokenManagerOffloadTests {
 				new JsonMapper(), () -> 1L);
 		final OAuth2ClientCredentialsTokenManager.TokenHandle handle = new OAuth2ClientCredentialsTokenManager.TokenHandle(
 				"tok-1", Instant.now().plusSeconds(60));
+		final OAuth2Profile profile = new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS,
+				"http://localhost/token", "cid", "sec", null, null, null, null, null);
 
 		// when/then
-		assertThatThrownBy(() -> manager.storeIfCurrent("pid-cc", 0L, handle))
+		assertThatThrownBy(() -> manager.storeIfCurrent("pid-cc", 0L, handle, profile))
 			.isInstanceOf(StaleProfileGenerationException.class)
 			.hasMessageContaining("pid-cc");
 	}
@@ -128,9 +132,11 @@ class OAuth2ClientCredentialsTokenManagerOffloadTests {
 				new JsonMapper(), () -> 1L);
 		final OAuth2ClientCredentialsTokenManager.TokenHandle handle = new OAuth2ClientCredentialsTokenManager.TokenHandle(
 				"tok-1", Instant.now().plusSeconds(60));
+		final OAuth2Profile profile = new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS,
+				"http://localhost/token", "cid", "sec", null, null, null, null, null);
 
 		// when
-		assertThatThrownBy(() -> manager.storeIfCurrent("pid-cc", 0L, handle))
+		assertThatThrownBy(() -> manager.storeIfCurrent("pid-cc", 0L, handle, profile))
 			.isInstanceOf(StaleProfileGenerationException.class);
 
 		// then

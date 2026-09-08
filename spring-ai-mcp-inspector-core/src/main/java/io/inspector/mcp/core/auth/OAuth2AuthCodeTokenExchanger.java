@@ -91,6 +91,9 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 	/** Cumulative count of expired tokens removed by removeExpiredStates. */
 	private final AtomicLong tokensExpiredTotal = new AtomicLong();
 
+	/** Lock for the generation-guarded token store. */
+	private final Object tokenStoreLock = new Object();
+
 	/** Outbound HTTP client (JDK). */
 	private final java.net.http.HttpClient httpClient;
 
@@ -270,7 +273,8 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 	/**
 	 * Atomically stores the exchanged tokens under {@code profileId} only when the
 	 * current generation matches the expected generation captured at verification time.
-	 * Synchronized on the {@code tokens} map.
+	 * Synchronized on the {@code tokens} map so that concurrent generation bumps
+	 * (delete/clear) are visible and atomic with the store.
 	 * @param profileId the profile id
 	 * @param expectedGeneration the generation captured at verification time
 	 * @param handle the exchanged token handle
@@ -279,11 +283,13 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 	public void storeTokensIfCurrent(final String profileId, final long expectedGeneration, final TokenHandle handle) {
 		Assert.hasText(profileId, "profileId must not be blank");
 		Assert.notNull(handle, "handle must not be null");
-		final long currentGeneration = this.generationGuard.getAsLong();
-		if (currentGeneration != expectedGeneration) {
-			throw new StaleProfileGenerationException(profileId, expectedGeneration, currentGeneration);
+		synchronized (this.tokenStoreLock) {
+			final long currentGeneration = this.generationGuard.getAsLong();
+			if (currentGeneration != expectedGeneration) {
+				throw new StaleProfileGenerationException(profileId, expectedGeneration, currentGeneration);
+			}
+			this.tokens.put(profileId, handle);
 		}
-		this.tokens.put(profileId, handle);
 		LOG.debug("oauth2-authcode[{}] generation match ({}), tokens stored", profileId, expectedGeneration);
 	}
 

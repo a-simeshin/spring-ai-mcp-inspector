@@ -49,10 +49,10 @@ import io.inspector.mcp.core.proxy.ProxyUpstreamException;
 import io.inspector.mcp.webflux.router.InspectorRouterConfig;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
-import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -199,6 +199,10 @@ class AuthProfileHandlerTests {
 			// given
 			given(AuthProfileHandlerTests.this.store.register(eq(OWNER_A), any(AuthProfile.class)))
 				.willReturn("pid-cc");
+			final OAuth2ClientCredentialsTokenManager.TokenHandle handle = new OAuth2ClientCredentialsTokenManager.TokenHandle(
+					"tok-1", Instant.now().plusSeconds(60));
+			given(AuthProfileHandlerTests.this.tokenManager.acquireAsync(eq("pid-cc"), any(OAuth2Profile.class)))
+				.willReturn(Mono.just(handle));
 
 			// when/then
 			withOwner(AuthProfileHandlerTests.this.client.post()
@@ -213,7 +217,9 @@ class AuthProfileHandlerTests {
 				.expectBody()
 				.jsonPath("$.profileId")
 				.isEqualTo("pid-cc");
-			verify(AuthProfileHandlerTests.this.tokenManager).acquire(eq("pid-cc"), any(OAuth2Profile.class));
+			verify(AuthProfileHandlerTests.this.tokenManager).acquireAsync(eq("pid-cc"), any(OAuth2Profile.class));
+			verify(AuthProfileHandlerTests.this.tokenManager).storeIfCurrent(eq("pid-cc"), anyLong(), eq(handle),
+					any(OAuth2Profile.class));
 		}
 
 		@Test
@@ -224,9 +230,9 @@ class AuthProfileHandlerTests {
 			// given
 			given(AuthProfileHandlerTests.this.store.register(eq(OWNER_A), any(AuthProfile.class)))
 				.willReturn("pid-cc");
-			willThrow(new ProxyUpstreamException(400, "OAuth2 client_credentials exchange failed: HTTP 400"))
-				.given(AuthProfileHandlerTests.this.tokenManager)
-				.acquire(eq("pid-cc"), any(OAuth2Profile.class));
+			given(AuthProfileHandlerTests.this.tokenManager.acquireAsync(eq("pid-cc"), any(OAuth2Profile.class)))
+				.willReturn(Mono
+					.error(new ProxyUpstreamException(400, "OAuth2 client_credentials exchange failed: HTTP 400")));
 
 			// when/then
 			withOwner(AuthProfileHandlerTests.this.client.post()
