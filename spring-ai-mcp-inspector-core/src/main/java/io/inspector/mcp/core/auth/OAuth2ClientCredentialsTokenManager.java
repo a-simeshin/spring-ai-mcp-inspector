@@ -181,19 +181,26 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 	 * @param profileId the store profile id
 	 * @param expectedGeneration the generation captured at registration time
 	 * @param handle the exchanged token handle
+	 * @param profile the client-credentials profile (credentials stored with the token)
 	 * @throws StaleProfileGenerationException when the generation does not match
 	 */
-	public void storeIfCurrent(final String profileId, final long expectedGeneration, final TokenHandle handle) {
+	public void storeIfCurrent(final String profileId, final long expectedGeneration, final TokenHandle handle,
+			final OAuth2Profile profile) {
 		Assert.hasText(profileId, "profileId must not be blank");
 		Assert.notNull(handle, "handle must not be null");
+		Assert.notNull(profile, "profile must not be null");
+		Assert.isTrue(profile.grantMode() == OAuth2GrantMode.CLIENT_CREDENTIALS,
+				"storeIfCurrent requires a CLIENT_CREDENTIALS profile");
 		final Object lock = this.profileLocks.computeIfAbsent(profileId, (key) -> new Object());
 		synchronized (lock) {
 			final long currentGeneration = this.generationGuard.getAsLong();
 			if (currentGeneration != expectedGeneration) {
 				throw new StaleProfileGenerationException(profileId, expectedGeneration, currentGeneration);
 			}
-			LOG.debug("oauth2-cc[{}] generation match ({}), storing token expiring {}", profileId, expectedGeneration,
-					handle.expiresAt());
+			LOG.debug("oauth2-cc[{}] generation match ({}), storing credentials and token expiring {}", profileId,
+					expectedGeneration, handle.expiresAt());
+			this.credentials.put(profileId, new StoredClientCredentials(profile.tokenUrl(), profile.clientId(),
+					profile.clientSecret(), profile.scopes()));
 			this.tokenCache.put(profileId, new TokenEntry(handle.accessToken(), handle.expiresAt()));
 		}
 	}

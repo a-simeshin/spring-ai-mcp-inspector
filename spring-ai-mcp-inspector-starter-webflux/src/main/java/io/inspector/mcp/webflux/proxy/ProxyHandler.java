@@ -388,15 +388,9 @@ public class ProxyHandler {
 				.fromCallable(() -> AuthHeaders.resolve(resolvedProfile, profileId, this.ccTokenManager,
 						this.authCodeExchanger))
 				.subscribeOn(Schedulers.boundedElastic())
-				.onErrorResume(ProxyUpstreamException.class, (ex) -> Mono.just(null))
-				.onErrorResume(IllegalStateException.class, (ex) -> Mono.just(null));
+				.onErrorResume(ProxyUpstreamException.class, (ex) -> Mono.empty())
+				.onErrorResume(IllegalStateException.class, (ex) -> Mono.empty());
 			return headersMono.flatMap((resolvedHeaders) -> {
-				if (resolvedHeaders == null) {
-					return ServerResponse.status(HttpStatus.BAD_GATEWAY)
-						.bodyValue(new ProxyErrorDto(502, "token_exchange_failed",
-								"OAuth2 token acquisition failed for profile " + profileId,
-								"Check the token endpoint, then reconnect.", null));
-				}
 				final AtomicReference<String> authorizationRef = new AtomicReference<>(resolvedHeaders.authorization());
 				final McpClientTransport target;
 				try {
@@ -490,7 +484,11 @@ public class ProxyHandler {
 				});
 
 				return ServerResponse.ok().contentType(MediaType.TEXT_EVENT_STREAM).body(flux, ServerSentEvent.class);
-			});
+			})
+				.switchIfEmpty(Mono.defer(() -> ServerResponse.status(HttpStatus.BAD_GATEWAY)
+					.bodyValue(new ProxyErrorDto(502, "token_exchange_failed",
+							"OAuth2 token acquisition failed for profile " + profileId,
+							"Check the token endpoint, then reconnect.", null))));
 		}
 		// No profileId : existing synchronous path
 		final AuthHeaders headers = null;
@@ -770,7 +768,6 @@ public class ProxyHandler {
 		// D8: resolve the owner from the signed session cookie and the bound profile
 		// when a profileId is supplied. A foreign/unknown profileId is a structured 400.
 		final String ownerId = resolveOwner(request);
-		final AuthHeaders headers;
 		if (profileId != null && !profileId.isBlank()) {
 			if (this.authProfileStore == null || this.sessionOwnerResolver == null) {
 				return ServerResponse.badRequest().bodyValue(Map.of("error", "auth-profile support is not wired"));
@@ -782,11 +779,43 @@ public class ProxyHandler {
 							"Invalid or missing auth profile or session reference.",
 							"Check the profile fields and profileId, then reconnect.", null));
 			}
-			headers = AuthHeaders.resolve(profile.get(), profileId, this.ccTokenManager, this.authCodeExchanger);
+			final AuthProfile resolvedProfile = profile.get();
+			return Mono
+				.fromCallable(() -> AuthHeaders.resolve(resolvedProfile, profileId, this.ccTokenManager,
+						this.authCodeExchanger))
+				.subscribeOn(Schedulers.boundedElastic())
+				.onErrorResume(ProxyUpstreamException.class, (ex) -> Mono.empty())
+				.onErrorResume(IllegalStateException.class, (ex) -> Mono.empty())
+				.flatMap((headers) -> openSessionAndRelayAfterAuth(sessionId, url, body, authorization, customHeaders,
+						profileId, ownerId, headers))
+				.switchIfEmpty(Mono.defer(() -> ServerResponse.status(HttpStatus.BAD_GATEWAY)
+					.bodyValue(new ProxyErrorDto(502, "token_exchange_failed",
+							"OAuth2 token acquisition failed for profile " + profileId,
+							"Check the token endpoint, then reconnect.", null))));
 		}
-		else {
-			headers = null;
-		}
+		// No profileId: synchronous path
+		return openSessionAndRelayAfterAuth(sessionId, url, body, authorization, customHeaders, profileId, ownerId,
+				null);
+	}
+
+	/**
+	 * Continuation of {@link #openSessionAndRelay} after auth headers have been resolved
+	 * (either async via boundedElastic for the profile path, or synchronous for the
+	 * no-profile path). Builds the transport, creates the session, binds the profile,
+	 * registers the session and dispatches the first frame.
+	 * @param sessionId the new session id
+	 * @param url the upstream streamable-HTTP URL
+	 * @param body the first JSON-RPC frame to relay
+	 * @param authorization the inbound {@code Authorization} header
+	 * @param customHeaders extra headers from the request
+	 * @param profileId the owner-scoped auth profile id, or {@code null}
+	 * @param ownerId the resolved owner id
+	 * @param headers the resolved auth headers, or {@code null} when no profile is used
+	 * @return a {@link Mono} emitting the relay result
+	 */
+	private Mono<ServerResponse> openSessionAndRelayAfterAuth(final String sessionId, final String url,
+			final JsonNode body, final String authorization, final Map<String, String> customHeaders,
+			final String profileId, final String ownerId, final AuthHeaders headers) {
 		final AtomicReference<String> authorizationRef = new AtomicReference<>(
 				(headers != null) ? headers.authorization() : null);
 		final McpClientTransport target;

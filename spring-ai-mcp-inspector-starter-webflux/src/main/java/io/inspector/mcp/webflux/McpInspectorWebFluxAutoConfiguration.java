@@ -163,6 +163,7 @@ public class McpInspectorWebFluxAutoConfiguration {
 		authProfileStore.setTokenEvictor(compositeEvictor);
 		// Generation guard: async token exchanges detect stale profile mutations.
 		manager.setGenerationGuard(authProfileStore::currentGeneration);
+		authCodeExchanger.setGenerationGuard(authProfileStore::currentGeneration);
 		return manager;
 	}
 
