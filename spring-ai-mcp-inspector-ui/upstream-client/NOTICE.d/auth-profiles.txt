@@ -28,6 +28,8 @@ stdio transport; await refreshProfiles after save/update/delete; focus name
 input on edit; role="radiogroup" on profile list; htmlFor/id on Type/Grant/
 Placement labels (native selects retained for testability; shadcn Select uses
 portals that complicate testing).
+Disconnect clears the D3 structured error banner alongside the connect-failure
+banner (setAuthError(null) in disconnect(), issue #54).
 Covered by jest unit tests (AuthProfiles.test.tsx, auth-profiles.test.ts,
 connectionAuthErrors.test.ts, and the profileId-override D9B cases in
 useConnection.test.tsx) in spring-ai-mcp-inspector-ui/upstream-client.
