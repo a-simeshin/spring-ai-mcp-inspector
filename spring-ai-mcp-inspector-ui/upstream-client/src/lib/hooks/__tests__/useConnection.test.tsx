@@ -28,6 +28,7 @@ import {
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import { discoverScopes } from "../../auth";
 import { CustomHeaders } from "../../types/customHeaders";
+import { ProxyErrorDto } from "../../connectionErrors";
 
 // Mock fetch - return a fresh Response for each call
 global.fetch = jest.fn().mockImplementation(() =>
@@ -70,10 +71,12 @@ const mockStreamableHTTPTransport: {
   start: jest.Mock;
   url: URL | undefined;
   options: SSEClientTransportOptions | undefined;
+  terminateSession: jest.Mock;
 } = {
   start: jest.fn(),
   url: undefined,
   options: undefined,
+  terminateSession: jest.fn(),
 };
 
 jest.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
@@ -2079,23 +2082,74 @@ describe("useConnection", () => {
     });
 
     test("disconnect clears authError and connectionError (issue #54)", async () => {
-      // First: connect fails, setting connectionError
-      mockClient.connect.mockRejectedValueOnce(
-        new Error("connection to the MCP server was refused"),
+      // D3 ProxyErrorDto that the backend proxy emits on streamable 401/403.
+      const authErrorDto: ProxyErrorDto = {
+        status: 401,
+        code: "unauthorized",
+        reason: "The MCP server rejected the request as unauthenticated.",
+        guidance: "Verify the token/API key. OAuth2 profiles refresh and retry once automatically.",
+        url: "https://server/mcp",
+      };
+
+      // Arrange fetch: health check 200, then streamable 401 with D3 DTO body.
+      (global.fetch as jest.Mock)
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ status: "ok" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(authErrorDto), {
+            status: 401,
+            statusText: "Unauthorized",
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+
+      // Arrange: mockClient.connect calls transport.start() (like the real SDK).
+      mockClient.connect.mockImplementationOnce(async (transport) => {
+        await transport.start();
+      });
+
+      // Arrange: mockStreamableHTTPTransport.start triggers the streamable
+      // transport fetch path (streamableFetchWithDtoParse inside useConnection).
+      mockStreamableHTTPTransport.start.mockImplementationOnce(async () => {
+        const fetchFn = mockStreamableHTTPTransport.options?.fetch;
+        if (fetchFn) {
+          await fetchFn(mockStreamableHTTPTransport.url!, {
+            headers: {},
+          });
+        }
+      });
+
+      const propsWithStreamableHttp = {
+        ...defaultProps,
+        transportType: "streamable-http" as const,
+        sseUrl: "http://localhost:8080",
+      };
+
+      const { result } = renderHook(() =>
+        useConnection(propsWithStreamableHttp),
       );
 
-      const { result } = renderHook(() => useConnection(defaultProps));
-
+      // Act: connect. The transport fetch gets a 401 with the D3 DTO.
+      // streamableFetchWithDtoParse parses it and sets authError.
       await act(async () => {
         await result.current.connect();
       });
-      expect(result.current.connectionError).not.toBeNull();
 
-      // Disconnect : clears both errors
+      // Assert: authError is set from the real D3 response before disconnect.
+      // connectionError stays null because client.connect resolved (no transport
+      // error thrown), only the D3 authError was consumed.
+      expect(result.current.authError).toEqual(authErrorDto);
+
+      // Act: disconnect.
       await act(async () => {
         await result.current.disconnect();
       });
 
+      // Assert: both error banners cleared.
       expect(result.current.connectionError).toBeNull();
       expect(result.current.authError).toBeNull();
     });
