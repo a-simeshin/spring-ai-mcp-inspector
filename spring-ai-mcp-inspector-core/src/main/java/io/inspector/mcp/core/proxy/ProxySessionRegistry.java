@@ -65,6 +65,45 @@ import io.inspector.mcp.core.shutdown.ShutdownDrain;
  * application, and therefore in every context this starter configures, but not in a bare
  * {@code GenericApplicationContext} assembled by hand.
  *
+ *
+ * <h2>Cleanup contract</h2>
+ *
+ * <p>
+ * The registry provides three cleanup paths, but only one is used in production:
+ *
+ * <dl>
+ * <dt>{@link #removeAndClose(String)}</dt>
+ * <dd><b>Canonical cleanup method.</b> Removes the session from the map and closes its
+ * transport. Used by all 17 external production call sites and by internal callers
+ * ({@link #closeAll()}, {@link #reap()}, and the double-check guard in
+ * {@link #put(ProxySession)}). The caller owns the session id; the method owns the
+ * transport close.</dd>
+ *
+ * <dt>{@link #put(ProxySession)}</dt>
+ * <dd>Registers a new session. When the key already exists in the map, the <b>old</b>
+ * session is replaced and its transport is closed immediately — the registry never holds
+ * two sessions under the same key. The new session's transport is left open. This is the
+ * only path that closes a session without an explicit removal call.</dd>
+ *
+ * <dt>{@code closeSession(String)}</dt>
+ * <dd><b>Dead code.</b> Exists only in the PR #89 branch, not on {@code develop/2.x}. The
+ * call graph analysis (see {@code VERDICT.md}) found zero production callers across all
+ * three modules. All 17 production call sites use {@link #removeAndClose(String)}
+ * instead. The method is kept for backward compatibility until PR #89 is merged.</dd>
+ * </dl>
+ *
+ * <p>
+ * Invariants:
+ * <ul>
+ * <li>Every session removed from the map has its {@link ProxySession#close()} called
+ * before the method returns.</li>
+ * <li>Every session that loses a key collision in {@link #put(ProxySession)} is closed
+ * immediately — no stale session survives in the map or leaks its transport.</li>
+ * <li>Removal is idempotent: {@link ProxySession#close()} is a no-op after the first
+ * call, and {@link #removeAndClose(String)} returns {@code false} when the id is
+ * unknown.</li>
+ * </ul>
+ *
  * @author Artem Simeshin
  */
 public class ProxySessionRegistry implements ApplicationContextAware {
@@ -94,18 +133,23 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	private volatile boolean closed;
 
 	/**
-	 * Adds {@code session} under {@code session.sessionId()}, unless the registry has
-	 * already been drained — in which case the session is closed immediately instead.
+	 * Registers {@code session} under {@code session.sessionId()}.
 	 *
 	 * <p>
-	 * The guard is not theoretical. A {@code GET /sse} that arrived just before shutdown
-	 * can still be connecting upstream when {@link ContextClosedEvent} fires; the sweep
-	 * runs, and only then does the request register its session. The container has not
-	 * paused its connector yet — that happens later, at phase 2147482623 — so the request
-	 * is live and its emitter would never be completed. Worse, a {@code put} landing
-	 * between the sweep and a bare {@code clear()} used to erase the session from the map
-	 * without closing it, which made {@link #size()} report zero over a still-open
-	 * stream.
+	 * If the registry has already been drained (see {@link #closeAll()}) the session is
+	 * closed immediately instead of being registered.
+	 *
+	 * <p>
+	 * If the key already exists in the map, the <b>old</b> session is replaced and its
+	 * transport is closed immediately — the registry never holds two sessions under the
+	 * same key. The new session is left open. This is the only path that closes a session
+	 * without an explicit removal call.
+	 *
+	 * <p>
+	 * Concurrent {@code put()} calls with the same key are safe: the underlying
+	 * {@link java.util.concurrent.ConcurrentHashMap} guarantees that exactly one writer
+	 * wins, and the loser's transport is closed before the method returns. See
+	 * {@link #removeAndClose(String)} for the canonical cleanup method.
 	 * @param session the session to register (never {@code null})
 	 */
 	public void put(final ProxySession session) {
@@ -113,7 +157,11 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 			session.close();
 			return;
 		}
-		this.sessions.put(session.sessionId(), session);
+		final ProxySession old = this.sessions.put(session.sessionId(), session);
+		if (old != null && old != session) {
+			// Replaced an existing session under the same key -- close the old one.
+			old.close();
+		}
 		if (this.closed) {
 			// Lost the race: closeAll() flipped the flag after our first check but swept
 			// before our put landed. Double-checking closes it without needing a lock.
@@ -131,7 +179,17 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	}
 
 	/**
-	 * Removes and closes the session for {@code id}.
+	 * Canonical cleanup method. Removes the session from the map and closes its
+	 * transport.
+	 *
+	 * <p>
+	 * This is the only production cleanup path — all 17 external call sites and all
+	 * internal callers ({@link #closeAll()}, {@link #reap()}, and the double-check guard
+	 * in {@link #put(ProxySession)}) use this method. See the class-level cleanup
+	 * contract for the full picture.
+	 *
+	 * <p>
+	 * Idempotent: returns {@code false} when the id is unknown or {@code null}.
 	 * @param id the session id to remove
 	 * @return {@code true} if a session was actually removed, {@code false} otherwise
 	 */
