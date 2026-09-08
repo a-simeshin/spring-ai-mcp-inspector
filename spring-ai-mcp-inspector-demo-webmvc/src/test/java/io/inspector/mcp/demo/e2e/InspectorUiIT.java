@@ -1919,19 +1919,16 @@ class InspectorUiIT {
 		@Test
 		@Story("Saved connections")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("Connect, save the connection, reload the page, restore from the saved entry, and verify tools/list still works.")
-		@DisplayName("connectSaveReloadRestore — tools/list works after restoring saved connection")
-		void connect_save_reload_restore_toolsListWorks() {
+		@Description("Connect, save the connection, corrupt the form, restore from the saved entry, and verify tools/list still works after restore.")
+		@DisplayName("connectSaveCorruptRestore — tools/list works after restoring saved connection")
+		void connect_save_corrupt_restore_toolsListWorks() {
 			// given
 			startApp(new Combo("sse"));
 			openAndConnect();
 
-			// Verify tools/list works before saving
+			// Verify tools/list works before saving (hard assert: must click and succeed)
 			clickTab("tools");
-			SelenideElement listTools = activePanel().$(byText("List Tools"));
-			if (listTools.exists() && listTools.isEnabled()) {
-				listTools.click();
-			}
+			activePanel().$(byText("List Tools")).shouldBe(visible, Duration.ofSeconds(10)).click();
 			activePanel().$(byText("sum")).shouldBe(visible, Duration.ofSeconds(15));
 
 			// Save the current connection via the UI
@@ -1943,23 +1940,36 @@ class InspectorUiIT {
 			// Verify the saved entry appears in the list
 			sidebar().$(byText("test-restore")).shouldBe(visible, Duration.ofSeconds(5));
 
+			// Break the URL in the form BEFORE reload: proves the saved entry
+			// actually restores it (not a no-op when form already has correct value).
+			String brokenUrl = "http://localhost:1/broken-url";
+			setReactInputValue("#sse-url-input", brokenUrl);
+			$("#sse-url-input").shouldHave(Condition.value(brokenUrl));
+
 			// when: reload the page
 			open("/mcp-inspector/index.html");
 
-			// Wait for the sidebar to render, then restore the saved connection
+			// Wait for the sidebar to render. The broken URL will NOT persist
+			// (localStorage is cleared on reload in fresh profile), so break
+			// the URL again after reload to prove the restore.
 			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+			setReactInputValue("#sse-url-input", brokenUrl);
+			$("#sse-url-input").shouldHave(Condition.value(brokenUrl));
+
+			// Now click the saved entry to restore the correct URL
 			sidebar().$(byText("test-restore")).shouldBe(visible, Duration.ofSeconds(10)).click();
 
-			// Connect using the restored connection settings
-			connectButton().click();
+			// Assert the URL field now holds the restored value, not the broken one
+			$("#sse-url-input").shouldNotHave(Condition.value(brokenUrl));
+			$("#sse-url-input").shouldHave(Condition.value("/mcp"));
+
+			// Connect using the restored connection settings (hard assert: must click)
+			connectButton().shouldBe(visible).click();
 			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
 
-			// then: tools/list must still work after restore
+			// then: tools/list must still work after restore (hard assert)
 			clickTab("tools");
-			SelenideElement listToolsAfter = activePanel().$(byText("List Tools"));
-			if (listToolsAfter.exists() && listToolsAfter.isEnabled()) {
-				listToolsAfter.click();
-			}
+			activePanel().$(byText("List Tools")).shouldBe(visible, Duration.ofSeconds(10)).click();
 			activePanel().$(byText("sum")).shouldBe(visible, Duration.ofSeconds(15));
 		}
 

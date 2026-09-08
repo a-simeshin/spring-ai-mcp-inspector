@@ -469,20 +469,19 @@ const Sidebar = ({
                     Save Current
                   </Button>
                 )}
-                {/* Secrets warning: show when customHeaders has enabled Authorization header */}
-                {customHeaders.some(
+                {/* [spring-ai-mcp-inspector PATCH] Warn that header and env
+                    values are not persisted, only their names. Combined into
+                    one <p>; text explains what IS stored vs what gets lost. */}
+                {(customHeaders.some(
                   (h) =>
                     h.enabled &&
                     h.name.toLowerCase() === "authorization" &&
                     h.value.trim(),
-                ) && (
+                ) ||
+                  (env && Object.values(env).some((v) => v.trim()))) && (
                   <p className="text-xs text-amber-600 dark:text-amber-400 px-1">
-                    Secrets are stored unencrypted in this browser profile.
-                  </p>
-                )}
-                {Object.values(env).some((v) => v.trim()) && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400 px-1">
-                    Secrets are stored unencrypted in this browser profile.
+                    Header and environment variable values are not saved, only
+                    their names; re-enter them after restoring.
                   </p>
                 )}
               </div>

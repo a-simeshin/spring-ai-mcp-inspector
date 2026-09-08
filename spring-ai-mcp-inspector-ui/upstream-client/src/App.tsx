@@ -544,20 +544,32 @@ const App = () => {
         env: transportType === "stdio" ? env : undefined,
         customHeaders,
       });
-      // [spring-ai-mcp-inspector PATCH] Check for duplicate name before
-      // saving. The caller expects SavedConnection | undefined and
-      // keeps the save dialog open when undefined is returned.
-      const existing = findConnectionByName(name);
-      let targetId = activeConnectionId;
-      if (existing && existing.id !== targetId) {
-        if (
-          !window.confirm(
-            `Connection "${name}" already exists. Overwrite?`,
-          )
-        ) {
-          return undefined;
+      // [spring-ai-mcp-inspector PATCH] Determine target id by comparing
+      // name against the currently active connection, not by blindly
+      // reusing activeConnectionId (which would overwrite the active
+      // entry when saving under a new name). See PR #149 blocker 1.
+      const allConnections = loadSavedConnections();
+      const activeConnection = allConnections.find(
+        (c) => c.id === activeConnectionId,
+      );
+      let targetId: string | undefined;
+      if (activeConnection && name === activeConnection.name) {
+        // Same name as the active connection: update in-place.
+        targetId = activeConnectionId;
+      } else {
+        // New name: check for collision with a different entry.
+        const existing = findConnectionByName(name);
+        if (existing) {
+          if (
+            !window.confirm(
+              `Connection "${name}" already exists. Overwrite?`,
+            )
+          ) {
+            return undefined;
+          }
+          targetId = existing.id;
         }
-        targetId = existing.id;
+        // else no collision: targetId undefined -> creates a new entry.
       }
       const saved = saveConnection(draft, targetId);
       setActiveConnectionId(saved.id);
@@ -621,6 +633,10 @@ const App = () => {
       }
       setActiveConnectionId(connection.id);
       touchSavedConnection(connection.id);
+      // [spring-ai-mcp-inspector PATCH] Refresh the list state after
+      // touchSavedConnection so the "sorted by last used" order is
+      // immediately visible (save/delete already do this).
+      setSavedConnections(loadSavedConnections());
     },
     [
       setTransportType,

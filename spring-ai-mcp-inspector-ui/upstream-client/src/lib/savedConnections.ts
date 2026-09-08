@@ -82,9 +82,10 @@ export function isValidConnection(c: unknown): c is SavedConnection {
     if (typeof header.value !== "string") return false;
     if (typeof header.enabled !== "boolean") return false;
   }
-  // Validate env: if present, must be a non-null object with string values
+  // Validate env: if present, must be a non-null object with string values.
+  // Arrays must NOT pass as plain objects (Array.isArray check).
   if (obj.env !== undefined) {
-    if (obj.env === null || typeof obj.env !== "object") return false;
+    if (obj.env === null || typeof obj.env !== "object" || Array.isArray(obj.env)) return false;
     for (const v of Object.values(obj.env as Record<string, unknown>)) {
       if (typeof v !== "string") return false;
     }

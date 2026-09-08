@@ -3,19 +3,21 @@ src/lib/types/savedConnection.ts + src/lib/savedConnections.ts +
  configurations (transport type, URL/command, args, custom headers,
  env vars) in localStorage under a single schema-versioned key
  `mcp-inspector.savedConnections.v1`. Users can save the current form
- state under a name, recall it with one click to fill all form fields,
- and delete saved entries. The list is sorted by last-used date, caps
- at 20 entries, and shows a security warning when the saved
- configuration includes Authorization headers or env vars. Upstream
- had no save/restore feature at all: each page reload or server
- restart required full manual re-entry of the connection parameters.
+ state under a name, recall it with one click to restore form fields
+ (header and env VALUES are stripped on save; user re-enters them
+ after restore), and delete saved entries. The list is sorted by
+ last-used date, caps at 20 entries, and shows a security warning
+ when the saved configuration includes Authorization headers or env
+ vars. Upstream had no save/restore feature at all: each page reload
+ or server restart required full manual re-entry of the connection
+ parameters.
  Local fix: new `SavedConnection` type in `src/lib/types/`,
  `savedConnections.ts` storage layer with CRUD, `loadSavedConnections`,
  `saveConnection`, `deleteSavedConnection`, `touchSavedConnection`,
  and `migrateSavedConnections` for schema versioning; the Sidebar
  renders a collapsible "Saved Connections" section with a "Save
  Current" button and click-to-fill entries; App.tsx wires the state.
- Covered by `src/lib/__tests__/savedConnections.test.ts` (34 unit
+ Covered by `src/lib/__tests__/savedConnections.test.ts` (57 unit
  tests: CRUD, eviction, duplicate name, findConnectionByName,
  isValidConnection, filterValidConnections, corrupt-data migration,
  edge cases).
@@ -50,8 +52,20 @@ REVIEW FIXES (PR #149 review findings):
   never persisted in localStorage. On restore, the user re-enters
   secrets.
 - `handleSelectConnection` now resets fields absent from the entry
-  (stdio fields no longer leak into sse entries) and calls
-  `touchSavedConnection` so sorting by last-used works correctly.
+  (stdio fields no longer leak into sse entries), calls
+  `touchSavedConnection` so sorting by last-used works correctly, and
+  refreshes the state list so the sorted order is immediately visible.
+- `handleSaveConnection` now only reuses `activeConnectionId` when the
+  name matches the active connection. Saving under a different name no
+  longer overwrites the currently selected entry: it creates a new
+  entry instead (or prompts for overwrite on collision with an
+  existing entry).
+- The security warning now says "Header and environment variable
+  values are not saved, only their names; re-enter them after
+  restoring." and is rendered once (no longer duplicated for
+  Authorization and env).
+- `isValidConnection` now rejects arrays as `env` values (only plain
+  objects accepted).
 - Duplicate-name check in `handleSaveConnection` now also triggers
   when `activeConnectionId` is set (not only when unset).
 - Added App-level integration tests covering the full save flow:
