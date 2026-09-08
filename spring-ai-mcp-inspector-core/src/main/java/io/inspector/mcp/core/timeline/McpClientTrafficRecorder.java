@@ -118,17 +118,6 @@ public final class McpClientTrafficRecorder {
 		final String corrKey = (id != null) ? correlationId(clientName, id) : null;
 		final PendingCorrelationStore.PendingCorrelation pending = (corrKey != null)
 				? this.requestCorrelations.remove(corrKey) : null;
-		if (pending == null && corrKey != null) {
-			// Also try the srv:-prefixed key for server-initiated request callbacks
-			// (sampling/elicitation/roots/list) whose response arrives via the client
-			// transport's sendMessage, not via the inbound handler.
-			final String srvKey = correlationId(clientName, "srv:" + id);
-			final PendingCorrelationStore.PendingCorrelation srvPending = this.requestCorrelations.remove(srvKey);
-			if (srvPending != null) {
-				emitClientResponse(clientName, transportType, response, id, srvPending, true);
-				return;
-			}
-		}
 		if (pending != null) {
 			emitClientResponse(clientName, transportType, response, id, pending, true);
 			return;
@@ -149,6 +138,59 @@ public final class McpClientTrafficRecorder {
 			final Object id, final PendingCorrelationStore.PendingCorrelation pending, final boolean withLatency) {
 		final String correlationId = pending.correlationId();
 		final ObjectNode payload = buildPayload(clientName, transportType, "server->client", null, id,
+				(response.error() != null) ? response.error().message() : null);
+		if (withLatency) {
+			payload.put("latencyMs", pending.elapsed());
+		}
+		final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, null,
+				TimelineEventType.MCP_JSONRPC_RESPONSE, Instant.now(), payload);
+		this.timelineService.append(event);
+	}
+
+	/**
+	 * Records an outbound JSON-RPC response (client&rarr;server) that answers a
+	 * server-initiated request (sampling/createMessage, elicitation/create, roots/list).
+	 *
+	 * <p>
+	 * Unlike {@link #recordClientResponse}, which handles inbound server-to-client
+	 * responses to client requests, this method handles the reverse flow: the client
+	 * sends a response to a server-initiated callback. The correlation lookup uses only
+	 * the {@code srv:}-prefixed key (never the client's own pending key first),
+	 * preventing id collisions when both sides use the same integer id.
+	 * @param clientName the configured client name (must not be {@code null})
+	 * @param transportType the transport type label (must not be {@code null})
+	 * @param response the JSON-RPC response (must not be {@code null})
+	 */
+	public void recordOutboundResponse(final String clientName, final String transportType,
+			final JSONRPCResponse response) {
+		if (response == null) {
+			return;
+		}
+		final Object id = response.id();
+		final String srvKey = (id != null) ? correlationId(clientName, "srv:" + id) : null;
+		final PendingCorrelationStore.PendingCorrelation pending = (srvKey != null)
+				? this.requestCorrelations.remove(srvKey) : null;
+		if (pending != null) {
+			emitOutboundResponse(clientName, transportType, response, id, pending, true);
+			return;
+		}
+		// Orphan: no matching server request found
+		final String correlationId = fallbackCorrelationId(clientName, id);
+		final ObjectNode payload = buildPayload(clientName, transportType, "client->server", null, id,
+				(response.error() != null) ? response.error().message() : null);
+		if (id != null) {
+			payload.put("orphan", true);
+		}
+		final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, null,
+				TimelineEventType.MCP_JSONRPC_RESPONSE, Instant.now(), payload);
+		this.timelineService.append(event);
+	}
+
+	private void emitOutboundResponse(final String clientName, final String transportType,
+			final JSONRPCResponse response, final Object id, final PendingCorrelationStore.PendingCorrelation pending,
+			final boolean withLatency) {
+		final String correlationId = pending.correlationId();
+		final ObjectNode payload = buildPayload(clientName, transportType, "client->server", null, id,
 				(response.error() != null) ? response.error().message() : null);
 		if (withLatency) {
 			payload.put("latencyMs", pending.elapsed());

@@ -181,11 +181,12 @@ class McpClientTrafficRecorderTests {
 			final JSONRPCRequest serverRequest = new JSONRPCRequest("2.0", "sampling/createMessage", "srv-1", null);
 			McpClientTrafficRecorderTests.this.recorder.recordServerRequest("my-client", "stdio", serverRequest);
 
-			// when: the client answers with a JSONRPCResponse via recordClientResponse
+			// when: the client answers with a JSONRPCResponse via recordOutboundResponse
 			final JSONRPCResponse response = JSONRPCResponse.result("srv-1", java.util.Map.of());
-			McpClientTrafficRecorderTests.this.recorder.recordClientResponse("my-client", "stdio", response);
+			McpClientTrafficRecorderTests.this.recorder.recordOutboundResponse("my-client", "stdio", response);
 
-			// then: response is not orphan, has latency, and pending is released
+			// then: response is not orphan, has latency, has client->server direction,
+			// and pending is released
 			final List<TimelineEvent> events = McpClientTrafficRecorderTests.this.timelineService
 				.query(TimelineQuery.all());
 			assertThat(events).hasSize(2);
@@ -193,6 +194,7 @@ class McpClientTrafficRecorderTests {
 				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
 				.findFirst()
 				.orElseThrow();
+			assertThat(responseEvent.payload().path("direction").asText()).isEqualTo("client->server");
 			assertThat(responseEvent.payload().has("orphan")).isFalse();
 			assertThat(responseEvent.payload().has("latencyMs")).isTrue();
 			assertThat(responseEvent.payload().path("latencyMs").asLong()).isGreaterThanOrEqualTo(0L);

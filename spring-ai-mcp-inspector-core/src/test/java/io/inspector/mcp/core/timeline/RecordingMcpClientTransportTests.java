@@ -147,6 +147,37 @@ class RecordingMcpClientTransportTests {
 				.query(TimelineQuery.all());
 			assertThat(events).hasSize(1);
 			assertThat(events.get(0).type()).isEqualTo(TimelineEventType.MCP_JSONRPC_RESPONSE);
+			assertThat(events.get(0).payload().path("direction").asText()).isEqualTo("client->server");
+		}
+
+		@Test
+		@DisplayName("outbound response with same id as client request uses srv: key")
+		void outboundResponseWithSameIdAsClientRequestUsesSrvKey() {
+			// given: a client request with id=1
+			RecordingMcpClientTransportTests.this.recorder.recordClientRequest("test-client", "stdio",
+					new JSONRPCRequest("2.0", "tools/call", 1, null));
+			// and a server request with the same id=1 (via recordServerRequest)
+			RecordingMcpClientTransportTests.this.recorder.recordServerRequest("test-client", "stdio",
+					new JSONRPCRequest("2.0", "sampling/createMessage", 1, null));
+
+			// when: the client sends the response to the server-initiated request
+			final JSONRPCResponse response = JSONRPCResponse.result(1, java.util.Map.of());
+			RecordingMcpClientTransportTests.this.transport.sendMessage(response).block();
+
+			// then: the outbound response is correlated with the server request, not the
+			// client request
+			final List<TimelineEvent> events = RecordingMcpClientTransportTests.this.timelineService
+				.query(TimelineQuery.all());
+			// 2 requests (client + server) + 1 response = 3 events
+			assertThat(events).hasSize(3);
+			final TimelineEvent responseEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.findFirst()
+				.orElseThrow();
+			assertThat(responseEvent.payload().path("direction").asText()).isEqualTo("client->server");
+			assertThat(responseEvent.payload().has("orphan")).isFalse();
+			// The client request's pending correlation should still be pending
+			assertThat(RecordingMcpClientTransportTests.this.recorder.pendingCorrelations()).isEqualTo(1);
 		}
 
 	}

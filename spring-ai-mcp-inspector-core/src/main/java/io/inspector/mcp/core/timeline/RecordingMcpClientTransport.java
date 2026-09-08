@@ -89,10 +89,10 @@ public final class RecordingMcpClientTransport implements McpClientTransport {
 		}
 		else if (message instanceof JSONRPCResponse response) {
 			// Client answers server-initiated requests (sampling, elicitation,
-			// roots/list)
-			// with a JSONRPCResponse via sendMessage; record it with client response
-			// semantics so the srv:-prefixed pending correlation is released.
-			this.trafficRecorder.recordClientResponse(this.clientName, this.transportType, response);
+			// roots/list) with a JSONRPCResponse via sendMessage; record it as
+			// an outbound response (client->server), not as an inbound server
+			// response.
+			this.trafficRecorder.recordOutboundResponse(this.clientName, this.transportType, response);
 		}
 		return this.delegate.sendMessage(message);
 	}
