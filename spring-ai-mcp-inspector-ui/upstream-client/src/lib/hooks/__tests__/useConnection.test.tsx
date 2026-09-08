@@ -148,6 +148,7 @@ jest.mock("../../auth", () => ({
   InspectorOAuthClientProvider: jest.fn().mockImplementation(() => ({
     tokens: jest.fn().mockResolvedValue({ access_token: "mock-token" }),
     redirectUrl: "http://localhost:3000/oauth/callback",
+    clear: jest.fn(),
   })),
   clearClientInformationFromSessionStorage: jest.fn(),
   saveClientInformationToSessionStorage: jest.fn(),
@@ -1509,7 +1510,7 @@ describe("useConnection", () => {
     });
 
     test("appends the activeProfileId to the first proxy connect URL", async () => {
-      // given — a named auth profile is active
+      // given : a named auth profile is active
       const profileProps = {
         ...defaultProps,
         activeProfileId: "pid-active",
@@ -1517,19 +1518,19 @@ describe("useConnection", () => {
 
       const { result } = renderHook(() => useConnection(profileProps));
 
-      // when — the first connect happens
+      // when : the first connect happens
       await act(async () => {
         await result.current.connect();
       });
 
-      // then — the very first proxy URL carries the active profileId
+      // then : the very first proxy URL carries the active profileId
       expect(mockSSETransport.url?.searchParams.get("profileId")).toBe(
         "pid-active",
       );
     });
 
     test("D9B callback wire: profileIdOverride wins over the stale activeProfileId on the first connect", async () => {
-      // given — the hook still holds a stale/previous active id, and the OAuth2
+      // given : the hook still holds a stale/previous active id, and the OAuth2
       // callback has just returned a brand-new profileId before the state
       // re-rendered
       const profileProps = {
@@ -1539,13 +1540,13 @@ describe("useConnection", () => {
 
       const { result } = renderHook(() => useConnection(profileProps));
 
-      // when — the very first connect is issued with the freshly returned
+      // when : the very first connect is issued with the freshly returned
       // profileId override
       await act(async () => {
         await result.current.connect(undefined, 0, "pid-new");
       });
 
-      // then — the first proxy URL carries the newly returned profileId, NOT
+      // then : the first proxy URL carries the newly returned profileId, NOT
       // the stale active id
       expect(mockSSETransport.url?.searchParams.get("profileId")).toBe(
         "pid-new",
@@ -2040,6 +2041,94 @@ describe("useConnection", () => {
       expect(
         mockStreamableHTTPTransport.url?.searchParams.get("profileId"),
       ).toBe("closure-profile-id");
+    });
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Regression tests for disconnect/reconnect
+  // clearing both error banners (issue #54, decision in t_04321ec1).
+  describe("Disconnect/reconnect clears error banners", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockClient.connect.mockResolvedValue(undefined);
+      mockAuth.mockResolvedValue("AUTHORIZED");
+    });
+
+    afterAll(() => {
+      mockClient.connect.mockResolvedValue(undefined);
+      mockAuth.mockResolvedValue("AUTHORIZED");
+    });
+
+    test("disconnect clears connectionError after a failed connect", async () => {
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionError).not.toBeNull();
+
+      await act(async () => {
+        await result.current.disconnect();
+      });
+
+      expect(result.current.connectionError).toBeNull();
+    });
+
+    test("disconnect clears authError and connectionError (issue #54)", async () => {
+      // First: connect fails, setting connectionError
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionError).not.toBeNull();
+
+      // Disconnect : clears both errors
+      await act(async () => {
+        await result.current.disconnect();
+      });
+
+      expect(result.current.connectionError).toBeNull();
+      expect(result.current.authError).toBeNull();
+    });
+
+    test("reconnect after disconnect has no stale errors", async () => {
+      // First connect fails
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+      // Second connect succeeds
+      mockClient.connect.mockResolvedValueOnce(undefined);
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // Connect : fails
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionError).not.toBeNull();
+
+      // Disconnect : clears errors
+      await act(async () => {
+        await result.current.disconnect();
+      });
+      expect(result.current.connectionError).toBeNull();
+      expect(result.current.authError).toBeNull();
+
+      // Reconnect : succeeds, no stale error
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionError).toBeNull();
+      expect(result.current.authError).toBeNull();
     });
   });
 });
