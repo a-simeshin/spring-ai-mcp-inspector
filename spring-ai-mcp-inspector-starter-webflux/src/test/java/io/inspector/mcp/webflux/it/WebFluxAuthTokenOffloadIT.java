@@ -32,6 +32,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webtestclient.autoconfigure.AutoConfigureWebTestClient;
@@ -39,6 +40,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.reactive.server.WebTestClient;
+import tools.jackson.databind.json.JsonMapper;
 
 import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
@@ -50,7 +52,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Integration test: verifies the OAuth token offload at the WebFlux boundary on a real
  * Netty server (RANDOM_PORT). Covers CC register (200 and 502 D9A rollback), auth-code
- * exchange (200 and 502 rollback), and composite eviction.
+ * exchange (200 and 502 rollback), composite eviction, and thread-boundary evidence (the
+ * blocking token HTTP call must execute on boundedElastic, never on the reactor event
+ * loop).
  */
 @Epic("MCP Inspector WebFlux")
 @Feature("Auth token offload (integration)")
@@ -75,6 +79,14 @@ class WebFluxAuthTokenOffloadIT {
 
 	@Autowired
 	private OAuth2AuthCodeTokenExchanger authCodeExchanger;
+
+	@Autowired
+	@Qualifier("ccThreadEvidenceHttpClient")
+	private ThreadEvidenceHttpClient ccEvidenceClient;
+
+	@Autowired
+	@Qualifier("acThreadEvidenceHttpClient")
+	private ThreadEvidenceHttpClient acEvidenceClient;
 
 	private HttpServer stubTokenServer;
 
@@ -115,6 +127,13 @@ class WebFluxAuthTokenOffloadIT {
 
 		assertThat(this.ccTokenManager.credentialCount()).isGreaterThan(0);
 		assertThat(this.ccTokenManager.cacheSize()).isGreaterThan(0);
+
+		// then: thread evidence shows the blocking HTTP call ran on boundedElastic,
+		// never on the reactor event loop
+		assertThat(this.ccEvidenceClient.recordedThreadName()).isNotNull();
+		assertThat(this.ccEvidenceClient.recordedThreadName()).doesNotContain("reactor-http-nio");
+		assertThat(this.ccEvidenceClient.recordedThreadName()).contains("boundedElastic");
+		assertThat(this.ccEvidenceClient.requestCount()).isGreaterThan(0);
 	}
 
 	@Test
@@ -142,6 +161,13 @@ class WebFluxAuthTokenOffloadIT {
 		// D9A rollback: no orphan profile, no retained credentials
 		assertThat(this.ccTokenManager.credentialCount()).isZero();
 		assertThat(this.ccTokenManager.cacheSize()).isZero();
+
+		// then: thread evidence shows the blocking HTTP call ran on boundedElastic,
+		// never on the reactor event loop
+		assertThat(this.ccEvidenceClient.recordedThreadName()).isNotNull();
+		assertThat(this.ccEvidenceClient.recordedThreadName()).doesNotContain("reactor-http-nio");
+		assertThat(this.ccEvidenceClient.recordedThreadName()).contains("boundedElastic");
+		assertThat(this.ccEvidenceClient.requestCount()).isGreaterThan(0);
 	}
 
 	@Test
@@ -185,7 +211,15 @@ class WebFluxAuthTokenOffloadIT {
 			.jsonPath("$.profileId")
 			.isEqualTo(profileId.get());
 
+		// then: tokens were stored
 		assertThat(this.authCodeExchanger.tokenCount()).isGreaterThan(0);
+
+		// then: thread evidence shows the blocking HTTP call ran on boundedElastic,
+		// never on the reactor event loop
+		assertThat(this.acEvidenceClient.recordedThreadName()).isNotNull();
+		assertThat(this.acEvidenceClient.recordedThreadName()).doesNotContain("reactor-http-nio");
+		assertThat(this.acEvidenceClient.recordedThreadName()).contains("boundedElastic");
+		assertThat(this.acEvidenceClient.requestCount()).isGreaterThan(0);
 	}
 
 	@Test
@@ -217,6 +251,7 @@ class WebFluxAuthTokenOffloadIT {
 			.jsonPath("$.state")
 			.value((String state) -> returnedState.set(state));
 
+		// Step 2: exchange with the returned state (fails upstream)
 		this.webTestClient.post()
 			.uri("/mcp-inspector/api/auth-profile/" + profileId.get() + "/exchange")
 			.contentType(MediaType.APPLICATION_JSON)
@@ -230,6 +265,13 @@ class WebFluxAuthTokenOffloadIT {
 			.isEqualTo("token_exchange_failed");
 
 		assertThat(this.authCodeExchanger.tokenCount()).isZero();
+
+		// then: thread evidence shows the blocking HTTP call ran on boundedElastic,
+		// never on the reactor event loop
+		assertThat(this.acEvidenceClient.recordedThreadName()).isNotNull();
+		assertThat(this.acEvidenceClient.recordedThreadName()).doesNotContain("reactor-http-nio");
+		assertThat(this.acEvidenceClient.recordedThreadName()).contains("boundedElastic");
+		assertThat(this.acEvidenceClient.requestCount()).isGreaterThan(0);
 	}
 
 	private void stubTokenEndpoint(final int status, final String body) {
@@ -255,7 +297,40 @@ class WebFluxAuthTokenOffloadIT {
 	}
 
 	@TestConfiguration
-	static class FixedOwnerConfig {
+	static class ThreadEvidenceConfig {
+
+		@Bean
+		ThreadEvidenceHttpClient ccThreadEvidenceHttpClient() {
+			return new ThreadEvidenceHttpClient(java.net.http.HttpClient.newHttpClient());
+		}
+
+		@Bean
+		ThreadEvidenceHttpClient acThreadEvidenceHttpClient() {
+			return new ThreadEvidenceHttpClient(java.net.http.HttpClient.newHttpClient());
+		}
+
+		@Bean
+		@Primary
+		OAuth2ClientCredentialsTokenManager ccTokenManagerWithEvidence(final AuthProfileStore authProfileStore,
+				final OAuth2AuthCodeTokenExchanger authCodeExchanger,
+				@Qualifier("ccThreadEvidenceHttpClient") final ThreadEvidenceHttpClient ccThreadEvidenceHttpClient) {
+			final OAuth2ClientCredentialsTokenManager manager = new OAuth2ClientCredentialsTokenManager(
+					ccThreadEvidenceHttpClient, new JsonMapper());
+			final io.inspector.mcp.core.auth.TokenEvictor compositeEvictor = (profileId) -> {
+				manager.evict(profileId);
+				authCodeExchanger.evict(profileId);
+			};
+			authProfileStore.setTokenEvictor(compositeEvictor);
+			manager.setGenerationGuard(authProfileStore::currentGeneration);
+			return manager;
+		}
+
+		@Bean
+		@Primary
+		OAuth2AuthCodeTokenExchanger acExchangerWithEvidence(
+				@Qualifier("acThreadEvidenceHttpClient") final ThreadEvidenceHttpClient acThreadEvidenceHttpClient) {
+			return new OAuth2AuthCodeTokenExchanger(acThreadEvidenceHttpClient, new JsonMapper());
+		}
 
 		@Bean
 		@Primary
