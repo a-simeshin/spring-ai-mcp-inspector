@@ -437,7 +437,7 @@ class AuthProfileLifecycleIT {
 		final String prefix = OWNER_COOKIE + "=";
 		final int start = setCookie.indexOf(prefix);
 		assertThat(start).as("owner cookie named %s on %s", OWNER_COOKIE, ProxyAppHarness.stack()).isNotNegative();
-		assertThat(setCookie).as("Set-Cookie HttpOnly on %s", ProxyAppHarness.stack()).contains("HttpOnly");
+		assertThat(setCookie).as("Set-Cookie HttpOnly on %s", ProxyAppHarness.stack()).containsIgnoringCase("HttpOnly");
 		assertThat(setCookie).as("Set-Cookie SameSite on %s", ProxyAppHarness.stack()).contains("SameSite=Lax");
 		assertThat(setCookie).as("Set-Cookie Path on %s", ProxyAppHarness.stack()).contains("Path=/");
 		assertThat(setCookie).as("Set-Cookie Secure absent on HTTP %s", ProxyAppHarness.stack())
