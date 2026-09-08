@@ -2527,7 +2527,7 @@ class InspectorUiIT {
 		@BeforeAll
 		void bootAndConnect() {
 			startApp(new Combo("sse"));
-			openAndConnectWithProfile();
+			openAndConnect();
 		}
 
 		@AfterAll
@@ -2632,7 +2632,7 @@ class InspectorUiIT {
 		@BeforeAll
 		void bootAndConnect() {
 			startApp(new Combo("sse"));
-			openAndConnectWithProfile();
+			openAndConnect();
 		}
 
 		@AfterAll
@@ -2718,7 +2718,7 @@ class InspectorUiIT {
 		@BeforeAll
 		void bootAndConnect() {
 			startApp(new Combo("sse"));
-			openAndConnectWithProfile();
+			openAndConnect();
 		}
 
 		@AfterAll
@@ -2820,7 +2820,7 @@ class InspectorUiIT {
 		@BeforeAll
 		void bootAndConnect() {
 			startApp(new Combo("sse"));
-			openAndConnectWithProfile();
+			openAndConnect();
 		}
 
 		@AfterAll
