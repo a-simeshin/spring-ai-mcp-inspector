@@ -17,6 +17,7 @@
 package io.inspector.mcp.core.proxy;
 
 import java.net.URI;
+import java.net.http.HttpRequest;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -222,6 +223,9 @@ public class ProxyTransportFactory {
 		if (!hasAuth && !hasCustom) {
 			return null;
 		}
+		if (hasCustom) {
+			validateHeaderNames(customHeaders);
+		}
 		return (builder, method, endpoint, body, context) -> {
 			if (hasAuth) {
 				builder.setHeader("Authorization", authorization);
@@ -229,16 +233,34 @@ public class ProxyTransportFactory {
 			if (hasCustom) {
 				customHeaders.forEach((name, value) -> {
 					if (name != null && !name.isBlank() && value != null) {
-						try {
-							builder.setHeader(name, value);
-						}
-						catch (final IllegalArgumentException ignored) {
-							// restricted header names are silently skipped
-						}
+						builder.setHeader(name, value);
 					}
 				});
 			}
 		};
+	}
+
+	/**
+	 * Validates that all custom header names are allowed by the JDK's
+	 * {@link HttpRequest.Builder} - throws {@link IllegalArgumentException} at transport
+	 * build time for any restricted name. The message contains the header name and the
+	 * JDK's reason, but NEVER the header value.
+	 * <p>
+	 * Null and blank header names are silently skipped (they are guarded by the caller's
+	 * null/blank check in the customizer lambda).
+	 * @param customHeaders the headers to validate (never {@code null})
+	 */
+	private static void validateHeaderNames(final Map<String, String> customHeaders) {
+		for (final String name : customHeaders.keySet()) {
+			if (name != null && !name.isBlank()) {
+				try {
+					HttpRequest.newBuilder().setHeader(name, "probe");
+				}
+				catch (final IllegalArgumentException ex) {
+					throw new IllegalArgumentException("Restricted custom header name: " + name, ex);
+				}
+			}
+		}
 	}
 
 	/**

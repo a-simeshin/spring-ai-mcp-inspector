@@ -161,19 +161,20 @@ class ProxyTransportFactoryTests {
 		}
 
 		@Test
-		@Story("Restricted header swallowed")
+		@Story("Restricted header diagnostic")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() does not propagate an IllegalArgumentException caused by a restricted "
-				+ "custom header name — the transport is still returned")
-		void openSse_withRestrictedCustomHeaderName_doesNotThrow() {
+		@Description("openSse() throws IllegalArgumentException at transport build time when a custom "
+				+ "header name is restricted - the message contains the name but never the value")
+		void openSse_withRestrictedCustomHeaderName_throwsIllegalArgument() {
 			// given — "host" is a restricted header in Java's HttpClient
 			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
 
-			// when & then — must not throw
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
-					Map.of("host", "evil.example.com"));
-
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			// when & then
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+					Map.of("host", "evil.example.com")))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("host")
+				.hasMessageNotContaining("evil.example.com");
 		}
 
 	}
@@ -292,19 +293,20 @@ class ProxyTransportFactoryTests {
 		}
 
 		@Test
-		@Story("Restricted header swallowed")
+		@Story("Restricted header diagnostic")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openStreamable() does not propagate an IllegalArgumentException caused by a restricted "
-				+ "custom header name — the transport is still returned")
-		void openStreamable_withRestrictedCustomHeaderName_doesNotThrow() {
+		@Description("openStreamable() throws IllegalArgumentException at transport build time when a custom "
+				+ "header name is restricted - the message contains the name but never the value")
+		void openStreamable_withRestrictedCustomHeaderName_throwsIllegalArgument() {
 			// given — "host" is a restricted header in Java's HttpClient
 			final URI mcpUri = URI.create("http://127.0.0.1:8080/mcp");
 
-			// when & then — must not throw
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri, null,
-					Map.of("host", "evil.example.com"));
-
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientStreamableHttpTransport.class);
+			// when & then
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri, null,
+					Map.of("host", "evil.example.com")))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("host")
+				.hasMessageNotContaining("evil.example.com");
 		}
 
 	}
