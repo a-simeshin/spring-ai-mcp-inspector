@@ -214,6 +214,122 @@ class TokenOffloadRaceTests {
 		assertThat(store.resolve("owner-a", profileId)).isEmpty();
 	}
 
+	@Test
+	void deterministicInterleaving_generationReadThenDeleteThenPut_ccZeroCounts() throws Exception {
+		// given: a controllable generation supplier that pauses after each read
+		final AuthProfileStore store = new AuthProfileStore();
+		final java.util.concurrent.CountDownLatch generationReadLatch = new java.util.concurrent.CountDownLatch(1);
+		final java.util.concurrent.CountDownLatch deleteLatch = new java.util.concurrent.CountDownLatch(1);
+		final java.util.function.LongSupplier pausingGuard = () -> {
+			final long g = store.currentGeneration();
+			generationReadLatch.countDown();
+			try {
+				deleteLatch.await(5, TimeUnit.SECONDS);
+			}
+			catch (final InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+			return g;
+		};
+		final OAuth2ClientCredentialsTokenManager manager = new OAuth2ClientCredentialsTokenManager(
+				HttpClient.newHttpClient(), new JsonMapper(), pausingGuard);
+		final OAuth2AuthCodeTokenExchanger exchanger = new OAuth2AuthCodeTokenExchanger();
+		store.setTokenEvictor((profileId) -> {
+			manager.evict(profileId);
+			exchanger.evict(profileId);
+		});
+
+		final OAuth2Profile profile = new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS,
+				"http://127.0.0.1:" + this.stubPort + "/token", "cid", "sec", null, null, null, null, null);
+		final String profileId = store.register("owner-a", profile);
+		final long expectedGeneration = store.currentGeneration();
+
+		// when: storeIfCurrent starts and pauses after reading generation
+		final CompletableFuture<Void> storeFuture = CompletableFuture.runAsync(() -> {
+			try {
+				manager.storeIfCurrent(profileId, expectedGeneration,
+						new OAuth2ClientCredentialsTokenManager.TokenHandle("tok-1", Instant.now().plusSeconds(60)));
+			}
+			catch (final StaleProfileGenerationException ex) {
+				// expected after delete
+			}
+		});
+
+		// Wait until generation has been read (inside the lock, before the put)
+		generationReadLatch.await(5, TimeUnit.SECONDS);
+
+		// Concurrent DELETE: bumps generation and evicts
+		final boolean deleted = store.delete("owner-a", profileId);
+		assertThat(deleted).isTrue();
+
+		// Release the paused generation read
+		deleteLatch.countDown();
+		storeFuture.get(10, TimeUnit.SECONDS);
+
+		// then: no resurrection of credentials or cache
+		assertThat(manager.credentialCount()).isZero();
+		assertThat(manager.cacheSize()).isZero();
+		assertThat(store.resolve("owner-a", profileId)).isEmpty();
+	}
+
+	@Test
+	void deterministicInterleaving_generationReadThenDeleteThenPut_authCodeZeroTokens() throws Exception {
+		// given: a controllable generation supplier that pauses after each read
+		final AuthProfileStore store = new AuthProfileStore();
+		final java.util.concurrent.CountDownLatch generationReadLatch = new java.util.concurrent.CountDownLatch(1);
+		final java.util.concurrent.CountDownLatch deleteLatch = new java.util.concurrent.CountDownLatch(1);
+		final java.util.function.LongSupplier pausingGuard = () -> {
+			final long g = store.currentGeneration();
+			generationReadLatch.countDown();
+			try {
+				deleteLatch.await(5, TimeUnit.SECONDS);
+			}
+			catch (final InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+			return g;
+		};
+		final OAuth2AuthCodeTokenExchanger exchanger = new OAuth2AuthCodeTokenExchanger(HttpClient.newHttpClient(),
+				new JsonMapper(), pausingGuard);
+		store.setTokenEvictor(exchanger);
+
+		final String verifier = "test-verifier";
+		final String challenge = s256(verifier);
+		final OAuth2Profile profile = new OAuth2Profile("ac", OAuth2GrantMode.AUTHORIZATION_CODE,
+				"http://127.0.0.1:" + this.stubPort + "/token", "cid", null, null, "http://idp/auth", "http://app/cb",
+				challenge, "S256");
+		final String profileId = store.register("owner-a", profile);
+		exchanger.mintState("owner-a", profileId);
+		final long expectedGeneration = store.currentGeneration();
+
+		// when: storeTokensIfCurrent starts and pauses after reading generation
+		final CompletableFuture<Void> storeFuture = CompletableFuture.runAsync(() -> {
+			try {
+				exchanger.storeTokensIfCurrent(profileId, expectedGeneration,
+						new OAuth2AuthCodeTokenExchanger.TokenHandle("tok-1", "rt-1", Instant.now().plusSeconds(60)));
+			}
+			catch (final StaleProfileGenerationException ex) {
+				// expected after delete
+			}
+		});
+
+		// Wait until generation has been read (inside the lock, before the put)
+		generationReadLatch.await(5, TimeUnit.SECONDS);
+
+		// Concurrent DELETE: bumps generation and evicts
+		final boolean deleted = store.delete("owner-a", profileId);
+		assertThat(deleted).isTrue();
+
+		// Release the paused generation read
+		deleteLatch.countDown();
+		storeFuture.get(10, TimeUnit.SECONDS);
+
+		// then: no resurrection of tokens or states
+		assertThat(exchanger.tokenCount()).isZero();
+		assertThat(exchanger.stateCount()).isZero();
+		assertThat(store.resolve("owner-a", profileId)).isEmpty();
+	}
+
 	private void stubTokenEndpointWithLatch(final int status, final String body) {
 		this.stubServer.createContext("/token", (exchange) -> {
 			try {

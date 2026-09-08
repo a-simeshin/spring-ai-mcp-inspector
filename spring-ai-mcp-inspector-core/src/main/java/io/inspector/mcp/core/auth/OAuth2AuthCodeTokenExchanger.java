@@ -83,9 +83,6 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 	/** Exchanged tokens keyed by profile id (never returned to the browser). */
 	private final ConcurrentMap<String, TokenHandle> tokens = new ConcurrentHashMap<>();
 
-	/** Lock for the generation-guarded token store. */
-	private final Object tokenStoreLock = new Object();
-
 	/** Outbound HTTP client (JDK). */
 	private final java.net.http.HttpClient httpClient;
 
@@ -94,6 +91,9 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 
 	/** Generation guard for atomic token storage. */
 	private LongSupplier generationGuard = () -> 0L;
+
+	/** Per-profile locks for the atomic store-tokens contract. */
+	private final ConcurrentMap<String, Object> tokenStoreLocks = new ConcurrentHashMap<>();
 
 	public OAuth2AuthCodeTokenExchanger() {
 		this(java.net.http.HttpClient.newBuilder().connectTimeout(REQUEST_TIMEOUT).build(), new JsonMapper(), () -> 0L);
@@ -273,7 +273,8 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 	public void storeTokensIfCurrent(final String profileId, final long expectedGeneration, final TokenHandle handle) {
 		Assert.hasText(profileId, "profileId must not be blank");
 		Assert.notNull(handle, "handle must not be null");
-		synchronized (this.tokenStoreLock) {
+		final Object lock = this.tokenStoreLocks.computeIfAbsent(profileId, (key) -> new Object());
+		synchronized (lock) {
 			final long currentGeneration = this.generationGuard.getAsLong();
 			if (currentGeneration != expectedGeneration) {
 				throw new StaleProfileGenerationException(profileId, expectedGeneration, currentGeneration);
@@ -305,8 +306,11 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 		if (profileId == null) {
 			return;
 		}
-		this.states.remove(profileId);
-		this.tokens.remove(profileId);
+		final Object lock = this.tokenStoreLocks.computeIfAbsent(profileId, (key) -> new Object());
+		synchronized (lock) {
+			this.states.remove(profileId);
+			this.tokens.remove(profileId);
+		}
 		LOG.debug("oauth2-authcode[{}] evicted state and tokens", profileId);
 	}
 
