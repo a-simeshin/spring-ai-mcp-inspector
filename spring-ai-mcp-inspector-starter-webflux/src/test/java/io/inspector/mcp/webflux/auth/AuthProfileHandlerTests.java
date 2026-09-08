@@ -44,6 +44,7 @@ import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.auth.OAuth2GrantMode;
 import io.inspector.mcp.core.auth.OAuth2Profile;
+import io.inspector.mcp.core.auth.StaleProfileGenerationException;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.ProxyUpstreamException;
 import io.inspector.mcp.webflux.router.InspectorRouterConfig;
@@ -53,6 +54,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -251,6 +253,45 @@ class AuthProfileHandlerTests {
 				.isEqualTo(502);
 			verify(AuthProfileHandlerTests.this.store).delete(OWNER_A, "pid-cc");
 			verify(AuthProfileHandlerTests.this.tokenManager).evict("pid-cc");
+		}
+
+		@Test
+		@Story("Client-credentials")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("register() with a stale generation returns 404 token_exchange_failed")
+		void register_staleGeneration_returns404() {
+			// given
+			given(AuthProfileHandlerTests.this.store.register(eq(OWNER_A), any(AuthProfile.class)))
+				.willReturn("pid-cc");
+			given(AuthProfileHandlerTests.this.store.currentGeneration()).willReturn(1L);
+			final OAuth2ClientCredentialsTokenManager.TokenHandle handle = new OAuth2ClientCredentialsTokenManager.TokenHandle(
+					"tok-1", Instant.now().plusSeconds(60));
+			given(AuthProfileHandlerTests.this.tokenManager.acquireAsync(eq("pid-cc"), any(OAuth2Profile.class)))
+				.willReturn(Mono.just(handle));
+			given(AuthProfileHandlerTests.this.store.currentGeneration()).willReturn(1L, 2L);
+			// The storeIfCurrent call must throw StaleProfileGenerationException because
+			// the
+			// generation captured before acquireAsync (1L) no longer matches the current
+			// (2L).
+			willThrow(new StaleProfileGenerationException("pid-cc", 1L, 2L))
+				.given(AuthProfileHandlerTests.this.tokenManager)
+				.storeIfCurrent(eq("pid-cc"), eq(1L), eq(handle), any(OAuth2Profile.class));
+
+			// when/then
+			withOwner(AuthProfileHandlerTests.this.client.post()
+				.uri(API_BASE)
+				.contentType(MediaType.APPLICATION_JSON)
+				.bodyValue(
+						"{\"profile\": {\"name\": \"cc-stale\", \"type\": \"OAUTH2\", \"grantMode\": \"CLIENT_CREDENTIALS\", "
+								+ "\"tokenUrl\": \"https://t/token\", \"clientId\": \"cid\", \"clientSecret\": \"sec\"}}"))
+				.exchange()
+				.expectStatus()
+				.isNotFound()
+				.expectBody()
+				.jsonPath("$.code")
+				.isEqualTo("token_exchange_failed")
+				.jsonPath("$.status")
+				.isEqualTo(404);
 		}
 
 		@Test
@@ -496,6 +537,72 @@ class AuthProfileHandlerTests {
 			verify(AuthProfileHandlerTests.this.exchanger).storeTokensIfCurrent(eq("pid-ac"), eq(0L),
 					any(OAuth2AuthCodeTokenExchanger.TokenHandle.class));
 			verify(AuthProfileHandlerTests.this.store).markActive(OWNER_A, "pid-ac");
+		}
+
+		@Test
+		@Story("Exchange")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("exchange() with a stale generation returns 404 token_exchange_failed")
+		void exchange_staleGeneration_returns404() {
+			// given
+			final OAuth2Profile pending = new OAuth2Profile("ac", OAuth2GrantMode.AUTHORIZATION_CODE, "https://t/token",
+					"cid", null, null, "https://idp/authorize", "https://app/cb", "ch", "S256");
+			given(AuthProfileHandlerTests.this.store.resolvePending(OWNER_A, "pid-ac"))
+				.willReturn(Optional.of(pending));
+			given(AuthProfileHandlerTests.this.exchanger.verifyAndConsumeState(OWNER_A, "pid-ac", "server-state-1"))
+				.willReturn(true);
+			given(AuthProfileHandlerTests.this.exchanger.exchangeAsync(pending, "auth-code-1", "verifier-1"))
+				.willReturn(Mono
+					.just(new OAuth2AuthCodeTokenExchanger.TokenHandle("at-1", "rt-1", Instant.now().plusSeconds(60))));
+			given(AuthProfileHandlerTests.this.store.currentGeneration()).willReturn(1L, 2L);
+			willThrow(new StaleProfileGenerationException("pid-ac", 1L, 2L))
+				.given(AuthProfileHandlerTests.this.exchanger)
+				.storeTokensIfCurrent(eq("pid-ac"), eq(1L), any(OAuth2AuthCodeTokenExchanger.TokenHandle.class));
+
+			// when/then
+			withOwner(AuthProfileHandlerTests.this.client.post()
+				.uri(API_BASE + "/pid-ac/exchange")
+				.contentType(MediaType.APPLICATION_JSON)
+				.bodyValue(EXCHANGE_BODY)).exchange()
+				.expectStatus()
+				.isNotFound()
+				.expectBody()
+				.jsonPath("$.code")
+				.isEqualTo("token_exchange_failed")
+				.jsonPath("$.status")
+				.isEqualTo(404);
+			verify(AuthProfileHandlerTests.this.store, never()).markActive(anyString(), anyString());
+		}
+
+		@Test
+		@Story("Exchange")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("exchange() when markActive returns false evicts tokens and returns 404")
+		void exchange_markActiveFalse_evictsTokensAndReturns404() {
+			// given
+			final OAuth2Profile pending = new OAuth2Profile("ac", OAuth2GrantMode.AUTHORIZATION_CODE, "https://t/token",
+					"cid", null, null, "https://idp/authorize", "https://app/cb", "ch", "S256");
+			given(AuthProfileHandlerTests.this.store.resolvePending(OWNER_A, "pid-ac"))
+				.willReturn(Optional.of(pending));
+			given(AuthProfileHandlerTests.this.exchanger.verifyAndConsumeState(OWNER_A, "pid-ac", "server-state-1"))
+				.willReturn(true);
+			given(AuthProfileHandlerTests.this.exchanger.exchangeAsync(pending, "auth-code-1", "verifier-1"))
+				.willReturn(Mono
+					.just(new OAuth2AuthCodeTokenExchanger.TokenHandle("at-1", "rt-1", Instant.now().plusSeconds(60))));
+			given(AuthProfileHandlerTests.this.store.currentGeneration()).willReturn(0L);
+			given(AuthProfileHandlerTests.this.store.markActive(OWNER_A, "pid-ac")).willReturn(false);
+
+			// when/then
+			withOwner(AuthProfileHandlerTests.this.client.post()
+				.uri(API_BASE + "/pid-ac/exchange")
+				.contentType(MediaType.APPLICATION_JSON)
+				.bodyValue(EXCHANGE_BODY)).exchange()
+				.expectStatus()
+				.isNotFound()
+				.expectBody()
+				.jsonPath("$.code")
+				.isEqualTo("token_exchange_failed");
+			verify(AuthProfileHandlerTests.this.exchanger).evict("pid-ac");
 		}
 
 		@Test
