@@ -18,6 +18,7 @@ package io.inspector.mcp.core.proxy;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
@@ -383,6 +384,99 @@ class SsePreflightStreamCountTests {
 		assertThat(this.stub.sseStreamCount()).as("SSE streams opened (delegate only)").isEqualTo(1);
 		assertThat(this.stub.activeExchangeCount()).as("Active exchanges (the real SSE stream)").isEqualTo(1);
 		assertThat(this.stub.postCount()).as("POST requests received (1 rejected)").isGreaterThanOrEqualTo(1);
+	}
+
+	@Test
+	@Story("Post 401 retry with refreshed token")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Scope decision: the full OAuth2 refresh-retry E2E lives on the not-yet-merged "
+			+ "auth-profiles-2x branch (ccProfile_401_refresh_retry_connected). This test "
+			+ "covers the closest level on develop/2.x that genuinely exercises retry "
+			+ "semantics: a client-side retry where the first transport's POST is rejected "
+			+ "with 401, credentials are refreshed (new Authorization value), and the retry "
+			+ "through a second transport succeeds and consumes an enqueued response. "
+			+ "This proves the transport can participate in a refresh-retry flow without " + "leaking exchanges.")
+	@DisplayName("Post 401 retry: refreshed token accepted, response consumed, zero leaks")
+	void post401Retry_whenRefreshedToken_retrySucceedsAndResponseConsumed() throws Exception {
+		// given
+		this.stub = new SseStreamCountingStub();
+		this.stub.rejectPosts(1);
+		final ProxyTransportFactory factory = new ProxyTransportFactory(new JsonMapper());
+
+		// First attempt: stale credentials
+		final McpClientTransport firstAttempt = factory.buildSse(URI.create(this.stub.sseUrl()), "Bearer stale-token",
+				null);
+		this.transport = firstAttempt;
+
+		// when : connect succeeds (HEAD preflight returns 200, delegate SSE stream opens)
+		this.transport.connect((inbound) -> inbound).then(Mono.fromRunnable(() -> {
+			try {
+				Thread.sleep(500);
+			}
+			catch (final InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+		})).block(Duration.ofSeconds(10));
+
+		// then : first POST is rejected with 401
+		final McpSchema.JSONRPCNotification firstMessage = new McpSchema.JSONRPCNotification("test");
+		assertThatThrownBy(() -> firstAttempt.sendMessage(firstMessage).block(Duration.ofSeconds(5)))
+			.isInstanceOf(Exception.class);
+
+		// Close the first attempt: the client discards the stale session.
+		firstAttempt.closeGracefully().block(Duration.ofSeconds(2));
+		this.transport = null;
+
+		// Allow a short delay for the server to process the close.
+		Thread.sleep(500);
+
+		// when : retry with refreshed credentials through a new transport
+		final McpClientTransport retryAttempt = factory.buildSse(URI.create(this.stub.sseUrl()),
+				"Bearer refreshed-token", null);
+		this.transport = retryAttempt;
+
+		retryAttempt.connect((inbound) -> inbound).then(Mono.fromRunnable(() -> {
+			try {
+				Thread.sleep(500);
+			}
+			catch (final InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+		})).block(Duration.ofSeconds(10));
+
+		// then : the retry POST succeeds (rejectPosts was already consumed by the first
+		// attempt)
+		final McpSchema.JSONRPCNotification retryMessage = new McpSchema.JSONRPCNotification("test-retry");
+		retryAttempt.sendMessage(retryMessage).block(Duration.ofSeconds(5));
+
+		// Allow a short delay for the stub to deliver any queued response.
+		Thread.sleep(300);
+
+		// then : assertions
+		// HEAD probes: one per transport connect (first attempt + retry attempt)
+		assertThat(this.stub.headCount()).as("HEAD preflight probes (one per transport)").isEqualTo(2);
+		// SSE streams: one per transport (first attempt's delegate + retry attempt's
+		// delegate)
+		assertThat(this.stub.sseStreamCount()).as("SSE streams opened (first + retry)").isEqualTo(2);
+		// Only the retry attempt's stream is active; the first attempt was closed.
+		assertThat(this.stub.activeExchangeCount()).as("Active exchanges (only the retry SSE stream)").isEqualTo(1);
+		// Both POST attempts observed by the stub.
+		assertThat(this.stub.postCount()).as("POST requests received (1 rejected + 1 accepted)").isEqualTo(2);
+		// The Authorization values differ: the first attempt used the stale token, the
+		// retry used the refreshed one.
+		final List<String> authValues = this.stub.postAuthorizationValues();
+		assertThat(authValues).as("Authorization values from POST attempts").hasSize(2);
+		assertThat(authValues.get(0)).as("First POST Authorization").isEqualTo("Bearer stale-token");
+		assertThat(authValues.get(1)).as("Retry POST Authorization").isEqualTo("Bearer refreshed-token");
+		// Close the retry attempt before asserting zero leaks. The retry transport's
+		// SSE stream is still active, so pendingExchangeCount is 1 at this point.
+		retryAttempt.closeGracefully().block(Duration.ofSeconds(2));
+		this.transport = null;
+		// Allow a short delay for the server to process the close.
+		Thread.sleep(500);
+		// No orphaned exchanges after the full sequence.
+		assertThat(this.stub.pendingExchangeCount()).as("No pending exchanges after full sequence").isEqualTo(0);
+		assertThat(this.stub.activeExchangeCount()).as("No active exchanges after full sequence").isEqualTo(0);
 	}
 
 	@Test

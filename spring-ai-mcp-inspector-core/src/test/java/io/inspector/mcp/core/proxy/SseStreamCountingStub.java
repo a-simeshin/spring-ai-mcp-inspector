@@ -20,6 +20,9 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -99,6 +102,12 @@ final class SseStreamCountingStub implements AutoCloseable {
 
 	/** Number of exchanges currently pending (HEAD or GET, opened but not yet closed). */
 	private final AtomicInteger pendingExchangeCount = new AtomicInteger();
+
+	/** Authorization header values from POST /message requests, in order. */
+	private final List<String> postAuthorizationValues = Collections.synchronizedList(new ArrayList<>());
+
+	/** Number of responses consumed from the SSE queue by the SSE loop. */
+	private final AtomicInteger responseDeliveryCount = new AtomicInteger();
 
 	int pendingExchangeCount() {
 		return this.pendingExchangeCount.get();
@@ -181,6 +190,16 @@ final class SseStreamCountingStub implements AutoCloseable {
 	 */
 	int closedFallbackGetCount() {
 		return this.closedFallbackGetCount.get();
+	}
+
+	/** Authorization header values from POST /message requests, in order. */
+	List<String> postAuthorizationValues() {
+		return List.copyOf(this.postAuthorizationValues);
+	}
+
+	/** Number of responses consumed from the SSE queue by the SSE loop. */
+	int responseDeliveryCount() {
+		return this.responseDeliveryCount.get();
 	}
 
 	void setHeadStatus(final int status) {
@@ -312,6 +331,7 @@ final class SseStreamCountingStub implements AutoCloseable {
 				if (response != null) {
 					out.write(("event: message\ndata: " + response + "\n\n").getBytes(StandardCharsets.UTF_8));
 					out.flush();
+					this.responseDeliveryCount.incrementAndGet();
 					keepAlive = 0;
 				}
 				// Every 4 iterations (~200ms), write a keep-alive to detect
@@ -338,6 +358,8 @@ final class SseStreamCountingStub implements AutoCloseable {
 
 	private void handleMessage(final HttpExchange exchange) throws IOException {
 		final int n = this.postCount.incrementAndGet();
+		final String auth = exchange.getRequestHeaders().getFirst("Authorization");
+		this.postAuthorizationValues.add((auth != null) ? auth : "");
 		if (n <= this.rejectPosts) {
 			exchange.sendResponseHeaders(401, -1);
 			exchange.close();
