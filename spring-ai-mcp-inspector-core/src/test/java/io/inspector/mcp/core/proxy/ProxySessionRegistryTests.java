@@ -17,6 +17,7 @@
 package io.inspector.mcp.core.proxy;
 
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
@@ -99,6 +100,62 @@ class ProxySessionRegistryTests {
 
 			// then
 			assertThat(found).isNull();
+		}
+
+		@Test
+		@Story("Concurrent put() race")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("When two threads concurrently put() a session under the same key,"
+				+ " the losing session's transport is closed and the registry contains exactly one entry"
+				+ " - regression test for the lost-race fix in put()")
+		void put_concurrentSameKey_orphanedSessionIsClosed() throws Exception {
+			// given
+			final McpClientTransport transportA = mockTransport();
+			final McpClientTransport transportB = mockTransport();
+			final ProxySession sessionA = sessionWith("s-race", transportA);
+			final ProxySession sessionB = sessionWith("s-race", transportB);
+			final CountDownLatch bothReady = new CountDownLatch(2);
+			final CountDownLatch go = new CountDownLatch(1);
+
+			// when - two threads race to put() the same key
+			final Thread t1 = new Thread(() -> {
+				bothReady.countDown();
+				try {
+					go.await();
+				}
+				catch (final InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+				ProxySessionRegistryTests.this.registry.put(sessionA);
+			});
+			final Thread t2 = new Thread(() -> {
+				bothReady.countDown();
+				try {
+					go.await();
+				}
+				catch (final InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+				ProxySessionRegistryTests.this.registry.put(sessionB);
+			});
+
+			t1.start();
+			t2.start();
+			bothReady.await();
+			go.countDown();
+			t1.join(1000);
+			t2.join(1000);
+
+			// then
+			// Exactly one session remains in the registry
+			assertThat(ProxySessionRegistryTests.this.registry.size()).isEqualTo(1);
+			final ProxySession survivor = ProxySessionRegistryTests.this.registry.get("s-race");
+			assertThat(survivor).isNotNull();
+
+			// The loser (the one not in the registry) must have its transport closed
+			final ProxySession loser = (survivor == sessionA) ? sessionB : sessionA;
+			final McpClientTransport loserTransport = (loser == sessionB) ? transportB : transportA;
+			verify(loserTransport).closeGracefully();
 		}
 
 	}
@@ -215,7 +272,7 @@ class ProxySessionRegistryTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("setInactivityBudget() with a positive Duration is accepted; reap() uses it to evict idle sessions")
 		void setInactivityBudget_withPositiveDuration_isAccepted() throws InterruptedException {
-			// given — 1 ms budget so any session is immediately idle
+			// given - 1 ms budget so any session is immediately idle
 			ProxySessionRegistryTests.this.registry.setInactivityBudget(Duration.ofMillis(1));
 			ProxySessionRegistryTests.this.registry.put(sessionWith("s-1", mockTransport()));
 			Thread.sleep(5);
@@ -223,7 +280,7 @@ class ProxySessionRegistryTests {
 			// when
 			ProxySessionRegistryTests.this.registry.reap();
 
-			// then — session was idle past the 1 ms budget and was evicted
+			// then - session was idle past the 1 ms budget and was evicted
 			assertThat(ProxySessionRegistryTests.this.registry.size()).isZero();
 		}
 
@@ -236,10 +293,10 @@ class ProxySessionRegistryTests {
 			ProxySessionRegistryTests.this.registry.setInactivityBudget(null);
 			ProxySessionRegistryTests.this.registry.put(sessionWith("s-1", mockTransport()));
 
-			// when — reap immediately; the session was just created so it is not idle
+			// when - reap immediately; the session was just created so it is not idle
 			ProxySessionRegistryTests.this.registry.reap();
 
-			// then — session was kept because the 30-minute default budget is not
+			// then - session was kept because the 30-minute default budget is not
 			// exceeded
 			assertThat(ProxySessionRegistryTests.this.registry.size()).isEqualTo(1);
 		}
@@ -256,7 +313,7 @@ class ProxySessionRegistryTests {
 			// when
 			ProxySessionRegistryTests.this.registry.reap();
 
-			// then — default 30-minute budget keeps the freshly-created session alive
+			// then - default 30-minute budget keeps the freshly-created session alive
 			assertThat(ProxySessionRegistryTests.this.registry.size()).isEqualTo(1);
 		}
 
@@ -272,7 +329,7 @@ class ProxySessionRegistryTests {
 			// when
 			ProxySessionRegistryTests.this.registry.reap();
 
-			// then — default 30-minute budget keeps the freshly-created session alive
+			// then - default 30-minute budget keeps the freshly-created session alive
 			assertThat(ProxySessionRegistryTests.this.registry.size()).isEqualTo(1);
 		}
 
@@ -296,7 +353,7 @@ class ProxySessionRegistryTests {
 			// when
 			ProxySessionRegistryTests.this.registry.reap();
 
-			// then — the session was removed from the registry
+			// then - the session was removed from the registry
 			assertThat(ProxySessionRegistryTests.this.registry.size()).isZero();
 			assertThat(ProxySessionRegistryTests.this.registry.get("s-1")).isNull();
 		}
@@ -327,7 +384,7 @@ class ProxySessionRegistryTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("reap() keeps a session that is open and whose lastActivity is within the budget")
 		void reap_withRecentlyActiveSession_keepsIt() {
-			// given — default 30-minute budget; session was just created
+			// given - default 30-minute budget; session was just created
 			ProxySessionRegistryTests.this.registry.put(sessionWith("s-live", mockTransport()));
 
 			// when
@@ -359,7 +416,7 @@ class ProxySessionRegistryTests {
 		@Story("Shutdown ordering")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("A session registered after the shutdown sweep is closed immediately instead of being "
-				+ "silently kept — a GET /sse still connecting upstream when ContextClosedEvent fires used to "
+				+ "silently kept - a GET /sse still connecting upstream when ContextClosedEvent fires used to "
 				+ "land in the map afterwards and hold its stream open for the whole graceful phase")
 		void put_afterCloseAll_closesTheLateSessionAndDoesNotRegisterIt() {
 			// given
