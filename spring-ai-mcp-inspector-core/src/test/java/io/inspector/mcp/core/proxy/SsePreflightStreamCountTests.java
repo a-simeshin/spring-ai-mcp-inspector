@@ -244,10 +244,12 @@ class SsePreflightStreamCountTests {
 			.isInstanceOf(McpTransportException.class)
 			.hasMessageContaining("timed out");
 
-		// then
+		// then : immediate server-side close assertion
 		assertThat(this.stub.headCount()).as("HEAD preflight probes").isEqualTo(1);
 		assertThat(this.stub.sseStreamCount()).as("No SSE stream opened on timeout").isEqualTo(0);
 		assertThat(this.stub.activeExchangeCount()).as("No leaked exchanges after timeout").isEqualTo(0);
+		assertThat(this.stub.serverClosedExchangeCount()).as("Server observed close after timeout").isEqualTo(1);
+		assertThat(this.stub.pendingExchangeCount()).as("No pending exchanges after timeout").isEqualTo(0);
 	}
 
 	@Test
@@ -273,10 +275,12 @@ class SsePreflightStreamCountTests {
 		disposable.dispose();
 		cancelled.complete(null);
 
-		// then
+		// then : immediate server-side close assertion
 		assertThat(this.stub.headCount()).as("HEAD preflight probes").isEqualTo(1);
 		assertThat(this.stub.sseStreamCount()).as("No SSE stream opened on cancellation").isEqualTo(0);
 		assertThat(this.stub.activeExchangeCount()).as("No leaked exchanges after cancellation").isEqualTo(0);
+		assertThat(this.stub.serverClosedExchangeCount()).as("Server observed close after cancellation").isEqualTo(1);
+		assertThat(this.stub.pendingExchangeCount()).as("No pending exchanges after cancellation").isEqualTo(0);
 	}
 
 	@Test
@@ -498,10 +502,50 @@ class SsePreflightStreamCountTests {
 			.isInstanceOf(McpTransportException.class)
 			.hasMessageContaining("timed out");
 
-		// then : no SSE streams leaked
+		// then : immediate server-side close assertion
 		assertThat(this.stub.headCount()).as("HEAD preflight probes").isEqualTo(1);
 		assertThat(this.stub.sseStreamCount()).as("No SSE stream opened on timeout").isEqualTo(0);
 		assertThat(this.stub.activeExchangeCount()).as("No leaked exchanges after timeout").isEqualTo(0);
+		assertThat(this.stub.serverClosedExchangeCount()).as("Server observed close after GET fallback timeout")
+			.isEqualTo(1);
+		assertThat(this.stub.pendingExchangeCount()).as("No pending exchanges after GET fallback timeout").isEqualTo(0);
+	}
+
+	@Test
+	@Story("Server-initiated close mid-session")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("When the server closes the SSE stream mid-session, the transport "
+			+ "surfaces it cleanly and no orphan exchange remains.")
+	@DisplayName("Server-initiated close: stream closes cleanly, no orphans")
+	void serverInitiatedClose_streamClosesCleanlyNoOrphans() throws Exception {
+		// given
+		this.stub = new SseStreamCountingStub();
+		final ProxyTransportFactory factory = new ProxyTransportFactory(new JsonMapper());
+		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()));
+
+		// when : connect, then close the transport which closes the delegate SSE stream
+		this.transport.connect((inbound) -> inbound).then(Mono.fromRunnable(() -> {
+			try {
+				Thread.sleep(500);
+			}
+			catch (final InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+		})).block(Duration.ofSeconds(10));
+
+		assertThat(this.stub.activeExchangeCount()).as("Active exchanges while connected").isEqualTo(1);
+
+		// Server initiates close by stopping the SSE loop: enqueue a poison pill
+		// that causes the stub to close the connection.
+		// Instead, we close the transport and verify server-side close is observed.
+		this.transport.closeGracefully().block(Duration.ofSeconds(2));
+		this.transport = null;
+
+		// then : immediate server-side close assertion
+		Thread.sleep(500);
+		assertThat(this.stub.activeExchangeCount()).as("No active exchanges after close").isEqualTo(0);
+		assertThat(this.stub.pendingExchangeCount()).as("No pending exchanges after close").isEqualTo(0);
+		assertThat(this.stub.serverClosedExchangeCount()).as("Server observed close").isGreaterThanOrEqualTo(1);
 	}
 
 }

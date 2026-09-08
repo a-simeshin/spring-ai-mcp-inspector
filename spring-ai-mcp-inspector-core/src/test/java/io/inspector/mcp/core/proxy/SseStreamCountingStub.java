@@ -16,9 +16,14 @@
 
 package io.inspector.mcp.core.proxy;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -32,8 +37,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -51,6 +54,8 @@ import tools.jackson.databind.json.JsonMapper;
  * <li>{@link #postCount()} : how many POST /message requests were received</li>
  * <li>{@link #activeExchangeCount()} : how many SSE streams are currently writing (their
  * SSE loop has not yet exited)</li>
+ * <li>{@link #serverClosedExchangeCount()} : how many exchanges were observed closed
+ * server-side (socket close detected by the handler thread)</li>
  * </ul>
  */
 final class SseStreamCountingStub implements AutoCloseable {
@@ -59,7 +64,7 @@ final class SseStreamCountingStub implements AutoCloseable {
 
 	private static final AtomicLong EXECUTOR_SEQ = new AtomicLong();
 
-	private final HttpServer server;
+	private final ServerSocket serverSocket;
 
 	private final ExecutorService executor;
 
@@ -103,6 +108,9 @@ final class SseStreamCountingStub implements AutoCloseable {
 	/** Number of exchanges currently pending (HEAD or GET, opened but not yet closed). */
 	private final AtomicInteger pendingExchangeCount = new AtomicInteger();
 
+	/** Number of exchanges whose server-side close was observed by the handler. */
+	private final AtomicInteger serverClosedExchangeCount = new AtomicInteger();
+
 	/** Authorization header values from POST /message requests, in order. */
 	private final List<String> postAuthorizationValues = Collections.synchronizedList(new ArrayList<>());
 
@@ -139,16 +147,14 @@ final class SseStreamCountingStub implements AutoCloseable {
 			thread.setDaemon(true);
 			return thread;
 		});
-		this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-		this.server.setExecutor(this.executor);
-		this.server.createContext("/sse", this::handleSse);
-		this.server.createContext("/message", this::handleMessage);
-		this.server.start();
+		this.serverSocket = new ServerSocket();
+		this.serverSocket.bind(new InetSocketAddress("127.0.0.1", 0));
+		this.executor.submit(this::acceptLoop);
 	}
 
 	/** The SSE handshake URL. */
 	String sseUrl() {
-		return "http://127.0.0.1:" + this.server.getAddress().getPort() + "/sse";
+		return "http://127.0.0.1:" + this.serverSocket.getLocalPort() + "/sse";
 	}
 
 	/** Number of SSE streams opened (GET /sse that sent the endpoint prologue). */
@@ -192,6 +198,11 @@ final class SseStreamCountingStub implements AutoCloseable {
 		return this.closedFallbackGetCount.get();
 	}
 
+	/** Number of exchanges whose server-side close was observed by the handler. */
+	int serverClosedExchangeCount() {
+		return this.serverClosedExchangeCount.get();
+	}
+
 	/** Authorization header values from POST /message requests, in order. */
 	List<String> postAuthorizationValues() {
 		return List.copyOf(this.postAuthorizationValues);
@@ -229,7 +240,12 @@ final class SseStreamCountingStub implements AutoCloseable {
 	@Override
 	public void close() {
 		this.stopped.set(true);
-		this.server.stop(1);
+		try {
+			this.serverSocket.close();
+		}
+		catch (final IOException ignored) {
+			// best-effort
+		}
 		this.executor.shutdown();
 		try {
 			this.executor.awaitTermination(2, TimeUnit.SECONDS);
@@ -239,110 +255,188 @@ final class SseStreamCountingStub implements AutoCloseable {
 		}
 	}
 
-	private void handleSse(final HttpExchange exchange) throws IOException {
-		this.pendingExchangeCount.incrementAndGet();
-		final String method = exchange.getRequestMethod().toUpperCase();
-		try {
-			switch (method) {
-				case "HEAD" -> {
-					this.headCount.incrementAndGet();
-					if (this.hangOnHead) {
-						// Block until the exchange is closed by the client
-						// disconnect. The transport's timeout or cancellation
-						// will close the TCP connection; the JDK HttpServer
-						// will then close the exchange, and read() returns -1.
-						try {
-							while (!this.stopped.get()) {
-								Thread.sleep(50);
-							}
-						}
-						catch (final InterruptedException ex) {
-							Thread.currentThread().interrupt();
-						}
-						exchange.close();
-						return;
-					}
-					exchange.sendResponseHeaders(this.headStatus, -1);
-					exchange.close();
-					if (this.headStatus == 405 || this.headStatus == 404) {
-						this.headRejected.set(true);
-					}
+	private void acceptLoop() {
+		while (!this.stopped.get()) {
+			try {
+				final Socket socket = this.serverSocket.accept();
+				this.executor.submit(() -> handleConnection(socket));
+			}
+			catch (final IOException ex) {
+				if (!this.stopped.get()) {
+					// unexpected
 				}
-				case "GET" -> {
-					if (this.hangOnSse) {
-						try {
-							while (!this.stopped.get()) {
-								Thread.sleep(50);
-							}
-						}
-						catch (final InterruptedException ex) {
-							Thread.currentThread().interrupt();
-						}
-						exchange.close();
-						return;
-					}
-					if (this.sseStatus != 200) {
-						exchange.sendResponseHeaders(this.sseStatus, -1);
-						exchange.close();
-						return;
-					}
-					this.sseStreamCount.incrementAndGet();
-					final boolean fallback = this.headRejected.getAndSet(false);
-					final int current = this.activeExchangeCount.incrementAndGet();
-					this.maxActiveExchangeCount.updateAndGet((prev) -> Math.max(prev, current));
-					exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
-					exchange.sendResponseHeaders(200, 0);
-					runSseLoop(exchange.getResponseBody());
-					this.activeExchangeCount.decrementAndGet();
-					this.closedGetCount.incrementAndGet();
-					if (fallback) {
-						this.closedFallbackGetCount.incrementAndGet();
-					}
-				}
-				default -> {
-					exchange.sendResponseHeaders(405, -1);
-					exchange.close();
-				}
+				break;
 			}
 		}
+	}
+
+	private void handleConnection(final Socket socket) {
+		this.pendingExchangeCount.incrementAndGet();
+		try {
+			final InputStream in = socket.getInputStream();
+			final OutputStream out = socket.getOutputStream();
+			final BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
+
+			// Parse request line
+			final String requestLine = reader.readLine();
+			if (requestLine == null) {
+				return;
+			}
+			final String[] parts = requestLine.split(" ");
+			final String method = parts[0].toUpperCase();
+			final String path = parts[1];
+
+			// Parse headers
+			String line;
+			String authHeader = null;
+			int contentLength = 0;
+			while ((line = reader.readLine()) != null && !line.isEmpty()) {
+				if (line.startsWith("Authorization:")) {
+					authHeader = line.substring("Authorization:".length()).trim();
+				}
+				if (line.startsWith("Content-Length:")) {
+					contentLength = Integer.parseInt(line.substring("Content-Length:".length()).trim());
+				}
+			}
+
+			// Read body if present
+			String body = "";
+			if (contentLength > 0) {
+				final char[] buf = new char[contentLength];
+				int read = 0;
+				while (read < contentLength) {
+					final int r = reader.read(buf, read, contentLength - read);
+					if (r == -1) {
+						break;
+					}
+					read += r;
+				}
+				body = new String(buf, 0, read);
+			}
+
+			switch (path) {
+				case "/sse" -> handleSse(socket, in, out, method);
+				case "/message" -> handleMessage(socket, in, out, method, authHeader, body);
+				default -> sendResponse(out, 404, "Not Found", -1);
+			}
+		}
+		catch (final IOException ex) {
+			// client disconnected or socket error
+		}
 		finally {
+			try {
+				socket.close();
+			}
+			catch (final IOException ignored) {
+				// best-effort
+			}
 			this.pendingExchangeCount.decrementAndGet();
+		}
+	}
+
+	private void handleSse(final Socket socket, final InputStream in, final OutputStream out, final String method)
+			throws IOException {
+		switch (method) {
+			case "HEAD" -> {
+				this.headCount.incrementAndGet();
+				if (this.hangOnHead) {
+					// Block until the client disconnects. Reading from the
+					// socket returns -1 when the client closes the connection.
+					try {
+						while (!this.stopped.get()) {
+							if (in.read() == -1) {
+								this.serverClosedExchangeCount.incrementAndGet();
+								return;
+							}
+						}
+					}
+					catch (final IOException ex) {
+						this.serverClosedExchangeCount.incrementAndGet();
+						return;
+					}
+					return;
+				}
+				sendResponse(out, this.headStatus, null, -1);
+				if (this.headStatus == 405 || this.headStatus == 404) {
+					this.headRejected.set(true);
+				}
+			}
+			case "GET" -> {
+				if (this.hangOnSse) {
+					try {
+						while (!this.stopped.get()) {
+							if (in.read() == -1) {
+								this.serverClosedExchangeCount.incrementAndGet();
+								return;
+							}
+						}
+					}
+					catch (final IOException ex) {
+						this.serverClosedExchangeCount.incrementAndGet();
+						return;
+					}
+					return;
+				}
+				if (this.sseStatus != 200) {
+					sendResponse(out, this.sseStatus, null, -1);
+					return;
+				}
+				this.sseStreamCount.incrementAndGet();
+				final boolean fallback = this.headRejected.getAndSet(false);
+				final int current = this.activeExchangeCount.incrementAndGet();
+				this.maxActiveExchangeCount.updateAndGet((prev) -> Math.max(prev, current));
+				out.write(("HTTP/1.1 200 OK\r\n" + "Content-Type: text/event-stream\r\n"
+						+ "Transfer-Encoding: chunked\r\n" + "\r\n")
+					.getBytes(StandardCharsets.UTF_8));
+				out.flush();
+				runSseLoop(socket, in, out);
+				this.activeExchangeCount.decrementAndGet();
+				this.closedGetCount.incrementAndGet();
+				if (fallback) {
+					this.closedFallbackGetCount.incrementAndGet();
+				}
+			}
+			default -> sendResponse(out, 405, "Method Not Allowed", -1);
 		}
 	}
 
 	/**
 	 * Runs the SSE event loop: writes the endpoint event, then waits for queued
 	 * responses. Every iteration writes a keep-alive newline to detect client
-	 * disconnection. The JDK HttpServer only detects a closed TCP connection when the
-	 * output buffer is flushed to the socket.
+	 * disconnection. The loop also monitors the socket input stream for client close
+	 * (read returns -1).
 	 */
-	private void runSseLoop(final OutputStream out) {
+	private void runSseLoop(final Socket socket, final InputStream in, final OutputStream out) {
 		try {
-			out.write("event: endpoint\ndata: /message\n\n".getBytes(StandardCharsets.UTF_8));
-			out.flush();
+			writeChunk(out, "event: endpoint\ndata: /message\n\n");
 		}
 		catch (final IOException ex) {
+			this.serverClosedExchangeCount.incrementAndGet();
 			return;
 		}
 		int keepAlive = 0;
 		while (!this.stopped.get()) {
 			try {
+				// Check if client closed the connection
+				if (in.available() > 0) {
+					final int r = in.read();
+					if (r == -1) {
+						this.serverClosedExchangeCount.incrementAndGet();
+						return;
+					}
+				}
 				final String response = this.responses.poll(50, TimeUnit.MILLISECONDS);
 				if (response != null) {
-					out.write(("event: message\ndata: " + response + "\n\n").getBytes(StandardCharsets.UTF_8));
-					out.flush();
+					writeChunk(out, "event: message\ndata: " + response + "\n\n");
 					this.responseDeliveryCount.incrementAndGet();
 					keepAlive = 0;
 				}
 				// Every 4 iterations (~200ms), write a keep-alive to detect
-				// client disconnection. The JDK HttpServer's output stream
-				// only throws IOException on write+flush when the underlying
-				// TCP socket is closed.
+				// client disconnection via IOException on flush.
 				keepAlive++;
 				if (keepAlive >= 4) {
 					keepAlive = 0;
-					out.write("\n".getBytes(StandardCharsets.UTF_8));
-					out.flush();
+					writeChunk(out, "\n");
 				}
 			}
 			catch (final InterruptedException ex) {
@@ -351,21 +445,24 @@ final class SseStreamCountingStub implements AutoCloseable {
 			}
 			catch (final IOException ex) {
 				// Client disconnected
+				this.serverClosedExchangeCount.incrementAndGet();
 				break;
 			}
 		}
 	}
 
-	private void handleMessage(final HttpExchange exchange) throws IOException {
-		final int n = this.postCount.incrementAndGet();
-		final String auth = exchange.getRequestHeaders().getFirst("Authorization");
-		this.postAuthorizationValues.add((auth != null) ? auth : "");
-		if (n <= this.rejectPosts) {
-			exchange.sendResponseHeaders(401, -1);
-			exchange.close();
+	private void handleMessage(final Socket socket, final InputStream in, final OutputStream out, final String method,
+			final String authHeader, final String body) throws IOException {
+		if (!"POST".equals(method)) {
+			sendResponse(out, 405, "Method Not Allowed", -1);
 			return;
 		}
-		final String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+		final int n = this.postCount.incrementAndGet();
+		this.postAuthorizationValues.add((authHeader != null) ? authHeader : "");
+		if (n <= this.rejectPosts) {
+			sendResponse(out, 401, "Unauthorized", -1);
+			return;
+		}
 		final String id = extractId(body);
 		if (id != null) {
 			final String response = """
@@ -373,8 +470,42 @@ final class SseStreamCountingStub implements AutoCloseable {
 					"capabilities":{},"serverInfo":{"name":"counting-stub-mcp","version":"1.0.0"}}}""".formatted(id);
 			this.responses.offer(response);
 		}
-		exchange.sendResponseHeaders(202, -1);
-		exchange.close();
+		sendResponse(out, 202, "Accepted", -1);
+	}
+
+	private static void sendResponse(final OutputStream out, final int status, final String statusText,
+			final int contentLength) throws IOException {
+		final String text = (statusText != null) ? statusText : defaultStatusText(status);
+		final StringBuilder sb = new StringBuilder();
+		sb.append("HTTP/1.1 ").append(status).append(' ').append(text).append("\r\n");
+		if (contentLength >= 0) {
+			sb.append("Content-Length: ").append(contentLength).append("\r\n");
+		}
+		sb.append("Connection: close\r\n");
+		sb.append("\r\n");
+		out.write(sb.toString().getBytes(StandardCharsets.UTF_8));
+		out.flush();
+	}
+
+	private static String defaultStatusText(final int status) {
+		return switch (status) {
+			case 200 -> "OK";
+			case 202 -> "Accepted";
+			case 400 -> "Bad Request";
+			case 401 -> "Unauthorized";
+			case 403 -> "Forbidden";
+			case 404 -> "Not Found";
+			case 405 -> "Method Not Allowed";
+			default -> "Status " + status;
+		};
+	}
+
+	private static void writeChunk(final OutputStream out, final String data) throws IOException {
+		final byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
+		out.write(String.format("%x\r\n", bytes.length).getBytes(StandardCharsets.UTF_8));
+		out.write(bytes);
+		out.write("\r\n".getBytes(StandardCharsets.UTF_8));
+		out.flush();
 	}
 
 	private static String extractId(final String body) {
