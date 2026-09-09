@@ -34,7 +34,7 @@ import org.springframework.ai.mcp.annotation.McpTool.McpAnnotations;
  * <p>
  * Contract (mirrored from issue #57, issuecomment-5382846304):
  * <ul>
- * <li>22 tools declared with {@code readOnlyHint=true, destructiveHint=false}: echo, sum,
+ * <li>21 tools declared with {@code readOnlyHint=true, destructiveHint=false}: echo, sum,
  * currentTime, addNumbers, concatenate, lookupUser, chooseColor, toggleFlag,
  * optionalGreeting, errorTool, largeOutput, structuredOutput, multiContent, deepJson,
  * blobAttachment, findFiles, listMyRoots, generateReport, getTaskStatus, cancelTask,
@@ -120,7 +120,7 @@ class DemoToolHintsTests {
 			String toolName = mcptool.name();
 			McpAnnotations annotations = mcptool.annotations();
 
-			// All 24 annotated tools MUST have explicit annotations present
+			// All 25 annotated tools MUST have explicit annotations present
 			Assertions.assertThat(annotations)
 				.as("Tool '%s' must declare explicit @McpTool annotations", toolName)
 				.isNotNull();
