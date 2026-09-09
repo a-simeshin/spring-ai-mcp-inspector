@@ -60,12 +60,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>
  * Contract under test:
  * <ul>
- * <li>22 tool entries (the 2.x line includes {@code authorizeViaUrl}, which needs SDK 2.0
+ * <li>26 tool entries (the 2.x line includes {@code authorizeViaUrl}, which needs SDK 2.0
  * URL-mode elicitation);</li>
- * <li>17 entries with {@code annotations.readOnlyHint=true, destructiveHint=false} (echo,
+ * <li>21 entries with {@code annotations.readOnlyHint=true, destructiveHint=false} (echo,
  * sum, currentTime, addNumbers, concatenate, lookupUser, chooseColor, toggleFlag,
  * optionalGreeting, errorTool, largeOutput, structuredOutput, multiContent, deepJson,
- * blobAttachment, findFiles, listMyRoots);</li>
+ * blobAttachment, findFiles, listMyRoots, generateReport, getTaskStatus, cancelTask,
+ * keepAliveTask);</li>
  * <li>4 entries with {@code annotations.readOnlyHint=false, destructiveHint=false}
  * (askLlm, askUser, deployService, authorizeViaUrl);</li>
  * <li>{@code slowEcho} carries NO {@code annotations} field at all — it is registered as
@@ -89,7 +90,8 @@ class ToolsListContractIT {
 
 	private static final List<String> READ_ONLY_TOOLS = List.of("echo", "sum", "currentTime", "addNumbers",
 			"concatenate", "lookupUser", "chooseColor", "toggleFlag", "optionalGreeting", "errorTool", "largeOutput",
-			"structuredOutput", "multiContent", "deepJson", "blobAttachment", "findFiles", "listMyRoots");
+			"structuredOutput", "multiContent", "deepJson", "blobAttachment", "findFiles", "listMyRoots",
+			"generateReport", "getTaskStatus", "cancelTask", "keepAliveTask");
 
 	private static final List<String> INTERACTIVE_TOOLS = List.of("askLlm", "askUser", "deployService",
 			"authorizeViaUrl");
@@ -109,11 +111,11 @@ class ToolsListContractIT {
 	@Test
 	@Story("tools/list contract")
 	@Severity(SeverityLevel.CRITICAL)
-	@DisplayName("toolsList22Entries — 22 entries; 17 read-only + 4 interactive annotated; no declared destructive")
-	@Description("tools/list through the relay returns 22 tools; 17 carry readOnlyHint=true/destructiveHint=false, "
+	@DisplayName("toolsList26Entries - 26 entries; 21 read-only + 4 interactive annotated; no declared destructive")
+	@Description("tools/list through the relay returns 26 tools; 21 carry readOnlyHint=true/destructiveHint=false, "
 			+ "4 (askLlm, askUser, deployService, authorizeViaUrl) carry readOnlyHint=false/destructiveHint=false, "
 			+ "and no entry declares destructiveHint=true.")
-	void toolsList22EntriesWithExplicitAnnotations() throws Exception {
+	void toolsList26EntriesWithExplicitAnnotations() throws Exception {
 		// given: a connected proxy session
 		final String sessionId = connect();
 		try {
@@ -122,8 +124,8 @@ class ToolsListContractIT {
 			final JsonNode tools = result.path("tools");
 			assertThat(tools.isArray()).as("tools/list must return a tools array").isTrue();
 
-			// then: 22 entries, exact matrix
-			assertThat(tools.size()).as("demo must advertise exactly 22 tools").isEqualTo(22);
+			// then: 26 entries, exact matrix
+			assertThat(tools.size()).as("demo must advertise exactly 26 tools").isEqualTo(26);
 
 			final List<String> names = new ArrayList<>();
 			for (final JsonNode tool : tools) {
