@@ -106,6 +106,7 @@ const TasksTab = ({
   // Track per-task polling intervals
   const taskPollIntervalsRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
   const taskStatusesRef = useRef<Map<string, Task["status"]>>(new Map());
+  const transitionTimeoutsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const selectedTaskRef = useRef<Task | null>(null);
   useEffect(() => {
     selectedTaskRef.current = selectedTask;
@@ -138,6 +139,7 @@ const TasksTab = ({
 
   // Detect status transitions for animation
   useEffect(() => {
+    const timeouts = transitionTimeoutsRef.current;
     setTaskRowStates((prev) => {
       const next = { ...prev };
       for (const task of tasks) {
@@ -148,7 +150,7 @@ const TasksTab = ({
             transitioning: true,
           };
           // Clear transition flag after animation
-          setTimeout(() => {
+          const id = setTimeout(() => {
             setTaskRowStates((s) => {
               if (s[task.taskId]) {
                 return {
@@ -159,11 +161,16 @@ const TasksTab = ({
               return s;
             });
           }, 600);
+          timeouts.add(id);
         }
         taskStatusesRef.current.set(task.taskId, task.status);
       }
       return next;
     });
+    return () => {
+      for (const id of timeouts) clearTimeout(id);
+      timeouts.clear();
+    };
   }, [tasks]);
 
   // Per-task polling: for each 'working' task, poll tasks/get at its pollInterval
