@@ -26,6 +26,8 @@ import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCNotification;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCRequest;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 
 /**
@@ -41,6 +43,8 @@ import reactor.core.publisher.Mono;
  * @author Artem Simeshin
  */
 public final class RecordingMcpClientTransport implements McpClientTransport {
+
+	private static final Logger LOG = LoggerFactory.getLogger(RecordingMcpClientTransport.class);
 
 	private final McpClientTransport delegate;
 
@@ -82,17 +86,33 @@ public final class RecordingMcpClientTransport implements McpClientTransport {
 	@Override
 	public Mono<Void> sendMessage(final JSONRPCMessage message) {
 		if (message instanceof JSONRPCRequest request) {
-			this.trafficRecorder.recordClientRequest(this.clientName, this.transportType, request);
+			try {
+				this.trafficRecorder.recordClientRequest(this.clientName, this.transportType, request);
+			}
+			catch (final Exception ex) {
+				LOG.warn("client[{}] traffic recorder outbound request failed: {}", this.clientName, ex.toString());
+			}
 		}
 		else if (message instanceof JSONRPCNotification notification) {
-			this.trafficRecorder.recordClientNotification(this.clientName, this.transportType, notification);
+			try {
+				this.trafficRecorder.recordClientNotification(this.clientName, this.transportType, notification);
+			}
+			catch (final Exception ex) {
+				LOG.warn("client[{}] traffic recorder outbound notification failed: {}", this.clientName,
+						ex.toString());
+			}
 		}
 		else if (message instanceof JSONRPCResponse response) {
 			// Client answers server-initiated requests (sampling, elicitation,
 			// roots/list) with a JSONRPCResponse via sendMessage; record it as
 			// an outbound response (client->server), not as an inbound server
 			// response.
-			this.trafficRecorder.recordOutboundResponse(this.clientName, this.transportType, response);
+			try {
+				this.trafficRecorder.recordOutboundResponse(this.clientName, this.transportType, response);
+			}
+			catch (final Exception ex) {
+				LOG.warn("client[{}] traffic recorder outbound response failed: {}", this.clientName, ex.toString());
+			}
 		}
 		return this.delegate.sendMessage(message);
 	}
@@ -162,14 +182,29 @@ public final class RecordingMcpClientTransport implements McpClientTransport {
 
 	private void recordInbound(final JSONRPCMessage message) {
 		if (message instanceof JSONRPCResponse response) {
-			this.trafficRecorder.recordClientResponse(this.clientName, this.transportType, response);
+			try {
+				this.trafficRecorder.recordClientResponse(this.clientName, this.transportType, response);
+			}
+			catch (final Exception ex) {
+				LOG.warn("client[{}] traffic recorder inbound response failed: {}", this.clientName, ex.toString());
+			}
 		}
 		else if (message instanceof JSONRPCRequest request) {
 			// Server-initiated request (sampling, elicitation, roots/list)
-			this.trafficRecorder.recordServerRequest(this.clientName, this.transportType, request);
+			try {
+				this.trafficRecorder.recordServerRequest(this.clientName, this.transportType, request);
+			}
+			catch (final Exception ex) {
+				LOG.warn("client[{}] traffic recorder inbound request failed: {}", this.clientName, ex.toString());
+			}
 		}
 		else if (message instanceof JSONRPCNotification notification) {
-			this.trafficRecorder.recordServerNotification(this.clientName, this.transportType, notification);
+			try {
+				this.trafficRecorder.recordServerNotification(this.clientName, this.transportType, notification);
+			}
+			catch (final Exception ex) {
+				LOG.warn("client[{}] traffic recorder inbound notification failed: {}", this.clientName, ex.toString());
+			}
 		}
 	}
 

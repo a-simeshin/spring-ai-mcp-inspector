@@ -98,6 +98,25 @@ class RecordingMcpClientTransportTests {
 	class SendMessage {
 
 		@Test
+		@DisplayName("recorder exception does not break the transport call")
+		void recorderExceptionDoesNotBreakTransportCall() {
+			// given: a recorder that throws
+			final McpClientTrafficRecorder failingRecorder = mock(McpClientTrafficRecorder.class);
+			org.mockito.BDDMockito.willThrow(new RuntimeException("test recorder failure"))
+				.given(failingRecorder)
+				.recordClientRequest(any(), any(), any());
+			final RecordingMcpClientTransport guardedTransport = new RecordingMcpClientTransport(
+					RecordingMcpClientTransportTests.this.delegate, "fail-client", "stdio", failingRecorder);
+
+			// when: send a request (the recorder will throw)
+			final JSONRPCRequest request = new JSONRPCRequest("2.0", "tools/call", 1, null);
+			guardedTransport.sendMessage(request).block();
+
+			// then: the delegate still receives the message
+			then(RecordingMcpClientTransportTests.this.delegate).should().sendMessage(request);
+		}
+
+		@Test
 		@DisplayName("records outbound request and delegates to real transport")
 		void recordsOutboundRequestAndDelegates() {
 			// given
