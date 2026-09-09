@@ -45,6 +45,8 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
@@ -53,6 +55,10 @@ import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.task.TaskHandle;
+import io.inspector.mcp.core.task.TaskNotCancelableException;
+import io.inspector.mcp.core.task.TaskNotFoundException;
+import io.inspector.mcp.core.task.TaskService;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.core.transport.TransportType;
@@ -101,14 +107,22 @@ public class ProxyHandler {
 
 	private final AtomicInteger listeningPort = new AtomicInteger(-1);
 
+	private final TaskService taskService;
+
 	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper) {
-		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, null);
+		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, null, null);
 	}
 
 	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper,
 			final McpInspectorProperties properties) {
+		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties, null);
+	}
+
+	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
+			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper,
+			final McpInspectorProperties properties, final TaskService taskService) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
@@ -117,6 +131,7 @@ public class ProxyHandler {
 		this.properties = properties;
 		this.timeouts = (properties != null) ? properties.getTimeouts() : new McpInspectorProperties.Timeouts();
 		this.outboundHttpClient = HttpClient.newBuilder().connectTimeout(this.timeouts.getFetchConnect()).build();
+		this.taskService = taskService;
 	}
 
 	@EventListener
@@ -528,6 +543,13 @@ public class ProxyHandler {
 			}
 			return accepted.build();
 		}
+		// Intercept tasks/get and tasks/cancel if a TaskService is available.
+		if (this.taskService != null) {
+			final Mono<ServerResponse> taskResponse = tryHandleTaskMethod(idNode, body);
+			if (taskResponse != null) {
+				return taskResponse;
+			}
+		}
 		// Eagerly subscribe to targetToBrowser via Sinks.One so the upstream
 		// transport's connect() error (ECONNREFUSED/DNS/timeout) is captured
 		// even when the relay Mono is subscribed to later by the WebFlux
@@ -598,6 +620,147 @@ public class ProxyHandler {
 			return null;
 		}
 		return id;
+	}
+
+	// ---------------------------------------------------------------------
+	// Task method interception (tasks/get, tasks/cancel)
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Checks whether {@code body} is a {@code tasks/get} or {@code tasks/cancel} JSON-RPC
+	 * request and handles it locally via the {@link #taskService}.
+	 * @param idNode the JSON-RPC request id
+	 * @param body the full JSON-RPC request body
+	 * @return a response Mono if the method was handled, or {@code null} to fall through
+	 * to the regular relay path
+	 */
+	private Mono<ServerResponse> tryHandleTaskMethod(final JsonNode idNode, final JsonNode body) {
+		final JsonNode methodNode = body.get("method");
+		if (methodNode == null || !methodNode.isTextual()) {
+			return null;
+		}
+		final String method = methodNode.asText();
+		if ("tasks/get".equals(method)) {
+			return handleTaskGet(idNode, body);
+		}
+		if ("tasks/cancel".equals(method)) {
+			return handleTaskCancel(idNode, body);
+		}
+		return null;
+	}
+
+	/**
+	 * Handle a {@code tasks/get} request: look up the task and return its handle.
+	 * @param idNode the JSON-RPC request id
+	 * @param body the full request body
+	 * @return a JSON-RPC response with the task handle, or a JSON-RPC error
+	 */
+	private Mono<ServerResponse> handleTaskGet(final JsonNode idNode, final JsonNode body) {
+		final String taskId = extractTaskId(body);
+		if (taskId == null) {
+			return jsonRpcError(idNode, -32602, "Invalid params: missing or invalid taskId");
+		}
+		try {
+			final TaskHandle handle = this.taskService.getTask(taskId);
+			return jsonRpcResult(idNode, taskHandleToNode(handle));
+		}
+		catch (final TaskNotFoundException ex) {
+			return jsonRpcError(idNode, -32602, "Failed to retrieve task: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Handle a {@code tasks/cancel} request: cancel the task and return the updated
+	 * handle.
+	 * @param idNode the JSON-RPC request id
+	 * @param body the full request body
+	 * @return a JSON-RPC response with the cancelled task handle, or a JSON-RPC error
+	 */
+	private Mono<ServerResponse> handleTaskCancel(final JsonNode idNode, final JsonNode body) {
+		final String taskId = extractTaskId(body);
+		if (taskId == null) {
+			return jsonRpcError(idNode, -32602, "Invalid params: missing or invalid taskId");
+		}
+		try {
+			final TaskHandle handle = this.taskService.cancelTask(taskId);
+			return jsonRpcResult(idNode, taskHandleToNode(handle));
+		}
+		catch (final TaskNotCancelableException ex) {
+			return jsonRpcError(idNode, -32602, ex.getMessage());
+		}
+		catch (final TaskNotFoundException ex) {
+			return jsonRpcError(idNode, -32602, "Failed to retrieve task: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Extract {@code taskId} from the {@code params} object of a task method call.
+	 * @param body the JSON-RPC request body
+	 * @return the task id string, or {@code null} if missing or invalid
+	 */
+	private static String extractTaskId(final JsonNode body) {
+		final JsonNode params = body.get("params");
+		if (params == null || !params.isObject()) {
+			return null;
+		}
+		final JsonNode taskIdNode = params.get("taskId");
+		if (taskIdNode == null || !taskIdNode.isTextual()) {
+			return null;
+		}
+		return taskIdNode.asText();
+	}
+
+	/**
+	 * Build a successful JSON-RPC response with a result object.
+	 * @param idNode the request id
+	 * @param resultNode the result object to include
+	 * @return a 200 OK Mono with the JSON-RPC envelope
+	 */
+	private static Mono<ServerResponse> jsonRpcResult(final JsonNode idNode, final JsonNode resultNode) {
+		final ObjectNode response = JsonNodeFactory.instance.objectNode();
+		response.put("jsonrpc", "2.0");
+		response.set("id", idNode);
+		response.set("result", resultNode);
+		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(response);
+	}
+
+	/**
+	 * Build a JSON-RPC error response with the given error code and message.
+	 * @param idNode the request id
+	 * @param code the JSON-RPC error code
+	 * @param message the error message
+	 * @return a 200 OK Mono with the JSON-RPC error envelope (per spec, errors are
+	 * returned with HTTP 200)
+	 */
+	private static Mono<ServerResponse> jsonRpcError(final JsonNode idNode, final int code, final String message) {
+		final ObjectNode response = JsonNodeFactory.instance.objectNode();
+		response.put("jsonrpc", "2.0");
+		response.set("id", idNode);
+		final ObjectNode error = JsonNodeFactory.instance.objectNode();
+		error.put("code", code);
+		error.put("message", message);
+		response.set("error", error);
+		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(response);
+	}
+
+	/**
+	 * Convert a {@link TaskHandle} to a JSON object node matching the SEP-1686 Task
+	 * schema.
+	 * @param handle the task handle to serialize
+	 * @return a JSON object node with all task fields
+	 */
+	private static ObjectNode taskHandleToNode(final TaskHandle handle) {
+		final ObjectNode node = JsonNodeFactory.instance.objectNode();
+		node.put("taskId", handle.taskId());
+		node.put("status", handle.status());
+		if (handle.statusMessage() != null) {
+			node.put("statusMessage", handle.statusMessage());
+		}
+		node.put("createdAt", handle.createdAt());
+		node.put("lastUpdatedAt", handle.lastUpdatedAt());
+		node.put("ttl", handle.ttl());
+		node.put("pollInterval", handle.pollInterval());
+		return node;
 	}
 
 	/**

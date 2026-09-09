@@ -129,6 +129,10 @@ class ProxyHandlerTests {
 		return ((EntityResponse<Object>) response).entity();
 	}
 
+	private static JsonNode entityJson(final ServerResponse response) throws Exception {
+		return new JsonMapper().readTree(extractBodyFlux(response).toString());
+	}
+
 	private static ProxySession newSession(final String id) {
 		final McpClientTransport transport = mock(McpClientTransport.class);
 		given(transport.closeGracefully()).willReturn(Mono.empty());
@@ -1766,6 +1770,204 @@ class ProxyHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.ACCEPTED);
 			verify(ProxyHandlerTests.this.transportFactory).openStreamable(any(URI.class));
+		}
+
+	}
+
+	@Nested
+	@DisplayName("task method interception")
+	class TaskMethodInterception {
+
+		private io.inspector.mcp.core.task.TaskService taskService;
+
+		private ProxyHandler handlerWithTasks;
+
+		@BeforeEach
+		void setUpTaskHandler() {
+			this.taskService = mock(io.inspector.mcp.core.task.TaskService.class);
+			this.handlerWithTasks = new ProxyHandler(ProxyHandlerTests.this.registry,
+					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
+					ProxyHandlerTests.this.transportDetector, ProxyHandlerTests.this.objectMapper,
+					ProxyHandlerTests.this.properties, this.taskService);
+		}
+
+		private ProxySession newSession(final String id) {
+			return ProxyHandlerTests.newSession(id);
+		}
+
+		private ServerRequest buildTaskRequest(final String sessionId, final String json) {
+			return toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, sessionId)
+				.contentType(MediaType.APPLICATION_JSON)
+				.body(json));
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("tasks/get is intercepted locally and returns the task handle")
+		void tasksGet_interceptedLocally_returnsTaskHandle() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-123",
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+			given(this.taskService.getTask("t-123")).willReturn(handle);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode result = body.get("result");
+			assertThat(result.get("taskId").asText()).isEqualTo("t-123");
+			assertThat(result.get("status").asText()).isEqualTo("working");
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/get with an unknown taskId returns a JSON-RPC -32602 error")
+		void tasksGet_unknownTask_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			given(this.taskService.getTask("missing"))
+				.willThrow(new io.inspector.mcp.core.task.TaskNotFoundException("missing"));
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"missing\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode error = body.get("error");
+			assertThat(error.get("code").asInt()).isEqualTo(-32602);
+			assertThat(error.get("message").asText()).containsIgnoringCase("not found");
+		}
+
+		@Test
+		@Story("tasks/cancel interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("tasks/cancel is intercepted locally and returns the cancelled handle")
+		void tasksCancel_interceptedLocally_returnsCancelledHandle() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-456",
+					"cancelled", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+			given(this.taskService.cancelTask("t-456")).willReturn(handle);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"t-456\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode result = body.get("result");
+			assertThat(result.get("status").asText()).isEqualTo("cancelled");
+		}
+
+		@Test
+		@Story("tasks/cancel interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/cancel on an already-terminal task returns a JSON-RPC -32602 error")
+		void tasksCancel_terminalTask_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			given(this.taskService.cancelTask("t-789"))
+				.willThrow(new io.inspector.mcp.core.task.TaskNotCancelableException("t-789", "completed"));
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"t-789\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode error = body.get("error");
+			assertThat(error.get("code").asInt()).isEqualTo(-32602);
+			assertThat(error.get("message").asText()).containsIgnoringCase("terminal");
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.MINOR)
+		@Description("tasks/get without a taskId returns a JSON-RPC -32602 error")
+		void tasksGet_missingTaskId_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tasks/get\",\"params\":{}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode error = body.get("error");
+			assertThat(error.get("code").asInt()).isEqualTo(-32602);
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/get with a task that has a statusMessage includes it in the response")
+		void tasksGet_withStatusMessage_includesIt() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-msg",
+					"failed", "Tool execution failed: timeout", "2025-01-01T00:00:00Z", "2025-01-01T00:01:00Z", 60000,
+					5000);
+			given(this.taskService.getTask("t-msg")).willReturn(handle);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-msg\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode result = body.get("result");
+			assertThat(result.get("statusMessage").asText()).isEqualTo("Tool execution failed: timeout");
+		}
+
+		@Test
+		@Story("no interception without TaskService")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("when no TaskService bean is available, tasks/get falls through to the regular relay path")
+		void tasksGet_withoutTaskService_relaysToUpstream() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}");
+
+			// when - the default handler has no TaskService
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then - the frame is relayed, not intercepted locally
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isNotEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
 		}
 
 	}
