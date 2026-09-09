@@ -111,6 +111,9 @@ final class SseStreamCountingStub implements AutoCloseable {
 	/** Number of exchanges whose server-side close was observed by the handler. */
 	private final AtomicInteger serverClosedExchangeCount = new AtomicInteger();
 
+	/** Active SSE sockets, tracked so the server can close them mid-session. */
+	private final List<Socket> activeSseSockets = Collections.synchronizedList(new ArrayList<>());
+
 	/** Authorization header values from POST /message requests, in order. */
 	private final List<String> postAuthorizationValues = Collections.synchronizedList(new ArrayList<>());
 
@@ -211,6 +214,25 @@ final class SseStreamCountingStub implements AutoCloseable {
 	/** Number of responses consumed from the SSE queue by the SSE loop. */
 	int responseDeliveryCount() {
 		return this.responseDeliveryCount.get();
+	}
+
+	/**
+	 * Closes all currently active SSE sockets from the server side. This simulates a
+	 * server-initiated shutdown: the client transport must observe the closure and
+	 * terminate cleanly without any client-side close call.
+	 */
+	void closeActiveStreams() {
+		synchronized (this.activeSseSockets) {
+			for (final Socket socket : this.activeSseSockets) {
+				try {
+					socket.close();
+				}
+				catch (final IOException ignored) {
+					// best-effort
+				}
+			}
+			this.activeSseSockets.clear();
+		}
 	}
 
 	void setHeadStatus(final int status) {
@@ -389,7 +411,13 @@ final class SseStreamCountingStub implements AutoCloseable {
 						+ "Transfer-Encoding: chunked\r\n" + "\r\n")
 					.getBytes(StandardCharsets.UTF_8));
 				out.flush();
-				runSseLoop(socket, in, out);
+				this.activeSseSockets.add(socket);
+				try {
+					runSseLoop(socket, in, out);
+				}
+				finally {
+					this.activeSseSockets.remove(socket);
+				}
 				this.activeExchangeCount.decrementAndGet();
 				this.closedGetCount.incrementAndGet();
 				if (fallback) {

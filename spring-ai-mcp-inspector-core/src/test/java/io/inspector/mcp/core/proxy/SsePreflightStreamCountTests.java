@@ -527,7 +527,7 @@ class SsePreflightStreamCountTests {
 		final ProxyTransportFactory factory = new ProxyTransportFactory(new JsonMapper());
 		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()));
 
-		// when : connect, then close the transport which closes the delegate SSE stream
+		// when : connect, then the server closes the SSE stream mid-session
 		this.transport.connect((inbound) -> inbound).then(Mono.fromRunnable(() -> {
 			try {
 				Thread.sleep(500);
@@ -539,16 +539,22 @@ class SsePreflightStreamCountTests {
 
 		assertThat(this.stub.activeExchangeCount()).as("Active exchanges while connected").isEqualTo(1);
 
-		// Server initiates close by stopping the SSE loop: enqueue a poison pill
-		// that causes the stub to close the connection.
-		// Instead, we close the transport and verify server-side close is observed.
+		// Server initiates close: shut down the SSE socket from the server side.
+		// The client does NOT call closeGracefully() here.
+		this.stub.closeActiveStreams();
+
+		// Allow a short delay for the client to observe the close and clean up.
+		Thread.sleep(500);
+
+		// then : the client transport observes the closure and terminates cleanly.
+		// closeGracefully() must complete without hanging, proving the transport
+		// already detected the server-side close and cleaned up its subscription.
 		this.transport.closeGracefully().block(Duration.ofSeconds(2));
 		this.transport = null;
 
-		// then : immediate server-side close assertion
-		Thread.sleep(500);
-		assertThat(this.stub.activeExchangeCount()).as("No active exchanges after close").isEqualTo(0);
-		assertThat(this.stub.pendingExchangeCount()).as("No pending exchanges after close").isEqualTo(0);
+		// Server-side counters settle to zero immediately in the test.
+		assertThat(this.stub.activeExchangeCount()).as("No active exchanges after server close").isEqualTo(0);
+		assertThat(this.stub.pendingExchangeCount()).as("No pending exchanges after server close").isEqualTo(0);
 		assertThat(this.stub.serverClosedExchangeCount()).as("Server observed close").isGreaterThanOrEqualTo(1);
 	}
 
