@@ -201,6 +201,48 @@ class McpClientTrafficRecorderTests {
 			assertThat(McpClientTrafficRecorderTests.this.recorder.pendingCorrelations()).isZero();
 		}
 
+		@Test
+		@DisplayName("marks outbound response orphan when no matching server request")
+		void marksOutboundResponseOrphan() {
+			// given: no server request recorded
+			// when: an outbound response arrives
+			final JSONRPCResponse response = JSONRPCResponse.result(99, java.util.Map.of());
+			McpClientTrafficRecorderTests.this.recorder.recordOutboundResponse("orphan-client", "sse", response);
+
+			// then
+			final List<TimelineEvent> events = McpClientTrafficRecorderTests.this.timelineService
+				.query(TimelineQuery.all());
+			assertThat(events).hasSize(1);
+			final TimelineEvent event = events.get(0);
+			assertThat(event.payload().path("direction").asText()).isEqualTo("client->server");
+			assertThat(event.payload().path("orphan").asText()).isEqualTo("true");
+		}
+
+		@Test
+		@DisplayName("records error message on outbound response")
+		void recordsErrorOnOutboundResponse() {
+			// given
+			final JSONRPCRequest serverRequest = new JSONRPCRequest("2.0", "sampling/createMessage", "srv-1", null);
+			McpClientTrafficRecorderTests.this.recorder.recordServerRequest("c", "stdio", serverRequest);
+
+			// when: the client answers with an error response
+			final JSONRPCResponse response = new JSONRPCResponse("2.0", "srv-1", null,
+					new io.modelcontextprotocol.spec.McpSchema.JSONRPCResponse.JSONRPCError(500, "server error"));
+			McpClientTrafficRecorderTests.this.recorder.recordOutboundResponse("c", "stdio", response);
+
+			// then
+			final List<TimelineEvent> events = McpClientTrafficRecorderTests.this.timelineService
+				.query(TimelineQuery.all());
+			assertThat(events).hasSize(2);
+			final TimelineEvent responseEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.findFirst()
+				.orElseThrow();
+			assertThat(responseEvent.payload().path("direction").asText()).isEqualTo("client->server");
+			assertThat(responseEvent.payload().path("error").asText()).isEqualTo("server error");
+			assertThat(responseEvent.payload().has("orphan")).isFalse();
+		}
+
 	}
 
 	@Nested
