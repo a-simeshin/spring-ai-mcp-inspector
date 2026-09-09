@@ -46,6 +46,7 @@ import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.shutdown.McpServerTransportDrain;
+import io.inspector.mcp.core.task.TaskService;
 import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 import io.inspector.mcp.core.timeline.TimelineService;
 import io.inspector.mcp.core.transport.TransportDetector;
@@ -209,8 +210,9 @@ public class McpInspectorWebFluxAutoConfiguration {
 	public ProxyHandler mcpInspectorProxyHandler(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy,
 			final TransportDetector transportDetector, final JsonMapper objectMapper,
-			final McpInspectorProperties properties) {
-		return new ProxyHandler(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties);
+			final McpInspectorProperties properties, final ObjectProvider<TaskService> taskServiceProvider) {
+		return new ProxyHandler(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties,
+				taskServiceProvider.getIfAvailable());
 	}
 
 	@Bean

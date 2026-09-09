@@ -28,16 +28,17 @@ import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpTool.McpAnnotations;
 
 /**
- * Unit tests validating the honesty contract of hint annotations across all 22 demo
+ * Unit tests validating the honesty contract of hint annotations across all 26 demo
  * tools.
  *
  * <p>
  * Contract (mirrored from issue #57, issuecomment-5382846304):
  * <ul>
- * <li>17 tools declared with {@code readOnlyHint=true, destructiveHint=false}: echo, sum,
+ * <li>22 tools declared with {@code readOnlyHint=true, destructiveHint=false}: echo, sum,
  * currentTime, addNumbers, concatenate, lookupUser, chooseColor, toggleFlag,
  * optionalGreeting, errorTool, largeOutput, structuredOutput, multiContent, deepJson,
- * blobAttachment, findFiles, listMyRoots</li>
+ * blobAttachment, findFiles, listMyRoots, generateReport, getTaskStatus, cancelTask,
+ * keepAliveTask</li>
  * <li>4 tools declared with {@code readOnlyHint=false, destructiveHint=false}: askLlm,
  * askUser, deployService, authorizeViaUrl</li>
  * <li>1 tool ({@code slowEcho}) deliberately NOT an {@code @McpTool} method: it is
@@ -70,6 +71,11 @@ class DemoToolHintsTests {
 			put("blobAttachment", new boolean[] { true, false });
 			put("findFiles", new boolean[] { true, false });
 			put("listMyRoots", new boolean[] { true, false });
+			// R=T, D=F (4 task-emulating tools)
+			put("generateReport", new boolean[] { true, false });
+			put("getTaskStatus", new boolean[] { true, false });
+			put("cancelTask", new boolean[] { true, false });
+			put("keepAliveTask", new boolean[] { true, false });
 			// R=F, D=F (4 tools)
 			put("askLlm", new boolean[] { false, false });
 			put("askUser", new boolean[] { false, false });
@@ -78,14 +84,12 @@ class DemoToolHintsTests {
 		}
 	};
 
-	/**
-	 * Names of the three provider classes that hold @McpTool methods.
-	 */
+	/** Names of the provider classes that hold @McpTool methods. */
 	private static final List<Class<?>> PROVIDER_CLASSES = List.of(DemoToolsProvider.class,
-			DemoAdvancedToolsProvider.class, DemoInteractiveToolsProvider.class);
+			DemoAdvancedToolsProvider.class, DemoInteractiveToolsProvider.class, DemoTaskEmulatingToolsProvider.class);
 
 	/**
-	 * Scans all @McpTool-annotated methods across the three provider classes and asserts
+	 * Scans all @McpTool-annotated methods across the four provider classes and asserts
 	 * that the readOnlyHint/destructiveHint values match the contracted matrix.
 	 *
 	 * <p>
@@ -116,7 +120,7 @@ class DemoToolHintsTests {
 			String toolName = mcptool.name();
 			McpAnnotations annotations = mcptool.annotations();
 
-			// All 21 annotated tools MUST have explicit annotations present
+			// All 24 annotated tools MUST have explicit annotations present
 			Assertions.assertThat(annotations)
 				.as("Tool '%s' must declare explicit @McpTool annotations", toolName)
 				.isNotNull();
@@ -148,8 +152,9 @@ class DemoToolHintsTests {
 	/**
 	 * Verifies that {@code slowEcho} is registered as a manual {@code ToolCallback} whose
 	 * {@code ToolDefinition} carries no annotations — the wire entry therefore omits the
-	 * {@code annotations} object, which is the honest signal that its hints are MCP spec
-	 * defaults, not server declarations.
+	 * {@code annotations} object (MCP SDK serializes {@code Tool} with NON_ABSENT
+	 * inclusion), which is the honest signal that its hints are MCP spec defaults, not
+	 * server declarations.
 	 *
 	 * <p>
 	 * The {@code @McpTool} route is deliberately avoided: the Spring AI annotation
@@ -173,7 +178,7 @@ class DemoToolHintsTests {
 			.as("slowEcho inputSchema must declare the text property")
 			.contains("text");
 		// ToolDefinition has no annotations concept — the converter builds the wire Tool
-		// without annotations, so the field is omitted on the wire.
+		// without annotations, and NON_ABSENT serialization omits the field.
 	}
 
 }
