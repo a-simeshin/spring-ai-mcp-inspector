@@ -23,6 +23,7 @@ import io.modelcontextprotocol.spec.McpClientTransport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 
 /**
@@ -55,18 +56,20 @@ public final class RecordingTransportPostProcessor implements BeanPostProcessor 
 	 */
 	static final String NAMED_CLIENT_TRANSPORT_FQCN = "org.springframework.ai.mcp.client.common.autoconfigure.NamedClientMcpTransport";
 
-	private final McpClientTrafficRecorder trafficRecorder;
+	private final ObjectProvider<McpClientTrafficRecorder> trafficRecorderProvider;
+
+	private volatile McpClientTrafficRecorder trafficRecorder;
 
 	/**
 	 * Creates a new post-processor.
-	 * @param trafficRecorder the recorder to pass to wrapping transports (must not be
-	 * {@code null})
+	 * @param trafficRecorderProvider the provider for the recorder to pass to wrapping
+	 * transports (must not be {@code null})
 	 */
-	public RecordingTransportPostProcessor(final McpClientTrafficRecorder trafficRecorder) {
-		if (trafficRecorder == null) {
-			throw new IllegalArgumentException("trafficRecorder must not be null");
+	public RecordingTransportPostProcessor(final ObjectProvider<McpClientTrafficRecorder> trafficRecorderProvider) {
+		if (trafficRecorderProvider == null) {
+			throw new IllegalArgumentException("trafficRecorderProvider must not be null");
 		}
-		this.trafficRecorder = trafficRecorder;
+		this.trafficRecorderProvider = trafficRecorderProvider;
 	}
 
 	@Override
@@ -117,12 +120,26 @@ public final class RecordingTransportPostProcessor implements BeanPostProcessor 
 	}
 
 	private Object wrapBean(final Object bean) throws ReflectiveOperationException {
+		final McpClientTrafficRecorder recorder = resolveRecorder();
+		if (recorder == null) {
+			LOG.warn("McpClientTrafficRecorder not yet available; skipping wrap of {}", NAMED_CLIENT_TRANSPORT_FQCN);
+			return bean;
+		}
 		final String clientName = (String) invokeAccessor(bean, "name");
 		final McpClientTransport delegate = (McpClientTransport) invokeAccessor(bean, "transport");
 		final String transportType = detectTransportType(delegate);
 		final RecordingMcpClientTransport recordingTransport = new RecordingMcpClientTransport(delegate, clientName,
-				transportType, this.trafficRecorder);
+				transportType, recorder);
 		return newNamedClientMcpTransport(clientName, recordingTransport);
+	}
+
+	private McpClientTrafficRecorder resolveRecorder() {
+		McpClientTrafficRecorder result = this.trafficRecorder;
+		if (result == null) {
+			result = this.trafficRecorderProvider.getObject();
+			this.trafficRecorder = result;
+		}
+		return result;
 	}
 
 	private Object invokeAccessor(final Object bean, final String accessorName) throws ReflectiveOperationException {

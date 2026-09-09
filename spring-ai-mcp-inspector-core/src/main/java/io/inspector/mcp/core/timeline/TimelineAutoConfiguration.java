@@ -110,7 +110,7 @@ public class TimelineAutoConfiguration {
 	@ConditionalOnBean(McpClientTrafficRecorder.class)
 	public static RecordingTransportPostProcessor mcpInspectorRecordingTransportPostProcessor(
 			final ObjectProvider<McpClientTrafficRecorder> trafficRecorderProvider) {
-		return new RecordingTransportPostProcessor(trafficRecorderProvider.getObject());
+		return new RecordingTransportPostProcessor(trafficRecorderProvider);
 	}
 
 	/**

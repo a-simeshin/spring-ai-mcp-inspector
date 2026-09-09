@@ -27,6 +27,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import reactor.core.publisher.Mono;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,6 +47,8 @@ class RecordingTransportPostProcessorTests {
 
 	private McpClientTrafficRecorder recorder;
 
+	private ObjectProvider<McpClientTrafficRecorder> recorderProvider;
+
 	private RecordingTransportPostProcessor postProcessor;
 
 	@BeforeEach
@@ -53,7 +56,9 @@ class RecordingTransportPostProcessorTests {
 		// given
 		this.timelineService = new BoundedTimelineService();
 		this.recorder = new McpClientTrafficRecorder(this.timelineService);
-		this.postProcessor = new RecordingTransportPostProcessor(this.recorder);
+		this.recorderProvider = mock(ObjectProvider.class);
+		given(this.recorderProvider.getObject()).willReturn(this.recorder);
+		this.postProcessor = new RecordingTransportPostProcessor(this.recorderProvider);
 	}
 
 	/**
@@ -73,8 +78,8 @@ class RecordingTransportPostProcessorTests {
 	class Constructor {
 
 		@Test
-		@DisplayName("rejects null recorder")
-		void rejectsNullRecorder() {
+		@DisplayName("rejects null recorder provider")
+		void rejectsNullRecorderProvider() {
 			assertThatThrownBy(() -> new RecordingTransportPostProcessor(null))
 				.isInstanceOf(IllegalArgumentException.class);
 		}
@@ -218,6 +223,50 @@ class RecordingTransportPostProcessorTests {
 			final RecordingMcpClientTransport recording = (RecordingMcpClientTransport) transport;
 			recording.sendMessage(new JSONRPCRequest("2.0", "tools/list", 1, null)).block();
 			assertThat(RecordingTransportPostProcessorTests.this.timelineService.query(TimelineQuery.all())).hasSize(1);
+		}
+
+		@Test
+		@DisplayName("resolves recorder lazily on first wrap, not at BPP creation")
+		void resolvesRecorderLazilyOnFirstWrap() throws Exception {
+			// given: a provider whose getObject() would fail if called eagerly
+			final McpClientTrafficRecorder realRecorder = new McpClientTrafficRecorder(
+					RecordingTransportPostProcessorTests.this.timelineService);
+			final ObjectProvider<McpClientTrafficRecorder> lazyProvider = new ObjectProvider<>() {
+				private boolean called = false;
+
+				@Override
+				public McpClientTrafficRecorder getObject() {
+					this.called = true;
+					return realRecorder;
+				}
+
+				@Override
+				public McpClientTrafficRecorder getObject(final Object... args) {
+					return getObject();
+				}
+
+				@Override
+				public McpClientTrafficRecorder getIfAvailable() {
+					return getObject();
+				}
+
+				@Override
+				public McpClientTrafficRecorder getIfUnique() {
+					return getObject();
+				}
+			};
+			final RecordingTransportPostProcessor lazyPp = new RecordingTransportPostProcessor(lazyProvider);
+
+			// when: wrap a bean
+			final McpClientTransport mockTransport = mock(McpClientTransport.class);
+			given(mockTransport.sendMessage(any(JSONRPCMessage.class))).willReturn(Mono.empty());
+			final Object named = newNamedClientMcpTransport("lazy-client", mockTransport);
+			final Object result = lazyPp.postProcessAfterInitialization(named, "namedTransport");
+
+			// then: the provider was called and the bean was wrapped
+			assertThat(result).isNotSameAs(named);
+			final Object transport = named.getClass().getMethod("transport").invoke(result);
+			assertThat(transport).isInstanceOf(RecordingMcpClientTransport.class);
 		}
 
 		@Test
