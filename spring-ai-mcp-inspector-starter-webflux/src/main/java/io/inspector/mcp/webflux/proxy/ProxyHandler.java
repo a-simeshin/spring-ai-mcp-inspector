@@ -377,8 +377,8 @@ public class ProxyHandler {
 		return switch (type) {
 			case "sse" -> {
 				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/sse");
-				yield noHeaders ? this.transportFactory.openSse(target)
-						: this.transportFactory.openSse(target, authorization, customHeaders);
+				yield noHeaders ? this.transportFactory.buildSse(target)
+						: this.transportFactory.buildSse(target, authorization, customHeaders);
 			}
 			case "streamable-http" -> {
 				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
