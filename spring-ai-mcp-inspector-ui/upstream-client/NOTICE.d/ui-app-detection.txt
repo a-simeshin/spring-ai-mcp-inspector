@@ -1,0 +1,22 @@
+Files changed:
+- src/components/AppsTab.tsx: export hasUIMetadata; prefilledToolCall.result
+  is now optional (absent = preselect-without-run from ToolsTab).
+- src/components/ToolsTab.tsx: added optional onOpenAsApp prop; renders an
+  "Open as App" button next to "Run Tool" for tools with
+  _meta.ui.resourceUri.
+- src/App.tsx: wired onOpenAsApp to set prefilledToolCall (without result)
+  and switch activeTab to "apps"; extended PrefilledAppsToolCall type to
+  make result optional.
+- src/components/__tests__/ui-resource-detection.test.ts: unit tests for
+  hasUIMetadata (nested key, deprecated flat key, absent meta, empty
+  string, non-ui:// value throws, null, number).
+- src/components/__tests__/ToolsTab.test.tsx: tests for the "Open as App"
+  button visibility and click behavior.
+
+Reason: SEP-1865 detection is tool-metadata-driven (_meta.ui.resourceUri),
+not content-sniffing. The button closes the loop between Tools tab and Apps
+tab: the user can open an App for a tool directly from Tools without
+running it first.
+
+Covered by: unit tests in ui-resource-detection.test.ts and
+ToolsTab.test.tsx.

@@ -35,6 +35,8 @@ import {
   AlertCircle,
   Copy,
   CheckCheck,
+  // [spring-ai-mcp-inspector PATCH] ui-app-detection: icon for Open as App
+  ExternalLink,
 } from "lucide-react";
 import { useEffect, useState, useRef } from "react";
 import ListPane from "./ListPane";
@@ -44,6 +46,8 @@ import { useToast } from "@/lib/hooks/useToast";
 import useCopy from "@/lib/hooks/useCopy";
 import IconDisplay, { WithIcons } from "./IconDisplay";
 import { cn } from "@/lib/utils";
+// [spring-ai-mcp-inspector PATCH] ui-app-detection: "Open as App" button
+import { hasUIMetadata } from "./AppsTab";
 import {
   META_NAME_RULES_MESSAGE,
   META_PREFIX_RULES_MESSAGE,
@@ -209,6 +213,8 @@ const ToolsTab = ({
   resourceContent,
   onReadResource,
   serverSupportsTaskRequests,
+  // [spring-ai-mcp-inspector PATCH] ui-app-detection: "Open as App" button
+  onOpenAsApp,
 }: {
   tools: Tool[];
   listTools: () => void;
@@ -228,6 +234,9 @@ const ToolsTab = ({
   resourceContent: Record<string, unknown>;
   onReadResource?: (uri: string) => void;
   serverSupportsTaskRequests: boolean;
+  // [spring-ai-mcp-inspector PATCH] ui-app-detection: called when the user
+  // clicks "Open as App" for a tool that has _meta.ui.resourceUri.
+  onOpenAsApp?: (tool: Tool) => void;
 }) => {
   const [params, setParams] = useState<Record<string, unknown>>({});
   const [runAsTask, setRunAsTask] = useState(false);
@@ -916,6 +925,18 @@ const ToolsTab = ({
                     </>
                   )}
                 </Button>
+                {/* [spring-ai-mcp-inspector PATCH] ui-app-detection:
+                    "Open as App" for tools with _meta.ui.resourceUri. */}
+                {selectedTool && hasUIMetadata(selectedTool) && onOpenAsApp && (
+                  <Button
+                    data-testid="open-as-app-button"
+                    variant="outline"
+                    onClick={() => onOpenAsApp(selectedTool)}
+                  >
+                    <ExternalLink className="w-4 h-4 mr-2" />
+                    Open as App
+                  </Button>
+                )}
                 <div className="flex gap-2">
                   <Button
                     onClick={async () => {

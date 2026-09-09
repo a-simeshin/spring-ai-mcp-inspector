@@ -1293,4 +1293,56 @@ describe("ToolsTab", () => {
       expect(screen.getByTestId("run-tool-button")).toBeInTheDocument();
     });
   });
+
+  // [spring-ai-mcp-inspector PATCH] ui-app-detection: tests for the
+  // "Open as App" button shown for tools with _meta.ui.resourceUri.
+  describe("Open as App button", () => {
+    const appTool: Tool = {
+      name: "weatherApp",
+      description: "Weather app with UI",
+      inputSchema: { type: "object" as const, properties: {} },
+      _meta: { ui: { resourceUri: "ui://weather-app" } },
+    } as Tool;
+
+    it("shows Open as App button for a tool with ui metadata", () => {
+      renderToolsTab({
+        tools: [appTool],
+        selectedTool: appTool,
+        onOpenAsApp: jest.fn(),
+      });
+      expect(screen.getByTestId("open-as-app-button")).toBeInTheDocument();
+    });
+
+    it("does not show Open as App button for a regular tool", () => {
+      renderToolsTab({
+        tools: [mockTools[0]],
+        selectedTool: mockTools[0],
+        onOpenAsApp: jest.fn(),
+      });
+      expect(
+        screen.queryByTestId("open-as-app-button"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("does not show Open as App button when onOpenAsApp is not provided", () => {
+      renderToolsTab({
+        tools: [appTool],
+        selectedTool: appTool,
+      });
+      expect(
+        screen.queryByTestId("open-as-app-button"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("calls onOpenAsApp with the selected tool when clicked", () => {
+      const onOpenAsApp = jest.fn();
+      renderToolsTab({
+        tools: [appTool],
+        selectedTool: appTool,
+        onOpenAsApp,
+      });
+      fireEvent.click(screen.getByTestId("open-as-app-button"));
+      expect(onOpenAsApp).toHaveBeenCalledWith(appTool);
+    });
+  });
 });

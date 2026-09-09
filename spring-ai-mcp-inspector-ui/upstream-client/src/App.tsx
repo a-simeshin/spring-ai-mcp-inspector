@@ -127,7 +127,9 @@ type PrefilledAppsToolCall = {
   id: number;
   toolName: string;
   params: Record<string, unknown>;
-  result: CompatibilityCallToolResult;
+  // [spring-ai-mcp-inspector PATCH] ui-app-detection: optional for
+  // preselect-without-run (ToolsTab "Open as App" button).
+  result?: CompatibilityCallToolResult;
 };
 
 const hasAppResourceUri = (tool: Tool): boolean => {
@@ -1739,6 +1741,17 @@ const App = () => {
                       onReadResource={(uri: string) => {
                         clearError("resources");
                         readResource(uri);
+                      }}
+                      // [spring-ai-mcp-inspector PATCH] ui-app-detection:
+                      // "Open as App" navigates to Apps tab and preselects
+                      // the tool (no auto-run; result is absent).
+                      onOpenAsApp={(tool: Tool) => {
+                        setPrefilledAppsToolCall({
+                          id: ++prefilledAppsToolCallIdRef.current,
+                          toolName: tool.name,
+                          params: {},
+                        });
+                        setActiveTab("apps");
                       }}
                     />
                     <TasksTab

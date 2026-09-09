@@ -55,7 +55,7 @@ interface AppsTabProps {
     id: number;
     toolName: string;
     params: Record<string, unknown>;
-    result: CompatibilityCallToolResult;
+    result?: CompatibilityCallToolResult;
   } | null;
   onPrefilledToolCallConsumed?: (callId: number) => void;
   error: string | null;
@@ -63,8 +63,9 @@ interface AppsTabProps {
   onNotification?: (notification: ServerNotification) => void;
 }
 
-// Type guard to check if a tool has UI metadata
-const hasUIMetadata = (tool: Tool): boolean => {
+// [spring-ai-mcp-inspector PATCH] ui-app-detection: exported for ToolsTab
+// "Open as App" button (issue #183).
+export const hasUIMetadata = (tool: Tool): boolean => {
   return !!getToolUiResourceUri(tool);
 };
 
@@ -196,7 +197,9 @@ const AppsTab = ({
     prefillingParamsRef.current = hydratedParams;
     setSelectedTool(matchingTool);
     setSubmittedParams(hydratedParams);
-    setSubmittedToolResult(prefilledToolCall.result);
+    // [spring-ai-mcp-inspector PATCH] ui-app-detection: result is optional
+    // (undefined = preselect without run, from ToolsTab "Open as App").
+    setSubmittedToolResult(prefilledToolCall.result ?? null);
     setIsAppOpen(true);
     setIsMaximized(false);
     consumedPrefilledCallIdRef.current = prefilledToolCall.id;
