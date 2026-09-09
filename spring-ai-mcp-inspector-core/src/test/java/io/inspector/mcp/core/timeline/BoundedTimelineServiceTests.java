@@ -330,4 +330,27 @@ class BoundedTimelineServiceTests {
 		assertThat(result).isEmpty();
 	}
 
+	@Test
+	@DisplayName("query with endpoint filter returns matching events across 501 events")
+	void queryByEndpointFilter_501Events() {
+		final ObjectNode diagPayload = JsonNodeFactory.instance.objectNode();
+		diagPayload.put("endpoint", "client-diagnostics");
+		final ObjectNode otherPayload = JsonNodeFactory.instance.objectNode();
+		otherPayload.put("endpoint", "client");
+		// Fill the service with 500 non-diagnostics events then 1 diagnostics event
+		for (int i = 0; i < 500; i++) {
+			this.service.append(new TimelineEvent("other-" + i, UUID.randomUUID().toString(), null,
+					TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), otherPayload));
+		}
+		final TimelineEvent diagEvent = new TimelineEvent("diag-1", UUID.randomUUID().toString(), null,
+				TimelineEventType.APP_LOG, Instant.now(), diagPayload);
+		this.service.append(diagEvent);
+		// Query with endpoint filter and default limit (500)
+		final List<TimelineEvent> result = this.service
+			.query(TimelineQuery.builder().endpoint("client-diagnostics").limit(500).build());
+		// Must find the single diagnostics event (endpoint filter applied before limit)
+		assertThat(result).hasSize(1);
+		assertThat(result.get(0).id()).isEqualTo("diag-1");
+	}
+
 }

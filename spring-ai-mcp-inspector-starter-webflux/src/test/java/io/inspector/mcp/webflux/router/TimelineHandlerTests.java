@@ -39,8 +39,6 @@ import org.springframework.web.reactive.function.server.HandlerStrategies;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Mono;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.node.JsonNodeFactory;
 
 import io.inspector.mcp.core.timeline.TimelineEvent;
 import io.inspector.mcp.core.timeline.TimelineEventType;
@@ -297,21 +295,47 @@ class TimelineHandlerTests {
 	class Diagnostics {
 
 		@Test
-		@Story("Filters by endpoint=client-diagnostics")
-		@Description("diagnostics() returns only events whose payload.endpoint equals client-diagnostics")
-		void diagnostics_filtersByEndpoint() {
+		@Story("Passes endpoint filter to timelineService")
+		@Description("diagnostics() passes endpoint=client-diagnostics filter to timelineService")
+		void diagnostics_passesEndpointFilter() {
 			// given
-			final JsonNode diagPayload = JsonNodeFactory.instance.objectNode().put("endpoint", "client-diagnostics");
-			final JsonNode clientPayload = JsonNodeFactory.instance.objectNode().put("endpoint", "client");
-			final JsonNode nullPayload = null;
+			given(TimelineHandlerTests.this.timelineService.query(any())).willReturn(List.of());
+
+			// when
+			TimelineHandlerTests.this.handler
+				.diagnostics(request(MockServerHttpRequest.get("/mcp-inspector/api/timeline/diagnostics").build()))
+				.block();
+
+			// then: the query has endpoint=client-diagnostics
+			verify(TimelineHandlerTests.this.timelineService)
+				.query(argThat((q) -> q.endpoint() != null && "client-diagnostics".equals(q.endpoint())));
+		}
+
+		@Test
+		@Story("Uses MAX_LIMIT")
+		@Description("diagnostics() uses MAX_LIMIT to avoid losing events to default 500 cap")
+		void diagnostics_usesMaxLimit() {
+			// given
+			given(TimelineHandlerTests.this.timelineService.query(any())).willReturn(List.of());
+
+			// when
+			TimelineHandlerTests.this.handler
+				.diagnostics(request(MockServerHttpRequest.get("/mcp-inspector/api/timeline/diagnostics").build()))
+				.block();
+
+			// then: the query has MAX_LIMIT
+			verify(TimelineHandlerTests.this.timelineService)
+				.query(argThat((q) -> q.limit() == TimelineQuery.MAX_LIMIT));
+		}
+
+		@Test
+		@Story("Returns service result")
+		@Description("diagnostics() returns whatever the service returns")
+		void diagnostics_returnsServiceResult() {
+			// given
 			final TimelineEvent diagEvent = new TimelineEvent("d1", null, null, TimelineEventType.APP_LOG,
-					Instant.now(), diagPayload);
-			final TimelineEvent clientEvent = new TimelineEvent("c1", null, null, TimelineEventType.MCP_JSONRPC_REQUEST,
-					Instant.now(), clientPayload);
-			final TimelineEvent nullPayloadEvent = new TimelineEvent("n1", null, null, TimelineEventType.APP_LOG,
-					Instant.now(), nullPayload);
-			given(TimelineHandlerTests.this.timelineService.query(any()))
-				.willReturn(List.of(diagEvent, clientEvent, nullPayloadEvent));
+					Instant.now(), null);
+			given(TimelineHandlerTests.this.timelineService.query(any())).willReturn(List.of(diagEvent));
 
 			// when
 			final Mono<ServerResponse> result = TimelineHandlerTests.this.handler
@@ -321,41 +345,6 @@ class TimelineHandlerTests {
 			final List<TimelineEvent> body = entityBody(result.block());
 			assertThat(body).hasSize(1);
 			assertThat(body.get(0).id()).isEqualTo("d1");
-		}
-
-		@Test
-		@Story("Empty result when no diagnostics events")
-		@Description("diagnostics() returns an empty list when no events have endpoint=client-diagnostics")
-		void diagnostics_noDiagnostics_returnsEmpty() {
-			// given
-			final JsonNode clientPayload = JsonNodeFactory.instance.objectNode().put("endpoint", "client");
-			final TimelineEvent clientEvent = new TimelineEvent("c1", null, null, TimelineEventType.MCP_JSONRPC_REQUEST,
-					Instant.now(), clientPayload);
-			given(TimelineHandlerTests.this.timelineService.query(any())).willReturn(List.of(clientEvent));
-
-			// when
-			final Mono<ServerResponse> result = TimelineHandlerTests.this.handler
-				.diagnostics(request(MockServerHttpRequest.get("/mcp-inspector/api/timeline/diagnostics").build()));
-
-			// then
-			final List<TimelineEvent> body = entityBody(result.block());
-			assertThat(body).isEmpty();
-		}
-
-		@Test
-		@Story("Empty events list")
-		@Description("diagnostics() returns an empty list when no events exist at all")
-		void diagnostics_noEvents_returnsEmpty() {
-			// given
-			given(TimelineHandlerTests.this.timelineService.query(any())).willReturn(List.of());
-
-			// when
-			final Mono<ServerResponse> result = TimelineHandlerTests.this.handler
-				.diagnostics(request(MockServerHttpRequest.get("/mcp-inspector/api/timeline/diagnostics").build()));
-
-			// then
-			final List<TimelineEvent> body = entityBody(result.block());
-			assertThat(body).isEmpty();
 		}
 
 	}

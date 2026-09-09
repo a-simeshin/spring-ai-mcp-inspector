@@ -135,29 +135,6 @@ function ProtocolNegotiationBlock({ negotiation }: { negotiation: ProtocolNegoti
   );
 }
 
-// Mask sensitive values in auth-related payload fields.
-// When used as a JSON.stringify replacer, non-sensitive values are returned
-// as-is so nested objects/array are preserved.
-function maskSensitiveValue(key: string, value: unknown): unknown {
-  if (typeof value !== "string") {
-    return value;
-  }
-  const lower = key.toLowerCase();
-  if (
-    lower.includes("token") ||
-    lower.includes("secret") ||
-    lower.includes("password") ||
-    lower.includes("apikey") ||
-    lower.includes("auth")
-  ) {
-    if (value.length <= 8) {
-      return "*".repeat(value.length);
-    }
-    return value.substring(0, 4) + "*".repeat(value.length - 8) + value.substring(value.length - 4);
-  }
-  return value;
-}
-
 function isDiagnosticEvent(payload: Record<string, unknown> | null): boolean {
   return payload?.endpoint === "client-diagnostics";
 }
@@ -313,7 +290,9 @@ const TimelineTab = () => {
     };
   }, [autoRefresh, fetchTimeline]);
 
-  // Collect unique client names and directions from the fetched events.
+  // Collect unique client names from the fetched events. Direction options are
+  // always both client->server and server->client (the two values used by the
+  // client traffic recorder).
   const clientNames = [
     ...new Set(
       events
@@ -321,16 +300,13 @@ const TimelineTab = () => {
         .filter((n): n is string => n !== null),
     ),
   ].sort();
-  const directions = [
-    ...new Set(
-      events
-        .map((e) => (e.payload && typeof e.payload.direction === "string" ? e.payload.direction : null))
-        .filter((n): n is string => n !== null),
-    ),
-  ].sort();
+  // Direction options are always the two known values from the client traffic recorder.
+  const directionOptions = ["client->server", "server->client"];
+  const directions = directionOptions.filter((d) => d !== "");
 
   // Filter by client name and direction on the client side.
-    const filteredEvents = events.filter((e) => {
+  const isFilterActive = directionFilter !== "" || clientNameFilter !== "";
+  const filteredEvents = events.filter((e) => {
     const p = e.payload ?? {};
     if (directionFilter && p.direction !== directionFilter) return false;
     if (clientNameFilter && p.clientName !== clientNameFilter) return false;
@@ -342,37 +318,37 @@ const TimelineTab = () => {
       <div className="bg-gray-900 text-gray-100 p-4 rounded-lg h-full font-mono text-sm overflow-auto flex flex-col">
         <div className="flex items-center justify-between mb-2 shrink-0">
           <span className="text-xs opacity-50">
-            {filteredEvents.length} event{filteredEvents.length !== 1 ? "s" : ""}
+            {isFilterActive
+              ? `${filteredEvents.length} of ${events.length} event${events.length !== 1 ? "s" : ""}`
+              : `${filteredEvents.length} event${filteredEvents.length !== 1 ? "s" : ""}`}
           </span>
           <div className="flex items-center gap-2">
-            {directions.length > 0 ? (
-              <select
-                className="bg-gray-800 text-xs border border-gray-700 rounded px-1 py-0.5"
-                value={directionFilter}
-                onChange={(e) => setDirectionFilter(e.target.value)}
-              >
-                <option value="">All directions</option>
-                {directions.map((d) => (
-                  <option key={d} value={d}>
-                    {d}
-                  </option>
-                ))}
-              </select>
-            ) : null}
-            {clientNames.length > 0 ? (
-              <select
-                className="bg-gray-800 text-xs border border-gray-700 rounded px-1 py-0.5"
-                value={clientNameFilter}
-                onChange={(e) => setClientNameFilter(e.target.value)}
-              >
-                <option value="">All clients</option>
-                {clientNames.map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-            ) : null}
+            <select
+              className="bg-gray-800 text-xs border border-gray-700 rounded px-1 py-0.5"
+              value={directionFilter}
+              onChange={(e) => setDirectionFilter(e.target.value)}
+              aria-label="Filter by direction"
+            >
+              <option value="">All directions</option>
+              {directions.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+            <select
+              className="bg-gray-800 text-xs border border-gray-700 rounded px-1 py-0.5"
+              value={clientNameFilter}
+              onChange={(e) => setClientNameFilter(e.target.value)}
+              aria-label="Filter by client name"
+            >
+              <option value="">All clients</option>
+              {clientNames.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
             <label className="flex items-center gap-1 text-xs opacity-70 cursor-pointer">
               <input
                 type="checkbox"
@@ -386,7 +362,9 @@ const TimelineTab = () => {
         </div>
         <div className="flex-1 overflow-y-auto">
           {filteredEvents.length === 0 ? (
-            <div className="opacity-50 text-center mt-8">No timeline events yet</div>
+            <div className="opacity-50 text-center mt-8">
+              {isFilterActive ? "No events match the current filter" : "No timeline events yet"}
+            </div>
           ) : (
             filteredEvents.map((event) => <TimelineEventRow key={event.id} event={event} />)
           )}

@@ -30,8 +30,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.node.JsonNodeFactory;
 
 import io.inspector.mcp.core.timeline.TimelineEvent;
 import io.inspector.mcp.core.timeline.TimelineEventType;
@@ -80,7 +78,7 @@ class TimelineControllerTests {
 
 			// when
 			final List<TimelineEvent> result = TimelineControllerTests.this.controller.query(null, null, null, null,
-					null, null, null, 100);
+					null, 100);
 
 			// then
 			assertThat(result).hasSize(1).contains(event);
@@ -97,7 +95,7 @@ class TimelineControllerTests {
 
 			// when
 			TimelineControllerTests.this.controller.query(UUID.randomUUID().toString(), "sess1", now, now,
-					"MCP_JSONRPC_REQUEST,APP_LOG", null, null, 10);
+					"MCP_JSONRPC_REQUEST,APP_LOG", 10);
 
 			// then
 			verify(TimelineControllerTests.this.timelineService).query(argThat((q) -> q.limit() == 10));
@@ -118,7 +116,7 @@ class TimelineControllerTests {
 			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of());
 
 			// when
-			TimelineControllerTests.this.controller.query(null, null, null, null, null, null, null, 500);
+			TimelineControllerTests.this.controller.query(null, null, null, null, null, 500);
 
 			// then
 			verify(TimelineControllerTests.this.timelineService)
@@ -134,8 +132,7 @@ class TimelineControllerTests {
 			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of());
 
 			// when
-			TimelineControllerTests.this.controller.query(null, null, null, null, "MCP_JSONRPC_REQUEST,APP_LOG", null,
-					null, 500);
+			TimelineControllerTests.this.controller.query(null, null, null, null, "MCP_JSONRPC_REQUEST,APP_LOG", 500);
 
 			// then: the query contains both parsed types
 			verify(TimelineControllerTests.this.timelineService).query(argThat((q) -> {
@@ -154,7 +151,7 @@ class TimelineControllerTests {
 			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of());
 
 			// when
-			TimelineControllerTests.this.controller.query(null, null, null, null, "UNKNOWN,APP_LOG", null, null, 500);
+			TimelineControllerTests.this.controller.query(null, null, null, null, "UNKNOWN,APP_LOG", 500);
 
 			// then: only APP_LOG survives
 			verify(TimelineControllerTests.this.timelineService).query(argThat((q) -> {
@@ -173,7 +170,7 @@ class TimelineControllerTests {
 
 			// when
 			TimelineControllerTests.this.controller.query(null, null, null, null,
-					"  MCP_JSONRPC_RESPONSE , , BAD , MCP_JSONRPC_NOTIFICATION  ", null, null, 500);
+					"  MCP_JSONRPC_RESPONSE , , BAD , MCP_JSONRPC_NOTIFICATION  ", 500);
 
 			// then
 			verify(TimelineControllerTests.this.timelineService).query(argThat((q) -> {
@@ -197,7 +194,7 @@ class TimelineControllerTests {
 			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of());
 
 			// when
-			TimelineControllerTests.this.controller.query(null, null, null, null, null, null, null, 0);
+			TimelineControllerTests.this.controller.query(null, null, null, null, null, 0);
 
 			// then
 			verify(TimelineControllerTests.this.timelineService)
@@ -212,7 +209,7 @@ class TimelineControllerTests {
 			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of());
 
 			// when
-			TimelineControllerTests.this.controller.query(null, null, null, null, null, null, null, 999999);
+			TimelineControllerTests.this.controller.query(null, null, null, null, null, 999999);
 
 			// then
 			verify(TimelineControllerTests.this.timelineService)
@@ -227,21 +224,43 @@ class TimelineControllerTests {
 	class Diagnostics {
 
 		@Test
-		@Story("Filters by endpoint=client-diagnostics")
-		@Description("diagnostics() returns only events whose payload.endpoint equals client-diagnostics")
-		void diagnostics_filtersByEndpoint() {
+		@Story("Passes endpoint filter to timelineService")
+		@Description("diagnostics() passes endpoint=client-diagnostics filter to timelineService")
+		void diagnostics_passesEndpointFilter() {
 			// given
-			final JsonNode diagPayload = JsonNodeFactory.instance.objectNode().put("endpoint", "client-diagnostics");
-			final JsonNode clientPayload = JsonNodeFactory.instance.objectNode().put("endpoint", "client");
-			final JsonNode nullPayload = null;
+			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of());
+
+			// when
+			TimelineControllerTests.this.controller.diagnostics();
+
+			// then: the query has endpoint=client-diagnostics
+			verify(TimelineControllerTests.this.timelineService)
+				.query(argThat((q) -> q.endpoint() != null && "client-diagnostics".equals(q.endpoint())));
+		}
+
+		@Test
+		@Story("Uses MAX_LIMIT")
+		@Description("diagnostics() uses MAX_LIMIT to avoid losing events to default 500 cap")
+		void diagnostics_usesMaxLimit() {
+			// given
+			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of());
+
+			// when
+			TimelineControllerTests.this.controller.diagnostics();
+
+			// then: the query has MAX_LIMIT
+			verify(TimelineControllerTests.this.timelineService)
+				.query(argThat((q) -> q.limit() == TimelineQuery.MAX_LIMIT));
+		}
+
+		@Test
+		@Story("Returns service result")
+		@Description("diagnostics() returns whatever the service returns")
+		void diagnostics_returnsServiceResult() {
+			// given
 			final TimelineEvent diagEvent = new TimelineEvent("d1", null, null, TimelineEventType.APP_LOG,
-					Instant.now(), diagPayload);
-			final TimelineEvent clientEvent = new TimelineEvent("c1", null, null, TimelineEventType.MCP_JSONRPC_REQUEST,
-					Instant.now(), clientPayload);
-			final TimelineEvent nullPayloadEvent = new TimelineEvent("n1", null, null, TimelineEventType.APP_LOG,
-					Instant.now(), nullPayload);
-			given(TimelineControllerTests.this.timelineService.query(any()))
-				.willReturn(List.of(diagEvent, clientEvent, nullPayloadEvent));
+					Instant.now(), null);
+			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of(diagEvent));
 
 			// when
 			final List<TimelineEvent> result = TimelineControllerTests.this.controller.diagnostics();
@@ -249,23 +268,6 @@ class TimelineControllerTests {
 			// then
 			assertThat(result).hasSize(1);
 			assertThat(result.get(0).id()).isEqualTo("d1");
-		}
-
-		@Test
-		@Story("Empty result when no diagnostics events")
-		@Description("diagnostics() returns an empty list when no events have endpoint=client-diagnostics")
-		void diagnostics_noDiagnostics_returnsEmpty() {
-			// given
-			final JsonNode clientPayload = JsonNodeFactory.instance.objectNode().put("endpoint", "client");
-			final TimelineEvent clientEvent = new TimelineEvent("c1", null, null, TimelineEventType.MCP_JSONRPC_REQUEST,
-					Instant.now(), clientPayload);
-			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of(clientEvent));
-
-			// when
-			final List<TimelineEvent> result = TimelineControllerTests.this.controller.diagnostics();
-
-			// then
-			assertThat(result).isEmpty();
 		}
 
 	}
