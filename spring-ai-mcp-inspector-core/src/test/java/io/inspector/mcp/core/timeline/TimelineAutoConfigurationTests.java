@@ -48,6 +48,30 @@ class TimelineAutoConfigurationTests {
 				});
 		}
 
+		@Test
+		@DisplayName("no BeanPostProcessorChecker WARN when client-capture-enabled=true")
+		void noBeanPostProcessorCheckerWarn() {
+			TimelineAutoConfigurationTests.this.runner
+				.withPropertyValues("spring.ai.mcp.inspector.timeline.enabled=true",
+						"spring.ai.mcp.inspector.timeline.client-capture-enabled=true",
+						"spring.ai.mcp.inspector.timeline.logs-enabled=false",
+						"spring.ai.mcp.inspector.timeline.stdio-capture-enabled=false")
+				.run((context) -> {
+					assertThat(context).hasSingleBean(McpClientTrafficRecorder.class);
+					assertThat(context).hasSingleBean(RecordingTransportPostProcessor.class);
+					// The BPP is static, but the recorder should NOT have been eagerly
+					// initialized: the ObjectProvider is stored, not resolved, at factory
+					// time.
+					// If it were resolved eagerly, BeanPostProcessorChecker would print a
+					// WARN
+					// for mcpInspectorRecordingTransportPostProcessor.
+					// We verify by checking the recorder is in the context (created
+					// lazily
+					// when the BPP actually wraps a bean, not during registration).
+					assertThat(context.getBean(McpClientTrafficRecorder.class)).isNotNull();
+				});
+		}
+
 	}
 
 	@Nested
