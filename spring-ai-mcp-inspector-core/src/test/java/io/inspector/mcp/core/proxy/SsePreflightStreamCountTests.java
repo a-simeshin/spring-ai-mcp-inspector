@@ -450,11 +450,15 @@ class SsePreflightStreamCountTests {
 
 		// then : the retry POST succeeds (rejectPosts was already consumed by the first
 		// attempt)
-		final McpSchema.JSONRPCNotification retryMessage = new McpSchema.JSONRPCNotification("test-retry");
+		final McpSchema.JSONRPCRequest retryMessage = new McpSchema.JSONRPCRequest("test-retry", "1");
 		retryAttempt.sendMessage(retryMessage).block(Duration.ofSeconds(5));
 
 		// Allow a short delay for the stub to deliver any queued response.
 		Thread.sleep(300);
+
+		// The retry POST carried an id, so the stub auto-queued an InitializeResult
+		// response for it. The SSE loop must have consumed it.
+		assertThat(this.stub.responseDeliveryCount()).as("Response consumed from SSE queue").isEqualTo(1);
 
 		// then : assertions
 		// HEAD probes: one per transport connect (first attempt + retry attempt)
