@@ -40,8 +40,9 @@ import java.util.Set;
  * property (both {@code url} and {@code command} on the same connection) is also
  * reported.</li>
  * <li><b>Duplicate handler bindings</b>: the same handler kind is bound to the same
- * client name by more than one bean/method. Only one survives at runtime; the others are
- * silently lost.</li>
+ * client name by more than one bean/method. Only one binding takes effect; the others are
+ * silently ignored. Spring AI keeps only one handler registration per kind+client
+ * combination, so duplicates beyond the first are dead code.</li>
  * </ol>
  *
  * @author Artem Simeshin
@@ -84,8 +85,9 @@ public final class ClientDesyncDetector {
 			}
 			if (!configuredNames.contains(binding.clientName())) {
 				findings.add(new DesyncFinding(DesyncType.ORPHAN_HANDLER, binding.clientName(), binding.handlerKind(),
-						binding.beanName() + "#" + binding.methodName(), "Handler references client '"
-								+ binding.clientName() + "' which is not configured in spring.ai.mcp.client.*"));
+						binding.beanName() + "#" + binding.methodName(),
+						"Handler references client '" + binding.clientName()
+								+ "' which is not configured in spring.ai.mcp.client.* properties"));
 			}
 		}
 		return findings;

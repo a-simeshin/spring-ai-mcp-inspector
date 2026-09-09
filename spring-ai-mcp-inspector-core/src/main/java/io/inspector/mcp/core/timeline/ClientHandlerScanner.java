@@ -17,6 +17,7 @@
 package io.inspector.mcp.core.timeline;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -27,6 +28,8 @@ import java.util.TreeMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.aop.framework.AopProxyUtils;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
@@ -100,12 +103,12 @@ public class ClientHandlerScanner implements ApplicationContextAware {
 		}
 		final Map<String, HandlerBinding> byKey = new LinkedHashMap<>();
 		for (final String beanName : this.beanFactory.getBeanDefinitionNames()) {
-			if (!this.beanFactory.isSingleton(beanName)) {
+			if (!isSingletonBean(this.beanFactory, beanName)) {
 				continue;
 			}
 			final Class<?> beanType;
 			try {
-				beanType = this.beanFactory.getType(beanName);
+				beanType = this.beanFactory.getType(beanName, false);
 			}
 			catch (final RuntimeException ex) {
 				continue;
@@ -113,9 +116,38 @@ public class ClientHandlerScanner implements ApplicationContextAware {
 			if (beanType == null) {
 				continue;
 			}
-			scanBeanMethods(beanName, beanType, byKey);
+			// Unwrap JDK proxies so that class-level and method-level annotations
+			// on the target class are not lost (getType returns the proxy interface
+			// for JDK proxies, and getAllDeclaredMethods would only see interface
+			// methods). At afterSingletonsInstantiated time, singletons are already
+			// created, so getBean returns the existing instance without
+			// initialization; fall back to the raw type on failure.
+			final Class<?> targetType = resolveTargetClass(beanName, beanType);
+			scanBeanMethods(beanName, targetType, byKey);
 		}
 		return List.copyOf(byKey.values());
+	}
+
+	private Class<?> resolveTargetClass(final String beanName, final Class<?> beanType) {
+		if (!Proxy.isProxyClass(beanType)) {
+			return beanType;
+		}
+		try {
+			final Object bean = this.beanFactory.getBean(beanName);
+			return AopProxyUtils.ultimateTargetClass(bean);
+		}
+		catch (final RuntimeException ex) {
+			return beanType;
+		}
+	}
+
+	private static boolean isSingletonBean(final ConfigurableListableBeanFactory beanFactory, final String beanName) {
+		try {
+			return beanFactory.getBeanDefinition(beanName).isSingleton();
+		}
+		catch (final NoSuchBeanDefinitionException ex) {
+			return false;
+		}
 	}
 
 	private void scanBeanMethods(final String beanName, final Class<?> beanClass,

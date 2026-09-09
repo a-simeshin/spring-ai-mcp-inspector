@@ -256,6 +256,77 @@ class ClientConfigReaderTests {
 		}
 
 		@Test
+		@DisplayName("redacts userinfo in URL without scheme")
+		void redactsNoSchemeUserinfo() {
+			// given
+			final String raw = "user:secret@example.invalid/mcp";
+
+			// when
+			final String redacted = ClientConfigReader.redactUrl(raw);
+
+			// then
+			assertThat(redacted).doesNotContain("user:secret");
+			assertThat(redacted).isEqualTo("***@example.invalid/mcp");
+		}
+
+		@Test
+		@DisplayName("strips fragment from URL")
+		void stripsFragment() {
+			// given
+			final String raw = "https://example.invalid/mcp#section";
+
+			// when
+			final String redacted = ClientConfigReader.redactUrl(raw);
+
+			// then
+			assertThat(redacted).doesNotContain("#section");
+			assertThat(redacted).isEqualTo("https://example.invalid/mcp");
+		}
+
+		@Test
+		@DisplayName("redacts userinfo and strips fragment in no-scheme URL")
+		void redactsUserinfoAndStripsFragmentNoScheme() {
+			// given
+			final String raw = "user:secret@example.invalid/mcp#section";
+
+			// when
+			final String redacted = ClientConfigReader.redactUrl(raw);
+
+			// then
+			assertThat(redacted).doesNotContain("user:secret");
+			assertThat(redacted).doesNotContain("#section");
+			assertThat(redacted).isEqualTo("***@example.invalid/mcp");
+		}
+
+		@Test
+		@DisplayName("redacts query string when userinfo is present without scheme")
+		void redactsQueryStringNoSchemeWithUserinfo() {
+			// given
+			final String raw = "user:secret@example.invalid/mcp?token=abc123";
+
+			// when
+			final String redacted = ClientConfigReader.redactUrl(raw);
+
+			// then
+			assertThat(redacted).doesNotContain("user:secret");
+			assertThat(redacted).doesNotContain("token=abc123");
+			assertThat(redacted).isEqualTo("***@example.invalid/mcp?***");
+		}
+
+		@Test
+		@DisplayName("does not alter no-scheme URL without credentials or fragment")
+		void doesNotAlterCleanNoSchemeUrl() {
+			// given
+			final String raw = "host/sse";
+
+			// when
+			final String redacted = ClientConfigReader.redactUrl(raw);
+
+			// then
+			assertThat(redacted).isEqualTo(raw);
+		}
+
+		@Test
 		@DisplayName("does not alter non-URL string")
 		void doesNotAlterNonUrl() {
 			// given

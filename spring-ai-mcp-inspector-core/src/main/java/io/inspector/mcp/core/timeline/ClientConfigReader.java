@@ -42,8 +42,9 @@ import org.springframework.core.env.Environment;
  *
  * <p>
  * URL and command values are redacted before leaving this reader: userinfo and query
- * string in URLs are masked, and command arguments beyond the executable are masked. This
- * prevents credential leakage through diagnostic logs and timeline events.
+ * string in URLs are masked, the fragment ({@code #...}) is stripped, and command
+ * arguments beyond the executable are masked. This prevents credential leakage through
+ * diagnostic logs and timeline events.
  *
  * @author Artem Simeshin
  */
@@ -120,8 +121,9 @@ public final class ClientConfigReader {
 	/**
 	 * Redacts sensitive parts of a URL: userinfo (user:password@) is replaced with
 	 * {@code ***@} and the query string is replaced with {@code ?***}. The scheme, host,
-	 * port, path and fragment are preserved because they are needed for transport
-	 * mismatch diagnostics.
+	 * port and path are preserved because they are needed for transport mismatch
+	 * diagnostics. The fragment ({@code #...}) is always stripped because it is never
+	 * needed for diagnostics and may contain credentials.
 	 * @param raw the raw URL, or {@code null}
 	 * @return the redacted URL, or {@code null} if the input was {@code null}
 	 */
@@ -129,15 +131,22 @@ public final class ClientConfigReader {
 		if (raw == null) {
 			return null;
 		}
+		// Strip fragment first: it is never needed for diagnostics
 		String result = raw;
+		final int hashPos = result.indexOf('#');
+		if (hashPos >= 0) {
+			result = result.substring(0, hashPos);
+		}
 		final int schemeEnd = result.indexOf("://");
-		if (schemeEnd >= 0) {
-			final int atSign = result.indexOf('@', schemeEnd + 3);
-			if (atSign >= 0) {
-				final int queryStart = result.indexOf('?');
-				if (queryStart < 0 || atSign < queryStart) {
-					result = result.substring(0, schemeEnd + 3) + "***" + result.substring(atSign);
-				}
+		// Find the first '@' in the authority part (after scheme, or from index 0 if
+		// there is no scheme)
+		final int searchStart = (schemeEnd >= 0) ? schemeEnd + 3 : 0;
+		final int atSign = result.indexOf('@', searchStart);
+		if (atSign >= 0) {
+			// Verify '@' is not part of the query (after '?')
+			final int queryStart = result.indexOf('?');
+			if (queryStart < 0 || atSign < queryStart) {
+				result = result.substring(0, searchStart) + "***" + result.substring(atSign);
 			}
 		}
 		final int queryStart = result.indexOf('?');

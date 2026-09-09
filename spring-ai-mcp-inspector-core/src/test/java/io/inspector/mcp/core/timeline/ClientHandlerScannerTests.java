@@ -16,6 +16,8 @@
 
 package io.inspector.mcp.core.timeline;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -84,6 +86,28 @@ class ClientHandlerScannerTests {
 			// then
 			assertThat(bindings).hasSize(1);
 			assertThat(bindings.get(0).clientName()).isEqualTo(ClientHandlerScanner.ALL_CLIENTS);
+		}
+
+		@Test
+		@DisplayName("handles annotation without explicit clients attribute via orElse fallback")
+		void handlesAnnotationWithoutClientsAttribute() {
+			// given: a bean whose @McpSampling is applied via a composed annotation
+			// that does not re-declare the clients() attribute, so
+			// MergedAnnotation.getValue("clients") returns empty and orElse(new
+			// String[0]) kicks in
+			final StaticApplicationContext context = new StaticApplicationContext();
+			context.registerBean("composedBean", ComposedSamplingHandlerBean.class);
+			context.refresh();
+			ClientHandlerScannerTests.this.scanner.setApplicationContext(context);
+
+			// when
+			final List<HandlerBinding> bindings = ClientHandlerScannerTests.this.scanner.scanHandlers();
+
+			// then: the scan continues without throwing NoSuchElementException, and
+			// the handler is treated as targeting ALL_CLIENTS
+			assertThat(bindings).hasSize(1);
+			assertThat(bindings.get(0).clientName()).isEqualTo(ClientHandlerScanner.ALL_CLIENTS);
+			assertThat(bindings.get(0).handlerKind()).isEqualTo("sampling");
 		}
 
 		@Test
@@ -243,6 +267,24 @@ class ClientHandlerScannerTests {
 
 		@org.springframework.ai.mcp.annotation.McpSampling(clients = "client")
 		String handle(final Integer request) {
+			return "result";
+		}
+
+	}
+
+	/** Composed annotation that applies @McpSampling via {@code clients = {}}. */
+	@org.springframework.ai.mcp.annotation.McpSampling(clients = {})
+	@Retention(RetentionPolicy.RUNTIME)
+	@interface ComposedSampling {
+
+	}
+
+	/** Test fixture: a bean with @McpSampling via a composed annotation. */
+	@SuppressWarnings("unused")
+	static class ComposedSamplingHandlerBean {
+
+		@ComposedSampling
+		String onSample(final Object request) {
 			return "result";
 		}
 

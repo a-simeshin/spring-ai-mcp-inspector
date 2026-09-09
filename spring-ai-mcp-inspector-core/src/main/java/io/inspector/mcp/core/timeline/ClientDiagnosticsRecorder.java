@@ -134,9 +134,15 @@ public final class ClientDiagnosticsRecorder implements ApplicationContextAware,
 			payload.put("source", finding.source());
 		}
 		payload.put("message", finding.message());
-		final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(),
-				"mcpcd:" + finding.type().name() + ":" + finding.clientName(), null, TimelineEventType.APP_LOG,
-				Instant.now(), payload);
+		final String correlationId;
+		if (finding.source() != null) {
+			correlationId = "mcpcd:" + finding.type().name() + ":" + finding.clientName() + ":" + finding.source();
+		}
+		else {
+			correlationId = "mcpcd:" + finding.type().name() + ":" + finding.clientName();
+		}
+		final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, null,
+				TimelineEventType.APP_LOG, Instant.now(), payload);
 		this.timelineService.append(event);
 	}
 

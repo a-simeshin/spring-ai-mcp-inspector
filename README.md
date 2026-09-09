@@ -251,6 +251,7 @@ All settings live under the `spring.ai.mcp.inspector` namespace:
 | `spring.ai.mcp.inspector.path` | `/mcp-inspector` | Base path the UI is served at. Must start with `/`, no trailing `/`. |
 | `spring.ai.mcp.inspector.auth-enabled` | `true` | When `true`, requests to the proxy endpoint require the bearer token below. |
 | `spring.ai.mcp.inspector.auth-token` | _(generated)_ | Bearer token. If unset, a random token is generated at boot and injected into the SPA bootstrap automatically. |
+| `spring.ai.mcp.inspector.timeline.client-capture-enabled` | `false` | Enable startup diagnostics for `@Mcp*` handler-to-client correlation. When active, WARN-level messages appear at boot if handler/client bindings are misconfigured (orphan handlers, orphan clients, transport mismatches, duplicate bindings). See [Client handler diagnostics](#client-handler-diagnostics). |
 | `spring.ai.mcp.inspector.allowed-origins` | _(empty)_ | Origins allowed to call the inspector API and proxy cross-origin. Empty means no CORS mapping is registered at all, so only same-origin browser calls work — set it only when the UI is served from a different host than the app. Accepts a YAML list. |
 
 Custom path example:
@@ -354,6 +355,26 @@ spring:
 
 The setting only exists where the inspector does: no application gets this behaviour
 merely by having spring-ai on the classpath.
+
+### Client handler diagnostics
+
+When `spring.ai.mcp.inspector.timeline.client-capture-enabled=true`, the inspector runs
+a startup check that correlates `@McpSampling`/`@McpElicitation`/`@McpLogging`/`@McpProgress`
+handler beans with the clients configured in `spring.ai.mcp.client.*` properties. If the
+configuration is inconsistent, WARN-level log messages appear at boot:
+
+- **Orphan handler**: a handler references a client name that is not configured. Typo in `clients()`.
+- **Orphan client**: a client exists but no `@Mcp*` handler is bound to it, while a sibling client
+  of the same transport type does have one. Possibly a forgotten handler.
+- **Transport mismatch**: a stdio connection has a URL property, or an HTTP connection has a command
+  property. Misconfigured transport family.
+- **Duplicate bindings**: the same handler kind is bound to the same client by multiple methods.
+  Only the first binding takes effect; the rest are dead.
+
+Each finding is also emitted as an `APP_LOG` timeline event with `endpoint=client-diagnostics`,
+so the timeline UI can surface it.
+
+This feature requires Spring AI 2.0 annotations; it is not available on the `1.x` line.
 
 ## Customizing the inspector bootstrap
 
