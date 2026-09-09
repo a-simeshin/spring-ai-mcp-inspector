@@ -1,0 +1,9 @@
+src/App.tsx: wire up getTask() callback for per-task polling and
+pass it to TasksTab. The TasksTab component now auto-polls the
+task list every 2s, polls each 'working' task via tasks/get at its
+own pollInterval, shows TTL countdown, status transition animations,
+and an empty state with a SEP-1686 spec link. Covered by existing
+622 test suite (TasksTab mocked in App tests; no console errors).
+src/components/TasksTab.tsx: full rewrite with auto-polling,
+per-task polling, TTL countdown, details drawer (keepAlive/ttl/
+pollInterval), status animations, and empty/selected states.
