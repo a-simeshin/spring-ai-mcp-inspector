@@ -10,6 +10,8 @@
 package io.inspector.mcp.demo.proxy;
 
 import java.io.OutputStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.util.ArrayList;
@@ -35,6 +37,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * Integration tests verifying that restricted custom header names are blocked at
@@ -142,11 +145,22 @@ class ProxyForbiddenHeadersIT {
 		startMockServer();
 		final URI mcpUri = URI.create("http://127.0.0.1:" + serverPort + "/mcp");
 
-		// when & then
-		assertThatThrownBy(() -> FACTORY.openStreamable(mcpUri, null, Map.of("host", "super-secret-value")))
-			.isInstanceOf(IllegalArgumentException.class)
-			.hasMessageContaining("host")
-			.hasMessageNotContaining("super-secret-value");
+		// when
+		final Throwable thrown = catchThrowable(
+				() -> FACTORY.openStreamable(mcpUri, null, Map.of("host", "super-secret-value")));
+
+		// then: the exception is the right type
+		assertThat(thrown).isInstanceOf(IllegalArgumentException.class);
+
+		// then: the message always contains the header name
+		assertThat(thrown.getMessage()).as("exception message must contain header name").contains("host");
+
+		// then: the full stack trace NEVER contains the secret value
+		final StringWriter sw = new StringWriter();
+		thrown.printStackTrace(new PrintWriter(sw));
+		final String fullTrace = sw.toString();
+		assertThat(fullTrace).as("full stack trace must not leak the header value")
+			.doesNotContain("super-secret-value");
 	}
 
 	@Test
@@ -264,12 +278,19 @@ class ProxyForbiddenHeadersIT {
 		// then: the mock server received the request(s) with our custom headers
 		assertThat(requestCount.get()).as("upstream must receive at least one request").isGreaterThanOrEqualTo(1);
 
-		// then: both headers reached the upstream
+		// then: both headers reached the upstream with their actual values
 		final Map<String, List<String>> upstreamHeaders = receivedHeaders.get(0);
+		assertThat(upstreamHeaders).as("mock server must have received request headers").isNotNull();
 		assertThat(upstreamHeaders.keySet()).as("X-Custom-A must be present in the upstream request headers")
 			.anyMatch(k -> k.equalsIgnoreCase("X-Custom-A"));
 		assertThat(upstreamHeaders.keySet()).as("X-Custom-B must be present in the upstream request headers")
 			.anyMatch(k -> k.equalsIgnoreCase("X-Custom-B"));
+		assertThat(upstreamHeaders.values().stream().flatMap(List::stream).anyMatch(v -> v.contains("value-a")))
+			.as("X-Custom-A value 'value-a' must reach the upstream")
+			.isTrue();
+		assertThat(upstreamHeaders.values().stream().flatMap(List::stream).anyMatch(v -> v.contains("value-b")))
+			.as("X-Custom-B value 'value-b' must reach the upstream")
+			.isTrue();
 	}
 
 }
