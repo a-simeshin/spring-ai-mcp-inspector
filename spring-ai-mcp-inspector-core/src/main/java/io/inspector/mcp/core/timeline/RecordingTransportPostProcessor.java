@@ -100,6 +100,13 @@ public final class RecordingTransportPostProcessor implements BeanPostProcessor 
 		for (final Object element : list) {
 			if (isNamedClientMcpTransport(element)) {
 				try {
+					// Guard against double wrapping: skip if the transport is already a
+					// RecordingMcpClientTransport
+					final Object existingTransport = invokeAccessor(element, "transport");
+					if (existingTransport instanceof RecordingMcpClientTransport) {
+						wrapped.add(element);
+						continue;
+					}
 					wrapped.add(wrapBean(element));
 					changed = true;
 				}

@@ -156,27 +156,15 @@ public final class RecordingMcpClientTransport implements McpClientTransport {
 		return this.delegate.protocolVersions();
 	}
 
-	/**
-	 * Returns the client name this transport decorator is associated with.
-	 * @return the client name (never {@code null})
-	 */
-	public String clientName() {
+	String clientName() {
 		return this.clientName;
 	}
 
-	/**
-	 * Returns the transport type label.
-	 * @return the transport type (never {@code null})
-	 */
-	public String transportType() {
+	String transportType() {
 		return this.transportType;
 	}
 
-	/**
-	 * Returns the underlying delegate transport.
-	 * @return the delegate (never {@code null})
-	 */
-	public McpClientTransport delegate() {
+	McpClientTransport delegate() {
 		return this.delegate;
 	}
 

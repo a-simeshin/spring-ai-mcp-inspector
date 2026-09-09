@@ -283,6 +283,24 @@ class RecordingTransportPostProcessorTests {
 			assertThat(result).isSameAs(list);
 		}
 
+		@Test
+		@DisplayName("skips already-wrapped transports (no double wrap)")
+		void skipsAlreadyWrappedTransports() throws Exception {
+			// given: a list with an already-wrapped element
+			final McpClientTransport mockTransport = mock(McpClientTransport.class);
+			given(mockTransport.sendMessage(any(JSONRPCMessage.class))).willReturn(Mono.empty());
+			final Object wrapped = newNamedClientMcpTransport("already-wrapped", new RecordingMcpClientTransport(
+					mockTransport, "already-wrapped", "stdio", RecordingTransportPostProcessorTests.this.recorder));
+			final List<Object> list = List.of(wrapped);
+
+			// when
+			final Object result = RecordingTransportPostProcessorTests.this.postProcessor
+				.postProcessAfterInitialization(list, "namedTransports");
+
+			// then: the list is returned unchanged (no double wrap)
+			assertThat(result).isSameAs(list);
+		}
+
 	}
 
 	/** Test helper: a transport whose class name contains "Stdio". */

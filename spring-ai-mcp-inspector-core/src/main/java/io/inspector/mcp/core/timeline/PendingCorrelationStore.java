@@ -23,11 +23,13 @@ import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 
 /**
- * A bounded LRU store for pending request→response correlations, shared between
+ * A bounded FIFO store for pending request&rarr;response correlations, shared between
  * {@link McpClientTrafficRecorder} and {@link McpTrafficRecorder}.
  * <p>
  * Thread-safe: all mutations are guarded by an internal lock. The map evicts the eldest
- * entry when the capacity is exceeded, keeping memory bounded.
+ * entry (insertion order, not access order) when the capacity is exceeded, keeping memory
+ * bounded. A single budget of 1000 entries is shared across all clients of one recorder
+ * instance.
  *
  * @param <K> the key type used for correlation lookup
  * @author Artem Simeshin

@@ -38,7 +38,10 @@ import tools.jackson.databind.node.ObjectNode;
  */
 public final class McpClientTrafficRecorder {
 
-	/** Maximum number of pending request→response correlations before eviction. */
+	/**
+	 * Maximum number of pending request&rarr;response correlations before eviction. One
+	 * shared budget across all clients using this recorder instance.
+	 */
 	static final int MAX_PENDING_CORRELATIONS = 1000;
 
 	/** Prefix for client-side correlation ids. */

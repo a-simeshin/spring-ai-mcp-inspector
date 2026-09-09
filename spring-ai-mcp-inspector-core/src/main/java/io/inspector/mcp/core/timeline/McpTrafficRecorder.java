@@ -42,7 +42,7 @@ public final class McpTrafficRecorder {
 	private final TimelineService timelineService;
 
 	/**
-	 * Pending request→response correlations, bounded LRU with thread-safe access.
+	 * Pending request&rarr;response correlations, bounded FIFO with thread-safe access.
 	 */
 	private final PendingCorrelationStore<CorrelationKey> requestCorrelations;
 
