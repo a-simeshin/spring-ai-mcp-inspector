@@ -33,24 +33,42 @@ const ResourceLinkView = memo(
         ? resourceContent as Record<string, unknown>
         : null;
       const contents = parsed?.contents as Array<Record<string, unknown>> | undefined;
-      const firstItem = contents?.[0];
+      const items = contents?.length ? contents : null;
+
+      if (!items) {
+        return (
+          <div className="mt-2">
+            <div className="flex justify-between items-center mb-1">
+              <span className="font-semibold text-green-600">Resource:</span>
+            </div>
+            <JsonView data={resourceContent} className="bg-background" />
+          </div>
+        );
+      }
 
       return (
         <div className="mt-2">
           <div className="flex justify-between items-center mb-1">
-            <span className="font-semibold text-green-600">Resource:</span>
+            <span className="font-semibold text-green-600">
+              Resource{items.length > 1 ? ` (${items.length} items)` : ""}:
+            </span>
           </div>
-          {firstItem ? (
-            <MediaContentView
-              mimeType={(firstItem.mimeType as string) || mimeType}
-              base64Data={"blob" in firstItem ? firstItem.blob as string : undefined}
-              text={"text" in firstItem ? firstItem.text as string : undefined}
-              filename={firstItem.uri ? (firstItem.uri as string).split("/").pop() : undefined}
-              className="bg-background"
-            />
-          ) : (
-            <JsonView data={resourceContent} className="bg-background" />
-          )}
+          {items.map((item, idx) => (
+            <div key={idx} className={idx > 0 ? "mt-3 border-t border-gray-200 dark:border-gray-700 pt-3" : ""}>
+              {items.length > 1 && (
+                <span className="text-xs text-gray-500 dark:text-gray-400 mb-1 block">
+                  Item {idx + 1}
+                </span>
+              )}
+              <MediaContentView
+                mimeType={(item.mimeType as string) || mimeType}
+                base64Data={"blob" in item ? item.blob as string : undefined}
+                text={"text" in item ? item.text as string : undefined}
+                filename={item.uri ? (item.uri as string).split("/").pop() : undefined}
+                className="bg-background"
+              />
+            </div>
+          ))}
         </div>
       );
     }, [expanded, resourceContent, mimeType]);

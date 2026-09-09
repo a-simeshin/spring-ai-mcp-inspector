@@ -124,10 +124,15 @@ final class PendingCorrelationStore<K> {
 	 * @param progressToken the request's {@code params._meta.progressToken} text, may be
 	 * {@code null}
 	 */
-	record PendingCorrelation(String correlationId, Instant timestamp, String progressToken) {
+	record PendingCorrelation(String correlationId, Instant timestamp, String progressToken,
+			String requestedProtocolVersion) {
 
 		PendingCorrelation(final String correlationId, final Instant timestamp) {
-			this(correlationId, timestamp, null);
+			this(correlationId, timestamp, null, null);
+		}
+
+		PendingCorrelation(final String correlationId, final Instant timestamp, final String progressToken) {
+			this(correlationId, timestamp, progressToken, null);
 		}
 
 		/**

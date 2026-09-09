@@ -44,8 +44,8 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
         <spring-boot.version>4.1.0</spring-boot.version>
-        <spring-ai.version>2.0.0</spring-ai.version>
-        <!-- MCP Java SDK is BOM-managed by spring-ai-bom 2.0.0 (mcp 2.0.0). Do NOT pin it
+        <spring-ai.version>2.0.1</spring-ai.version>
+        <!-- MCP Java SDK is BOM-managed by spring-ai-bom 2.0.1 (mcp 2.0.0). Do NOT pin it
              here: an explicit override would drag the SDK two majors behind the BOM and
              silently reintroduce 0.18 APIs. -->
         <!-- mcp-sdk.version intentionally removed; managed by spring-ai-bom -->
@@ -74,24 +74,25 @@
              verify phase (needs compiled bytecode). spotbugs.version pins the core
              engine to the same train as the plugin wrapper. demo/ui opt out via
              <spotbugs.skip>true</spotbugs.skip>. -->
-        <spotbugs-maven-plugin.version>4.9.3.0</spotbugs-maven-plugin.version>
-        <spotbugs.version>4.9.3</spotbugs.version>
+        <spotbugs-maven-plugin.version>4.10.4.0</spotbugs-maven-plugin.version>
+        <spotbugs.version>4.10.4</spotbugs.version>
         <spotbugs.skip>false</spotbugs.skip>
 
         <!-- Allure test reporting. allure.version: latest stable Allure 2.x (known-good
              recent release). aspectj.version MUST match the aspectjweaver version managed
-             by spring-boot-dependencies (3.5.15 → 1.9.25.1) so the -javaagent jar path on
-             surefire/failsafe argLine resolves to a real jar in the local repository. -->
+             by spring-boot-dependencies (3.5.15 -> 1.9.25.1) so the -javaagent jar path on
+             surefire/failsafe argLine resolves to a real jar in the local repository.
+             allure-maven-plugin bumped to 3.0.3 (latest). -->
         <allure.version>2.29.1</allure.version>
         <aspectj.version>1.9.25.1</aspectj.version>
-        <allure-maven-plugin.version>2.15.2</allure-maven-plugin.version>
+        <allure-maven-plugin.version>3.0.3</allure-maven-plugin.version>
 
         <!-- Browser automation for the Selenide UI tests. Declared here because the
              demo split put them on three classpaths at once (demo-app, demo-webmvc,
              demo-webflux); a single pair of properties keeps the browser stack from
              drifting apart between the stack modules. -->
-        <selenide.version>7.6.1</selenide.version>
-        <webdrivermanager.version>6.1.0</webdrivermanager.version>
+        <selenide.version>7.18.1</selenide.version>
+        <webdrivermanager.version>6.3.4</webdrivermanager.version>
 
         <!-- JaCoCo coverage gate (Surefire only — IT/E2E run under Failsafe
              and do not contribute). Override per-module to relax or skip. -->

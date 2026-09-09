@@ -1,0 +1,11 @@
+src/utils/urlValidation.ts + src/components/Sidebar.tsx - client-side URL
+format validation for the Connect field's URL input. The upstream
+inspector accepts any malformed URL value without feedback; the user
+only learns about the error after a failed async connect attempt.
+Local fix: adds `validateServerUrl()` which checks for allowed schemes
+(http://, https://, ws://, wss:// with a non-empty host) or an absolute
+path starting with '/'; the sidebar shows a red border + inline error
+message on blur and input, and disables the Connect button while the
+value is invalid. Covered by
+src/utils/__tests__/urlValidation.test.ts (validateServerUrl suite) and
+src/components/__tests__/Sidebar.urlValidation.test.tsx (UI test suite).

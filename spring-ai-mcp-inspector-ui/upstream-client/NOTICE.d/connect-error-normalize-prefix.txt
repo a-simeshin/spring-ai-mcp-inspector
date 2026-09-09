@@ -1,0 +1,7 @@
+src/lib/hooks/useConnection.ts - normalize the error message shown in
+the "Connection error" toast to remove the duplicated "Error:" prefix.
+`${e}` in a template literal calls Error.prototype.toString() which
+prepends "Error: " to the message, and the SDK's own error classes
+already carry their own "Error:" prefix. The fix uses
+connectionFailureFromError(e).message instead, which strips the
+duplicate prefix.

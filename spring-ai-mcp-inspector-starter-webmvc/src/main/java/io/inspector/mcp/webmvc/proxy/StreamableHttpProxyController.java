@@ -304,12 +304,21 @@ public class StreamableHttpProxyController {
 		// if the upstream answer lands before .block() registers a subscriber,
 		// the replay buffer still hands it over). We still emit AFTER preparing
 		// the await pipeline so the read-side wiring exists first.
+		// Eagerly subscribe to targetToBrowser via Sinks.One so the upstream
+		// transport's connect() error (ECONNREFUSED/DNS/timeout) is captured
+		// even when the await pipeline is subscribed to later by block().
+		// Without this the replay sink may not carry the error to a late
+		// subscriber, and the awaiter would block for the full
+		// streamable-request timeout instead of failing fast.
 		final Duration requestTimeout = resolveTimeouts().getStreamableRequest();
-		final Mono<JsonNode> awaiter = session.targetToBrowser()
+		final Sinks.One<JsonNode> awaiterSink = Sinks.one();
+		session.targetToBrowser()
 			.asFlux()
 			.filter((frame) -> matchesId(frame, idNode))
 			.next()
-			.timeout(requestTimeout);
+			.timeout(requestTimeout)
+			.subscribe(awaiterSink::tryEmitValue, awaiterSink::tryEmitError, () -> awaiterSink.tryEmitEmpty());
+		final Mono<JsonNode> awaiter = awaiterSink.asMono();
 		final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
 		if (emitResult.isFailure()) {
 			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("emit failed: " + emitResult.name());
