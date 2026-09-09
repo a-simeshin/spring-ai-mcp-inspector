@@ -219,6 +219,16 @@ class McpClientTrafficRecorderTests {
 		}
 
 		@Test
+		@DisplayName("ignores null outbound response")
+		void ignoresNullOutboundResponse() {
+			// when
+			McpClientTrafficRecorderTests.this.recorder.recordOutboundResponse("c", "stdio", null);
+
+			// then
+			assertThat(McpClientTrafficRecorderTests.this.timelineService.query(TimelineQuery.all())).isEmpty();
+		}
+
+		@Test
 		@DisplayName("records error message on outbound response")
 		void recordsErrorOnOutboundResponse() {
 			// given

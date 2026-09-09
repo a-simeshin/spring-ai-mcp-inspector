@@ -123,6 +123,8 @@ final class PendingCorrelationStore<K> {
 	 * @param timestamp the instant when the request was recorded
 	 * @param progressToken the request's {@code params._meta.progressToken} text, may be
 	 * {@code null}
+	 * @param requestedProtocolVersion the protocol version the client requested in the
+	 * initialize params, or {@code null} for non-initialize requests
 	 */
 	record PendingCorrelation(String correlationId, Instant timestamp, String progressToken,
 			String requestedProtocolVersion) {
