@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] Tasks tab - task list with auto-polling, cancel, and details (#182).
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { TabsContent } from "@/components/ui/tabs";
