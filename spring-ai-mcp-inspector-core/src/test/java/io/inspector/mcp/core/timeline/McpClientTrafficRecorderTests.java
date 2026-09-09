@@ -156,6 +156,16 @@ class McpClientTrafficRecorderTests {
 		}
 
 		@Test
+		@DisplayName("ignores null response")
+		void ignoresNullResponse() {
+			// when
+			McpClientTrafficRecorderTests.this.recorder.recordClientResponse("c", "stdio", null);
+
+			// then
+			assertThat(McpClientTrafficRecorderTests.this.timelineService.query(TimelineQuery.all())).isEmpty();
+		}
+
+		@Test
 		@DisplayName("records latency for paired response")
 		void recordsLatencyForPairedResponse() {
 			// given
@@ -278,6 +288,16 @@ class McpClientTrafficRecorderTests {
 			assertThat(event.payload().path("method").asText()).isEqualTo("notifications/cancelled");
 		}
 
+		@Test
+		@DisplayName("ignores null notification")
+		void ignoresNullNotification() {
+			// when
+			McpClientTrafficRecorderTests.this.recorder.recordClientNotification("c", "stdio", null);
+
+			// then
+			assertThat(McpClientTrafficRecorderTests.this.timelineService.query(TimelineQuery.all())).isEmpty();
+		}
+
 	}
 
 	@Nested
@@ -303,6 +323,16 @@ class McpClientTrafficRecorderTests {
 			assertThat(event.correlationId()).matches("[a-f0-9-]{36}");
 		}
 
+		@Test
+		@DisplayName("ignores null server request")
+		void ignoresNullServerRequest() {
+			// when
+			McpClientTrafficRecorderTests.this.recorder.recordServerRequest("c", "stdio", null);
+
+			// then
+			assertThat(McpClientTrafficRecorderTests.this.timelineService.query(TimelineQuery.all())).isEmpty();
+		}
+
 	}
 
 	@Nested
@@ -325,6 +355,16 @@ class McpClientTrafficRecorderTests {
 			final TimelineEvent event = events.get(0);
 			assertThat(event.payload().path("direction").asText()).isEqualTo("server->client");
 			assertThat(event.payload().path("method").asText()).isEqualTo("notifications/progress");
+		}
+
+		@Test
+		@DisplayName("ignores null server notification")
+		void ignoresNullServerNotification() {
+			// when
+			McpClientTrafficRecorderTests.this.recorder.recordServerNotification("c", "stdio", null);
+
+			// then
+			assertThat(McpClientTrafficRecorderTests.this.timelineService.query(TimelineQuery.all())).isEmpty();
 		}
 
 	}
