@@ -19,6 +19,8 @@ import {
   isPropertyRequired,
   normalizeUnionType,
   resolveRef,
+  findToolSchemaWarnings,
+  type UnresolvedRefInfo,
 } from "@/utils/schemaUtils";
 import {
   CompatibilityCallToolResult,
@@ -33,10 +35,11 @@ import {
   ChevronUp,
   ChevronRight,
   AlertCircle,
+  AlertTriangle,
   Copy,
   CheckCheck,
 } from "lucide-react";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import ListPane from "./ListPane";
 import JsonView from "./JsonView";
 import ToolResults from "./ToolResults";
@@ -253,6 +256,18 @@ const ToolsTab = ({
     return errors;
   };
 
+  // Compute warnings for each tool: detect unresolvable $ref pointers in schemas
+  const toolWarnings = useMemo(() => {
+    const map = new Map<string, UnresolvedRefInfo[]>();
+    for (const tool of tools) {
+      const warnings = findToolSchemaWarnings(tool);
+      if (warnings.length > 0) {
+        map.set(tool.name, warnings);
+      }
+    }
+    return map;
+  }, [tools]);
+
   useEffect(() => {
     const params = Object.entries(
       selectedTool?.inputSchema.properties ?? [],
@@ -331,6 +346,12 @@ const ToolsTab = ({
               <div className="flex-shrink-0 mt-1">
                 <IconDisplay icons={(tool as ExtendedTool).icons} size="sm" />
               </div>
+              {toolWarnings.has(tool.name) && (
+                <AlertTriangle
+                  className="w-4 h-4 text-amber-500 flex-shrink-0 mt-1"
+                  aria-label="Schema contains unresolvable $ref pointers"
+                />
+              )}
               <div className="flex flex-col flex-1 min-w-0">
                 <span className="truncate">{tool.title || tool.name}</span>
                 <span className="text-sm text-gray-500 text-left line-clamp-2">
@@ -399,6 +420,41 @@ const ToolsTab = ({
                   }
                   declared={hasAnnotations(selectedTool)}
                 />
+                {selectedTool && toolWarnings.has(selectedTool.name) && (() => {
+                  const warnings = toolWarnings.get(selectedTool.name)!;
+                  return (
+                    <Alert>
+                      <AlertTriangle className="h-4 w-4 text-amber-500" />
+                      <AlertTitle>Schema Warning</AlertTitle>
+                      <AlertDescription>
+                        <p className="text-sm">
+                          This tool's schema contains $ref pointers that could
+                          not be resolved within the schema document.
+                        </p>
+                        <ul className="mt-2 list-disc list-inside text-sm">
+                          {warnings.map((w, i) => (
+                            <li key={i}>
+                              Unresolved pointer:{" "}
+                              <code className="text-xs bg-muted px-1 rounded">
+                                {w.ref}
+                              </code>{" "}
+                              in <code className="text-xs">{w.location}</code>
+                            </li>
+                          ))}
+                        </ul>
+                        <a
+                          href="https://github.com/spring-projects/spring-ai/issues/5888"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-blue-600 dark:text-blue-400 underline mt-2 inline-block"
+                        >
+                          Learn more about this issue
+                          (spring-projects/spring-ai#5888)
+                        </a>
+                      </AlertDescription>
+                    </Alert>
+                  );
+                })()}
                 {Object.entries(selectedTool.inputSchema.properties ?? []).map(
                   ([key, value]) => {
                     // First resolve any $ref references
