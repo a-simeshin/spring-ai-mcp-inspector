@@ -9,6 +9,8 @@ import {
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { validateToolOutput, hasOutputSchema } from "@/utils/schemaUtils";
+// [spring-ai-mcp-inspector PATCH] missing-output-schema-warning (#6773)
+import { findMissingOutputSchemaWarning } from "@/utils/schemaUtils";
 import useCopy from "@/lib/hooks/useCopy";
 import { useToast } from "@/lib/hooks/useToast";
 
@@ -137,6 +139,14 @@ const ToolResults = ({
       );
     }
 
+    // [spring-ai-mcp-inspector PATCH] missing-output-schema-warning (#6773):
+    // surface a warning when the tool was advertised without an output schema
+    // but the observed result is a primitive value. Schema generation in
+    // spring-ai silently skips primitive return types.
+    const missingSchemaWarning = selectedTool
+      ? findMissingOutputSchemaWarning(selectedTool, structuredResult)
+      : null;
+
     // [spring-ai-mcp-inspector PATCH] Copy button for full tool result + scrollable
     // container (#??): the result content is wrapped in a scrollable container so
     // long output does not extend into the History pane below, and the horizontal
@@ -144,6 +154,22 @@ const ToolResults = ({
     // copies the complete un-truncated output to clipboard.
     return (
       <>
+        {missingSchemaWarning && (
+          <div
+            className="mb-2 p-2 rounded text-sm bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200"
+            data-testid="missing-output-schema-warning"
+          >
+            {missingSchemaWarning}{" "}
+            <a
+              href="https://github.com/spring-projects/spring-ai/issues/6773"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              spring-ai#6773
+            </a>
+          </div>
+        )}
         <div className="flex items-center justify-between mb-2">
           <h4 className="font-semibold">
             Tool Result:{" "}

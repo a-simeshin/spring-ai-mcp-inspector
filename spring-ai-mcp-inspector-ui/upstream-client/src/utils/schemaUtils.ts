@@ -4,6 +4,14 @@ import type { ValidateFunction } from "ajv";
 import type { Tool, JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { isJSONRPCRequest } from "@modelcontextprotocol/sdk/types.js";
 
+// [spring-ai-mcp-inspector PATCH] missing-output-schema-warning (#6773):
+// schema generation in spring-ai silently skips primitive/simple return types,
+// so a @McpTool(generateOutputSchema=true) that returns String/int/... ends up
+// advertising no output schema. We detect the case client-side once the tool
+// has been called and the observed result is a primitive (string/number/
+// boolean). Structured objects without a schema are NOT flagged here.
+const PRIMITIVE_CONTENT_TYPES = new Set(["string", "number", "boolean"]);
+
 const ajv = new Ajv();
 
 // Cache for compiled validators
@@ -350,4 +358,113 @@ export function resolveRefsInMessage(message: JSONRPCMessage): JSONRPCMessage {
   };
 
   return resolvedMessage;
+}
+
+// [spring-ai-mcp-inspector PATCH] missing-output-schema-warning (#6773):
+// minimal shape of a CallToolResult we need for detection. We avoid pulling in
+// the full SDK union type here so the helper stays easy to unit-test.
+export type ToolCallResultLike = {
+  content?: Array<{
+    type?: string;
+    text?: string;
+    [key: string]: unknown;
+  }>;
+  structuredContent?: unknown;
+  isError?: boolean;
+};
+
+/**
+ * Returns true when the observed tool result looks like a primitive (string,
+ * number, boolean) rather than a structured object. We look at the text
+ * content blocks first (this is where spring-ai places String/int/boolean
+ * return values), then at structuredContent for the rare case where a
+ * primitive was placed there.
+ */
+function isPrimitiveResult(result: ToolCallResultLike): boolean {
+  if (result.structuredContent !== undefined && result.structuredContent !== null) {
+    return PRIMITIVE_CONTENT_TYPES.has(typeof result.structuredContent);
+  }
+
+  if (!Array.isArray(result.content)) {
+    return false;
+  }
+
+  for (const block of result.content) {
+    if (!block || block.type !== "text") {
+      continue;
+    }
+    const text = block.text;
+    if (typeof text !== "string") {
+      continue;
+    }
+    const trimmed = text.trim();
+    if (trimmed === "") {
+      continue;
+    }
+    // Try JSON first: a bare "foo" / 42 / true parses as a primitive, while
+    // structured objects parse to { ... } / [ ... ]. If JSON.parse fails, the
+    // text content is a plain string, which IS the primitive case (#6773).
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (PRIMITIVE_CONTENT_TYPES.has(typeof parsed)) {
+        return true;
+      }
+    } catch {
+      // Plain string content: this is exactly what a String-returning tool
+      // produces when schema generation skipped the return type.
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Detects the spring-ai#6773 case: a tool was advertised without an output
+ * schema (or with an empty one), and an observed call result returns a
+ * primitive value (string / number / boolean). Schema generation silently
+ * skips primitive return types, so the tool likely was annotated
+ * `@McpTool(generateOutputSchema=true)` but no schema was emitted.
+ *
+ * Returns a short human-readable warning string when the detector fires, or
+ * null when no warning applies. Structured objects without a schema are NOT
+ * flagged: they are out of scope for this detector.
+ */
+export function findMissingOutputSchemaWarning(
+  tool: { name?: string; outputSchema?: JsonSchemaType | null },
+  toolResult: ToolCallResultLike | null,
+): string | null {
+  if (!tool || !toolResult) {
+    return null;
+  }
+
+  // If the tool DID advertise an output schema, there is nothing to detect.
+  const advertised = tool.outputSchema;
+  if (advertised && typeof advertised === "object") {
+    const hasShape =
+      advertised.type !== undefined ||
+      (advertised.properties !== undefined &&
+        advertised.properties !== null &&
+        Object.keys(advertised.properties).length > 0) ||
+      advertised.$ref !== undefined;
+    if (hasShape) {
+      return null;
+    }
+  }
+
+  // Errors are not representative: skip them so the warning does not fire on
+  // a tool that legitimately returns String but happened to error here.
+  if (toolResult.isError === true) {
+    return null;
+  }
+
+  if (!isPrimitiveResult(toolResult)) {
+    return null;
+  }
+
+  return (
+    `Tool '${tool.name ?? "unknown"}' returned a primitive value but ` +
+    `advertises no output schema. Schema generation likely skipped the ` +
+    `primitive return type. See https://github.com/spring-projects/spring-ai/issues/6773.`
+  );
 }
