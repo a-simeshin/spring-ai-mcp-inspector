@@ -602,3 +602,135 @@ describe("Output Schema Validation", () => {
     });
   });
 });
+
+// [spring-ai-mcp-inspector PATCH] missing-output-schema-warning (#6773)
+import { findMissingOutputSchemaWarning } from "../schemaUtils";
+
+describe("findMissingOutputSchemaWarning", () => {
+  test("flags primitive string result when no outputSchema is advertised", () => {
+    const warning = findMissingOutputSchemaWarning(
+      { name: "echo" },
+      { content: [{ type: "text", text: "hello world" }] },
+    );
+    expect(warning).not.toBeNull();
+    expect(warning).toContain("echo");
+    expect(warning).toContain("6773");
+  });
+
+  test("flags primitive number result when no outputSchema is advertised", () => {
+    const warning = findMissingOutputSchemaWarning(
+      { name: "add" },
+      { content: [{ type: "text", text: "42" }] },
+    );
+    expect(warning).not.toBeNull();
+  });
+
+  test("flags primitive boolean result when no outputSchema is advertised", () => {
+    const warning = findMissingOutputSchemaWarning(
+      { name: "isValid" },
+      { content: [{ type: "text", text: "true" }] },
+    );
+    expect(warning).not.toBeNull();
+  });
+
+  test("flags JSON-encoded primitive in text content", () => {
+    const warning = findMissingOutputSchemaWarning(
+      { name: "echo" },
+      { content: [{ type: "text", text: "\"hello\"" }] },
+    );
+    expect(warning).not.toBeNull();
+  });
+
+  test("flags empty outputSchema object", () => {
+    const warning = findMissingOutputSchemaWarning(
+      { name: "echo", outputSchema: {} as JsonSchemaType },
+      { content: [{ type: "text", text: "hello" }] },
+    );
+    expect(warning).not.toBeNull();
+  });
+
+  test("does NOT flag when tool has a proper outputSchema", () => {
+    const warning = findMissingOutputSchemaWarning(
+      {
+        name: "echo",
+        outputSchema: {
+          type: "object",
+          properties: { result: { type: "string" } },
+        } as JsonSchemaType,
+      },
+      { content: [{ type: "text", text: "hello" }] },
+    );
+    expect(warning).toBeNull();
+  });
+
+  test("does NOT flag when outputSchema is a $ref", () => {
+    const warning = findMissingOutputSchemaWarning(
+      {
+        name: "echo",
+        outputSchema: { $ref: "#/$defs/Result" } as JsonSchemaType,
+      },
+      { content: [{ type: "text", text: "hello" }] },
+    );
+    expect(warning).toBeNull();
+  });
+
+  test("does NOT flag structured object result without schema (out of scope)", () => {
+    const warning = findMissingOutputSchemaWarning(
+      { name: "getUser" },
+      { content: [{ type: "text", text: "{\"name\":\"alice\"}" }] },
+    );
+    expect(warning).toBeNull();
+  });
+
+  test("does NOT flag structuredContent object without schema", () => {
+    const warning = findMissingOutputSchemaWarning(
+      { name: "getUser" },
+      { structuredContent: { name: "alice" } },
+    );
+    expect(warning).toBeNull();
+  });
+
+  test("flags primitive structuredContent", () => {
+    const warning = findMissingOutputSchemaWarning(
+      { name: "count" },
+      { structuredContent: 42 },
+    );
+    expect(warning).not.toBeNull();
+  });
+
+  test("does NOT flag error results", () => {
+    const warning = findMissingOutputSchemaWarning(
+      { name: "echo" },
+      { content: [{ type: "text", text: "boom" }], isError: true },
+    );
+    expect(warning).toBeNull();
+  });
+
+  test("returns null when toolResult is null", () => {
+    expect(findMissingOutputSchemaWarning({ name: "echo" }, null)).toBeNull();
+  });
+
+  test("returns null when tool is null", () => {
+    expect(
+      findMissingOutputSchemaWarning(null as unknown as { name: string }, {
+        content: [{ type: "text", text: "hello" }],
+      }),
+    ).toBeNull();
+  });
+
+  test("does NOT flag when content has only image blocks", () => {
+    const warning = findMissingOutputSchemaWarning(
+      { name: "render" },
+      { content: [{ type: "image", data: "abc", mimeType: "image/png" }] },
+    );
+    expect(warning).toBeNull();
+  });
+
+  test("does NOT flag empty text content", () => {
+    const warning = findMissingOutputSchemaWarning(
+      { name: "echo" },
+      { content: [{ type: "text", text: "   " }] },
+    );
+    expect(warning).toBeNull();
+  });
+});

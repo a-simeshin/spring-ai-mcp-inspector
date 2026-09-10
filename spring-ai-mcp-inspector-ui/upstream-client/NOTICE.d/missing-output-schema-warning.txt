@@ -1,0 +1,24 @@
+src/utils/schemaUtils.ts: add findMissingOutputSchemaWarning helper that
+detects the spring-ai#6773 case: a tool advertises no outputSchema (or an
+empty one) while its observed call result returns a primitive value
+(string/number/boolean). Schema generation in spring-ai silently skips
+primitive return types, so @McpTool(generateOutputSchema=true) on a method
+returning String/int/... yields no schema and no warning anywhere. The
+helper inspects the parsed CallToolResult: text content blocks that fail
+JSON.parse are treated as plain strings (the canonical #6773 shape), and
+JSON-encoded primitives and primitive structuredContent are also matched.
+Structured objects and arrays without a schema are NOT flagged (out of
+scope).
+
+src/components/ToolResults.tsx: render the warning inline above the tool
+result body when findMissingOutputSchemaWarning fires, with an amber
+background and a link to https://github.com/spring-projects/spring-ai/issues/6773.
+The warning is keyed by data-testid="missing-output-schema-warning" for
+testability.
+
+Covered by 15 new Jest cases in
+src/utils/__tests__/schemaUtils.test.ts (findMissingOutputSchemaWarning
+describe block) covering: plain string, JSON-encoded primitive, number,
+boolean, empty outputSchema, structured object (negative), structuredContent
+primitive and object, error result (negative), null tool/result, non-text
+content blocks, and whitespace-only text.
