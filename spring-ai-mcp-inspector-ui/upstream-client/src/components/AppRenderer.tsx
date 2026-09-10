@@ -30,6 +30,7 @@ import {
 interface AppRendererProps {
   sandboxPath: string;
   tool: Tool;
+  tools: Tool[];
   mcpClient: Client | null;
   toolInput?: Record<string, unknown>;
   toolResult?: CompatibilityCallToolResult | null;
@@ -53,6 +54,7 @@ interface AppRendererProps {
 const AppRenderer = ({
   sandboxPath,
   tool,
+  tools,
   mcpClient,
   toolInput,
   toolResult,
@@ -309,6 +311,57 @@ const AppRenderer = ({
     }
   };
 
+  // [spring-ai-mcp-inspector PATCH] onCallTool handler: reject tools/call
+  // when the tool's ui.visibility excludes "app".
+  const handleCallTool = useCallback(
+    async (
+      params: { name: string; arguments?: Record<string, unknown> },
+      extra?: RequestHandlerExtra,
+    ): Promise<CallToolResult> => {
+      const toolName = params.name;
+      const matchedTool = tools.find((t) => t.name === toolName);
+      if (!matchedTool) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `Tool '${toolName}' is not available to apps`,
+            },
+          ],
+        };
+      }
+      // default visibility = ["model", "app"] per McpUiToolVisibilitySchema
+      const visibility = (matchedTool as Record<string, unknown>)._meta as
+        | Record<string, unknown>
+        | undefined;
+      const ui = visibility?.ui as Record<string, unknown> | undefined;
+      const toolVisibility = ui?.visibility as string[] | undefined;
+      const effectiveVisibility = toolVisibility ?? ["model", "app"];
+      if (!effectiveVisibility.includes("app")) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `Tool '${toolName}' is not available to apps`,
+            },
+          ],
+        };
+      }
+      const result = await mcpClient!.request(
+        {
+          method: "tools/call",
+          params: { name: toolName, arguments: params.arguments },
+        },
+        CallToolResultSchema,
+        { signal: extra?.signal },
+      );
+      return result;
+    },
+    [mcpClient, tools],
+  );
+
   if (!mcpClient) {
     return (
       <Alert>
@@ -337,12 +390,20 @@ const AppRenderer = ({
           onOpenLink={handleOpenLink}
           onMessage={handleMessage}
           onLoggingMessage={handleLoggingMessage}
+          onCallTool={handleCallTool}
           toolName={tool.name}
           hostContext={hostContext}
           toolInput={toolInput}
           toolResult={normalizedToolResult}
           sandbox={{
             url: new URL(sandboxPath, window.location.origin),
+            csp: (((tool as Record<string, unknown>)._meta as
+              | Record<string, unknown>
+              | undefined)?.["ui"] as
+              | Record<string, unknown>
+              | undefined)?.["csp"] as
+              | Record<string, unknown>
+              | undefined,
           }}
           onError={(err) => {
             setError(err.message);

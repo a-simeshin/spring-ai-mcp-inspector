@@ -18,6 +18,7 @@ package io.inspector.mcp.webflux.proxy;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.http.CacheControl;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
@@ -53,27 +54,53 @@ class SandboxProxyHandlerTests {
 	}
 
 	@Test
-	void serveSandboxAcceptsCustomCspParam() {
-		final String customCsp = "default-src 'self'; script-src 'self'";
-		final MockServerHttpRequest request = MockServerHttpRequest.get("/mcp-inspector-api/sandbox").build();
-		// Add query param manually since the MockServerHttpRequest URI builder
-		// doesn't handle query strings with special chars well in unit tests
+	void serveSandboxWithValidCspParam_serializesJsonToHeader() {
+		final String cspJson = "{\"connectDomains\":[\"https://api.example.com\"],\"resourceDomains\":[\"https://cdn.example.com\"]}";
+		final MockServerHttpRequest request = MockServerHttpRequest
+			.get("/mcp-inspector-api/sandbox?csp="
+					+ java.net.URLEncoder.encode(cspJson, java.nio.charset.StandardCharsets.UTF_8))
+			.build();
 		final MockServerWebExchange exchange = MockServerWebExchange.from(request);
-		// Simulate the csp param via the request
-		// In a real scenario the browser sends ?csp=<urlencoded-json>
-		// Here we test the handler logic with the raw param
 		final ServerRequest serverRequest = ServerRequest.create(exchange,
 				java.util.List.of(new org.springframework.http.codec.HttpMessageReader[0]));
 
-		// When no csp param, the default CSP is used; the handler reads the query
-		// param via request.queryParam("csp"), so let's just test the default path
-		// and verify the CSP header is present and restrictive
+		// Parse csp directly and verify handler's serialization
+		final String cspHeader = this.handler.parseAndSerializeCsp(cspJson);
+		assertThat(cspHeader).contains("connect-src https://api.example.com");
+		assertThat(cspHeader).contains("img-src https://cdn.example.com");
+	}
+
+	@Test
+	void serveSandboxWithMalformedCspParam_returnsSafeDefault() {
+		final String malformed = "not-json{";
+		final String cspHeader = this.handler.parseAndSerializeCsp(malformed);
+		// Should not echo raw value; should return safe default
+		assertThat(cspHeader).doesNotContain("not-json{");
+		assertThat(cspHeader).contains("default-src 'none'");
+	}
+
+	@Test
+	void serveSandboxWithOversizeCspParam_returns400() {
+		final String oversized = "x".repeat(4097);
+		final MockServerHttpRequest request = MockServerHttpRequest.get("/mcp-inspector-api/sandbox?csp=" + oversized)
+			.build();
+		final MockServerWebExchange exchange = MockServerWebExchange.from(request);
+		final ServerRequest serverRequest = ServerRequest.create(exchange,
+				java.util.List.of(new org.springframework.http.codec.HttpMessageReader[0]));
+
 		final Mono<ServerResponse> result = this.handler.serveSandbox(serverRequest);
 
 		StepVerifier.create(result)
-			.assertNext((response) -> assertThat(response.headers().getFirst("Content-Security-Policy"))
-				.contains("default-src"))
+			.assertNext((response) -> assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST))
 			.verifyComplete();
+	}
+
+	@Test
+	void serveSandboxWithJavascriptOrigin_rejectsWithSafeDefault() {
+		final String cspJson = "{\"connectDomains\":[\"javascript:alert(1)\"]}";
+		final String cspHeader = this.handler.parseAndSerializeCsp(cspJson);
+		assertThat(cspHeader).doesNotContain("javascript:alert");
+		assertThat(cspHeader).contains("default-src 'none'");
 	}
 
 }

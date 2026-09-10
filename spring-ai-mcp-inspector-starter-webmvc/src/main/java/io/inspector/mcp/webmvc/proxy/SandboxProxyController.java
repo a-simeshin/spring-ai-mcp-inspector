@@ -19,17 +19,23 @@ package io.inspector.mcp.webmvc.proxy;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.CacheControl;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Serves the sandbox proxy HTML page ({@code GET /mcp-inspector-api/sandbox}) for the
@@ -86,6 +92,10 @@ public class SandboxProxyController {
 	 */
 	private static final String DEFAULT_CSP = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'none'; frame-src 'self'; base-uri 'none'; form-action 'none'";
 
+	private static final int CSP_PARAM_MAX_LENGTH = 4096;
+
+	private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
 	@GetMapping(value = "/sandbox", produces = MediaType.TEXT_HTML_VALUE)
 	public ResponseEntity<String> serveSandbox(@RequestParam(value = "csp", required = false) final String cspParam)
 			throws IOException {
@@ -99,13 +109,141 @@ public class SandboxProxyController {
 			html = new String(is.readAllBytes(), StandardCharsets.UTF_8);
 		}
 
-		final String csp = (cspParam != null && !cspParam.isBlank()) ? cspParam : DEFAULT_CSP;
+		// Parse csp query param as JSON object -> serialize to CSP string
+		if (cspParam != null && cspParam.length() > CSP_PARAM_MAX_LENGTH) {
+			return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("CSP parameter exceeds maximum length");
+		}
+		final String csp = parseAndSerializeCsp(cspParam);
 
 		return ResponseEntity.ok()
 			.contentType(new MediaType(MediaType.TEXT_HTML, StandardCharsets.UTF_8))
 			.header("Content-Security-Policy", csp)
 			.cacheControl(CacheControl.noStore())
 			.body(html);
+	}
+
+	/**
+	 * Parse the {@code csp} query parameter as a JSON object (McpUiResourceCsp) and
+	 * serialize to a CSP header string. Malformed JSON returns the all-'none' default. A
+	 * null or blank param returns the page-level DEFAULT_CSP.
+	 * @param cspParam the raw csp query param value
+	 * @return the CSP header string
+	 */
+	static String parseAndSerializeCsp(final String cspParam) {
+		if (cspParam == null || cspParam.isBlank()) {
+			return DEFAULT_CSP;
+		}
+		try {
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> parsed = OBJECT_MAPPER.readValue(cspParam, Map.class);
+			// Reject javascript:/data: origins in any domain list
+			if (containsDangerousOrigin(parsed)) {
+				LOG.warn("Rejected csp param containing javascript:/data: origins");
+				return DEFAULT_CSP
+						+ "; default-src 'none'; connect-src 'none'; img-src 'none'; script-src 'unsafe-inline' 'none'; style-src 'unsafe-inline' 'none'; font-src 'none'; media-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'";
+			}
+			final String innerCsp = CspSerializer.serialize(parsed);
+			// Intersect with page-level CSP: keep the page's own default-src,
+			// script-src, style-src, frame-src 'self' for the proxy page itself.
+			return DEFAULT_CSP + "; " + innerCsp;
+		}
+		catch (final Exception ex) {
+			LOG.warn("Failed to parse csp param, using all-none default: {}", ex.getMessage());
+			// Malformed JSON -> all-'none' default (do NOT echo raw value)
+			return DEFAULT_CSP
+					+ "; default-src 'none'; connect-src 'none'; img-src 'none'; script-src 'unsafe-inline' 'none'; style-src 'unsafe-inline' 'none'; font-src 'none'; media-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'";
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private static boolean containsDangerousOrigin(final Map<String, Object> csp) {
+		final String[] keys = { "connectDomains", "resourceDomains", "frameDomains", "baseUriDomains" };
+		for (final String key : keys) {
+			final Object value = csp.get(key);
+			if (value instanceof List<?> list) {
+				for (final Object item : list) {
+					if (item instanceof String s && (s.startsWith("javascript:") || s.startsWith("data:"))) {
+						return true;
+					}
+				}
+			}
+		}
+		return false;
+	}
+
+	// CspSerializer inner class (mirrors csp-serializer.ts)
+	static final class CspSerializer {
+
+		private static final String ALL_NONE_BASELINE = "default-src 'none'; connect-src 'none'; img-src 'none'; script-src 'unsafe-inline' 'none'; style-src 'unsafe-inline' 'none'; font-src 'none'; media-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'";
+
+		static String serialize(final Map<String, Object> csp) {
+			if (csp == null) {
+				return ALL_NONE_BASELINE;
+			}
+
+			final List<String> parts = new ArrayList<>();
+			parts.add("default-src 'none'");
+
+			final List<String> connectDomains = safeList(csp.get("connectDomains"));
+			if (!connectDomains.isEmpty()) {
+				parts.add("connect-src " + String.join(" ", connectDomains));
+			}
+			else {
+				parts.add("connect-src 'none'");
+			}
+
+			final List<String> resourceDomains = safeList(csp.get("resourceDomains"));
+			if (!resourceDomains.isEmpty()) {
+				final String joined = String.join(" ", resourceDomains);
+				parts.add("img-src " + joined);
+				parts.add("script-src 'unsafe-inline' " + joined);
+				parts.add("style-src 'unsafe-inline' " + joined);
+				parts.add("font-src " + joined);
+				parts.add("media-src " + joined);
+			}
+			else {
+				parts.add("img-src 'none'");
+				parts.add("script-src 'unsafe-inline' 'none'");
+				parts.add("style-src 'unsafe-inline' 'none'");
+				parts.add("font-src 'none'");
+				parts.add("media-src 'none'");
+			}
+
+			final List<String> frameDomains = safeList(csp.get("frameDomains"));
+			if (!frameDomains.isEmpty()) {
+				parts.add("frame-src " + String.join(" ", frameDomains));
+			}
+			else {
+				parts.add("frame-src 'none'");
+			}
+
+			final List<String> baseUriDomains = safeList(csp.get("baseUriDomains"));
+			if (!baseUriDomains.isEmpty()) {
+				parts.add("base-uri " + String.join(" ", baseUriDomains));
+			}
+			else {
+				parts.add("base-uri 'self'");
+			}
+
+			parts.add("form-action 'none'");
+
+			return String.join("; ", parts);
+		}
+
+		@SuppressWarnings("unchecked")
+		private static List<String> safeList(final Object value) {
+			if (value instanceof List<?> rawList) {
+				final List<String> result = new ArrayList<>();
+				for (final Object item : rawList) {
+					if (item instanceof String s) {
+						result.add(s);
+					}
+				}
+				return result;
+			}
+			return Collections.emptyList();
+		}
+
 	}
 
 }
