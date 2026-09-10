@@ -1,0 +1,35 @@
+sandbox-proxy-and-lifecycle.txt
+
+Sandboxed iframe renderer with SEP-1865 lifecycle bridge (t_cca2f271):
+- Added sandbox-proxy.html static resource: outer sandbox proxy page that relays
+  postMessage between host and opaque-origin inner view iframe.
+- Added SandboxProxyController (webmvc) and SandboxProxyHandler (webflux) serving
+  GET /mcp-inspector-api/sandbox with restrictive CSP and Cache-Control: no-store.
+- Added /sandbox to auth filter allowlists (both stacks) alongside /health.
+- Updated ProxyConstants.java javadoc (both stacks): added /sandbox to the endpoint
+  list, removed "minus the /sandbox route" note.
+- AppRenderer.tsx: added traffic tap (window.addEventListener + postMessage wrap),
+  lifecycle state machine, and onAppTraffic/onLifecycleChange callbacks.
+  PATCH marker [spring-ai-mcp-inspector PATCH] applied to AppRenderer.tsx.
+  The tap captures guest->host frames via addEventListener and host->guest frames
+  by wrapping the outer iframe's contentWindow.postMessage.
+  Lifecycle: idle -> loading-resource -> sandbox-waiting -> initializing -> ready -> error -> torn-down.
+
+Security fixes (t_e6c85c96):
+- Added csp-serializer.ts (src/lib/csp-serializer.ts): serializes
+  McpUiResourceCsp JSON objects to Content-Security-Policy header strings with
+  restrictive defaults (all-'none' baseline when absent).
+- sandbox-proxy.html: always emits a CSP meta tag. Parses the csp query param
+  (JSON object) and serializes it via serializeCsp; malformed or absent param
+  produces the all-'none' baseline.
+- SandboxProxyController (webmvc) and SandboxProxyHandler (webflux): parse the
+  csp query param as JSON, serialize via CspSerializer (core module), set as
+  HTTP response header. Reject javascript:/data: origins. Cap param at 4 KB
+  (400 on overflow). Malformed JSON -> all-'none' default.
+- AppRenderer.tsx: passes sandbox.csp (McpUiResourceCsp object from tool's
+  _meta.ui.csp) to @mcp-ui/client AppRenderer; adds onCallTool handler that
+  rejects tools/call for tools whose _meta.ui.visibility lacks "app"
+  (default: ["model","app"]).
+- AppsTab.tsx: bounds the traffic ingress queue (max 500 pending entries,
+  singleton dropped-N marker per flush window); truncates params/result > 64 KB
+  to {truncated: true, bytes: N}.

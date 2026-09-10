@@ -1,18 +1,18 @@
-// [spring-ai-mcp-inspector PATCH] AppRenderer onCallTool visibility check tests.
-// These test the visibility logic that AppRenderer implements via its
-// handleCallTool callback (passed to @mcp-ui/client AppRenderer as onCallTool).
-
-import { Tool } from "@modelcontextprotocol/sdk/types.js";
+// [spring-ai-mcp-inspector PATCH] AppRenderer visibility logic test (#183, #199)
 import { checkToolVisibility } from "../AppRenderer";
+import { Tool } from "@modelcontextprotocol/sdk/types.js";
 
-describe("AppRenderer.handleCallTool visibility", () => {
+describe("AppRenderer - handleCallTool visibility logic", () => {
   const makeTool = (name: string, visibility?: string[]): Tool => {
     const tool: Record<string, unknown> = {
       name,
-      inputSchema: { type: "object", properties: {} },
+      description: "test",
+      inputSchema: { type: "object" as const, properties: {} },
     };
-    if (visibility) {
-      tool._meta = { ui: { visibility } };
+    if (visibility !== undefined) {
+      (tool as Record<string, unknown>)._meta = {
+        ui: { visibility },
+      };
     }
     return tool as unknown as Tool;
   };
@@ -35,16 +35,13 @@ describe("AppRenderer.handleCallTool visibility", () => {
   });
 
   it("allows omitted visibility (default includes app)", () => {
-    const result = checkToolVisibility(
-      [makeTool("defaultTool")],
-      "defaultTool",
-    );
+    const result = checkToolVisibility([makeTool("defaultTool")], "defaultTool");
     expect(result.allowed).toBe(true);
   });
 
   it("rejects unknown tool", () => {
     const result = checkToolVisibility(
-      [makeTool("knownTool", ["app"])],
+      [makeTool("knownTool")],
       "unknownTool",
     );
     expect(result.allowed).toBe(false);

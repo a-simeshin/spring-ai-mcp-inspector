@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="referrer" content="no-referrer">
+<title>Sandbox Proxy</title>
+<style>
+  body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #fff; }
+  iframe { border: none; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="container"></div>
+<script>
+(function() {
+  'use strict';
+
+  var container = document.getElementById('container');
+  var innerIframe = null;
+  var readySent = false;
+
+  // Notify the host that the proxy page is ready
+  function sendProxyReady() {
+    if (readySent) return;
+    readySent = true;
+    window.parent.postMessage(
+      { jsonrpc: '2.0', method: 'ui/notifications/sandbox-proxy-ready' },
+      '*'
+    );
+  }
+
+  // Serialize a McpUiResourceCsp JSON object to a CSP header string
+  function serializeCsp(cspObj) {
+    if (!cspObj || typeof cspObj !== 'object') {
+      return "default-src 'none'; connect-src 'none'; img-src 'none'; script-src 'unsafe-inline' 'none'; style-src 'unsafe-inline' 'none'; font-src 'none'; media-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'";
+    }
+    var parts = ["default-src 'none'"];
+    var cd = cspObj.connectDomains;
+    if (cd && cd.length > 0) {
+      parts.push("connect-src " + cd.join(" "));
+    } else {
+      parts.push("connect-src 'none'");
+    }
+    var rd = cspObj.resourceDomains;
+    if (rd && rd.length > 0) {
+      var rdJoined = rd.join(" ");
+      parts.push("img-src " + rdJoined);
+      parts.push("script-src 'unsafe-inline' " + rdJoined);
+      parts.push("style-src 'unsafe-inline' " + rdJoined);
+      parts.push("font-src " + rdJoined);
+      parts.push("media-src " + rdJoined);
+    } else {
+      parts.push("img-src 'none'");
+      parts.push("script-src 'unsafe-inline' 'none'");
+      parts.push("style-src 'unsafe-inline' 'none'");
+      parts.push("font-src 'none'");
+      parts.push("media-src 'none'");
+    }
+    var fd = cspObj.frameDomains;
+    if (fd && fd.length > 0) {
+      parts.push("frame-src " + fd.join(" "));
+    } else {
+      parts.push("frame-src 'none'");
+    }
+    var bud = cspObj.baseUriDomains;
+    if (bud && bud.length > 0) {
+      parts.push("base-uri " + bud.join(" "));
+    } else {
+      parts.push("base-uri 'self'");
+    }
+    parts.push("form-action 'none'");
+    return parts.join("; ");
+  }
+
+  // Create the inner view iframe with the given HTML
+  function createViewIframe(html, sandbox, csp) {
+    var attrs = sandbox || 'allow-scripts';
+    var iframe = document.createElement('iframe');
+
+    // Set sandbox attribute; NO allow-same-origin by default
+    iframe.setAttribute('sandbox', attrs);
+
+    // Parse csp param (JSON object or string) and serialize to CSP meta tag
+    var cspStr;
+    if (typeof csp === 'string' && csp.length > 0) {
+      try {
+        cspStr = serializeCsp(JSON.parse(csp));
+      } catch (_) {
+        cspStr = serializeCsp(null);
+      }
+    } else if (typeof csp === 'object' && csp !== null) {
+      cspStr = serializeCsp(csp);
+    } else {
+      cspStr = serializeCsp(null);
+    }
+    html = '<meta http-equiv="Content-Security-Policy" content="' +
+      cspStr.replace(/"/g, '&quot;') + '">' + html;
+
+    iframe.srcdoc = html;
+    iframe.style.width = '100%';
+    iframe.style.height = '100%';
+    container.appendChild(iframe);
+    innerIframe = iframe;
+  }
+
+  // Relay a message from host to inner iframe
+  function forwardToView(event) {
+    if (!innerIframe || !innerIframe.contentWindow) return;
+    innerIframe.contentWindow.postMessage(event.data, '*');
+  }
+
+  // Relay a message from inner iframe to host
+  function forwardToHost(event) {
+    // Only relay messages from our own inner iframe
+    if (event.source !== (innerIframe && innerIframe.contentWindow)) return;
+    window.parent.postMessage(event.data, '*');
+  }
+
+  // Handle incoming messages
+  window.addEventListener('message', function(event) {
+    // Determine message source
+    var isFromHost = (event.source === window.parent);
+    var isFromView = innerIframe && (event.source === innerIframe.contentWindow);
+
+    if (!isFromHost && !isFromView) return; // Unknown source, drop
+
+    var data = event.data;
+    if (!data || typeof data !== 'object') return;
+
+    // View -> Host relay
+    if (isFromView) {
+      window.parent.postMessage(data, '*');
+      return;
+    }
+
+    // Host -> View messages
+    var method = data.method;
+
+    // sandbox-resource-ready: create the inner view iframe
+    if (method === 'ui/notifications/sandbox-resource-ready') {
+      var params = data.params || {};
+      var html = params.html;
+      if (!html) return;
+      createViewIframe(html, params.sandbox, params.csp);
+      return;
+    }
+
+    // Everything else: forward to inner iframe
+    forwardToView(event);
+  });
+
+  // Send ready notification as soon as the page loads
+  if (document.readyState === 'complete') {
+    sendProxyReady();
+  } else {
+    window.addEventListener('load', sendProxyReady);
+  }
+})();
+</script>
+</body>
+</html>

@@ -88,8 +88,8 @@ public class ProxyAuthWebFilter implements WebFilter, Ordered {
 		if (!path.startsWith(this.proxyPrefix)) {
 			return chain.filter(exchange);
 		}
-		// Health is intentionally open.
-		if (path.endsWith("/health")) {
+		// Health and sandbox proxy are intentionally open.
+		if (path.endsWith("/health") || path.endsWith("/sandbox")) {
 			return chain.filter(exchange);
 		}
 		// CORS preflight requests carry no credentials; let them pass so the CORS
