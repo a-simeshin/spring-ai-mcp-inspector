@@ -17,11 +17,14 @@
 package io.inspector.mcp.core.proxy;
 
 import java.net.URI;
+import java.net.http.HttpRequest;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
@@ -222,6 +225,9 @@ public class ProxyTransportFactory {
 		if (!hasAuth && !hasCustom) {
 			return null;
 		}
+		if (hasCustom) {
+			validateHeaderNames(customHeaders);
+		}
 		return (builder, method, endpoint, body, context) -> {
 			if (hasAuth) {
 				builder.setHeader("Authorization", authorization);
@@ -232,13 +238,56 @@ public class ProxyTransportFactory {
 						try {
 							builder.setHeader(name, value);
 						}
-						catch (final IllegalArgumentException ignored) {
-							// restricted header names are silently skipped
+						catch (final IllegalArgumentException ex) {
+							throw new IllegalArgumentException("custom header '" + name + "' rejected: invalid value",
+									null);
 						}
 					}
 				});
 			}
 		};
+	}
+
+	/**
+	 * Validates that all custom header names are allowed by the JDK's
+	 * {@link HttpRequest.Builder} - throws {@link IllegalArgumentException} at transport
+	 * build time for any restricted name. The message contains every offending header
+	 * name and the JDK's reason, but NEVER any header value.
+	 * <p>
+	 * Null and blank header names are silently skipped (they are guarded by the caller's
+	 * null/blank check in the customizer lambda). Null header values are also skipped
+	 * (the customizer lambda skips null values, so there is nothing to validate).
+	 * @param customHeaders the headers to validate (never {@code null})
+	 */
+	private static void validateHeaderNames(final Map<String, String> customHeaders) {
+		final List<String> offenders = new ArrayList<>();
+		for (final Map.Entry<String, String> entry : customHeaders.entrySet()) {
+			final String name = entry.getKey();
+			if (name != null && !name.isBlank() && entry.getValue() != null) {
+				try {
+					HttpRequest.newBuilder().setHeader(name, "probe");
+				}
+				catch (final IllegalArgumentException ex) {
+					offenders.add(name + ": " + ex.getMessage());
+				}
+			}
+		}
+		if (!offenders.isEmpty()) {
+			final String names = offenders.stream()
+				.map((o) -> o.substring(0, o.indexOf(':')))
+				.collect(Collectors.joining(", "));
+			final String reasons = offenders.stream()
+				.map((o) -> o.substring(o.indexOf(':') + 2))
+				.collect(Collectors.joining("; "));
+			if (offenders.size() == 1) {
+				throw new IllegalArgumentException(
+						"custom header '" + names + "' is not allowed by the JDK HTTP client: " + reasons);
+			}
+			else {
+				throw new IllegalArgumentException(
+						"custom headers [" + names + "] are not allowed by the JDK HTTP client: " + reasons);
+			}
+		}
 	}
 
 	/**
