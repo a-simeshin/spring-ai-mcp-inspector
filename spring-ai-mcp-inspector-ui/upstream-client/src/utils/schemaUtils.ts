@@ -302,6 +302,120 @@ export function normalizeUnionType(schema: JsonSchemaType): JsonSchemaType {
   return schema;
 }
 
+// [spring-ai-mcp-inspector PATCH] $ref schema warnings (Spring AI #5888 detector)
+/**
+ * Checks whether a $ref pointer can be resolved within a root schema.
+ * Only handles #/-prefixed paths (e.g. #/properties/foo, #/$defs/Bar).
+ */
+function canResolveRef(ref: string, rootSchema: JsonSchemaType): boolean {
+  if (!ref.startsWith("#/")) return false;
+
+  const path = ref.substring(2).split("/");
+  let current: unknown = rootSchema;
+
+  for (const segment of path) {
+    if (
+      current &&
+      typeof current === "object" &&
+      current !== null &&
+      segment in current
+    ) {
+      current = (current as Record<string, unknown>)[segment];
+    } else {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Recursively traverses a schema subtree collecting $ref pointers that
+ * cannot be resolved within the root schema. Does NOT mutate the schema.
+ */
+function collectUnresolvedRefs(
+  schema: JsonSchemaType,
+  rootSchema: JsonSchemaType,
+  result: string[],
+): void {
+  if (!schema || typeof schema !== "object") return;
+
+  if ("$ref" in schema && typeof schema.$ref === "string") {
+    const ref = schema.$ref;
+    if (!canResolveRef(ref, rootSchema) && !result.includes(ref)) {
+      result.push(ref);
+    }
+    // Do NOT descend into the $ref target -- we are validating the pointer,
+    // not resolving it.
+    return;
+  }
+
+  // Descend into nested schema containers.
+  if (schema.properties) {
+    for (const prop of Object.values(schema.properties)) {
+      collectUnresolvedRefs(prop as JsonSchemaType, rootSchema, result);
+    }
+  }
+  if (schema.items) {
+    collectUnresolvedRefs(schema.items as JsonSchemaType, rootSchema, result);
+  }
+  if (schema.anyOf) {
+    for (const item of schema.anyOf) {
+      collectUnresolvedRefs(item as JsonSchemaType, rootSchema, result);
+    }
+  }
+  if (schema.oneOf) {
+    for (const item of schema.oneOf) {
+      collectUnresolvedRefs(item as JsonSchemaType, rootSchema, result);
+    }
+  }
+}
+
+/**
+ * Finds all unresolvable $ref pointers within a JSON schema.
+ * Returns an array of the exact $ref strings (e.g. "#/properties/missing")
+ * that could not be resolved against the schema document itself.
+ */
+export function findUnresolvedRefs(rootSchema: JsonSchemaType): string[] {
+  if (!rootSchema || typeof rootSchema !== "object") return [];
+
+  const result: string[] = [];
+  collectUnresolvedRefs(rootSchema, rootSchema, result);
+  return result;
+}
+
+/**
+ * Result of scanning a tool's schemas for unresolved $ref pointers.
+ */
+export type UnresolvedRefInfo = {
+  ref: string;
+  location: "inputSchema" | "outputSchema";
+};
+
+/**
+ * Scans both inputSchema and outputSchema of a Tool (if present) for
+ * unresolvable $ref pointers. Returns the list of findings.
+ */
+export function findToolSchemaWarnings(tool: {
+  inputSchema?: JsonSchemaType;
+  outputSchema?: JsonSchemaType;
+}): UnresolvedRefInfo[] {
+  const warnings: UnresolvedRefInfo[] = [];
+
+  if (tool.inputSchema) {
+    for (const ref of findUnresolvedRefs(tool.inputSchema)) {
+      warnings.push({ ref, location: "inputSchema" });
+    }
+  }
+  if (tool.outputSchema) {
+    for (const ref of findUnresolvedRefs(tool.outputSchema)) {
+      warnings.push({ ref, location: "outputSchema" });
+    }
+  }
+
+  return warnings;
+}
+
 /**
  * Formats a field key into a human-readable label
  * @param key The field key to format
