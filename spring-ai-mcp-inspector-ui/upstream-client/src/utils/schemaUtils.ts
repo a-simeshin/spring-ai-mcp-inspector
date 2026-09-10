@@ -442,7 +442,7 @@ export function findMissingOutputSchemaWarning(
   const advertised = tool.outputSchema;
   if (advertised && typeof advertised === "object") {
     const hasShape =
-      (typeof advertised.type === "string" && advertised.type !== "") ||
+      advertised.type !== undefined ||
       (advertised.properties !== undefined &&
         advertised.properties !== null &&
         Object.keys(advertised.properties).length > 0) ||
