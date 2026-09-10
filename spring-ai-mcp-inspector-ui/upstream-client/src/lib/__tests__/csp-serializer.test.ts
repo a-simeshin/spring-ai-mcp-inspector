@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] CSP serializer test (#183, #199)
 import { serializeCsp, McpUiResourceCsp } from "../csp-serializer";
 
 describe("serializeCsp", () => {

@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] AppRenderer visibility logic test (#183, #199)
 describe("AppRenderer - handleCallTool visibility logic", () => {
   // Test the visibility logic extracted from AppRenderer.tsx
   // by testing it in isolation as a pure function.
