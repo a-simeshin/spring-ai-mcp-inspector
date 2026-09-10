@@ -878,3 +878,138 @@ describe("findUnresolvedRefs - RFC 6901 and traversal regression", () => {
     expect(findUnresolvedRefs(schema)).toEqual([]);
   });
 });
+
+// Regression tests for full schema keyword traversal (PR #204 review)
+describe("findUnresolvedRefs - schema keyword traversal", () => {
+  test("detects unresolved ref inside not", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        value: {
+          not: { $ref: "#/$defs/MissingFromNot" },
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingFromNot"]);
+  });
+
+  test("detects unresolved ref inside if", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        value: {
+          if: { $ref: "#/$defs/MissingIf" },
+          then: { properties: { x: { type: "string" } } },
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingIf"]);
+  });
+
+  test("detects unresolved ref inside then", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        value: {
+          if: { properties: { x: { type: "string" } } },
+          then: { $ref: "#/$defs/MissingThen" },
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingThen"]);
+  });
+
+  test("detects unresolved ref inside else", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        value: {
+          if: { properties: { x: { type: "string" } } },
+          else: { $ref: "#/$defs/MissingElse" },
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingElse"]);
+  });
+
+  test("detects unresolved ref inside contains", () => {
+    const schema: JsonSchemaType = {
+      type: "array",
+      items: { type: "object" },
+      contains: { $ref: "#/$defs/MissingContains" },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingContains"]);
+  });
+
+  test("detects unresolved ref inside prefixItems", () => {
+    const schema: JsonSchemaType = {
+      type: "array",
+      prefixItems: [
+        { type: "string" },
+        { $ref: "#/$defs/MissingPrefixItem" },
+      ],
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingPrefixItem"]);
+  });
+
+  test("detects unresolved ref inside additionalProperties", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: { name: { type: "string" } },
+      additionalProperties: { $ref: "#/$defs/MissingAdditionalProp" },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([
+      "#/$defs/MissingAdditionalProp",
+    ]);
+  });
+
+  test("detects unresolved ref inside dependentSchemas", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: { credit_card: { type: "string" } },
+      dependentSchemas: {
+        credit_card: { $ref: "#/$defs/MissingDependent" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingDependent"]);
+  });
+
+  test("detects unresolved ref inside patternProperties", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      patternProperties: {
+        "^S_": { $ref: "#/$defs/MissingPattern" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingPattern"]);
+  });
+
+  test("resolves valid ref inside not", () => {
+    const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
+      type: "object",
+      properties: {
+        value: {
+          not: { $ref: "#/$defs/Allowed" },
+        },
+      },
+      $defs: {
+        Allowed: { type: "string" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("still does NOT mutate the stored schema with new keywords", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        value: {
+          not: { $ref: "#/$defs/MissingFromNot" },
+        },
+      },
+    };
+    const copy = JSON.parse(JSON.stringify(schema));
+    findUnresolvedRefs(schema);
+    expect(schema).toEqual(copy);
+  });
+});
