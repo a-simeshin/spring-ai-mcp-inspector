@@ -31,6 +31,7 @@ import org.springframework.web.reactive.function.server.ServerResponse;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.webflux.proxy.ProxyHandler;
+import io.inspector.mcp.webflux.proxy.SandboxProxyHandler;
 
 import static org.springframework.web.reactive.function.server.RequestPredicates.DELETE;
 import static org.springframework.web.reactive.function.server.RequestPredicates.GET;
@@ -129,14 +130,16 @@ public class InspectorRouterConfig {
 	 * Upstream-compatible proxy routes. Lives on a sibling prefix ({@code path + "-api"})
 	 * to keep the v1 inspector contract intact.
 	 * @param proxy the proxy handler bean
+	 * @param sandboxProxy the sandbox proxy handler bean
 	 * @param properties the inspector configuration properties
 	 * @return the router function for proxy endpoints
 	 */
 	@Bean
 	public RouterFunction<ServerResponse> inspectorProxyRouter(final ProxyHandler proxy,
-			final McpInspectorProperties properties) {
+			final SandboxProxyHandler sandboxProxy, final McpInspectorProperties properties) {
 		final String proxyBase = properties.getProxyPath();
 		return route(GET(proxyBase + "/health"), proxy::health).andRoute(GET(proxyBase + "/config"), proxy::config)
+			.andRoute(GET(proxyBase + "/sandbox"), sandboxProxy::serveSandbox)
 			.andRoute(POST(proxyBase + "/fetch"), proxy::fetch)
 			.andRoute(GET(proxyBase + "/sse"), proxy::openSse)
 			.andRoute(GET(proxyBase + "/stdio"), proxy::openStdio)

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, useCallback, useEffect } from "react";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
   Tool,
@@ -21,6 +21,11 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
 import { useToast } from "@/lib/hooks/useToast";
+import {
+  type AppTrafficEntry,
+  type AppLifecycleState,
+  derivePhase,
+} from "@/lib/app-traffic";
 
 interface AppRendererProps {
   sandboxPath: string;
@@ -29,8 +34,22 @@ interface AppRendererProps {
   toolInput?: Record<string, unknown>;
   toolResult?: CompatibilityCallToolResult | null;
   onNotification?: (notification: ServerNotification) => void;
+  onAppTraffic?: (entry: AppTrafficEntry) => void;
+  onLifecycleChange?: (state: AppLifecycleState) => void;
 }
 
+/**
+ * [spring-ai-mcp-inspector PATCH] AppRenderer with SEP-1865 traffic tap
+ * and lifecycle state machine.
+ *
+ * The tap observes guest<->host JSON-RPC traffic at the DOM boundary:
+ * - guest->host: via window.addEventListener("message", ...) filtering by
+ *   event.source === outerIframe.contentWindow
+ * - host->guest: via wrapping the outer iframe's contentWindow.postMessage
+ *
+ * Both directions are emitted as AppTrafficEntry entries to the onAppTraffic
+ * callback for the traffic panel (task 3 / t_4abaf1bb).
+ */
 const AppRenderer = ({
   sandboxPath,
   tool,
@@ -38,9 +57,189 @@ const AppRenderer = ({
   toolInput,
   toolResult,
   onNotification,
+  onAppTraffic,
+  onLifecycleChange,
 }: AppRendererProps) => {
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const seqRef = useRef(0);
+  const tapCleanupRef = useRef<(() => void) | null>(null);
+  const stateRef = useRef<AppLifecycleState>("idle");
+
+  const setLifecycleState = useCallback(
+    (state: AppLifecycleState) => {
+      if (stateRef.current === state) return;
+      stateRef.current = state;
+      onLifecycleChange?.(state);
+    },
+    [onLifecycleChange],
+  );
+
+  const emitTraffic = useCallback(
+    (
+      direction: AppTrafficEntry["direction"],
+      data: Record<string, unknown>,
+    ) => {
+      const method = data.method as string | undefined;
+      const entry: AppTrafficEntry = {
+        seq: seqRef.current++,
+        timestamp: new Date().toISOString(),
+        direction,
+        kind:
+          data.id !== undefined && data.method !== undefined
+            ? "request"
+            : data.id !== undefined && data.result !== undefined
+              ? "response"
+              : data.id !== undefined && data.error !== undefined
+                ? "response"
+                : "notification",
+        method,
+        id: data.id as string | number | undefined,
+        params: data.params as unknown,
+        result: data.result as unknown,
+        error: data.error as { code: number; message: string } | undefined,
+        phase: derivePhase(method),
+      };
+      onAppTraffic?.(entry);
+    },
+    [onAppTraffic],
+  );
+
+  // [spring-ai-mcp-inspector PATCH] Set up the DOM-level tap on the outer
+  // sandbox iframe. The tap is installed after the iframe is mounted by the
+  // @mcp-ui/client AppFrame (it creates the iframe inside a React effect).
+  // We wait for the iframe element to appear in the container div, then:
+  // 1. Add a window message listener for guest->host frames
+  // 2. Wrap the outer iframe's contentWindow.postMessage to capture host->guest
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !mcpClient) return;
+
+    let disposed = false;
+    const timeoutId = setTimeout(() => {
+      if (disposed) return;
+      // The @mcp-ui/client AppFrame has a 10s timeout internally; if we haven't
+      // found the iframe by now, it's an error state.
+      if (!container.querySelector("iframe")) {
+        setError("Sandbox proxy iframe did not mount within timeout");
+        setLifecycleState("error");
+      }
+    }, 10_000);
+
+    // Poll for the iframe to appear (the library mounts it in its own effect)
+    const pollInterval = setInterval(() => {
+      if (disposed) {
+        clearInterval(pollInterval);
+        return;
+      }
+      const iframe = container.querySelector("iframe");
+      if (!iframe) return;
+      clearInterval(pollInterval);
+      clearTimeout(timeoutId);
+
+      const outerIframe = iframe as HTMLIFrameElement;
+      const contentWindow = outerIframe.contentWindow;
+      if (!contentWindow) return;
+
+      setLifecycleState("sandbox-waiting");
+
+      // --- guest->host direction ---
+      // The sandbox proxy page relays guest messages to window.parent with
+      // targetOrigin "*", so at host level the message arrives from the outer
+      // iframe. Filter by source === outerIframe.contentWindow.
+      const onMessage = (event: MessageEvent) => {
+        if (disposed) return;
+        // Only accept messages from our outer sandbox iframe.
+        // This is the "wrong origins are rejected" acceptance criterion.
+        if (event.source !== contentWindow) return;
+        if (!event.data || typeof event.data !== "object") return;
+        if (event.data.jsonrpc !== "2.0") return;
+
+        emitTraffic("guest->host", event.data);
+
+        // Lifecycle transitions from guest->host frames
+        const method = event.data.method as string | undefined;
+        if (method === "ui/notifications/sandbox-proxy-ready") {
+          setLifecycleState("initializing");
+        }
+        if (method === "ui/notifications/initialized") {
+          setLifecycleState("ready");
+        }
+        if (method === "ui/resource-teardown") {
+          setLifecycleState("torn-down");
+        }
+      };
+      window.addEventListener("message", onMessage);
+
+      // --- host->guest direction ---
+      // Wrap the outer iframe's contentWindow.postMessage to capture outbound
+      // messages. The library calls contentWindow.postMessage on the iframe.
+      // Using bind() to capture the original, then replacing.
+      const origPostMessage = contentWindow.postMessage.bind(contentWindow);
+      const wrappedPostMessage = (
+        message: unknown,
+        targetOrigin?: string,
+      ) => {
+        if (
+          !disposed &&
+          message &&
+          typeof message === "object" &&
+          (message as Record<string, unknown>).jsonrpc === "2.0"
+        ) {
+          emitTraffic(
+            "host->guest",
+            message as Record<string, unknown>,
+          );
+          const method = (message as Record<string, unknown>)
+            .method as string | undefined;
+          if (method === "ui/initialize") {
+            setLifecycleState("initializing");
+          }
+        }
+        return origPostMessage(message, targetOrigin ?? "*");
+      };
+
+      // Override contentWindow.postMessage. This is safe because the library
+      // holds a reference to the contentWindow object, and we're replacing
+      // the method on that object.
+      try {
+        Object.defineProperty(contentWindow, "postMessage", {
+          value: wrappedPostMessage,
+          writable: true,
+          configurable: true,
+        });
+      } catch {
+        // If we can't override postMessage (cross-origin restrictions),
+        // we fall back to observing only guest->host traffic. This is a
+        // degraded mode but not an error.
+        console.warn(
+          "Could not wrap iframe.postMessage; host->guest traffic tap degraded",
+        );
+      }
+
+      tapCleanupRef.current = () => {
+        window.removeEventListener("message", onMessage);
+        try {
+          Object.defineProperty(contentWindow, "postMessage", {
+            value: origPostMessage,
+            writable: true,
+            configurable: true,
+          });
+        } catch {
+          // Ignore restore errors
+        }
+      };
+    }, 100);
+
+    return () => {
+      disposed = true;
+      clearInterval(pollInterval);
+      clearTimeout(timeoutId);
+      tapCleanupRef.current?.();
+      tapCleanupRef.current = null;
+    };
+  }, [mcpClient, emitTraffic, setLifecycleState]);
 
   const normalizedToolResult = useMemo<CallToolResult | undefined>(() => {
     if (!toolResult) {
@@ -129,6 +328,7 @@ const AppRenderer = ({
       )}
 
       <div
+        ref={containerRef}
         className="flex-1 border rounded overflow-hidden"
         style={{ minHeight: "400px" }}
       >
@@ -144,7 +344,10 @@ const AppRenderer = ({
           sandbox={{
             url: new URL(sandboxPath, window.location.origin),
           }}
-          onError={(err) => setError(err.message)}
+          onError={(err) => {
+            setError(err.message);
+            setLifecycleState("error");
+          }}
         />
       </div>
     </div>

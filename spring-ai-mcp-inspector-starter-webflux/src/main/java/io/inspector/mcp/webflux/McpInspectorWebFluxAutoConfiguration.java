@@ -52,6 +52,7 @@ import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.webflux.filter.InspectorAuthWebFilter;
 import io.inspector.mcp.webflux.proxy.ProxyAuthWebFilter;
 import io.inspector.mcp.webflux.proxy.ProxyHandler;
+import io.inspector.mcp.webflux.proxy.SandboxProxyHandler;
 import io.inspector.mcp.webflux.router.InspectorHandler;
 import io.inspector.mcp.webflux.router.InspectorRouterConfig;
 import io.inspector.mcp.webflux.router.TimelineHandler;
@@ -211,6 +212,12 @@ public class McpInspectorWebFluxAutoConfiguration {
 			final TransportDetector transportDetector, final JsonMapper objectMapper,
 			final McpInspectorProperties properties) {
 		return new ProxyHandler(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties);
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public SandboxProxyHandler mcpInspectorSandboxProxyHandler() {
+		return new SandboxProxyHandler();
 	}
 
 	@Bean

@@ -1,0 +1,16 @@
+sandbox-proxy-and-lifecycle.txt
+
+Sandboxed iframe renderer with SEP-1865 lifecycle bridge (t_cca2f271):
+- Added sandbox-proxy.html static resource: outer sandbox proxy page that relays
+  postMessage between host and opaque-origin inner view iframe.
+- Added SandboxProxyController (webmvc) and SandboxProxyHandler (webflux) serving
+  GET /mcp-inspector-api/sandbox with restrictive CSP and Cache-Control: no-store.
+- Added /sandbox to auth filter allowlists (both stacks) alongside /health.
+- Updated ProxyConstants.java javadoc (both stacks): added /sandbox to the endpoint
+  list, removed "minus the /sandbox route" note.
+- AppRenderer.tsx: added traffic tap (window.addEventListener + postMessage wrap),
+  lifecycle state machine, and onAppTraffic/onLifecycleChange callbacks.
+  PATCH marker [spring-ai-mcp-inspector PATCH] applied to AppRenderer.tsx.
+  The tap captures guest->host frames via addEventListener and host->guest frames
+  by wrapping the outer iframe's contentWindow.postMessage.
+  Lifecycle: idle -> loading-resource -> sandbox-waiting -> initializing -> ready -> error -> torn-down.

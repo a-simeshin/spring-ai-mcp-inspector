@@ -78,7 +78,7 @@ public class ProxyAuthFilter extends OncePerRequestFilter {
 		}
 
 		final String path = request.getRequestURI();
-		if (path != null && path.endsWith("/health")) {
+		if (path != null && (path.endsWith("/health") || path.endsWith("/sandbox"))) {
 			chain.doFilter(request, response);
 			return;
 		}
