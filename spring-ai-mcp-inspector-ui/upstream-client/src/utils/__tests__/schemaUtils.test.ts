@@ -798,3 +798,83 @@ describe("findToolSchemaWarnings", () => {
     ]);
   });
 });
+
+// Regression tests for PR #204 review findings
+// (escaped pointer, allOf, $defs traversal)
+describe("findUnresolvedRefs - RFC 6901 and traversal regression", () => {
+  test("resolves escaped pointer ~1 to /", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a/b": { type: "string" },
+        alias: { $ref: "#/properties/a~1b" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("resolves escaped pointer ~0 to ~", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a~b": { type: "string" },
+        alias: { $ref: "#/properties/a~0b" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("detects broken ref under allOf", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        value: {
+          allOf: [{ $ref: "#/properties/missing" }],
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/properties/missing"]);
+  });
+
+  test("detects broken ref inside nested $defs", () => {
+    const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
+      type: "object",
+      properties: {
+        user: { $ref: "#/$defs/User" },
+      },
+      $defs: {
+        User: {
+          type: "object",
+          properties: {
+            profile: { $ref: "#/$defs/Profile" },
+          },
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/Profile"]);
+  });
+
+  test("resolves valid ref inside $defs", () => {
+    const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
+      type: "object",
+      properties: {
+        user: { $ref: "#/$defs/User" },
+      },
+      $defs: {
+        User: {
+          type: "object",
+          properties: {
+            profile: { $ref: "#/$defs/Profile" },
+          },
+        },
+        Profile: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+          },
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+});
