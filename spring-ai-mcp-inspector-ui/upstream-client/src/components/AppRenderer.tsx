@@ -40,6 +40,35 @@ interface AppRendererProps {
 }
 
 /**
+ * Check whether a tool call from an App is allowed based on the tool's
+ * _meta.ui.visibility. The default visibility is ["model", "app"] per the
+ * SEP-1865 McpUiToolVisibilitySchema. Tools with visibility that does not
+ * include "app" are rejected. Unknown tools are rejected.
+ *
+ * Exported so that unit tests import the actual production function instead
+ * of duplicating its logic.
+ */
+export function checkToolVisibility(
+  tools: Tool[],
+  toolName: string,
+): { allowed: boolean; reason?: string } {
+  const matchedTool = tools.find((t) => t.name === toolName);
+  if (!matchedTool) {
+    return { allowed: false, reason: "unknown tool" };
+  }
+  const meta = (matchedTool as Record<string, unknown>)._meta as
+    | Record<string, unknown>
+    | undefined;
+  const ui = meta?.ui as Record<string, unknown> | undefined;
+  const toolVisibility = ui?.visibility as string[] | undefined;
+  const effectiveVisibility = toolVisibility ?? ["model", "app"];
+  if (!effectiveVisibility.includes("app")) {
+    return { allowed: false, reason: "not available to apps" };
+  }
+  return { allowed: true };
+}
+
+/**
  * [spring-ai-mcp-inspector PATCH] AppRenderer with SEP-1865 traffic tap
  * and lifecycle state machine.
  *
@@ -319,26 +348,8 @@ const AppRenderer = ({
       extra?: RequestHandlerExtra,
     ): Promise<CallToolResult> => {
       const toolName = params.name;
-      const matchedTool = tools.find((t) => t.name === toolName);
-      if (!matchedTool) {
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `Tool '${toolName}' is not available to apps`,
-            },
-          ],
-        };
-      }
-      // default visibility = ["model", "app"] per McpUiToolVisibilitySchema
-      const visibility = (matchedTool as Record<string, unknown>)._meta as
-        | Record<string, unknown>
-        | undefined;
-      const ui = visibility?.ui as Record<string, unknown> | undefined;
-      const toolVisibility = ui?.visibility as string[] | undefined;
-      const effectiveVisibility = toolVisibility ?? ["model", "app"];
-      if (!effectiveVisibility.includes("app")) {
+      const check = checkToolVisibility(tools, toolName);
+      if (!check.allowed) {
         return {
           isError: true,
           content: [

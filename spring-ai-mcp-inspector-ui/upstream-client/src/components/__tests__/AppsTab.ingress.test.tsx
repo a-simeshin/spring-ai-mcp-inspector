@@ -27,6 +27,11 @@ jest.mock("../AppTrafficPanel", () => {
             "truncated" in e.params ? (
               <span data-testid={`truncated-${e.seq}`}>truncated</span>
             ) : null}
+            {e.params && typeof e.params === "object" && "droppedCount" in e.params ? (
+              <span data-testid={`dropped-count-${e.seq}`}>
+                {JSON.stringify(e.params)}
+              </span>
+            ) : null}
           </div>
         ))}
       </div>
@@ -36,22 +41,43 @@ jest.mock("../AppTrafficPanel", () => {
 
 // Mock AppRenderer that captures traffic entries
 jest.mock("../AppRenderer", () => {
+  let hugeMode = false;
   return function MockAppRenderer({
     onAppTraffic,
   }: {
     onAppTraffic?: (entry: AppTrafficEntry) => void;
   }) {
-    // Simulate a flood of traffic entries
     const floodTraffic = () => {
       if (onAppTraffic) {
         for (let i = 0; i < 2000; i++) {
+          let params: unknown = { data: "x".repeat(100) };
+          if (hugeMode && (i % 400 === 0 || i === 1999)) {
+            params = { data: "x".repeat(70000) };
+          }
           onAppTraffic({
             seq: i,
             timestamp: new Date().toISOString(),
             direction: "guest->host",
             kind: "notification",
             method: "test/method",
-            params: { data: "x".repeat(100) },
+            params,
+            phase: "sandbox",
+          });
+        }
+      }
+    };
+
+    const floodHuge = () => {
+      hugeMode = true;
+      if (onAppTraffic) {
+        for (let i = 0; i < 10; i++) {
+          onAppTraffic({
+            seq: i + 10000,
+            timestamp: new Date().toISOString(),
+            direction: "guest->host",
+            kind: "notification",
+            method: "test/huge",
+            params: { data: "x".repeat(70000) },
             phase: "sandbox",
           });
         }
@@ -65,6 +91,12 @@ jest.mock("../AppRenderer", () => {
           onClick={floodTraffic}
         >
           Flood
+        </button>
+        <button
+          data-testid="flood-huge-button"
+          onClick={floodHuge}
+        >
+          Flood Huge
         </button>
       </div>
     );
@@ -101,7 +133,6 @@ describe("AppsTab - traffic ingress bounding", () => {
       </Tabs>,
     );
 
-    // Open the app
     const appCard = screen.getByText("trafficApp").closest("div");
     fireEvent.click(appCard!);
 
@@ -109,59 +140,52 @@ describe("AppsTab - traffic ingress bounding", () => {
       expect(screen.getByTestId("app-renderer")).toBeInTheDocument();
     });
 
-    // Flood 2000 entries (ingress should cap at 500 pending)
     const floodButton = screen.getByTestId("flood-button");
     fireEvent.click(floodButton);
 
-    // Advance timers past the 50ms flush throttle
     act(() => {
       jest.advanceTimersByTime(100);
     });
 
-    // The traffic panel should show entries (bounded to 500 max)
     const panel = screen.getByTestId("app-traffic-panel");
     const count = parseInt(
       panel.querySelector("[data-testid='traffic-count']")?.textContent ?? "0",
     );
     expect(count).toBeLessThanOrEqual(500);
+
+    const droppedEntry = screen.queryByTestId("entry--1");
+    expect(droppedEntry).toBeInTheDocument();
+    expect(droppedEntry!.textContent).toContain("ui/traffic/dropped");
+
+    const droppedCountSpan = screen.queryByTestId("dropped-count--1");
+    expect(droppedCountSpan).toBeInTheDocument();
+    expect(droppedCountSpan!.textContent).toContain("1500");
   });
 
   it("truncates oversize entries (> 64 KB params)", async () => {
-    const toolWithHugeResult: Tool = {
-      name: "hugeApp",
-      inputSchema: { type: "object" as const, properties: {} },
-      _meta: { ui: { resourceUri: "ui://huge" } },
-    } as Tool;
-
     render(
       <Tabs defaultValue="apps">
-        <AppsTab
-          {...defaultProps}
-          tools={[toolWithHugeResult]}
-          callTool={jest.fn(async () => ({
-            content: [{ type: "text", text: "ok" }],
-          }))}
-        />
+        <AppsTab {...defaultProps} />
       </Tabs>,
     );
 
-    // Open the app
-    const appCard = screen.getByText("hugeApp").closest("div");
+    const appCard = screen.getByText("trafficApp").closest("div");
     fireEvent.click(appCard!);
 
     await waitFor(() => {
       expect(screen.getByTestId("app-renderer")).toBeInTheDocument();
     });
 
-    // Flood with a huge entry
-    const floodButton = screen.getByTestId("flood-button");
-    fireEvent.click(floodButton);
+    const floodHugeButton = screen.getByTestId("flood-huge-button");
+    fireEvent.click(floodHugeButton);
 
     act(() => {
       jest.advanceTimersByTime(100);
     });
 
-    // Traffic panel should render without crashing
     expect(screen.getByTestId("app-traffic-panel")).toBeInTheDocument();
+
+    const truncatedEntries = screen.queryAllByText("truncated");
+    expect(truncatedEntries.length).toBeGreaterThan(0);
   });
 });
