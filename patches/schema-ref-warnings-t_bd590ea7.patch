@@ -1,0 +1,429 @@
+diff --git a/spring-ai-mcp-inspector-ui/upstream-client/src/components/ToolsTab.tsx b/spring-ai-mcp-inspector-ui/upstream-client/src/components/ToolsTab.tsx
+index 735ffe9..736271f 100644
+--- a/spring-ai-mcp-inspector-ui/upstream-client/src/components/ToolsTab.tsx
++++ b/spring-ai-mcp-inspector-ui/upstream-client/src/components/ToolsTab.tsx
+@@ -19,6 +19,8 @@ import {
+   isPropertyRequired,
+   normalizeUnionType,
+   resolveRef,
++  findToolSchemaWarnings,
++  type UnresolvedRefInfo,
+ } from "@/utils/schemaUtils";
+ import {
+   CompatibilityCallToolResult,
+@@ -33,12 +35,13 @@ import {
+   ChevronUp,
+   ChevronRight,
+   AlertCircle,
++  AlertTriangle,
+   Copy,
+   CheckCheck,
+   // [spring-ai-mcp-inspector PATCH] ui-app-detection: icon for Open as App
+   ExternalLink,
+ } from "lucide-react";
+-import { useEffect, useState, useRef } from "react";
++import { useEffect, useState, useRef, useMemo } from "react";
+ import ListPane from "./ListPane";
+ import JsonView from "./JsonView";
+ import ToolResults from "./ToolResults";
+@@ -262,6 +265,18 @@ const ToolsTab = ({
+     return errors;
+   };
+ 
++  // Compute warnings for each tool: detect unresolvable $ref pointers in schemas
++  const toolWarnings = useMemo(() => {
++    const map = new Map<string, UnresolvedRefInfo[]>();
++    for (const tool of tools) {
++      const warnings = findToolSchemaWarnings(tool);
++      if (warnings.length > 0) {
++        map.set(tool.name, warnings);
++      }
++    }
++    return map;
++  }, [tools]);
++
+   useEffect(() => {
+     const params = Object.entries(
+       selectedTool?.inputSchema.properties ?? [],
+@@ -340,6 +355,12 @@ const ToolsTab = ({
+               <div className="flex-shrink-0 mt-1">
+                 <IconDisplay icons={(tool as ExtendedTool).icons} size="sm" />
+               </div>
++              {toolWarnings.has(tool.name) && (
++                <AlertTriangle
++                  className="w-4 h-4 text-amber-500 flex-shrink-0 mt-1"
++                  aria-label="Schema contains unresolvable $ref pointers"
++                />
++              )}
+               <div className="flex flex-col flex-1 min-w-0">
+                 <span className="truncate">{tool.title || tool.name}</span>
+                 <span className="text-sm text-gray-500 text-left line-clamp-2">
+@@ -408,6 +429,41 @@ const ToolsTab = ({
+                   }
+                   declared={hasAnnotations(selectedTool)}
+                 />
++                {selectedTool && toolWarnings.has(selectedTool.name) && (() => {
++                  const warnings = toolWarnings.get(selectedTool.name)!;
++                  return (
++                    <Alert>
++                      <AlertTriangle className="h-4 w-4 text-amber-500" />
++                      <AlertTitle>Schema Warning</AlertTitle>
++                      <AlertDescription>
++                        <p className="text-sm">
++                          This tool's schema contains $ref pointers that could
++                          not be resolved within the schema document.
++                        </p>
++                        <ul className="mt-2 list-disc list-inside text-sm">
++                          {warnings.map((w, i) => (
++                            <li key={i}>
++                              Unresolved pointer:{" "}
++                              <code className="text-xs bg-muted px-1 rounded">
++                                {w.ref}
++                              </code>{" "}
++                              in <code className="text-xs">{w.location}</code>
++                            </li>
++                          ))}
++                        </ul>
++                        <a
++                          href="https://github.com/spring-projects/spring-ai/issues/5888"
++                          target="_blank"
++                          rel="noopener noreferrer"
++                          className="text-sm text-blue-600 dark:text-blue-400 underline mt-2 inline-block"
++                        >
++                          Learn more about this issue
++                          (spring-projects/spring-ai#5888)
++                        </a>
++                      </AlertDescription>
++                    </Alert>
++                  );
++                })()}
+                 {Object.entries(selectedTool.inputSchema.properties ?? []).map(
+                   ([key, value]) => {
+                     // First resolve any $ref references
+diff --git a/spring-ai-mcp-inspector-ui/upstream-client/src/utils/__tests__/schemaUtils.test.ts b/spring-ai-mcp-inspector-ui/upstream-client/src/utils/__tests__/schemaUtils.test.ts
+index 2d1b686..968b803 100644
+--- a/spring-ai-mcp-inspector-ui/upstream-client/src/utils/__tests__/schemaUtils.test.ts
++++ b/spring-ai-mcp-inspector-ui/upstream-client/src/utils/__tests__/schemaUtils.test.ts
+@@ -602,3 +602,198 @@ describe("Output Schema Validation", () => {
+     });
+   });
+ });
++
++import {
++  findUnresolvedRefs,
++  findToolSchemaWarnings,
++} from "../schemaUtils";
++
++describe("findUnresolvedRefs", () => {
++  test("returns empty array for schema without $ref", () => {
++    const schema: JsonSchemaType = {
++      type: "object",
++      properties: {
++        name: { type: "string" },
++        age: { type: "number" },
++      },
++    };
++    expect(findUnresolvedRefs(schema)).toEqual([]);
++  });
++
++  test("returns empty array for valid internal $ref", () => {
++    const schema: JsonSchemaType = {
++      type: "object",
++      properties: {
++        source: { type: "string" },
++        alias: { $ref: "#/properties/source" },
++      },
++    };
++    expect(findUnresolvedRefs(schema)).toEqual([]);
++  });
++
++  test("returns the exact pointer path for an unresolvable $ref", () => {
++    const schema: JsonSchemaType = {
++      type: "object",
++      properties: {
++        missing: { $ref: "#/properties/nonexistent" },
++      },
++    };
++    expect(findUnresolvedRefs(schema)).toEqual(["#/properties/nonexistent"]);
++  });
++
++  test("returns pointer path for deeply nested unresolvable $ref", () => {
++    const schema: JsonSchemaType = {
++      type: "object",
++      properties: {
++        child: {
++          type: "object",
++          properties: {
++            grandchild: { $ref: "#/$defs/MissingType" },
++          },
++        },
++      },
++    };
++    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingType"]);
++  });
++
++  test("resolves $defs refs correctly", () => {
++    const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
++      type: "object",
++      properties: {
++        user: { $ref: "#/$defs/User" },
++      },
++      $defs: {
++        User: {
++          type: "object",
++          properties: {
++            name: { type: "string" },
++          },
++        },
++      },
++    };
++    expect(findUnresolvedRefs(schema)).toEqual([]);
++  });
++
++  test("detects unresolved ref inside properties", () => {
++    const schema: JsonSchemaType = {
++      type: "object",
++      properties: {
++        items: {
++          type: "array",
++          items: { $ref: "#/properties/nonexistent" },
++        },
++      },
++    };
++    expect(findUnresolvedRefs(schema)).toEqual(["#/properties/nonexistent"]);
++  });
++
++  test("detects unresolved ref inside anyOf", () => {
++    const schema: JsonSchemaType = {
++      type: "object",
++      properties: {
++        value: {
++          anyOf: [
++            { type: "string" },
++            { $ref: "#/$defs/Missing" },
++          ],
++        },
++      },
++    };
++    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/Missing"]);
++  });
++
++  test("detects unresolved ref inside oneOf", () => {
++    const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
++      type: "object",
++      properties: {
++        result: {
++          oneOf: [
++            { $ref: "#/$defs/Success" },
++            { $ref: "#/$defs/Error" },
++          ],
++        },
++      },
++      $defs: {
++        Success: { type: "object", properties: { data: { type: "string" } } },
++      },
++    };
++    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/Error"]);
++  });
++
++  test("collects multiple unresolved refs", () => {
++    const schema: JsonSchemaType = {
++      type: "object",
++      properties: {
++        a: { $ref: "#/properties/missingA" },
++        b: { $ref: "#/properties/missingB" },
++      },
++    };
++    const result = findUnresolvedRefs(schema);
++    expect(result).toContain("#/properties/missingA");
++    expect(result).toContain("#/properties/missingB");
++    expect(result).toHaveLength(2);
++  });
++
++  test("does NOT mutate the stored schema", () => {
++    const schema: JsonSchemaType = {
++      type: "object",
++      properties: {
++        broken: { $ref: "#/properties/nonexistent" },
++      },
++    };
++    const copy = JSON.parse(JSON.stringify(schema));
++    findUnresolvedRefs(schema);
++    expect(schema).toEqual(copy);
++  });
++
++  test("handles null/undefined input gracefully", () => {
++    expect(findUnresolvedRefs(null as unknown as JsonSchemaType)).toEqual([]);
++    expect(findUnresolvedRefs(undefined as unknown as JsonSchemaType)).toEqual(
++      [],
++    );
++  });
++});
++
++describe("findToolSchemaWarnings", () => {
++  test("returns empty for tool without $ref", () => {
++    const tool = {
++      inputSchema: {
++        type: "object" as const,
++        properties: { name: { type: "string" as const } },
++      } as JsonSchemaType,
++    };
++    expect(findToolSchemaWarnings(tool)).toEqual([]);
++  });
++
++  test("returns warning for unresolved ref in inputSchema", () => {
++    const tool = {
++      inputSchema: {
++        type: "object" as const,
++        properties: {
++          broken: { $ref: "#/properties/missing" },
++        },
++      } as JsonSchemaType,
++    };
++    expect(findToolSchemaWarnings(tool)).toEqual([
++      { ref: "#/properties/missing", location: "inputSchema" },
++    ]);
++  });
++
++  test("returns warning for unresolved ref in outputSchema", () => {
++    const tool = {
++      inputSchema: {
++        type: "object" as const,
++        properties: { name: { type: "string" as const } },
++      } as JsonSchemaType,
++      outputSchema: {
++        type: "object" as const,
++        properties: {
++          result: { $ref: "#/$defs/MissingResult" },
++        },
++      } as JsonSchemaType,
++    };
++    expect(findToolSchemaWarnings(tool)).toEqual([
++      { ref: "#/$defs/MissingResult", location: "outputSchema" },
++    ]);
++  });
++});
+diff --git a/spring-ai-mcp-inspector-ui/upstream-client/src/utils/schemaUtils.ts b/spring-ai-mcp-inspector-ui/upstream-client/src/utils/schemaUtils.ts
+index 692e05b..79d0814 100644
+--- a/spring-ai-mcp-inspector-ui/upstream-client/src/utils/schemaUtils.ts
++++ b/spring-ai-mcp-inspector-ui/upstream-client/src/utils/schemaUtils.ts
+@@ -302,6 +302,119 @@ export function normalizeUnionType(schema: JsonSchemaType): JsonSchemaType {
+   return schema;
+ }
+ 
++/**
++ * Checks whether a $ref pointer can be resolved within a root schema.
++ * Only handles #/-prefixed paths (e.g. #/properties/foo, #/$defs/Bar).
++ */
++function canResolveRef(ref: string, rootSchema: JsonSchemaType): boolean {
++  if (!ref.startsWith("#/")) return false;
++
++  const path = ref.substring(2).split("/");
++  let current: unknown = rootSchema;
++
++  for (const segment of path) {
++    if (
++      current &&
++      typeof current === "object" &&
++      current !== null &&
++      segment in current
++    ) {
++      current = (current as Record<string, unknown>)[segment];
++    } else {
++      return false;
++    }
++  }
++
++  return true;
++}
++
++/**
++ * Recursively traverses a schema subtree collecting $ref pointers that
++ * cannot be resolved within the root schema. Does NOT mutate the schema.
++ */
++function collectUnresolvedRefs(
++  schema: JsonSchemaType,
++  rootSchema: JsonSchemaType,
++  result: string[],
++): void {
++  if (!schema || typeof schema !== "object") return;
++
++  if ("$ref" in schema && typeof schema.$ref === "string") {
++    const ref = schema.$ref;
++    if (!canResolveRef(ref, rootSchema) && !result.includes(ref)) {
++      result.push(ref);
++    }
++    // Do NOT descend into the $ref target -- we are validating the pointer,
++    // not resolving it.
++    return;
++  }
++
++  // Descend into nested schema containers.
++  if (schema.properties) {
++    for (const prop of Object.values(schema.properties)) {
++      collectUnresolvedRefs(prop as JsonSchemaType, rootSchema, result);
++    }
++  }
++  if (schema.items) {
++    collectUnresolvedRefs(schema.items as JsonSchemaType, rootSchema, result);
++  }
++  if (schema.anyOf) {
++    for (const item of schema.anyOf) {
++      collectUnresolvedRefs(item as JsonSchemaType, rootSchema, result);
++    }
++  }
++  if (schema.oneOf) {
++    for (const item of schema.oneOf) {
++      collectUnresolvedRefs(item as JsonSchemaType, rootSchema, result);
++    }
++  }
++}
++
++/**
++ * Finds all unresolvable $ref pointers within a JSON schema.
++ * Returns an array of the exact $ref strings (e.g. "#/properties/missing")
++ * that could not be resolved against the schema document itself.
++ */
++export function findUnresolvedRefs(rootSchema: JsonSchemaType): string[] {
++  if (!rootSchema || typeof rootSchema !== "object") return [];
++
++  const result: string[] = [];
++  collectUnresolvedRefs(rootSchema, rootSchema, result);
++  return result;
++}
++
++/**
++ * Result of scanning a tool's schemas for unresolved $ref pointers.
++ */
++export type UnresolvedRefInfo = {
++  ref: string;
++  location: "inputSchema" | "outputSchema";
++};
++
++/**
++ * Scans both inputSchema and outputSchema of a Tool (if present) for
++ * unresolvable $ref pointers. Returns the list of findings.
++ */
++export function findToolSchemaWarnings(tool: {
++  inputSchema?: JsonSchemaType;
++  outputSchema?: JsonSchemaType;
++}): UnresolvedRefInfo[] {
++  const warnings: UnresolvedRefInfo[] = [];
++
++  if (tool.inputSchema) {
++    for (const ref of findUnresolvedRefs(tool.inputSchema)) {
++      warnings.push({ ref, location: "inputSchema" });
++    }
++  }
++  if (tool.outputSchema) {
++    for (const ref of findUnresolvedRefs(tool.outputSchema)) {
++      warnings.push({ ref, location: "outputSchema" });
++    }
++  }
++
++  return warnings;
++}
++
+ /**
+  * Formats a field key into a human-readable label
+  * @param key The field key to format

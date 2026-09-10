@@ -1,0 +1,18 @@
+[spring-ai-mcp-inspector PATCH] $ref schema warnings (Spring AI #5888 detector)
+
+File: src/utils/schemaUtils.ts
+- Added findUnresolvedRefs() — scans a JSON Schema tree for $ref pointers
+  that cannot be resolved within the schema document (broken/recursive refs).
+- Added findToolSchemaWarnings() — convenience that checks both inputSchema
+  and outputSchema of a Tool.
+- Both functions are read-only (no mutation of the stored schema).
+
+File: src/components/ToolsTab.tsx
+- Computes per-tool warnings via useMemo when the tools list changes.
+- Renders an amber AlertTriangle badge next to each tool with unresolved $ref
+  in the list pane.
+- Renders a detailed warning Alert in the detail pane when a tool with
+  unresolved refs is selected, listing each broken pointer path and linking
+  to https://github.com/spring-projects/spring-ai/issues/5888.
+
+Covered by: src/utils/__tests__/schemaUtils.test.ts (11 new unit tests)
