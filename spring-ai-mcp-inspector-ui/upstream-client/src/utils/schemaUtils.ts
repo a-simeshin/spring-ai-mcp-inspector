@@ -317,6 +317,8 @@ function decodePointerToken(token: string): string {
  * Segments are decoded per RFC 6901 before lookup.
  */
 function canResolveRef(ref: string, rootSchema: JsonSchemaType): boolean {
+  if (ref === "#") return true; // RFC 6901: empty fragment means the root document
+
   if (!ref.startsWith("#/")) return false;
 
   const path = ref.substring(2).split("/").map(decodePointerToken);
@@ -327,7 +329,7 @@ function canResolveRef(ref: string, rootSchema: JsonSchemaType): boolean {
       current &&
       typeof current === "object" &&
       current !== null &&
-      segment in current
+      Object.prototype.hasOwnProperty.call(current, segment)
     ) {
       current = (current as Record<string, unknown>)[segment];
     } else {
@@ -354,9 +356,8 @@ function collectUnresolvedRefs(
     if (!canResolveRef(ref, rootSchema) && !result.includes(ref)) {
       result.push(ref);
     }
-    // Do NOT descend into the $ref target -- we are validating the pointer,
-    // not resolving it.
-    return;
+    // Do NOT return early -- sibling keywords (e.g. allOf on a schema with
+    // $ref) must still be traversed.
   }
 
   // Descend into nested schema containers.
@@ -366,7 +367,13 @@ function collectUnresolvedRefs(
     }
   }
   if (schema.items) {
-    collectUnresolvedRefs(schema.items as JsonSchemaType, rootSchema, result);
+    if (Array.isArray(schema.items)) {
+      for (const item of schema.items) {
+        collectUnresolvedRefs(item as JsonSchemaType, rootSchema, result);
+      }
+    } else {
+      collectUnresolvedRefs(schema.items as JsonSchemaType, rootSchema, result);
+    }
   }
   if (schema.anyOf) {
     for (const item of schema.anyOf) {
@@ -384,6 +391,8 @@ function collectUnresolvedRefs(
   const extended = schema as JsonSchemaType & {
     allOf?: JsonSchemaType[];
     $defs?: Record<string, JsonSchemaType>;
+    definitions?: Record<string, JsonSchemaType>;
+    dependencies?: Record<string, JsonSchemaType | string[]>;
     not?: JsonSchemaType;
     if?: JsonSchemaType;
     then?: JsonSchemaType;
@@ -407,6 +416,20 @@ function collectUnresolvedRefs(
   if (extended.$defs) {
     for (const def of Object.values(extended.$defs)) {
       collectUnresolvedRefs(def, rootSchema, result);
+    }
+  }
+  if (extended.definitions) {
+    for (const def of Object.values(extended.definitions)) {
+      collectUnresolvedRefs(def, rootSchema, result);
+    }
+  }
+  if (extended.dependencies) {
+    for (const dep of Object.values(extended.dependencies)) {
+      // dependencies entries may be a schema (object) or a string[]
+      // (property-name dependency). Only traverse the schema form.
+      if (dep && typeof dep === "object" && !Array.isArray(dep)) {
+        collectUnresolvedRefs(dep as JsonSchemaType, rootSchema, result);
+      }
     }
   }
   if (extended.not) {

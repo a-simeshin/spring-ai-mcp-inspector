@@ -1013,3 +1013,89 @@ describe("findUnresolvedRefs - schema keyword traversal", () => {
     expect(schema).toEqual(copy);
   });
 });
+
+// Regression tests for PR #204 review findings:
+// sibling keywords on $ref, tuple items, legacy definitions/dependencies,
+// inherited Object.prototype guard, and root fragment #
+describe("findUnresolvedRefs - $ref sibling, legacy, and JSON Pointer fixes", () => {
+  test("traverses sibling allOf on a schema with $ref", () => {
+    const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
+      type: "object",
+      $defs: {
+        Base: { type: "object", properties: { x: { type: "string" } } },
+      },
+      properties: {
+        derived: {
+          $ref: "#/$defs/Base",
+          allOf: [{ $ref: "#/$defs/MissingSibling" }],
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingSibling"]);
+  });
+
+  test("traverses items as array (tuple items)", () => {
+    const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
+      type: "array",
+      items: [
+        { type: "string" },
+        { $ref: "#/$defs/MissingTupleItem" },
+      ],
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingTupleItem"]);
+  });
+
+  test("traverses legacy definitions keyword", () => {
+    const schema: JsonSchemaType & { definitions: Record<string, JsonSchemaType> } = {
+      type: "object",
+      properties: {
+        value: { $ref: "#/definitions/MissingDef" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/definitions/MissingDef"]);
+  });
+
+  test("traverses legacy dependencies schema form", () => {
+    const schema: JsonSchemaType & { dependencies: Record<string, JsonSchemaType | string[]> } = {
+      type: "object",
+      properties: {
+        a: { type: "string" },
+      },
+      dependencies: {
+        a: { $ref: "#/$defs/MissingDepSchema" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingDepSchema"]);
+  });
+
+  test("skips property-name form of dependencies", () => {
+    const schema: JsonSchemaType & { dependencies: Record<string, JsonSchemaType | string[]> } = {
+      type: "object",
+      properties: {
+        a: { type: "string" },
+        b: { type: "string" },
+      },
+      dependencies: {
+        a: ["b"], // property-name form only -- no schema to traverse
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("does not match inherited Object.prototype members", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        bad: { $ref: "#/toString" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/toString"]);
+  });
+
+  test("resolves root fragment #", () => {
+    const schema: JsonSchemaType = {
+      $ref: "#",
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+});
