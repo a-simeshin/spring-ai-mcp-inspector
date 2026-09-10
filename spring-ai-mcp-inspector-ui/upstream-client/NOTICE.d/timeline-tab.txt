@@ -7,3 +7,9 @@ Reads _protocolNegotiation enrichment from McpTrafficRecorder and renders a
 severity-colored badge plus an expanded detail block with summary, affectedMethods,
 and a footer link to issue #129. OK severity is silent-positive (badge only, no
 expanded block). Badge text and colors follow the decision record (t_9315a78c).
+Updated: CallToolResult error highlighting (#184). Detects MCP_JSONRPC_RESPONSE
+frames whose result.isError is true and renders the row in red (text-red-400 /
+border-l-red-500 / bg-red-950/30) with a "validation failed" badge. The badge
+tooltip surfaces the first text content block from the result payload so the
+developer sees the server-side validation message the LLM received. Successful
+rows (isError=false or absent) render unchanged.
