@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] AppsTab test: malformed _meta.ui.resourceUri and ingress tests (#183, #199)
 import {
   render,
   screen,
@@ -6,12 +7,15 @@ import {
   act,
 } from "@testing-library/react";
 import "@testing-library/jest-dom";
+// [spring-ai-mcp-inspector PATCH] AppsTab test: malformed _meta.ui.resourceUri and ingress tests (#183, #199)
 import { describe, it, jest, beforeEach } from "@jest/globals";
 import AppsTab from "../AppsTab";
+// [spring-ai-mcp-inspector PATCH] AppsTab test: malformed _meta.ui.resourceUri and ingress tests (#183, #199)
 import {
   Tool,
   CompatibilityCallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
+// [spring-ai-mcp-inspector PATCH] AppsTab test: malformed _meta.ui.resourceUri and ingress tests (#183, #199)
 import { Tabs } from "../ui/tabs";
 
 // Mock AppRenderer component
