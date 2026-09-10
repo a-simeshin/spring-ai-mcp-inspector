@@ -304,13 +304,22 @@ export function normalizeUnionType(schema: JsonSchemaType): JsonSchemaType {
 
 // [spring-ai-mcp-inspector PATCH] $ref schema warnings (Spring AI #5888 detector)
 /**
+ * Decodes a single JSON Pointer token per RFC 6901.
+ * Order matters: ~1 -> / first, then ~0 -> ~.
+ */
+function decodePointerToken(token: string): string {
+  return token.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+/**
  * Checks whether a $ref pointer can be resolved within a root schema.
  * Only handles #/-prefixed paths (e.g. #/properties/foo, #/$defs/Bar).
+ * Segments are decoded per RFC 6901 before lookup.
  */
 function canResolveRef(ref: string, rootSchema: JsonSchemaType): boolean {
   if (!ref.startsWith("#/")) return false;
 
-  const path = ref.substring(2).split("/");
+  const path = ref.substring(2).split("/").map(decodePointerToken);
   let current: unknown = rootSchema;
 
   for (const segment of path) {
@@ -367,6 +376,21 @@ function collectUnresolvedRefs(
   if (schema.oneOf) {
     for (const item of schema.oneOf) {
       collectUnresolvedRefs(item as JsonSchemaType, rootSchema, result);
+    }
+  }
+  // allOf and $defs are not declared on JsonSchemaType; access via type assertion
+  const extended = schema as JsonSchemaType & {
+    allOf?: JsonSchemaType[];
+    $defs?: Record<string, JsonSchemaType>;
+  };
+  if (extended.allOf) {
+    for (const item of extended.allOf) {
+      collectUnresolvedRefs(item, rootSchema, result);
+    }
+  }
+  if (extended.$defs) {
+    for (const def of Object.values(extended.$defs)) {
+      collectUnresolvedRefs(def, rootSchema, result);
     }
   }
 }
