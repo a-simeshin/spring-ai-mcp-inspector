@@ -125,7 +125,7 @@ class ProxyForbiddenHeadersIT {
 		// when & then: build fails with diagnostic message
 		assertThatThrownBy(() -> FACTORY.openStreamable(mcpUri, null, Map.of("host", "evil.example.com")))
 			.isInstanceOf(IllegalArgumentException.class)
-			.hasMessageContaining("host")
+			.hasMessageContaining("custom header 'host' is not allowed by the JDK HTTP client: restricted header name")
 			.hasMessageNotContaining("evil.example.com");
 
 		// then: no request reached the upstream
@@ -177,7 +177,7 @@ class ProxyForbiddenHeadersIT {
 		// when & then
 		assertThatThrownBy(() -> FACTORY.openStreamable(mcpUri, null, Map.of("Host", "evil.example.com")))
 			.isInstanceOf(IllegalArgumentException.class)
-			.hasMessageContaining("Host")
+			.hasMessageContaining("custom header 'Host' is not allowed by the JDK HTTP client: restricted header name")
 			.hasMessageNotContaining("evil.example.com");
 
 		// then: no request reached the upstream
@@ -187,12 +187,12 @@ class ProxyForbiddenHeadersIT {
 	}
 
 	@Test
-	@DisplayName("restricted header: multiple offenders, first-one-wins, upstream receives no request")
+	@DisplayName("restricted header: multiple offenders, all listed, upstream receives no request")
 	@Story("Restricted header prevention: multiple offenders")
 	@Severity(SeverityLevel.NORMAL)
-	@Description("When multiple restricted headers are configured, the first one throws and "
-			+ "the upstream receives no request; the others are never evaluated")
-	void restrictedHeader_multipleOffenders_firstOneWins_upstreamReceivesNoRequest() throws Exception {
+	@Description("When multiple restricted headers are configured, one exception lists all of them "
+			+ "and the upstream receives no request")
+	void restrictedHeader_multipleOffenders_allOffendersListed_upstreamReceivesNoRequest() throws Exception {
 		// given
 		startMockServer();
 		final URI mcpUri = URI.create("http://127.0.0.1:" + serverPort + "/mcp");
@@ -201,7 +201,8 @@ class ProxyForbiddenHeadersIT {
 		assertThatThrownBy(
 				() -> FACTORY.openStreamable(mcpUri, null, Map.of("host", "evil.com", "connection", "close")))
 			.isInstanceOf(IllegalArgumentException.class)
-			.hasMessageContaining("Restricted custom header name");
+			.hasMessageContaining("host")
+			.hasMessageContaining("connection");
 
 		// then: no request reached the upstream
 		assertThat(requestCount.get())
@@ -246,11 +247,8 @@ class ProxyForbiddenHeadersIT {
 		// then: the allowed header is present in the first request received by the mock
 		final Map<String, List<String>> upstreamHeaders = receivedHeaders.get(0);
 		assertThat(upstreamHeaders).as("mock server must have received the request headers").isNotNull();
-		assertThat(upstreamHeaders.keySet()).as("X-Custom-Header must be present in the upstream request headers")
-			.anyMatch(k -> k.equalsIgnoreCase(headerName));
-		assertThat(upstreamHeaders.values().stream().flatMap(List::stream).anyMatch(v -> v.contains(headerValue)))
-			.as("header value '%s' must reach the upstream", headerValue)
-			.isTrue();
+		assertThat(upstreamHeaders.entrySet()).as("X-Custom-Header must carry the configured value at the upstream")
+			.anyMatch(e -> e.getKey().equalsIgnoreCase(headerName) && e.getValue().contains(headerValue));
 	}
 
 	@Test
@@ -281,16 +279,10 @@ class ProxyForbiddenHeadersIT {
 		// then: both headers reached the upstream with their actual values
 		final Map<String, List<String>> upstreamHeaders = receivedHeaders.get(0);
 		assertThat(upstreamHeaders).as("mock server must have received request headers").isNotNull();
-		assertThat(upstreamHeaders.keySet()).as("X-Custom-A must be present in the upstream request headers")
-			.anyMatch(k -> k.equalsIgnoreCase("X-Custom-A"));
-		assertThat(upstreamHeaders.keySet()).as("X-Custom-B must be present in the upstream request headers")
-			.anyMatch(k -> k.equalsIgnoreCase("X-Custom-B"));
-		assertThat(upstreamHeaders.values().stream().flatMap(List::stream).anyMatch(v -> v.contains("value-a")))
-			.as("X-Custom-A value 'value-a' must reach the upstream")
-			.isTrue();
-		assertThat(upstreamHeaders.values().stream().flatMap(List::stream).anyMatch(v -> v.contains("value-b")))
-			.as("X-Custom-B value 'value-b' must reach the upstream")
-			.isTrue();
+		assertThat(upstreamHeaders.entrySet()).as("X-Custom-A must carry value-a")
+			.anyMatch(e -> e.getKey().equalsIgnoreCase("X-Custom-A") && e.getValue().contains("value-a"));
+		assertThat(upstreamHeaders.entrySet()).as("X-Custom-B must carry value-b")
+			.anyMatch(e -> e.getKey().equalsIgnoreCase("X-Custom-B") && e.getValue().contains("value-b"));
 	}
 
 }
