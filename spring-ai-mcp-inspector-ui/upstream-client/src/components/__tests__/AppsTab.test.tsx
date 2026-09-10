@@ -37,6 +37,13 @@ jest.mock("../AppRenderer", () => {
   };
 });
 
+// Mock AppTrafficPanel component
+jest.mock("../AppTrafficPanel", () => {
+  return function MockAppTrafficPanel() {
+    return <div data-testid="app-traffic-panel" />;
+  };
+});
+
 describe("AppsTab", () => {
   const mockAppTool: Tool = {
     name: "weatherApp",

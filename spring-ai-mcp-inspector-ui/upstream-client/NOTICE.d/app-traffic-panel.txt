@@ -1,0 +1,13 @@
+app-traffic-panel.txt
+
+App traffic side panel, lifecycle indicator, and logs view (t_4abaf1bb):
+- Added AppTrafficPanel.tsx: side panel with chronological JSON-RPC traffic log,
+  collapsible params/result/error via JsonView, lifecycle status indicator (colored
+  dot + state name), method filter input, copy-message-as-JSON button per entry,
+  and a Guest Logs collapsible section.
+- Modified AppsTab.tsx: wired onAppTraffic / onLifecycleChange callbacks from
+  AppRenderer to the side panel. Added throttled ring buffer (500 max, 50ms batch
+  interval) for high-frequency tool-input-partial streams. Side panel is 280px wide
+  and sits to the right of the app renderer when an app is open. Traffic and
+  lifecycle state are cleared when the app is closed or deselected.
+  PATCH marker [spring-ai-mcp-inspector PATCH] applied to AppsTab.tsx.

@@ -1,3 +1,4 @@
+/* [spring-ai-mcp-inspector PATCH] AppsTab: wired onAppTraffic / onLifecycleChange callbacks to AppRenderer and added side panel (AppTrafficPanel). */
 import { useEffect, useState, useCallback, useRef } from "react";
 import { TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,12 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getToolUiResourceUri } from "@modelcontextprotocol/ext-apps/app-bridge";
+import {
+  type AppTrafficEntry,
+  type AppLifecycleState,
+} from "@/lib/app-traffic";
 import AppRenderer from "./AppRenderer";
+import AppTrafficPanel from "./AppTrafficPanel";
 import ListPane from "./ListPane";
 import IconDisplay, { WithIcons } from "./IconDisplay";
 import { Label } from "@/components/ui/label";
@@ -105,6 +111,42 @@ const AppsTab = ({
   const openAppRunIdRef = useRef(0);
   const prefillingParamsRef = useRef<Record<string, unknown> | null>(null);
   const consumedPrefilledCallIdRef = useRef<number | null>(null);
+
+  const [trafficEntries, setTrafficEntries] = useState<AppTrafficEntry[]>([]);
+  const [lifecycleState, setLifecycleState] =
+    useState<AppLifecycleState>("idle");
+  const pendingEntriesRef = useRef<AppTrafficEntry[]>([]);
+  const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flushEntries = useCallback(() => {
+    const pending = pendingEntriesRef.current;
+    pendingEntriesRef.current = [];
+    if (pending.length > 0) {
+      setTrafficEntries((prev) => {
+        const combined = [...prev, ...pending];
+        if (combined.length > 500) {
+          return combined.slice(combined.length - 500);
+        }
+        return combined;
+      });
+    }
+    throttleTimerRef.current = null;
+  }, []);
+
+  const handleAppTraffic = useCallback(
+    (entry: AppTrafficEntry) => {
+      pendingEntriesRef.current.push(entry);
+      if (!throttleTimerRef.current) {
+        throttleTimerRef.current = setTimeout(flushEntries, 50);
+      }
+    },
+    [flushEntries],
+  );
+
+  const handleClearTraffic = useCallback(() => {
+    setTrafficEntries([]);
+    pendingEntriesRef.current = [];
+  }, []);
 
   const buildInitialParams = useCallback((tool: Tool) => {
     const initialParams = Object.entries(tool.inputSchema.properties ?? []).map(
@@ -246,6 +288,9 @@ const AppsTab = ({
     setIsOpeningApp(false);
     setIsAppOpen(false);
     setSubmittedToolResult(null);
+    setTrafficEntries([]);
+    setLifecycleState("idle");
+    pendingEntriesRef.current = [];
   }, []);
 
   const handleOpenApp = useCallback(async () => {
@@ -288,6 +333,9 @@ const AppsTab = ({
     setIsMaximized(false);
     setSubmittedParams(undefined);
     setSubmittedToolResult(null);
+    setTrafficEntries([]);
+    setLifecycleState("idle");
+    pendingEntriesRef.current = [];
   }, []);
 
   return (
@@ -638,15 +686,26 @@ const AppsTab = ({
                             </Button>
                           </div>
                         )}
-                        <div className="h-[600px]">
-                          <AppRenderer
-                            sandboxPath={sandboxPath}
-                            tool={selectedTool}
-                            mcpClient={mcpClient}
-                            toolInput={submittedParams}
-                            toolResult={submittedToolResult}
-                            onNotification={onNotification}
-                          />
+                        <div className="flex h-[600px]">
+                          <div className="flex-1 min-w-0">
+                            <AppRenderer
+                              sandboxPath={sandboxPath}
+                              tool={selectedTool}
+                              mcpClient={mcpClient}
+                              toolInput={submittedParams}
+                              toolResult={submittedToolResult}
+                              onNotification={onNotification}
+                              onAppTraffic={handleAppTraffic}
+                              onLifecycleChange={setLifecycleState}
+                            />
+                          </div>
+                          <div className="w-[280px] shrink-0">
+                            <AppTrafficPanel
+                              entries={trafficEntries}
+                              lifecycleState={lifecycleState}
+                              onClear={handleClearTraffic}
+                            />
+                          </div>
                         </div>
                       </div>
                     )}
