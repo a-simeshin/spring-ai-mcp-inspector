@@ -1,3 +1,4 @@
+/* [spring-ai-mcp-inspector PATCH] AppsTab: wired onAppTraffic / onLifecycleChange callbacks to AppRenderer and added side panel (AppTrafficPanel). */
 import { useEffect, useState, useCallback, useRef } from "react";
 import { TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,12 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getToolUiResourceUri } from "@modelcontextprotocol/ext-apps/app-bridge";
+import {
+  type AppTrafficEntry,
+  type AppLifecycleState,
+} from "@/lib/app-traffic";
 import AppRenderer from "./AppRenderer";
+import AppTrafficPanel from "./AppTrafficPanel";
 import ListPane from "./ListPane";
 import IconDisplay, { WithIcons } from "./IconDisplay";
 import { Label } from "@/components/ui/label";
@@ -64,7 +70,7 @@ interface AppsTabProps {
 }
 
 // [spring-ai-mcp-inspector PATCH] ui-app-detection: exported for ToolsTab
-// "Open as App" button (issue #183).
+// "Open as App" button (issue #183). Merged with #199's comment.
 // Boundary is intentionally non-throwing: getToolUiResourceUri throws on
 // malformed values, so we catch and return false to keep the UI stable.
 export const hasUIMetadata = (tool: Tool): boolean => {
@@ -112,6 +118,83 @@ const AppsTab = ({
   const openAppRunIdRef = useRef(0);
   const prefillingParamsRef = useRef<Record<string, unknown> | null>(null);
   const consumedPrefilledCallIdRef = useRef<number | null>(null);
+
+  const [trafficEntries, setTrafficEntries] = useState<AppTrafficEntry[]>([]);
+  const [lifecycleState, setLifecycleState] =
+    useState<AppLifecycleState>("idle");
+  const pendingEntriesRef = useRef<AppTrafficEntry[]>([]);
+  const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const droppedCountRef = useRef(0);
+
+  const flushEntries = useCallback(() => {
+    const pending = pendingEntriesRef.current;
+    pendingEntriesRef.current = [];
+    const dropped = droppedCountRef.current;
+    droppedCountRef.current = 0;
+    if (dropped > 0) {
+      // Singleton dropped-entries marker per flush window
+      pending.push({
+        seq: -1,
+        timestamp: new Date().toISOString(),
+        direction: "guest->host",
+        kind: "notification",
+        method: "ui/traffic/dropped",
+        params: { droppedCount: dropped },
+        phase: "sandbox",
+      } as AppTrafficEntry);
+    }
+    if (pending.length > 0) {
+      setTrafficEntries((prev) => {
+        const combined = [...prev, ...pending];
+        if (combined.length > 500) {
+          return combined.slice(combined.length - 500);
+        }
+        return combined;
+      });
+    }
+    throttleTimerRef.current = null;
+  }, []);
+
+  const handleAppTraffic = useCallback(
+    (entry: AppTrafficEntry) => {
+      // Bound ingress: drop if already at 500 pending
+      if (pendingEntriesRef.current.length >= 500) {
+        droppedCountRef.current += 1;
+        return;
+      }
+      // Truncate oversize entries (> 64 KB params/result JSON)
+      const clamped = { ...entry };
+      if (clamped.params) {
+        const paramsStr = JSON.stringify(clamped.params);
+        if (paramsStr.length > 65536) {
+          clamped.params = {
+            truncated: true,
+            bytes: paramsStr.length,
+          };
+        }
+      }
+      if (clamped.result) {
+        const resultStr = JSON.stringify(clamped.result);
+        if (resultStr.length > 65536) {
+          clamped.result = {
+            truncated: true,
+            bytes: resultStr.length,
+          };
+        }
+      }
+      pendingEntriesRef.current.push(clamped);
+      if (!throttleTimerRef.current) {
+        throttleTimerRef.current = setTimeout(flushEntries, 50);
+      }
+    },
+    [flushEntries],
+  );
+
+  const handleClearTraffic = useCallback(() => {
+    setTrafficEntries([]);
+    pendingEntriesRef.current = [];
+    droppedCountRef.current = 0;
+  }, []);
 
   const buildInitialParams = useCallback((tool: Tool) => {
     const initialParams = Object.entries(tool.inputSchema.properties ?? []).map(
@@ -255,6 +338,10 @@ const AppsTab = ({
     setIsOpeningApp(false);
     setIsAppOpen(false);
     setSubmittedToolResult(null);
+    setTrafficEntries([]);
+    setLifecycleState("idle");
+    pendingEntriesRef.current = [];
+    droppedCountRef.current = 0;
   }, []);
 
   const handleOpenApp = useCallback(async () => {
@@ -297,6 +384,10 @@ const AppsTab = ({
     setIsMaximized(false);
     setSubmittedParams(undefined);
     setSubmittedToolResult(null);
+    setTrafficEntries([]);
+    setLifecycleState("idle");
+    pendingEntriesRef.current = [];
+    droppedCountRef.current = 0;
   }, []);
 
   return (
@@ -647,15 +738,27 @@ const AppsTab = ({
                             </Button>
                           </div>
                         )}
-                        <div className="h-[600px]">
-                          <AppRenderer
-                            sandboxPath={sandboxPath}
-                            tool={selectedTool}
-                            mcpClient={mcpClient}
-                            toolInput={submittedParams}
-                            toolResult={submittedToolResult}
-                            onNotification={onNotification}
-                          />
+                        <div className="flex h-[600px]">
+                          <div className="flex-1 min-w-0">
+                            <AppRenderer
+                              sandboxPath={sandboxPath}
+                              tool={selectedTool}
+                              tools={tools}
+                              mcpClient={mcpClient}
+                              toolInput={submittedParams}
+                              toolResult={submittedToolResult}
+                              onNotification={onNotification}
+                              onAppTraffic={handleAppTraffic}
+                              onLifecycleChange={setLifecycleState}
+                            />
+                          </div>
+                          <div className="w-[280px] shrink-0">
+                            <AppTrafficPanel
+                              entries={trafficEntries}
+                              lifecycleState={lifecycleState}
+                              onClear={handleClearTraffic}
+                            />
+                          </div>
                         </div>
                       </div>
                     )}
