@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="referrer" content="no-referrer">
+<title>Sandbox Proxy</title>
+<style>
+  body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #fff; }
+  iframe { border: none; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="container"></div>
+<script>
+(function() {
+  'use strict';
+
+  var container = document.getElementById('container');
+  var innerIframe = null;
+  var readySent = false;
+
+  // Notify the host that the proxy page is ready
+  function sendProxyReady() {
+    if (readySent) return;
+    readySent = true;
+    window.parent.postMessage(
+      { jsonrpc: '2.0', method: 'ui/notifications/sandbox-proxy-ready' },
+      '*'
+    );
+  }
+
+  // Create the inner view iframe with the given HTML
+  function createViewIframe(html, sandbox, csp) {
+    var attrs = sandbox || 'allow-scripts';
+    var iframe = document.createElement('iframe');
+
+    // Set sandbox attribute; NO allow-same-origin by default
+    iframe.setAttribute('sandbox', attrs);
+
+    // Set CSP via meta tag prepended to the HTML
+    if (csp) {
+      html = '<meta http-equiv="Content-Security-Policy" content="' +
+        csp.replace(/"/g, '&quot;') + '">' + html;
+    }
+
+    iframe.srcdoc = html;
+    iframe.style.width = '100%';
+    iframe.style.height = '100%';
+    container.appendChild(iframe);
+    innerIframe = iframe;
+  }
+
+  // Relay a message from host to inner iframe
+  function forwardToView(event) {
+    if (!innerIframe || !innerIframe.contentWindow) return;
+    innerIframe.contentWindow.postMessage(event.data, '*');
+  }
+
+  // Relay a message from inner iframe to host
+  function forwardToHost(event) {
+    // Only relay messages from our own inner iframe
+    if (event.source !== (innerIframe && innerIframe.contentWindow)) return;
+    window.parent.postMessage(event.data, '*');
+  }
+
+  // Handle incoming messages
+  window.addEventListener('message', function(event) {
+    // Determine message source
+    var isFromHost = (event.source === window.parent);
+    var isFromView = innerIframe && (event.source === innerIframe.contentWindow);
+
+    if (!isFromHost && !isFromView) return; // Unknown source, drop
+
+    var data = event.data;
+    if (!data || typeof data !== 'object') return;
+
+    // View -> Host relay
+    if (isFromView) {
+      window.parent.postMessage(data, '*');
+      return;
+    }
+
+    // Host -> View messages
+    var method = data.method;
+
+    // sandbox-resource-ready: create the inner view iframe
+    if (method === 'ui/notifications/sandbox-resource-ready') {
+      var params = data.params || {};
+      var html = params.html;
+      if (!html) return;
+      createViewIframe(html, params.sandbox, params.csp);
+      return;
+    }
+
+    // Everything else: forward to inner iframe
+    forwardToView(event);
+  });
+
+  // Send ready notification as soon as the page loads
+  if (document.readyState === 'complete') {
+    sendProxyReady();
+  } else {
+    window.addEventListener('load', sendProxyReady);
+  }
+})();
+</script>
+</body>
+</html>

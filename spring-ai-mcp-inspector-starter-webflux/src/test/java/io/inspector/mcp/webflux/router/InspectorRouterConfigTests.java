@@ -297,12 +297,14 @@ class InspectorRouterConfigTests {
 		@Description("inspectorProxyRouter mounts the proxy routes on the derived ${path}-api prefix")
 		void proxyRoutes_matchDerivedProxyPrefix() {
 			// given
-			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config
-				.inspectorProxyRouter(InspectorRouterConfigTests.this.proxy, properties("/mcp-inspector"));
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorProxyRouter(
+					InspectorRouterConfigTests.this.proxy, new io.inspector.mcp.webflux.proxy.SandboxProxyHandler(),
+					properties("/mcp-inspector"));
 
 			// when & then
 			assertThat(matches(router, request(HttpMethod.GET, "/mcp-inspector-api/health"))).isTrue();
 			assertThat(matches(router, request(HttpMethod.GET, "/mcp-inspector-api/config"))).isTrue();
+			assertThat(matches(router, request(HttpMethod.GET, "/mcp-inspector-api/sandbox"))).isTrue();
 			assertThat(matches(router, request(HttpMethod.POST, "/mcp-inspector-api/mcp"))).isTrue();
 			assertThat(matches(router, request(HttpMethod.DELETE, "/mcp-inspector-api/mcp"))).isTrue();
 		}
@@ -313,8 +315,9 @@ class InspectorRouterConfigTests {
 		@Description("inspectorProxyRouter does not match a path outside the proxy prefix")
 		void nonProxyPath_doesNotMatch() {
 			// given
-			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config
-				.inspectorProxyRouter(InspectorRouterConfigTests.this.proxy, properties("/mcp-inspector"));
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorProxyRouter(
+					InspectorRouterConfigTests.this.proxy, new io.inspector.mcp.webflux.proxy.SandboxProxyHandler(),
+					properties("/mcp-inspector"));
 
 			// when
 			final boolean matched = matches(router, request(HttpMethod.GET, "/unrelated/health"));
