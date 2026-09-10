@@ -141,6 +141,60 @@ const INCOMPATIBLE_RESPONSE_EVENT: WireEvent = {
   },
 };
 
+// [spring-ai-mcp-inspector PATCH] CallToolResult isError=true fixtures (#184).
+
+const VALIDATION_ERROR_RESPONSE_EVENT: WireEvent = {
+  id: "evt-7",
+  correlationId: "corr-6",
+  sessionId: "s-5",
+  type: "MCP_JSONRPC_RESPONSE",
+  timestamp: "2026-08-30T12:00:05.000Z",
+  payload: {
+    jsonrpc: "2.0",
+    id: 5,
+    result: {
+      content: [
+        {
+          type: "text",
+          text: "Parameter 'limit' must be a positive integer",
+        },
+      ],
+      isError: true,
+    },
+  },
+};
+
+const SUCCESS_CALL_RESPONSE_EVENT: WireEvent = {
+  id: "evt-8",
+  correlationId: "corr-7",
+  sessionId: "s-5",
+  type: "MCP_JSONRPC_RESPONSE",
+  timestamp: "2026-08-30T12:00:06.000Z",
+  payload: {
+    jsonrpc: "2.0",
+    id: 6,
+    result: {
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+    },
+  },
+};
+
+const NO_ISERROR_RESPONSE_EVENT: WireEvent = {
+  id: "evt-9",
+  correlationId: "corr-8",
+  sessionId: "s-5",
+  type: "MCP_JSONRPC_RESPONSE",
+  timestamp: "2026-08-30T12:00:07.000Z",
+  payload: {
+    jsonrpc: "2.0",
+    id: 7,
+    result: {
+      content: [{ type: "text", text: "ok" }],
+    },
+  },
+};
+
 function mockFetch(events: WireEvent[]) {
   const fetchMock = jest.fn().mockResolvedValue({
     ok: true,
@@ -294,5 +348,41 @@ describe("TimelineTab", () => {
     expect(screen.getByText(/severity: INCOMPATIBLE/)).toBeInTheDocument();
     // Affected methods appear in the expanded block.
     expect(screen.getByText(/affected: initialize/)).toBeInTheDocument();
+  });
+
+  // [spring-ai-mcp-inspector PATCH] CallToolResult isError=true tests (#184).
+
+  it("renders a validation failed badge with tooltip for isError=true CallToolResult", async () => {
+    mockFetch([VALIDATION_ERROR_RESPONSE_EVENT]);
+    renderTab();
+
+    const badge = await waitFor(() =>
+      screen.getByText("validation failed"),
+    );
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute(
+      "title",
+      "Parameter 'limit' must be a positive integer",
+    );
+  });
+
+  it("does not render validation failed badge for isError=false", async () => {
+    mockFetch([SUCCESS_CALL_RESPONSE_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("1 event")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("validation failed")).not.toBeInTheDocument();
+  });
+
+  it("does not render validation failed badge when isError is absent", async () => {
+    mockFetch([NO_ISERROR_RESPONSE_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("1 event")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("validation failed")).not.toBeInTheDocument();
   });
 });
