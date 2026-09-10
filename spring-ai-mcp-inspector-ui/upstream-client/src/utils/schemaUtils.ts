@@ -378,10 +378,26 @@ function collectUnresolvedRefs(
       collectUnresolvedRefs(item as JsonSchemaType, rootSchema, result);
     }
   }
-  // allOf and $defs are not declared on JsonSchemaType; access via type assertion
+  // allOf, $defs, not, if/then/else, contains, prefixItems,
+  // patternProperties, dependentSchemas and other standard sub-schema
+  // keywords are not declared on JsonSchemaType; access via type assertion.
   const extended = schema as JsonSchemaType & {
     allOf?: JsonSchemaType[];
     $defs?: Record<string, JsonSchemaType>;
+    not?: JsonSchemaType;
+    if?: JsonSchemaType;
+    then?: JsonSchemaType;
+    else?: JsonSchemaType;
+    contains?: JsonSchemaType;
+    prefixItems?: JsonSchemaType[];
+    additionalProperties?: JsonSchemaType;
+    additionalItems?: JsonSchemaType;
+    propertyNames?: JsonSchemaType;
+    dependentSchemas?: Record<string, JsonSchemaType>;
+    patternProperties?: Record<string, JsonSchemaType>;
+    contentSchema?: JsonSchemaType;
+    unevaluatedProperties?: JsonSchemaType;
+    unevaluatedItems?: JsonSchemaType;
   };
   if (extended.allOf) {
     for (const item of extended.allOf) {
@@ -392,6 +408,54 @@ function collectUnresolvedRefs(
     for (const def of Object.values(extended.$defs)) {
       collectUnresolvedRefs(def, rootSchema, result);
     }
+  }
+  if (extended.not) {
+    collectUnresolvedRefs(extended.not, rootSchema, result);
+  }
+  if (extended.if) {
+    collectUnresolvedRefs(extended.if, rootSchema, result);
+  }
+  if (extended.then) {
+    collectUnresolvedRefs(extended.then, rootSchema, result);
+  }
+  if (extended.else) {
+    collectUnresolvedRefs(extended.else, rootSchema, result);
+  }
+  if (extended.contains) {
+    collectUnresolvedRefs(extended.contains, rootSchema, result);
+  }
+  if (extended.prefixItems) {
+    for (const item of extended.prefixItems) {
+      collectUnresolvedRefs(item, rootSchema, result);
+    }
+  }
+  if (extended.additionalProperties) {
+    collectUnresolvedRefs(extended.additionalProperties, rootSchema, result);
+  }
+  if (extended.additionalItems) {
+    collectUnresolvedRefs(extended.additionalItems, rootSchema, result);
+  }
+  if (extended.propertyNames) {
+    collectUnresolvedRefs(extended.propertyNames, rootSchema, result);
+  }
+  if (extended.dependentSchemas) {
+    for (const dep of Object.values(extended.dependentSchemas)) {
+      collectUnresolvedRefs(dep, rootSchema, result);
+    }
+  }
+  if (extended.patternProperties) {
+    for (const pat of Object.values(extended.patternProperties)) {
+      collectUnresolvedRefs(pat, rootSchema, result);
+    }
+  }
+  if (extended.contentSchema) {
+    collectUnresolvedRefs(extended.contentSchema, rootSchema, result);
+  }
+  if (extended.unevaluatedProperties) {
+    collectUnresolvedRefs(extended.unevaluatedProperties, rootSchema, result);
+  }
+  if (extended.unevaluatedItems) {
+    collectUnresolvedRefs(extended.unevaluatedItems, rootSchema, result);
   }
 }
 

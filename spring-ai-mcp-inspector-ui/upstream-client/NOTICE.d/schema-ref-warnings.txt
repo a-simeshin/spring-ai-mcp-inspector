@@ -6,6 +6,11 @@ File: src/utils/schemaUtils.ts
 - Added findToolSchemaWarnings() - convenience that checks both inputSchema
   and outputSchema of a Tool.
 - Both functions are read-only (no mutation of the stored schema).
+- collectUnresolvedRefs traverses all standard schema-bearing locations:
+  properties, items, anyOf, oneOf, allOf, $defs, not, if/then/else,
+  contains, prefixItems, additionalProperties, additionalItems,
+  propertyNames, dependentSchemas, patternProperties, contentSchema,
+  unevaluatedProperties, unevaluatedItems (no mutation of stored schema).
 
 File: src/components/ToolsTab.tsx
 - Computes per-tool warnings via useMemo when the tools list changes.
@@ -15,4 +20,4 @@ File: src/components/ToolsTab.tsx
   unresolved refs is selected, listing each broken pointer path and linking
   to https://github.com/spring-projects/spring-ai/issues/5888.
 
-Covered by: src/utils/__tests__/schemaUtils.test.ts (11 new unit tests)
+Covered by: src/utils/__tests__/schemaUtils.test.ts (22 unit tests)
