@@ -17,6 +17,7 @@
 package io.inspector.mcp.core.proxy;
 
 import java.net.URI;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -219,10 +220,12 @@ class ProxyTransportFactoryTests {
 		void openSse_withMultipleRestrictedHeaderNames_firstOneWins() {
 			// given - both "host" and "connection" are restricted by JDK's HttpClient
 			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+			final Map<String, String> headers = new LinkedHashMap<>();
+			headers.put("host", "evil.com");
+			headers.put("connection", "close");
 
 			// when & then
-			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
-					Map.of("host", "evil.com", "connection", "close")))
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openSse(sseUri, null, headers))
 				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("host");
 		}
@@ -401,10 +404,12 @@ class ProxyTransportFactoryTests {
 		void openStreamable_withMultipleRestrictedHeaderNames_firstOneWins() {
 			// given - both "host" and "connection" are restricted by JDK's HttpClient
 			final URI mcpUri = URI.create("http://127.0.0.1:8080/mcp");
+			final Map<String, String> headers = new LinkedHashMap<>();
+			headers.put("host", "evil.com");
+			headers.put("connection", "close");
 
 			// when & then
-			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri, null,
-					Map.of("host", "evil.com", "connection", "close")))
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri, null, headers))
 				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("host");
 		}
