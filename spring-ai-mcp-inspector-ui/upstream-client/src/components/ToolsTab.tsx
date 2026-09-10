@@ -44,6 +44,9 @@ import { useToast } from "@/lib/hooks/useToast";
 import useCopy from "@/lib/hooks/useCopy";
 import IconDisplay, { WithIcons } from "./IconDisplay";
 import { cn } from "@/lib/utils";
+// [spring-ai-mcp-inspector PATCH] Common Spring AI 2.0 pitfalls hint panel
+// reachable from the tool-detail view (t_406cfdce).
+import { SpringAiPitfallsPanel } from "./SpringAiPitfallsPanel";
 import {
   META_NAME_RULES_MESSAGE,
   META_PREFIX_RULES_MESSAGE,
@@ -399,6 +402,12 @@ const ToolsTab = ({
                   }
                   declared={hasAnnotations(selectedTool)}
                 />
+                {/* [spring-ai-mcp-inspector PATCH] Pitfalls panel: hint
+                    reachable from the tool-detail view. When sibling detector
+                    PRs land (unresolved $ref, missing output schema,
+                    isError=true), they can pass active flags here. Without
+                    flags the panel renders static entries with links only. */}
+                <SpringAiPitfallsPanel />
                 {Object.entries(selectedTool.inputSchema.properties ?? []).map(
                   ([key, value]) => {
                     // First resolve any $ref references
