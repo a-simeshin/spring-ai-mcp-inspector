@@ -29,6 +29,49 @@
     );
   }
 
+  // Serialize a McpUiResourceCsp JSON object to a CSP header string
+  function serializeCsp(cspObj) {
+    if (!cspObj || typeof cspObj !== 'object') {
+      return "default-src 'none'; connect-src 'none'; img-src 'none'; script-src 'unsafe-inline' 'none'; style-src 'unsafe-inline' 'none'; font-src 'none'; media-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'";
+    }
+    var parts = ["default-src 'none'"];
+    var cd = cspObj.connectDomains;
+    if (cd && cd.length > 0) {
+      parts.push("connect-src " + cd.join(" "));
+    } else {
+      parts.push("connect-src 'none'");
+    }
+    var rd = cspObj.resourceDomains;
+    if (rd && rd.length > 0) {
+      var rdJoined = rd.join(" ");
+      parts.push("img-src " + rdJoined);
+      parts.push("script-src 'unsafe-inline' " + rdJoined);
+      parts.push("style-src 'unsafe-inline' " + rdJoined);
+      parts.push("font-src " + rdJoined);
+      parts.push("media-src " + rdJoined);
+    } else {
+      parts.push("img-src 'none'");
+      parts.push("script-src 'unsafe-inline' 'none'");
+      parts.push("style-src 'unsafe-inline' 'none'");
+      parts.push("font-src 'none'");
+      parts.push("media-src 'none'");
+    }
+    var fd = cspObj.frameDomains;
+    if (fd && fd.length > 0) {
+      parts.push("frame-src " + fd.join(" "));
+    } else {
+      parts.push("frame-src 'none'");
+    }
+    var bud = cspObj.baseUriDomains;
+    if (bud && bud.length > 0) {
+      parts.push("base-uri " + bud.join(" "));
+    } else {
+      parts.push("base-uri 'self'");
+    }
+    parts.push("form-action 'none'");
+    return parts.join("; ");
+  }
+
   // Create the inner view iframe with the given HTML
   function createViewIframe(html, sandbox, csp) {
     var attrs = sandbox || 'allow-scripts';
@@ -37,11 +80,21 @@
     // Set sandbox attribute; NO allow-same-origin by default
     iframe.setAttribute('sandbox', attrs);
 
-    // Set CSP via meta tag prepended to the HTML
-    if (csp) {
-      html = '<meta http-equiv="Content-Security-Policy" content="' +
-        csp.replace(/"/g, '&quot;') + '">' + html;
+    // Parse csp param (JSON object or string) and serialize to CSP meta tag
+    var cspStr;
+    if (typeof csp === 'string' && csp.length > 0) {
+      try {
+        cspStr = serializeCsp(JSON.parse(csp));
+      } catch (_) {
+        cspStr = serializeCsp(null);
+      }
+    } else if (typeof csp === 'object' && csp !== null) {
+      cspStr = serializeCsp(csp);
+    } else {
+      cspStr = serializeCsp(null);
     }
+    html = '<meta http-equiv="Content-Security-Policy" content="' +
+      cspStr.replace(/"/g, '&quot;') + '">' + html;
 
     iframe.srcdoc = html;
     iframe.style.width = '100%';

@@ -37,7 +37,7 @@ jest.mock("../AppRenderer", () => {
   };
 });
 
-// Mock AppTrafficPanel component
+// [spring-ai-mcp-inspector PATCH] app-traffic-panel: AppTrafficPanel mock and Apps tab assertions (issue #183).
 jest.mock("../AppTrafficPanel", () => {
   return function MockAppTrafficPanel() {
     return <div data-testid="app-traffic-panel" />;

@@ -69,7 +69,7 @@ interface AppsTabProps {
   onNotification?: (notification: ServerNotification) => void;
 }
 
-// Type guard to check if a tool has UI metadata
+// [spring-ai-mcp-inspector PATCH] hasUIMetadata: checks if a tool has _meta.ui.resourceUri (issue #183).
 const hasUIMetadata = (tool: Tool): boolean => {
   return !!getToolUiResourceUri(tool);
 };
@@ -117,10 +117,25 @@ const AppsTab = ({
     useState<AppLifecycleState>("idle");
   const pendingEntriesRef = useRef<AppTrafficEntry[]>([]);
   const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const droppedCountRef = useRef(0);
 
   const flushEntries = useCallback(() => {
     const pending = pendingEntriesRef.current;
     pendingEntriesRef.current = [];
+    const dropped = droppedCountRef.current;
+    droppedCountRef.current = 0;
+    if (dropped > 0) {
+      // Singleton dropped-entries marker per flush window
+      pending.push({
+        seq: -1,
+        timestamp: new Date().toISOString(),
+        direction: "guest->host",
+        kind: "notification",
+        method: "ui/traffic/dropped",
+        params: { droppedCount: dropped },
+        phase: "sandbox",
+      } as AppTrafficEntry);
+    }
     if (pending.length > 0) {
       setTrafficEntries((prev) => {
         const combined = [...prev, ...pending];
@@ -135,7 +150,32 @@ const AppsTab = ({
 
   const handleAppTraffic = useCallback(
     (entry: AppTrafficEntry) => {
-      pendingEntriesRef.current.push(entry);
+      // Bound ingress: drop if already at 500 pending
+      if (pendingEntriesRef.current.length >= 500) {
+        droppedCountRef.current += 1;
+        return;
+      }
+      // Truncate oversize entries (> 64 KB params/result JSON)
+      const clamped = { ...entry };
+      if (clamped.params) {
+        const paramsStr = JSON.stringify(clamped.params);
+        if (paramsStr.length > 65536) {
+          clamped.params = {
+            truncated: true,
+            bytes: paramsStr.length,
+          };
+        }
+      }
+      if (clamped.result) {
+        const resultStr = JSON.stringify(clamped.result);
+        if (resultStr.length > 65536) {
+          clamped.result = {
+            truncated: true,
+            bytes: resultStr.length,
+          };
+        }
+      }
+      pendingEntriesRef.current.push(clamped);
       if (!throttleTimerRef.current) {
         throttleTimerRef.current = setTimeout(flushEntries, 50);
       }
@@ -146,6 +186,7 @@ const AppsTab = ({
   const handleClearTraffic = useCallback(() => {
     setTrafficEntries([]);
     pendingEntriesRef.current = [];
+    droppedCountRef.current = 0;
   }, []);
 
   const buildInitialParams = useCallback((tool: Tool) => {
@@ -291,6 +332,7 @@ const AppsTab = ({
     setTrafficEntries([]);
     setLifecycleState("idle");
     pendingEntriesRef.current = [];
+    droppedCountRef.current = 0;
   }, []);
 
   const handleOpenApp = useCallback(async () => {
@@ -336,6 +378,7 @@ const AppsTab = ({
     setTrafficEntries([]);
     setLifecycleState("idle");
     pendingEntriesRef.current = [];
+    droppedCountRef.current = 0;
   }, []);
 
   return (
@@ -691,6 +734,7 @@ const AppsTab = ({
                             <AppRenderer
                               sandboxPath={sandboxPath}
                               tool={selectedTool}
+                              tools={tools}
                               mcpClient={mcpClient}
                               toolInput={submittedParams}
                               toolResult={submittedToolResult}
