@@ -1,0 +1,12 @@
+src/components/SpringAiPitfallsPanel.tsx, src/components/TimelineTab.tsx, src/components/ToolsTab.tsx,
+src/components/__tests__/SpringAiPitfallsPanel.test.tsx, src/components/__tests__/TimelineTab.test.tsx,
+src/components/__tests__/ToolsTab.test.tsx: add a "Common Spring AI 2.0 pitfalls"
+hint panel reachable from the Timeline and tool-detail views. The panel lists
+three known silent failure modes for Spring AI 2.0 (server-side validation
+returning silent isError=true results; recursive parameter types emitting
+unresolvable $ref pointers per spring-projects/spring-ai#5888; schema
+generation silently skipping primitive/simple return types per
+spring-projects/spring-ai#6773), each with a one-line symptom and an upstream
+link. Optional props (hasUnresolvedRefWarning, hasIsErrorWarning) let sibling
+detector PRs surface "detector active" notes next to the matching entry;
+without flags the panel degrades to static entries with links only.

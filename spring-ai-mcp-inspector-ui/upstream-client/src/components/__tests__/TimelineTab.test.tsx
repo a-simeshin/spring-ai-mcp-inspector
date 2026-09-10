@@ -295,4 +295,33 @@ describe("TimelineTab", () => {
     // Affected methods appear in the expanded block.
     expect(screen.getByText(/affected: initialize/)).toBeInTheDocument();
   });
+
+  // [spring-ai-mcp-inspector PATCH] Pitfalls panel reachable from Timeline
+  // (t_406cfdce).
+  it("renders the Common Spring AI 2.0 pitfalls panel from the Timeline view", async () => {
+    mockFetch([]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Common Spring AI 2.0 pitfalls"),
+      ).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByText("Common Spring AI 2.0 pitfalls"));
+    expect(
+      screen.getByText(/Recursive parameter types emit unresolvable \$ref/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /spring-projects\/spring-ai#5888/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /spring-projects\/spring-ai#6773/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", {
+        name: /Medium: production tools failing/,
+      }),
+    ).toBeInTheDocument();
+  });
 });
