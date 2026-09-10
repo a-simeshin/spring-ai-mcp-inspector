@@ -17,6 +17,8 @@
 package io.inspector.mcp.webmvc.proxy;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -62,14 +64,22 @@ class SandboxProxyControllerTests {
 	}
 
 	@Test
-	void parseAndSerializeCsp_oversize_throws() {
+	void parseAndSerializeCsp_dataOrigin_rejected() {
+		final String cspJson = "{\"frameDomains\":[\"data:text/html,<script>alert(1)</script>\"]}";
+		final String result = SandboxProxyController.parseAndSerializeCsp(cspJson);
+		assertThat(result).doesNotContain("data:text/html");
+		assertThat(result).contains("default-src 'none'");
+	}
+
+	@Test
+	void serveSandboxWithOversizeCspParam_returns400() throws Exception {
 		final StringBuilder sb = new StringBuilder();
 		for (int i = 0; i < 4097; i++) {
 			sb.append("x");
 		}
-		// Oversize check is in the controller, not in parseAndSerializeCsp
-		// But verify the param length check constant
-		assertThat(sb.length()).isGreaterThan(4096);
+		final ResponseEntity<String> response = new SandboxProxyController().serveSandbox(sb.toString());
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+		assertThat(response.getBody()).contains("CSP parameter exceeds maximum length");
 	}
 
 }

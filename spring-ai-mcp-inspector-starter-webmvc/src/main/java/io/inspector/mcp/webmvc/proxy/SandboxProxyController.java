@@ -99,6 +99,11 @@ public class SandboxProxyController {
 	@GetMapping(value = "/sandbox", produces = MediaType.TEXT_HTML_VALUE)
 	public ResponseEntity<String> serveSandbox(@RequestParam(value = "csp", required = false) final String cspParam)
 			throws IOException {
+		// Check oversize BEFORE loading the resource (fail-fast for invalid params)
+		if (cspParam != null && cspParam.length() > CSP_PARAM_MAX_LENGTH) {
+			return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("CSP parameter exceeds maximum length");
+		}
+
 		final ClassPathResource resource = new ClassPathResource(SANDBOX_PROXY_RESOURCE);
 		if (!resource.exists()) {
 			LOG.error("Sandbox proxy resource not found on classpath: {}", SANDBOX_PROXY_RESOURCE);
@@ -110,9 +115,6 @@ public class SandboxProxyController {
 		}
 
 		// Parse csp query param as JSON object -> serialize to CSP string
-		if (cspParam != null && cspParam.length() > CSP_PARAM_MAX_LENGTH) {
-			return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("CSP parameter exceeds maximum length");
-		}
 		final String csp = parseAndSerializeCsp(cspParam);
 
 		return ResponseEntity.ok()
