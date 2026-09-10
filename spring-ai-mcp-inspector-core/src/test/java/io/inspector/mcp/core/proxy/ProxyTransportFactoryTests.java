@@ -174,7 +174,8 @@ class ProxyTransportFactoryTests {
 			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
 					Map.of("host", "evil.example.com")))
 				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessageContaining("host")
+				.hasMessageContaining(
+						"custom header 'host' is not allowed by the JDK HTTP client: restricted header name")
 				.hasMessageNotContaining("evil.example.com");
 		}
 
@@ -191,7 +192,8 @@ class ProxyTransportFactoryTests {
 			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
 					Map.of("host", "secret-token-123")))
 				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessageContaining("host")
+				.hasMessageContaining(
+						"custom header 'host' is not allowed by the JDK HTTP client: restricted header name")
 				.hasMessageNotContaining("secret-token-123");
 		}
 
@@ -208,16 +210,17 @@ class ProxyTransportFactoryTests {
 			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
 					Map.of("Host", "evil.example.com")))
 				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessageContaining("Host")
+				.hasMessageContaining(
+						"custom header 'Host' is not allowed by the JDK HTTP client: restricted header name")
 				.hasMessageNotContaining("evil.example.com");
 		}
 
 		@Test
 		@Story("Restricted header diagnostic - multiple offenders")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() throws on the first restricted header name when multiple "
-				+ "restricted headers are supplied - first-one-wins")
-		void openSse_withMultipleRestrictedHeaderNames_firstOneWins() {
+		@Description("openSse() collects ALL restricted header names in one exception when multiple "
+				+ "restricted headers are supplied")
+		void openSse_withMultipleRestrictedHeaderNames_allOffendersListed() {
 			// given - both "host" and "connection" are restricted by JDK's HttpClient
 			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
 			final Map<String, String> headers = new LinkedHashMap<>();
@@ -227,7 +230,34 @@ class ProxyTransportFactoryTests {
 			// when & then
 			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openSse(sseUri, null, headers))
 				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessageContaining("host");
+				.hasMessageContaining("host")
+				.hasMessageContaining("connection");
+		}
+
+		@Test
+		@Story("Header value with newline never leaks")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A custom header value containing a newline triggers IllegalArgumentException "
+				+ "whose message and full stack trace contain the header name but NEVER the value")
+		void openSse_withNewlineInHeaderValue_neverLeaksValue() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+			final String secretValue = "super-secret-value" + (char) 10;
+			final Map<String, String> headers = Map.of("X-Custom", secretValue);
+
+			// when
+			final var transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null, headers);
+
+			// then - transport builds, but the customizer lambda will throw when applying
+			// the header
+			assertThat(transport).isNotNull();
+			final Throwable thrown = org.assertj.core.api.Assertions
+				.catchThrowable(() -> transport.connect((inbound) -> inbound).block());
+			assertThat(thrown).isInstanceOf(IllegalArgumentException.class);
+			assertThat(thrown.getMessage()).contains("X-Custom");
+			final java.io.StringWriter sw = new java.io.StringWriter();
+			thrown.printStackTrace(new java.io.PrintWriter(sw));
+			assertThat(sw.toString()).doesNotContain("super-secret-value");
 		}
 
 	}
@@ -358,7 +388,8 @@ class ProxyTransportFactoryTests {
 			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri, null,
 					Map.of("host", "evil.example.com")))
 				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessageContaining("host")
+				.hasMessageContaining(
+						"custom header 'host' is not allowed by the JDK HTTP client: restricted header name")
 				.hasMessageNotContaining("evil.example.com");
 		}
 
@@ -375,7 +406,8 @@ class ProxyTransportFactoryTests {
 			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri, null,
 					Map.of("host", "secret-token-123")))
 				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessageContaining("host")
+				.hasMessageContaining(
+						"custom header 'host' is not allowed by the JDK HTTP client: restricted header name")
 				.hasMessageNotContaining("secret-token-123");
 		}
 
@@ -392,16 +424,17 @@ class ProxyTransportFactoryTests {
 			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri, null,
 					Map.of("Host", "evil.example.com")))
 				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessageContaining("Host")
+				.hasMessageContaining(
+						"custom header 'Host' is not allowed by the JDK HTTP client: restricted header name")
 				.hasMessageNotContaining("evil.example.com");
 		}
 
 		@Test
 		@Story("Restricted header diagnostic - multiple offenders")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openStreamable() throws on the first restricted header name when multiple "
-				+ "restricted headers are supplied - first-one-wins")
-		void openStreamable_withMultipleRestrictedHeaderNames_firstOneWins() {
+		@Description("openStreamable() collects ALL restricted header names in one exception when multiple "
+				+ "restricted headers are supplied")
+		void openStreamable_withMultipleRestrictedHeaderNames_allOffendersListed() {
 			// given - both "host" and "connection" are restricted by JDK's HttpClient
 			final URI mcpUri = URI.create("http://127.0.0.1:8080/mcp");
 			final Map<String, String> headers = new LinkedHashMap<>();
@@ -411,7 +444,8 @@ class ProxyTransportFactoryTests {
 			// when & then
 			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri, null, headers))
 				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessageContaining("host");
+				.hasMessageContaining("host")
+				.hasMessageContaining("connection");
 		}
 
 	}
@@ -547,6 +581,60 @@ class ProxyTransportFactoryTests {
 
 			// then
 			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Restricted header with null value")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("A restricted header name with a null value is silently skipped "
+				+ "and does not throw - the transport is built successfully")
+		void restrictedHeaderWithNullValue_skippedSilently() {
+			// given - "host" is restricted, but a null value means the header would never
+			// be applied
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+			final Map<String, String> headersWithNull = new java.util.HashMap<>();
+			headersWithNull.put("host", null);
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+					headersWithNull);
+
+			// then - null value is skipped, no exception, transport is built
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Restricted header with null value - streamable")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openStreamable() also skips a restricted header name when its value is null")
+		void restrictedHeaderWithNullValue_streamableSkippedSilently() {
+			// given
+			final URI mcpUri = URI.create("http://127.0.0.1:8080/mcp");
+			final Map<String, String> headersWithNull = new java.util.HashMap<>();
+			headersWithNull.put("connection", null);
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openStreamable(mcpUri, null,
+					headersWithNull);
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientStreamableHttpTransport.class);
+		}
+
+		@Test
+		@Story("Restricted header with non-null value still throws")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A restricted header name with a non-null value still throws "
+				+ "IllegalArgumentException - null skip does not weaken validation")
+		void restrictedHeaderWithNonNullValue_stillThrows() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when & then
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+					Map.of("host", "evil.example.com")))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("custom header 'host' is not allowed by the JDK HTTP client");
 		}
 
 	}
