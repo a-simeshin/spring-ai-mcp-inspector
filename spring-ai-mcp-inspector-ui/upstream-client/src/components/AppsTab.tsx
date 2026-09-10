@@ -65,8 +65,14 @@ interface AppsTabProps {
 
 // [spring-ai-mcp-inspector PATCH] ui-app-detection: exported for ToolsTab
 // "Open as App" button (issue #183).
+// Boundary is intentionally non-throwing: getToolUiResourceUri throws on
+// malformed values, so we catch and return false to keep the UI stable.
 export const hasUIMetadata = (tool: Tool): boolean => {
-  return !!getToolUiResourceUri(tool);
+  try {
+    return !!getToolUiResourceUri(tool);
+  } catch {
+    return false;
+  }
 };
 
 const cloneToolParams = (

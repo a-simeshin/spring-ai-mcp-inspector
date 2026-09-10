@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] ui-app-detection: tests for hasUIMetadata (issue #183).
 import { describe, it, expect } from "@jest/globals";
 import { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { hasUIMetadata } from "../AppsTab";
@@ -47,32 +48,31 @@ describe("hasUIMetadata", () => {
     expect(hasUIMetadata(tool)).toBe(false);
   });
 
-  it("throws when resourceUri is an empty string", () => {
+  it("returns false when resourceUri is an empty string", () => {
     const tool = {
       name: "empty",
       inputSchema: { type: "object" as const, properties: {} },
       _meta: { ui: { resourceUri: "" } },
     } as Tool;
-    // upstream throws on empty string (treats it as invalid URI)
-    expect(() => hasUIMetadata(tool)).toThrow(/Invalid UI resource URI/);
+    expect(hasUIMetadata(tool)).toBe(false);
   });
 
-  it("throws when resourceUri does not start with ui://", () => {
+  it("returns false when resourceUri does not start with ui://", () => {
     const tool = {
       name: "bad",
       inputSchema: { type: "object" as const, properties: {} },
       _meta: { ui: { resourceUri: "https://evil.example.com" } },
     } as Tool;
-    expect(() => hasUIMetadata(tool)).toThrow(/Invalid UI resource URI/);
+    expect(hasUIMetadata(tool)).toBe(false);
   });
 
-  it("throws when resourceUri is a number", () => {
+  it("returns false when resourceUri is a number", () => {
     const tool = {
       name: "bad",
       inputSchema: { type: "object" as const, properties: {} },
       _meta: { ui: { resourceUri: 42 } },
     } as unknown as Tool;
-    expect(() => hasUIMetadata(tool)).toThrow(/Invalid UI resource URI/);
+    expect(hasUIMetadata(tool)).toBe(false);
   });
 
   it("prefers nested _meta.ui.resourceUri over deprecated flat key", () => {
@@ -88,13 +88,21 @@ describe("hasUIMetadata", () => {
     expect(hasUIMetadata(tool)).toBe(true);
   });
 
-  it("throws when _meta.ui.resourceUri is null", () => {
+  it("returns false when _meta.ui.resourceUri is null", () => {
     const tool = {
       name: "null-uri",
       inputSchema: { type: "object" as const, properties: {} },
       _meta: { ui: { resourceUri: null } },
     } as unknown as Tool;
-    // upstream treats null as an invalid URI (throws), not as absent
-    expect(() => hasUIMetadata(tool)).toThrow(/Invalid UI resource URI/);
+    expect(hasUIMetadata(tool)).toBe(false);
+  });
+
+  it("returns false when _meta.ui.resourceUri is an object", () => {
+    const tool = {
+      name: "obj-uri",
+      inputSchema: { type: "object" as const, properties: {} },
+      _meta: { ui: { resourceUri: { uri: "ui://nested" } } },
+    } as unknown as Tool;
+    expect(hasUIMetadata(tool)).toBe(false);
   });
 });

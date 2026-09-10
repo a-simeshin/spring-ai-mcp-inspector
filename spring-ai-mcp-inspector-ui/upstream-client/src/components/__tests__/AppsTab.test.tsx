@@ -239,6 +239,42 @@ describe("AppsTab", () => {
     expect(screen.getByText("noDescriptionApp")).toBeInTheDocument();
   });
 
+  it("should not crash when a tool has malformed _meta.ui.resourceUri", () => {
+    const consoleError = jest
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const malformedTool = {
+      name: "malformedApp",
+      description: "Tool with malformed UI metadata",
+      inputSchema: {
+        type: "object" as const,
+        properties: {},
+      },
+      _meta: {
+        ui: {
+          resourceUri: "https://evil.example.com",
+        },
+      },
+    } as unknown as Tool;
+
+    try {
+      renderAppsTab({
+        tools: [malformedTool, mockAppTool],
+      });
+
+      // Malformed tool must be filtered out; valid app tool still renders.
+      expect(screen.queryByText("malformedApp")).not.toBeInTheDocument();
+      expect(screen.getByText("weatherApp")).toBeInTheDocument();
+      // No render-phase React error propagated to console.
+      expect(consoleError).not.toHaveBeenCalledWith(
+        expect.stringContaining("Invalid UI resource URI"),
+        expect.anything(),
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("should reset selected tool when tools list changes and selected tool is removed", async () => {
     const { rerender } = renderAppsTab({
       tools: [mockAppTool],
