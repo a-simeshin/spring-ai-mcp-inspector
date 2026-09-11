@@ -602,3 +602,565 @@ describe("Output Schema Validation", () => {
     });
   });
 });
+
+// [spring-ai-mcp-inspector PATCH] $ref schema warnings (Spring AI #5888 detector)
+import {
+  findUnresolvedRefs,
+  findToolSchemaWarnings,
+} from "../schemaUtils";
+
+describe("findUnresolvedRefs", () => {
+  test("returns empty array for schema without $ref", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        age: { type: "number" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("returns empty array for valid internal $ref", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        source: { type: "string" },
+        alias: { $ref: "#/properties/source" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("returns the exact pointer path for an unresolvable $ref", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        missing: { $ref: "#/properties/nonexistent" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/properties/nonexistent"]);
+  });
+
+  test("returns pointer path for deeply nested unresolvable $ref", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        child: {
+          type: "object",
+          properties: {
+            grandchild: { $ref: "#/$defs/MissingType" },
+          },
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingType"]);
+  });
+
+  test("resolves $defs refs correctly", () => {
+    const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
+      type: "object",
+      properties: {
+        user: { $ref: "#/$defs/User" },
+      },
+      $defs: {
+        User: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+          },
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("detects unresolved ref inside properties", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: { $ref: "#/properties/nonexistent" },
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/properties/nonexistent"]);
+  });
+
+  test("detects unresolved ref inside anyOf", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        value: {
+          anyOf: [
+            { type: "string" },
+            { $ref: "#/$defs/Missing" },
+          ],
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/Missing"]);
+  });
+
+  test("detects unresolved ref inside oneOf", () => {
+    const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
+      type: "object",
+      properties: {
+        result: {
+          oneOf: [
+            { $ref: "#/$defs/Success" },
+            { $ref: "#/$defs/Error" },
+          ],
+        },
+      },
+      $defs: {
+        Success: { type: "object", properties: { data: { type: "string" } } },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/Error"]);
+  });
+
+  test("collects multiple unresolved refs", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        a: { $ref: "#/properties/missingA" },
+        b: { $ref: "#/properties/missingB" },
+      },
+    };
+    const result = findUnresolvedRefs(schema);
+    expect(result).toContain("#/properties/missingA");
+    expect(result).toContain("#/properties/missingB");
+    expect(result).toHaveLength(2);
+  });
+
+  test("does NOT mutate the stored schema", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        broken: { $ref: "#/properties/nonexistent" },
+      },
+    };
+    const copy = JSON.parse(JSON.stringify(schema));
+    findUnresolvedRefs(schema);
+    expect(schema).toEqual(copy);
+  });
+
+  test("handles null/undefined input gracefully", () => {
+    expect(findUnresolvedRefs(null as unknown as JsonSchemaType)).toEqual([]);
+    expect(findUnresolvedRefs(undefined as unknown as JsonSchemaType)).toEqual(
+      [],
+    );
+  });
+});
+
+describe("findToolSchemaWarnings", () => {
+  test("returns empty for tool without $ref", () => {
+    const tool = {
+      inputSchema: {
+        type: "object" as const,
+        properties: { name: { type: "string" as const } },
+      } as JsonSchemaType,
+    };
+    expect(findToolSchemaWarnings(tool)).toEqual([]);
+  });
+
+  test("returns warning for unresolved ref in inputSchema", () => {
+    const tool = {
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          broken: { $ref: "#/properties/missing" },
+        },
+      } as JsonSchemaType,
+    };
+    expect(findToolSchemaWarnings(tool)).toEqual([
+      { ref: "#/properties/missing", location: "inputSchema" },
+    ]);
+  });
+
+  test("returns warning for unresolved ref in outputSchema", () => {
+    const tool = {
+      inputSchema: {
+        type: "object" as const,
+        properties: { name: { type: "string" as const } },
+      } as JsonSchemaType,
+      outputSchema: {
+        type: "object" as const,
+        properties: {
+          result: { $ref: "#/$defs/MissingResult" },
+        },
+      } as JsonSchemaType,
+    };
+    expect(findToolSchemaWarnings(tool)).toEqual([
+      { ref: "#/$defs/MissingResult", location: "outputSchema" },
+    ]);
+  });
+});
+
+// Regression tests for PR #204 review findings
+// (escaped pointer, allOf, $defs traversal)
+describe("findUnresolvedRefs - RFC 6901 and traversal regression", () => {
+  test("resolves escaped pointer ~1 to /", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a/b": { type: "string" },
+        alias: { $ref: "#/properties/a~1b" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("resolves escaped pointer ~0 to ~", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a~b": { type: "string" },
+        alias: { $ref: "#/properties/a~0b" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("detects broken ref under allOf", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        value: {
+          allOf: [{ $ref: "#/properties/missing" }],
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/properties/missing"]);
+  });
+
+  test("detects broken ref inside nested $defs", () => {
+    const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
+      type: "object",
+      properties: {
+        user: { $ref: "#/$defs/User" },
+      },
+      $defs: {
+        User: {
+          type: "object",
+          properties: {
+            profile: { $ref: "#/$defs/Profile" },
+          },
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/Profile"]);
+  });
+
+  test("resolves valid ref inside $defs", () => {
+    const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
+      type: "object",
+      properties: {
+        user: { $ref: "#/$defs/User" },
+      },
+      $defs: {
+        User: {
+          type: "object",
+          properties: {
+            profile: { $ref: "#/$defs/Profile" },
+          },
+        },
+        Profile: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+          },
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+});
+
+// Regression tests for full schema keyword traversal (PR #204 review)
+describe("findUnresolvedRefs - schema keyword traversal", () => {
+  test("detects unresolved ref inside not", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        value: {
+          not: { $ref: "#/$defs/MissingFromNot" },
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingFromNot"]);
+  });
+
+  test("detects unresolved ref inside if", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        value: {
+          if: { $ref: "#/$defs/MissingIf" },
+          then: { properties: { x: { type: "string" } } },
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingIf"]);
+  });
+
+  test("detects unresolved ref inside then", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        value: {
+          if: { properties: { x: { type: "string" } } },
+          then: { $ref: "#/$defs/MissingThen" },
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingThen"]);
+  });
+
+  test("detects unresolved ref inside else", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        value: {
+          if: { properties: { x: { type: "string" } } },
+          else: { $ref: "#/$defs/MissingElse" },
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingElse"]);
+  });
+
+  test("detects unresolved ref inside contains", () => {
+    const schema: JsonSchemaType = {
+      type: "array",
+      items: { type: "object" },
+      contains: { $ref: "#/$defs/MissingContains" },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingContains"]);
+  });
+
+  test("detects unresolved ref inside prefixItems", () => {
+    const schema: JsonSchemaType = {
+      type: "array",
+      prefixItems: [
+        { type: "string" },
+        { $ref: "#/$defs/MissingPrefixItem" },
+      ],
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingPrefixItem"]);
+  });
+
+  test("detects unresolved ref inside additionalProperties", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: { name: { type: "string" } },
+      additionalProperties: { $ref: "#/$defs/MissingAdditionalProp" },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([
+      "#/$defs/MissingAdditionalProp",
+    ]);
+  });
+
+  test("detects unresolved ref inside dependentSchemas", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: { credit_card: { type: "string" } },
+      dependentSchemas: {
+        credit_card: { $ref: "#/$defs/MissingDependent" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingDependent"]);
+  });
+
+  test("detects unresolved ref inside patternProperties", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      patternProperties: {
+        "^S_": { $ref: "#/$defs/MissingPattern" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingPattern"]);
+  });
+
+  test("resolves valid ref inside not", () => {
+    const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
+      type: "object",
+      properties: {
+        value: {
+          not: { $ref: "#/$defs/Allowed" },
+        },
+      },
+      $defs: {
+        Allowed: { type: "string" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("still does NOT mutate the stored schema with new keywords", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        value: {
+          not: { $ref: "#/$defs/MissingFromNot" },
+        },
+      },
+    };
+    const copy = JSON.parse(JSON.stringify(schema));
+    findUnresolvedRefs(schema);
+    expect(schema).toEqual(copy);
+  });
+});
+
+// Regression tests for PR #204 review findings:
+// sibling keywords on $ref, tuple items, legacy definitions/dependencies,
+// inherited Object.prototype guard, and root fragment #
+describe("findUnresolvedRefs - $ref sibling, legacy, and JSON Pointer fixes", () => {
+  test("traverses sibling allOf on a schema with $ref", () => {
+    const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
+      type: "object",
+      $defs: {
+        Base: { type: "object", properties: { x: { type: "string" } } },
+      },
+      properties: {
+        derived: {
+          $ref: "#/$defs/Base",
+          allOf: [{ $ref: "#/$defs/MissingSibling" }],
+        },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingSibling"]);
+  });
+
+  test("traverses items as array (tuple items)", () => {
+    const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
+      type: "array",
+      items: [
+        { type: "string" },
+        { $ref: "#/$defs/MissingTupleItem" },
+      ],
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingTupleItem"]);
+  });
+
+  test("traverses legacy definitions keyword", () => {
+    const schema: JsonSchemaType & { definitions: Record<string, JsonSchemaType> } = {
+      type: "object",
+      definitions: {
+        RealDef: {
+          type: "object",
+          properties: {
+            inner: { $ref: "#/definitions/AlsoMissing" },
+          },
+        },
+      },
+      properties: {
+        value: { $ref: "#/definitions/RealDef" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([
+      "#/definitions/AlsoMissing",
+    ]);
+  });
+
+  test("traverses legacy dependencies schema form", () => {
+    const schema: JsonSchemaType & { dependencies: Record<string, JsonSchemaType | string[]> } = {
+      type: "object",
+      properties: {
+        a: { type: "string" },
+      },
+      dependencies: {
+        a: { $ref: "#/$defs/MissingDepSchema" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingDepSchema"]);
+  });
+
+  test("skips property-name form of dependencies", () => {
+    const schema: JsonSchemaType & { dependencies: Record<string, JsonSchemaType | string[]> } = {
+      type: "object",
+      properties: {
+        a: { type: "string" },
+        b: { type: "string" },
+      },
+      dependencies: {
+        a: ["b"], // property-name form only -- no schema to traverse
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("does not match inherited Object.prototype members", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        bad: { $ref: "#/toString" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/toString"]);
+  });
+
+  test("resolves root fragment #", () => {
+    const schema: JsonSchemaType = {
+      $ref: "#",
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("detects unresolved ref inside contentSchema", () => {
+    const schema: JsonSchemaType & { contentSchema: JsonSchemaType } = {
+      type: "string",
+      contentSchema: { $ref: "#/$defs/MissingContentSchema" },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([
+      "#/$defs/MissingContentSchema",
+    ]);
+  });
+
+  test("detects unresolved ref inside unevaluatedProperties", () => {
+    const schema: JsonSchemaType & {
+      unevaluatedProperties: JsonSchemaType;
+    } = {
+      type: "object",
+      properties: { name: { type: "string" } },
+      unevaluatedProperties: { $ref: "#/$defs/MissingUnevaluatedProps" },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([
+      "#/$defs/MissingUnevaluatedProps",
+    ]);
+  });
+
+  test("detects unresolved ref inside unevaluatedItems", () => {
+    const schema: JsonSchemaType & { unevaluatedItems: JsonSchemaType } = {
+      type: "array",
+      items: { type: "string" },
+      unevaluatedItems: { $ref: "#/$defs/MissingUnevaluatedItems" },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([
+      "#/$defs/MissingUnevaluatedItems",
+    ]);
+  });
+
+  test("detects unresolved ref inside propertyNames", () => {
+    const schema: JsonSchemaType & { propertyNames: JsonSchemaType } = {
+      type: "object",
+      propertyNames: { $ref: "#/$defs/MissingPropertyNames" },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([
+      "#/$defs/MissingPropertyNames",
+    ]);
+  });
+
+  test("detects unresolved ref inside additionalItems", () => {
+    const schema: JsonSchemaType & { additionalItems: JsonSchemaType } = {
+      type: "array",
+      items: [{ type: "string" }],
+      additionalItems: { $ref: "#/$defs/MissingAdditionalItems" },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([
+      "#/$defs/MissingAdditionalItems",
+    ]);
+  });
+});

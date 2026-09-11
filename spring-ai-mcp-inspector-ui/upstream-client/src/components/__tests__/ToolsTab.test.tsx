@@ -1293,4 +1293,68 @@ describe("Responsive layout", () => {
       expect(destructiveBadge).toHaveAttribute("title", expect.stringContaining("explicitly set"));
     });
   });
+
+  describe("Responsive layout", () => {
+    // [spring-ai-mcp-inspector PATCH] Responsive Tools list/detail grid
+    // (#58): upstream hard-codes two columns, which overlap at a 375px
+    // viewport. The local fix stacks the grid into one column below the
+    // `sm` (640px) breakpoint and keeps two columns at and above it; the
+    // testid anchors let Selenide assert geometry deterministically.
+    it("should stack the tools list/detail grid below the sm breakpoint", () => {
+      renderToolsTab({ selectedTool: mockTools[0] });
+
+      const grid = screen.getByTestId("tools-list-detail-grid");
+      expect(grid).toHaveClass("grid-cols-1");
+      expect(grid).toHaveClass("sm:grid-cols-2");
+
+      expect(screen.getByTestId("tools-list-pane")).toBeInTheDocument();
+      expect(screen.getByTestId("tools-detail-pane")).toBeInTheDocument();
+      expect(screen.getByTestId("run-tool-button")).toBeInTheDocument();
+    });
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Schema warning UI evidence (PR #204 review)
+  describe("Schema warning badges", () => {
+    const toolWithBrokenRef: Tool = {
+      name: "brokenRefTool",
+      description: "Tool with an unresolvable $ref",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          missing: { $ref: "#/properties/nonexistent" },
+        },
+      },
+    };
+
+    it("shows AlertTriangle badge in list row for tool with broken $ref", () => {
+      renderToolsTab({ tools: [toolWithBrokenRef] });
+
+      const badge = screen.getByLabelText(
+        /schema contains unresolvable \$ref pointers/i,
+      );
+      expect(badge).toBeInTheDocument();
+    });
+
+    it("shows Schema Warning alert in detail pane for selected tool with broken $ref", () => {
+      renderToolsTab({
+        tools: [toolWithBrokenRef],
+        selectedTool: toolWithBrokenRef,
+      });
+
+      const alertTitle = screen.getByText(/schema warning/i);
+      expect(alertTitle).toBeInTheDocument();
+
+      const pointerPath = screen.getByText(/#\/properties\/nonexistent/i);
+      expect(pointerPath).toBeInTheDocument();
+
+      const link = screen.getByRole("link", {
+        name: /learn more about this issue/i,
+      });
+      expect(link).toBeInTheDocument();
+      expect(link).toHaveAttribute(
+        "href",
+        "https://github.com/spring-projects/spring-ai/issues/5888",
+      );
+    });
+  });
 });
