@@ -70,7 +70,7 @@ import static org.mockito.Mockito.verify;
 /**
  * Unit tests for {@link ProxyHandler}. Exercises the upstream-compatible reactive proxy
  * surface (health, config, fetch, SSE open, postMessage, Streamable-HTTP post/get/delete)
- * with the registry / transport factory / proxy collaborators mocked — no live sockets.
+ * with the registry / transport factory / proxy collaborators mocked - no live sockets.
  *
  * <p>
  * After the WAF-safe loopback fix:
@@ -127,6 +127,10 @@ class ProxyHandlerTests {
 
 	private static Object extractBodyFlux(final ServerResponse response) {
 		return ((EntityResponse<Object>) response).entity();
+	}
+
+	private static JsonNode entityJson(final ServerResponse response) throws Exception {
+		return new JsonMapper().readTree(extractBodyFlux(response).toString());
 	}
 
 	private static ProxySession newSession(final String id) {
@@ -198,7 +202,7 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.config(request).block();
 
-			// then — defaultServerUrl is now the WAF-safe relative path "/sse", not
+			// then - defaultServerUrl is now the WAF-safe relative path "/sse", not
 			// "http://localhost:7000/sse"
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
@@ -212,7 +216,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("config() with an UNKNOWN transport yields an empty defaultTransport and empty server URL")
 		void config_withUnknownTransport_mapsEmptyDefaults() {
-			// given — no onWebServerStarted, port stays -1
+			// given - no onWebServerStarted, port stays -1
 			given(ProxyHandlerTests.this.transportDetector.detect())
 				.willReturn(new DetectedTransport(TransportType.UNKNOWN, null, null, "WEBFLUX"));
 			final ServerRequest request = toServerRequest(
@@ -282,7 +286,7 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.config(request).block();
 
-			// then — blank endpoint falls back to "/mcp" (relative), not ":7000/mcp"
+			// then - blank endpoint falls back to "/mcp" (relative), not ":7000/mcp"
 			assertThat(entityBody(response)).containsEntry("defaultServerUrl", "/mcp");
 		}
 
@@ -297,7 +301,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("fetch() proxies a real http GET and maps the upstream status, headers and body into the envelope")
 		void fetch_withRealHttpTarget_returnsUpstreamBody() throws Exception {
-			// given — a tiny loopback HTTP server returning a known body
+			// given - a tiny loopback HTTP server returning a known body
 			final com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
 				.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
 			server.createContext("/echo", (exchange) -> {
@@ -336,7 +340,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("fetch() runs its blocking HttpClient.send() off the subscribing (event-loop) thread")
 		void fetch_whenSubscribedOnANonBlockingThread_leavesThatThreadFree() throws Exception {
-			// given — an upstream that holds the response open for 3s
+			// given - an upstream that holds the response open for 3s
 			final CountDownLatch inFlight = new CountDownLatch(1);
 			final com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
 				.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
@@ -359,12 +363,12 @@ class ProxyHandlerTests {
 					.contentType(MediaType.APPLICATION_JSON)
 					.body("{\"url\":\"http://127.0.0.1:" + port + "/slow\"}"));
 
-				// when — the exchange is subscribed on a single-worker (event-loop-like)
+				// when - the exchange is subscribed on a single-worker (event-loop-like)
 				// scheduler
 				ProxyHandlerTests.this.handler.fetch(request).subscribeOn(loop).subscribe();
 				assertThat(inFlight.await(5, TimeUnit.SECONDS)).isTrue();
 
-				// then — that worker is still able to run other work
+				// then - that worker is still able to run other work
 				final CountDownLatch free = new CountDownLatch(1);
 				loop.schedule(free::countDown);
 				assertThat(free.await(1, TimeUnit.SECONDS))
@@ -498,13 +502,13 @@ class ProxyHandlerTests {
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
 
-			// when — open the stream, then push one upstream frame into the session
+			// when - open the stream, then push one upstream frame into the session
 			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
 			final JsonNode frame = ProxyHandlerTests.this.objectMapper.createObjectNode().put("hello", "world");
 			captured[0].targetToBrowser().tryEmitNext(frame);
 			captured[0].targetToBrowser().tryEmitComplete();
 
-			// then — the body flux begins with the endpoint prologue and then a message
+			// then - the body flux begins with the endpoint prologue and then a message
 			// event
 			@SuppressWarnings("unchecked")
 			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
@@ -554,7 +558,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("A WebServerInitializedEvent from the management context does not overwrite the loopback port")
 		void onWebServerStarted_withManagementNamespace_isIgnored() {
-			// given — the actuator's own server reports port 9999
+			// given - the actuator's own server reports port 9999
 			final McpClientTransport target = mock(McpClientTransport.class);
 			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
 			ProxyHandlerTests.this.handler.onWebServerStarted(managementServerStartedEvent(9999));
@@ -564,7 +568,7 @@ class ProxyHandlerTests {
 			// when
 			ProxyHandlerTests.this.handler.openSse(request).block();
 
-			// then — the port is still unset, so the resolver falls back to 8080
+			// then - the port is still unset, so the resolver falls back to 8080
 			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
 		}
 
@@ -573,7 +577,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() with a missing url resolves to the loopback /sse endpoint and opens a session")
 		void openSse_withMissingUrl_resolvesToLoopbackAndOpensSession() {
-			// given — no url param; ProxyTargetResolver resolves null to
+			// given - no url param; ProxyTargetResolver resolves null to
 			// http://127.0.0.1:8080/sse (loopback port defaults to 8080 before server
 			// start)
 			final McpClientTransport target = mock(McpClientTransport.class);
@@ -584,7 +588,7 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
 
-			// then — NOT 400; the resolver produces a valid loopback URI, session IS
+			// then - NOT 400; the resolver produces a valid loopback URI, session IS
 			// opened
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
@@ -645,7 +649,7 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.openStdio(request).block();
 
-			// then — still opens (malformed env ignored), 200 SSE
+			// then - still opens (malformed env ignored), 200 SSE
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			verify(ProxyHandlerTests.this.transportFactory).openStdio(any(), org.mockito.ArgumentMatchers.eq(Map.of()));
@@ -721,7 +725,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMessage() maps a sink emit failure into a 500 error envelope")
 		void postMessage_whenEmitFails_returns500() {
-			// given — a session whose browser->target sink is already terminated, so
+			// given - a session whose browser->target sink is already terminated, so
 			// emits
 			// fail
 			final ProxySession session = newSession("s-fail");
@@ -744,7 +748,7 @@ class ProxyHandlerTests {
 	}
 
 	@Nested
-	@DisplayName("postMcp() — Streamable-HTTP")
+	@DisplayName("postMcp() - Streamable-HTTP")
 	class PostMcp {
 
 		@Test
@@ -752,7 +756,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() opening a new session without a url resolves to loopback and opens a session")
 		void postMcp_newSessionWithoutUrl_resolvesToLoopbackAndOpensSession() {
-			// given — null url: ProxyTargetResolver produces http://127.0.0.1:8080/mcp
+			// given - null url: ProxyTargetResolver produces http://127.0.0.1:8080/mcp
 			final McpClientTransport target = mock(McpClientTransport.class);
 			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
 			final ProxySession[] captured = new ProxySession[1];
@@ -768,7 +772,7 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
 
-			// then — resolver succeeds, session is opened (not 400); notification body →
+			// then - resolver succeeds, session is opened (not 400); notification body →
 			// 202
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isNotEqualTo(HttpStatus.BAD_REQUEST);
@@ -808,7 +812,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("postMcp() relaying a request to a known session awaits and returns the matching upstream response")
 		void postMcp_requestToKnownSession_returnsMatchingUpstreamResponse() {
-			// given — a known session
+			// given - a known session
 			final ProxySession session = newSession("s-known");
 			given(ProxyHandlerTests.this.registry.get("s-known")).willReturn(session);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
@@ -816,7 +820,7 @@ class ProxyHandlerTests {
 				.contentType(MediaType.APPLICATION_JSON)
 				.body("{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"ping\"}"));
 
-			// when — feed the matching upstream response shortly after subscription
+			// when - feed the matching upstream response shortly after subscription
 			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request)
 				.doOnSubscribe((s) -> new Thread(() -> {
 					try {
@@ -898,7 +902,7 @@ class ProxyHandlerTests {
 						.contentType(MediaType.APPLICATION_JSON)
 						.body("{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"ping\"}"));
 
-			// when — subscribe, then feed the matching upstream response into the session
+			// when - subscribe, then feed the matching upstream response into the session
 			final Mono<ServerResponse> mono = ProxyHandlerTests.this.handler.postMcp(request);
 			final ServerResponse response = mono.doOnSubscribe((s) -> {
 				try {
@@ -1057,7 +1061,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("the 5-arg constructor (no properties) defaults the SSE prologue endpoint to the legacy proxy path")
 		void openSse_withFiveArgConstructor_usesLegacyProxyBaseInPrologue() {
-			// given — the 5-arg overload leaves properties null (proxyBase fallback +
+			// given - the 5-arg overload leaves properties null (proxyBase fallback +
 			// objectMapper fallback branches)
 			final ProxyHandler fiveArg = new ProxyHandler(ProxyHandlerTests.this.registry,
 					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
@@ -1076,7 +1080,7 @@ class ProxyHandlerTests {
 			final ServerResponse response = fiveArg.openSse(request).block();
 			captured[0].targetToBrowser().tryEmitComplete();
 
-			// then — the prologue carries the legacy /mcp-inspector-api path
+			// then - the prologue carries the legacy /mcp-inspector-api path
 			@SuppressWarnings("unchecked")
 			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
 					response);
@@ -1090,7 +1094,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("config() maps a null transport type to an empty defaultTransport (mapTransport type == null branch)")
 		void config_withNullTransportType_mapsEmptyTransport() {
-			// given — a detected transport whose type is null
+			// given - a detected transport whose type is null
 			ProxyHandlerTests.this.handler.onWebServerStarted(webServerStartedEvent(7000));
 			given(ProxyHandlerTests.this.transportDetector.detect())
 				.willReturn(new DetectedTransport(null, "/mcp", null, "WEBFLUX"));
@@ -1100,7 +1104,7 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.config(request).block();
 
-			// then — mapTransport's null arm yields ""; buildServerUrl returns relative
+			// then - mapTransport's null arm yields ""; buildServerUrl returns relative
 			// "/mcp"
 			// because a null type is neither UNKNOWN nor STDIO_NO_HTTP
 			final Map<String, Object> body = entityBody(response);
@@ -1132,7 +1136,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("config() yields an empty server URL when the listening port is still unknown (port <= 0 branch)")
 		void config_whenPortUnknown_returnsEmptyServerUrl() {
-			// given — no onWebServerStarted, so listeningPort stays -1 with a usable
+			// given - no onWebServerStarted, so listeningPort stays -1 with a usable
 			// transport
 			given(ProxyHandlerTests.this.transportDetector.detect())
 				.willReturn(new DetectedTransport(TransportType.STREAMABLE, "/mcp", null, "WEBFLUX"));
@@ -1149,7 +1153,7 @@ class ProxyHandlerTests {
 	}
 
 	@Nested
-	@DisplayName("fetch() — request/response mapping branches")
+	@DisplayName("fetch() - request/response mapping branches")
 	class FetchBranches {
 
 		@Test
@@ -1157,7 +1161,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("fetch() proxies a POST with a body + custom headers and maps a non-2xx upstream status to ok=false")
 		void fetch_withPostBodyHeadersAndNon2xxStatus_mapsOkFalse() throws Exception {
-			// given — an upstream that echoes a 404 so the ok = status in [200,300)
+			// given - an upstream that echoes a 404 so the ok = status in [200,300)
 			// branch
 			// resolves false, with init.method/body/headers all present
 			final com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer
@@ -1195,7 +1199,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("fetch() with a non-textual url node returns a 502 invalid-url error (urlNode not textual branch)")
 		void fetch_withNonTextualUrl_returns502() {
-			// given — url is a number, so urlNode.isTextual() is false
+			// given - url is a number, so urlNode.isTextual() is false
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/fetch")
 				.contentType(MediaType.APPLICATION_JSON)
 				.body("{\"url\":123}"));
@@ -1214,7 +1218,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("fetch() with a URL that has no scheme returns a 502 http/https-only error (scheme == null branch)")
 		void fetch_withSchemelessUrl_returns502() {
-			// given — a relative URL has a null scheme
+			// given - a relative URL has a null scheme
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/fetch")
 				.contentType(MediaType.APPLICATION_JSON)
 				.body("{\"url\":\"/relative/path\"}"));
@@ -1231,7 +1235,7 @@ class ProxyHandlerTests {
 	}
 
 	@Nested
-	@DisplayName("open transports — blank-input branches")
+	@DisplayName("open transports - blank-input branches")
 	class OpenBlankInputBranches {
 
 		@Test
@@ -1239,7 +1243,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("openStdio() with a blank command returns 400 (command isBlank branch, distinct from null)")
 		void openStdio_withBlankCommand_returnsBadRequest() {
-			// given — a present but blank command value
+			// given - a present but blank command value
 			final URI uri = URI.create("/mcp-inspector-api/stdio?command=%20%20");
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.method(HttpMethod.GET, uri).build());
 
@@ -1256,7 +1260,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("openStdio() with a blank args value adds no extra argv entries (args isBlank branch)")
 		void openStdio_withBlankArgs_usesCommandOnly() {
-			// given — blank args exercises the `args != null && !args.isBlank()` false
+			// given - blank args exercises the `args != null && !args.isBlank()` false
 			// path
 			final McpClientTransport target = mock(McpClientTransport.class);
 			given(ProxyHandlerTests.this.transportFactory.openStdio(any(), any())).willReturn(target);
@@ -1266,7 +1270,7 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.openStdio(request).block();
 
-			// then — only the command becomes argv, no split args
+			// then - only the command becomes argv, no split args
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			verify(ProxyHandlerTests.this.transportFactory).openStdio(
@@ -1279,7 +1283,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("openStdio() with a blank env value falls back to an empty environment (env isBlank branch)")
 		void openStdio_withBlankEnv_fallsBackToEmptyEnv() {
-			// given — blank env exercises parseEnv's `env.isBlank()` branch
+			// given - blank env exercises parseEnv's `env.isBlank()` branch
 			final McpClientTransport target = mock(McpClientTransport.class);
 			given(ProxyHandlerTests.this.transportFactory.openStdio(any(), any())).willReturn(target);
 			final URI uri = URI.create("/mcp-inspector-api/stdio?command=node&env=%20");
@@ -1299,7 +1303,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("openSse() with a present but blank url resolves to the loopback /sse endpoint (blank resolves, not rejected)")
 		void openSse_withBlankUrl_resolvesToLoopback() {
-			// given — blank url (trimmed to "") is treated as a blank by
+			// given - blank url (trimmed to "") is treated as a blank by
 			// ProxyTargetResolver
 			// and resolved to http://127.0.0.1:8080/sse (default path for sse transport)
 			final McpClientTransport target = mock(McpClientTransport.class);
@@ -1310,7 +1314,7 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
 
-			// then — resolver handles blank url as loopback default, session IS opened
+			// then - resolver handles blank url as loopback default, session IS opened
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
@@ -1319,7 +1323,7 @@ class ProxyHandlerTests {
 	}
 
 	@Nested
-	@DisplayName("postMcp() — extra dispatch branches")
+	@DisplayName("postMcp() - extra dispatch branches")
 	class PostMcpBranches {
 
 		@Test
@@ -1327,7 +1331,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() opening a new session with a blank url resolves to the loopback /mcp endpoint")
 		void postMcp_newSessionWithBlankUrl_resolvesToLoopback() {
-			// given — blank url (space) is resolved to http://127.0.0.1:8080/mcp by
+			// given - blank url (space) is resolved to http://127.0.0.1:8080/mcp by
 			// ProxyTargetResolver
 			final McpClientTransport target = mock(McpClientTransport.class);
 			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
@@ -1344,7 +1348,7 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
 
-			// then — resolver resolves blank to loopback, session IS opened (not 400)
+			// then - resolver resolves blank to loopback, session IS opened (not 400)
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isNotEqualTo(HttpStatus.BAD_REQUEST);
 			verify(ProxyHandlerTests.this.transportFactory).openStreamable(URI.create("http://127.0.0.1:8080/mcp"));
@@ -1355,7 +1359,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() with a present but blank mcp-session-id opens a new session (mcpSessionId isBlank branch)")
 		void postMcp_withBlankSessionHeader_opensNewSession() {
-			// given — a blank session header must NOT be treated as an existing session;
+			// given - a blank session header must NOT be treated as an existing session;
 			// null url resolves to loopback, session is opened with a notification (202)
 			final McpClientTransport target = mock(McpClientTransport.class);
 			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
@@ -1373,7 +1377,7 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
 
-			// then — blank header → open new session; null url resolves to loopback → 202
+			// then - blank header → open new session; null url resolves to loopback → 202
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.ACCEPTED);
 			verify(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
@@ -1384,7 +1388,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() opening a new session with a notification (no id) returns 202 and includes the mcp-session-id header")
 		void postMcp_newSessionNotification_returnsAcceptedWithSessionHeader() {
-			// given — a new session + a notification frame: includeSessionHeader == true
+			// given - a new session + a notification frame: includeSessionHeader == true
 			// on
 			// the 202 path
 			final McpClientTransport target = mock(McpClientTransport.class);
@@ -1408,7 +1412,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() relaying a frame whose id is explicitly null is treated as a notification and returns 202 (id isNull branch)")
 		void postMcp_frameWithNullId_treatedAsNotification() {
-			// given — extractRequestId's id.isNull() branch: an explicit null id
+			// given - extractRequestId's id.isNull() branch: an explicit null id
 			final ProxySession session = newSession("s-null-id");
 			given(ProxyHandlerTests.this.registry.get("s-null-id")).willReturn(session);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
@@ -1429,7 +1433,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() relaying a non-object JSON frame is treated as a notification (extractRequestId body not-object branch)")
 		void postMcp_nonObjectFrame_treatedAsNotification() {
-			// given — a JSON array body is not an object
+			// given - a JSON array body is not an object
 			final ProxySession session = newSession("s-array");
 			given(ProxyHandlerTests.this.registry.get("s-array")).willReturn(session);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
@@ -1450,7 +1454,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() relaying a notification into a session whose sink is terminated returns a 500 emit-failed error")
 		void postMcp_notificationWhenEmitFails_returns500() {
-			// given — a known session whose browser->target sink is already completed
+			// given - a known session whose browser->target sink is already completed
 			final ProxySession session = newSession("s-emit-fail");
 			session.browserToTarget().tryEmitComplete();
 			given(ProxyHandlerTests.this.registry.get("s-emit-fail")).willReturn(session);
@@ -1473,7 +1477,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() ignores non-matching upstream frames (different id, non-object) before returning the matching response")
 		void postMcp_skipsNonMatchingFramesThenReturnsMatch() {
-			// given — a known session; upstream emits a wrong-id frame and a non-object
+			// given - a known session; upstream emits a wrong-id frame and a non-object
 			// frame (matchesId mismatch + body-not-object branches) before the real reply
 			final ProxySession session = newSession("s-skip");
 			given(ProxyHandlerTests.this.registry.get("s-skip")).willReturn(session);
@@ -1505,7 +1509,7 @@ class ProxyHandlerTests {
 				}).start())
 				.block();
 
-			// then — only the matching frame resolves the awaiter with a 200 json
+			// then - only the matching frame resolves the awaiter with a 200 json
 			// response
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
@@ -1515,7 +1519,7 @@ class ProxyHandlerTests {
 	}
 
 	@Nested
-	@DisplayName("relayAndAwait() — JSON-RPC response framing + new-session timeout")
+	@DisplayName("relayAndAwait() - JSON-RPC response framing + new-session timeout")
 	class RelayResponseFramingAndTimeout {
 
 		@Test
@@ -1523,7 +1527,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() relaying a server->client JSON-RPC response (id + result, no method) is fire-and-forget 202, not relay-and-await")
 		void postMcp_jsonRpcResponseFrame_treatedAsFireAndForget() {
-			// given — a frame that carries an id and a result but NO method: a response,
+			// given - a frame that carries an id and a result but NO method: a response,
 			// so extractRequestId returns null and the 202 fire-and-forget path is taken
 			final ProxySession session = newSession("s-response");
 			given(ProxyHandlerTests.this.registry.get("s-response")).willReturn(session);
@@ -1545,7 +1549,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() opening a new session whose upstream never replies times out with a 504 and tears down the orphaned session")
 		void postMcp_newSessionTimeout_returnsGatewayTimeoutAndRemovesSession() {
-			// given — a fast streamable request timeout so the awaiter trips quickly, and
+			// given - a fast streamable request timeout so the awaiter trips quickly, and
 			// a
 			// brand-new session (includeSessionHeader == true) whose upstream stays
 			// silent
@@ -1566,10 +1570,10 @@ class ProxyHandlerTests {
 						.contentType(MediaType.APPLICATION_JSON)
 						.body("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"ping\"}"));
 
-			// when — never feed a reply, so the awaiter times out
+			// when - never feed a reply, so the awaiter times out
 			final ServerResponse response = fastHandler.postMcp(request).block();
 
-			// then — 504 gateway timeout and the orphaned new session is removed
+			// then - 504 gateway timeout and the orphaned new session is removed
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
 			assertThat(entityBody(response).get("error").toString()).contains("MCP_CONNECT_FAILED");
@@ -1599,7 +1603,7 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
 
-			// then — the 3-arg header-aware overload is used, not the bare single-arg one
+			// then - the 3-arg header-aware overload is used, not the bare single-arg one
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			verify(ProxyHandlerTests.this.transportFactory).openSse(any(URI.class),
@@ -1611,7 +1615,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() without any inbound auth headers uses the bare single-arg openSse factory overload")
 		void openSse_withoutHeaders_usesBareSseFactory() {
-			// given — no Authorization, no x-custom-auth-headers: inboundAuthorization
+			// given - no Authorization, no x-custom-auth-headers: inboundAuthorization
 			// null
 			// and inboundCustomHeaders empty, so the noHeaders branch picks the 1-arg
 			// overload
@@ -1634,7 +1638,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() forwards the named custom headers (x-custom-auth-headers) into the header-aware factory and skips blank / absent names")
 		void openSse_withCustomHeaders_forwardsNamedValuesOnly() {
-			// given — x-custom-auth-headers names two headers (one with surrounding
+			// given - x-custom-auth-headers names two headers (one with surrounding
 			// blanks)
 			// plus a blank entry and an unset name, exercising inboundCustomHeaders' trim
 			// /
@@ -1651,7 +1655,7 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
 
-			// then — only the present named headers are forwarded; the blank token and
+			// then - only the present named headers are forwarded; the blank token and
 			// the
 			// unset X-Absent name are dropped; no Authorization is present
 			assertThat(response).isNotNull();
@@ -1666,7 +1670,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("openSse() with a blank x-custom-auth-headers value forwards no custom headers (named isBlank branch)")
 		void openSse_withBlankCustomHeaderList_forwardsNoCustomHeaders() {
-			// given — a present but blank x-custom-auth-headers triggers the
+			// given - a present but blank x-custom-auth-headers triggers the
 			// named.isBlank()
 			// early return of an empty map; the Authorization header keeps the
 			// header-aware
@@ -1694,7 +1698,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("openStdio() with an inbound Authorization header still opens via the stdio factory (stdio ignores forwarded headers)")
 		void openStdio_withAuthorizationHeader_opensStdioTransport() {
-			// given — stdio's switch arm ignores the forwarded headers, but the header
+			// given - stdio's switch arm ignores the forwarded headers, but the header
 			// plumbing (inboundAuthorization / inboundCustomHeaders) still runs through
 			// openProxiedSession
 			final McpClientTransport target = mock(McpClientTransport.class);
@@ -1732,10 +1736,10 @@ class ProxyHandlerTests {
 						.contentType(MediaType.APPLICATION_JSON)
 						.body("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"));
 
-			// when — a notification frame keeps the relay on the 202 path (no awaiter)
+			// when - a notification frame keeps the relay on the 202 path (no awaiter)
 			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
 
-			// then — the 3-arg header-aware streamable overload is used for the new
+			// then - the 3-arg header-aware streamable overload is used for the new
 			// session
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.ACCEPTED);
@@ -1749,7 +1753,7 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() opening a new session without inbound auth headers uses the bare single-arg openStreamable overload")
 		void postMcp_newSessionWithoutHeaders_usesBareStreamableFactory() {
-			// given — no inbound auth headers: openSessionAndRelay's noHeaders branch
+			// given - no inbound auth headers: openSessionAndRelay's noHeaders branch
 			// picks
 			// the 1-arg openStreamable overload
 			final McpClientTransport target = mock(McpClientTransport.class);
@@ -1766,6 +1770,384 @@ class ProxyHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.ACCEPTED);
 			verify(ProxyHandlerTests.this.transportFactory).openStreamable(any(URI.class));
+		}
+
+	}
+
+	@Nested
+	@DisplayName("task method interception")
+	class TaskMethodInterception {
+
+		private io.inspector.mcp.core.task.TaskService taskService;
+
+		private ProxyHandler handlerWithTasks;
+
+		@BeforeEach
+		void setUpTaskHandler() {
+			this.taskService = mock(io.inspector.mcp.core.task.TaskService.class);
+			this.handlerWithTasks = new ProxyHandler(ProxyHandlerTests.this.registry,
+					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
+					ProxyHandlerTests.this.transportDetector, ProxyHandlerTests.this.objectMapper,
+					ProxyHandlerTests.this.properties, this.taskService);
+		}
+
+		private ProxySession newSession(final String id) {
+			return ProxyHandlerTests.newSession(id);
+		}
+
+		private ServerRequest buildTaskRequest(final String sessionId, final String json) {
+			return toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, sessionId)
+				.contentType(MediaType.APPLICATION_JSON)
+				.body(json));
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("tasks/get is intercepted locally and returns the task handle")
+		void tasksGet_interceptedLocally_returnsTaskHandle() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-123",
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+			given(this.taskService.getTask("t-123")).willReturn(handle);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode result = body.get("result");
+			assertThat(result.get("taskId").asText()).isEqualTo("t-123");
+			assertThat(result.get("status").asText()).isEqualTo("working");
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/get with an unknown taskId returns a JSON-RPC -32602 error")
+		void tasksGet_unknownTask_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			given(this.taskService.getTask("missing"))
+				.willThrow(new io.inspector.mcp.core.task.TaskNotFoundException("missing"));
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"missing\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode error = body.get("error");
+			assertThat(error.get("code").asInt()).isEqualTo(-32602);
+			assertThat(error.get("message").asText()).containsIgnoringCase("not found");
+		}
+
+		@Test
+		@Story("tasks/cancel interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("tasks/cancel is intercepted locally and returns the cancelled handle")
+		void tasksCancel_interceptedLocally_returnsCancelledHandle() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-456",
+					"cancelled", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+			given(this.taskService.cancelTask("t-456")).willReturn(handle);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"t-456\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode result = body.get("result");
+			assertThat(result.get("status").asText()).isEqualTo("cancelled");
+		}
+
+		@Test
+		@Story("tasks/cancel interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/cancel on an already-terminal task returns a JSON-RPC -32602 error")
+		void tasksCancel_terminalTask_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			given(this.taskService.cancelTask("t-789"))
+				.willThrow(new io.inspector.mcp.core.task.TaskNotCancelableException("t-789", "completed"));
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"t-789\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode error = body.get("error");
+			assertThat(error.get("code").asInt()).isEqualTo(-32602);
+			assertThat(error.get("message").asText()).containsIgnoringCase("terminal");
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.MINOR)
+		@Description("tasks/get without a taskId returns a JSON-RPC -32602 error")
+		void tasksGet_missingTaskId_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tasks/get\",\"params\":{}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode error = body.get("error");
+			assertThat(error.get("code").asInt()).isEqualTo(-32602);
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/get with a task that has a statusMessage includes it in the response")
+		void tasksGet_withStatusMessage_includesIt() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-msg",
+					"failed", "Tool execution failed: timeout", "2025-01-01T00:00:00Z", "2025-01-01T00:01:00Z", 60000,
+					5000);
+			given(this.taskService.getTask("t-msg")).willReturn(handle);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-msg\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode result = body.get("result");
+			assertThat(result.get("statusMessage").asText()).isEqualTo("Tool execution failed: timeout");
+		}
+
+		@Test
+		@Story("no interception without TaskService")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("when no TaskService bean is available, tasks/get falls through to the regular relay path")
+		void tasksGet_withoutTaskService_relaysToUpstream() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}");
+
+			// when - the default handler has no TaskService
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then - the frame is relayed, not intercepted locally
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isNotEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("Initialize capability injection")
+	class InitializeCapabilityInjection {
+
+		private io.inspector.mcp.core.task.TaskService taskService;
+
+		private ProxyHandler handlerWithTasks;
+
+		@BeforeEach
+		void setUpCapabilityInjection() {
+			this.taskService = mock(io.inspector.mcp.core.task.TaskService.class);
+			this.handlerWithTasks = new ProxyHandler(ProxyHandlerTests.this.registry,
+					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
+					ProxyHandlerTests.this.transportDetector, ProxyHandlerTests.this.objectMapper,
+					ProxyHandlerTests.this.properties, this.taskService);
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() with an initialize request injects capabilities.tasks when a TaskService is available and the upstream does not advertise it")
+		void postMcp_initializeRequest_injectsTasksCapability() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final JsonNode response = ProxyHandlerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"logging\":{}}}}");
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse serverResponse = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(serverResponse).isNotNull();
+			assertThat(serverResponse.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = entityJson(serverResponse);
+			final JsonNode tasks = responseBody.path("result").path("capabilities").path("tasks");
+			assertThat(tasks.isObject()).as("capabilities.tasks must be injected").isTrue();
+			assertThat(tasks.has("list")).as("tasks must contain list").isTrue();
+			assertThat(tasks.has("cancel")).as("tasks must contain cancel").isTrue();
+			assertThat(tasks.path("requests").path("tools").path("call").isObject())
+				.as("tasks.requests.tools.call must be an object")
+				.isTrue();
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with an initialize request does not overwrite capabilities.tasks when the upstream already advertises it")
+		void postMcp_initializeRequest_whenTasksAlreadyPresent_doesNotOverwrite() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final JsonNode response = ProxyHandlerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":{\"tasks\":{\"custom\":true}}}}");
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse serverResponse = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then
+			assertThat(serverResponse).isNotNull();
+			assertThat(serverResponse.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = entityJson(serverResponse);
+			assertThat(responseBody.path("result").path("capabilities").path("tasks").path("custom").asBoolean())
+				.as("upstream tasks must be preserved")
+				.isTrue();
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with an initialize request passes through malformed responses unchanged")
+		void postMcp_initializeRequest_whenMalformedResponse_passesThroughUnchanged() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final JsonNode response = ProxyHandlerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"Internal error\"}}");
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse serverResponse = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then - no injection happens, no crash
+			assertThat(serverResponse).isNotNull();
+			assertThat(serverResponse.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = entityJson(serverResponse);
+			assertThat(responseBody.has("error")).as("error response must pass through").isTrue();
+			assertThat(responseBody.path("error").path("code").asInt()).isEqualTo(-32603);
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with an initialize request does not inject tasks when no TaskService bean is available")
+		void postMcp_initializeRequest_withoutTaskService_doesNotInjectTasks() throws Exception {
+			// given: default handler has no TaskService
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final JsonNode response = ProxyHandlerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"logging\":{}}}}");
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when: using the default handler without TaskService
+			final ServerResponse serverResponse = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then: no tasks capability is injected
+			assertThat(serverResponse).isNotNull();
+			assertThat(serverResponse.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = entityJson(serverResponse);
+			assertThat(responseBody.path("result").path("capabilities").has("tasks"))
+				.as("tasks must not be injected without a TaskService")
+				.isFalse();
+		}
+
+		@Test
+		@Story("task method on new session")
+		@Severity(SeverityLevel.MINOR)
+		@Description("a task method intercepted on the first POST includes the session-id header in the response")
+		void tasksGet_onNewSession_includesSessionIdHeader() throws Exception {
+			// given: a new session request (no session id) that opens a session and
+			// dispatches a task/get which is intercepted
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> Mono.empty());
+			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-1",
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+			given(this.taskService.getTask("t-1")).willReturn(handle);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest
+				.post("/mcp-inspector-api/mcp?url=http://target/mcp")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}"));
+
+			// when: no session-id header = first POST of a new session
+			final ServerResponse serverResponse = this.handlerWithTasks.postMcp(request).block();
+
+			// then - session-id header is present even though the task was handled
+			// locally
+			assertThat(serverResponse).isNotNull();
+			assertThat(serverResponse.statusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(serverResponse.headers().get(ProxyConstants.MCP_SESSION_ID_HEADER))
+				.as("session-id header must be present on first POST task response")
+				.isNotEmpty();
 		}
 
 	}

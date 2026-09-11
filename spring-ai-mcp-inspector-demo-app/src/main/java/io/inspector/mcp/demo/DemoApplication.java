@@ -4,7 +4,9 @@ import java.util.Locale;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 /**
  * Demo MCP server application.
@@ -48,6 +50,21 @@ public class DemoApplication {
 		// locale-neutral.
 		Locale.setDefault(Locale.ENGLISH);
 		SpringApplication.run(DemoApplication.class, args);
+	}
+
+	/**
+	 * Dedicated thread pool for long-running demo tools. Keeps background task execution
+	 * off the MCP request thread so the tool can return its handle immediately.
+	 */
+	@Bean
+	public ThreadPoolTaskExecutor demoTaskExecutor() {
+		final ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+		executor.setCorePoolSize(4);
+		executor.setMaxPoolSize(8);
+		executor.setQueueCapacity(32);
+		executor.setThreadNamePrefix("demo-task-");
+		executor.initialize();
+		return executor;
 	}
 
 }

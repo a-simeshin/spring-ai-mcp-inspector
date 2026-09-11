@@ -27,6 +27,7 @@ import io.modelcontextprotocol.spec.McpClientTransport;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -46,6 +47,9 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
@@ -55,6 +59,10 @@ import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.task.TaskHandle;
+import io.inspector.mcp.core.task.TaskNotCancelableException;
+import io.inspector.mcp.core.task.TaskNotFoundException;
+import io.inspector.mcp.core.task.TaskService;
 import io.inspector.mcp.webmvc.InspectorServerPortHolder;
 
 /**
@@ -108,6 +116,8 @@ public class StreamableHttpProxyController {
 
 	private final InspectorServerPortHolder portHolder;
 
+	private final ObjectProvider<TaskService> taskServiceProvider;
+
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper) {
 		this(registry, transportFactory, mcpProxy, objectMapper, null, null);
@@ -119,7 +129,6 @@ public class StreamableHttpProxyController {
 		this(registry, transportFactory, mcpProxy, objectMapper, properties, null);
 	}
 
-	@Autowired
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
 			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder) {
@@ -129,6 +138,42 @@ public class StreamableHttpProxyController {
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.properties = properties;
 		this.portHolder = portHolder;
+		this.taskServiceProvider = null;
+	}
+
+	/**
+	 * Full constructor that also accepts an optional {@link TaskService} via an
+	 * {@link ObjectProvider}. When no {@link TaskService} bean is available the
+	 * controller falls through to the regular relay path for all methods.
+	 * @param registry the proxy session registry
+	 * @param transportFactory the proxy transport factory
+	 * @param mcpProxy the MCP proxy relay
+	 * @param objectMapper the JSON object mapper
+	 * @param properties the inspector properties
+	 * @param portHolder the server port holder
+	 * @param taskServiceProvider provider for an optional {@link TaskService}
+	 */
+	@Autowired
+	public StreamableHttpProxyController(final ProxySessionRegistry registry,
+			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
+			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,
+			final ObjectProvider<TaskService> taskServiceProvider) {
+		this.registry = registry;
+		this.transportFactory = transportFactory;
+		this.mcpProxy = mcpProxy;
+		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
+		this.properties = properties;
+		this.portHolder = portHolder;
+		this.taskServiceProvider = taskServiceProvider;
+	}
+
+	/**
+	 * Lazily resolves the optional {@link TaskService} bean. Resolved on first use so the
+	 * constructor stays trivially safe (no method calls that could throw).
+	 * @return the resolved service, or {@code null} when unavailable
+	 */
+	private TaskService taskService() {
+		return (this.taskServiceProvider != null) ? this.taskServiceProvider.getIfAvailable() : null;
 	}
 
 	private int loopbackPort() {
@@ -300,6 +345,19 @@ public class StreamableHttpProxyController {
 			}
 			return builder.build();
 		}
+		// Intercept tasks/get, tasks/list and tasks/cancel if a TaskService is available.
+		if (taskService() != null) {
+			final ResponseEntity<Object> taskResponse = tryHandleTaskMethod(idNode, body);
+			if (taskResponse != null) {
+				if (includeSessionHeader) {
+					final ResponseEntity.BodyBuilder builder = ResponseEntity.status(taskResponse.getStatusCode())
+						.contentType(MediaType.APPLICATION_JSON);
+					builder.header(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
+					return builder.body(taskResponse.getBody());
+				}
+				return taskResponse;
+			}
+		}
 		// Request — pre-create the awaiter Mono (replay sink buffers, so even
 		// if the upstream answer lands before .block() registers a subscriber,
 		// the replay buffer still hands it over). We still emit AFTER preparing
@@ -326,6 +384,9 @@ public class StreamableHttpProxyController {
 		session.touch();
 		try {
 			final JsonNode response = awaiter.block(requestTimeout);
+			if (taskService() != null) {
+				injectTasksCapability(response, body, includeSessionHeader);
+			}
 			final ResponseEntity.BodyBuilder builder = ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON);
 			if (includeSessionHeader) {
 				builder.header(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
@@ -420,6 +481,167 @@ public class StreamableHttpProxyController {
 		return id != null && !id.isNull() && id.equals(expected);
 	}
 
+	// ---------------------------------------------------------------------
+	// Task method interception (tasks/get, tasks/list, tasks/cancel)
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Checks whether {@code body} is a {@code tasks/get}, {@code tasks/list}, or
+	 * {@code tasks/cancel} JSON-RPC request and handles it locally via the
+	 * {@link #taskService}.
+	 * @param idNode the JSON-RPC request id
+	 * @param body the full JSON-RPC request body
+	 * @return a response entity if the method was handled, or {@code null} to fall
+	 * through to the regular relay path
+	 */
+	private ResponseEntity<Object> tryHandleTaskMethod(final JsonNode idNode, final JsonNode body) {
+		final JsonNode methodNode = body.get("method");
+		if (methodNode == null || !methodNode.isTextual()) {
+			return null;
+		}
+		final String method = methodNode.asText();
+		if ("tasks/get".equals(method)) {
+			return handleTaskGet(idNode, body);
+		}
+		if ("tasks/list".equals(method)) {
+			return handleTaskList(idNode);
+		}
+		if ("tasks/cancel".equals(method)) {
+			return handleTaskCancel(idNode, body);
+		}
+		return null;
+	}
+
+	/**
+	 * Handle a {@code tasks/get} request: look up the task and return its handle.
+	 * @param idNode the JSON-RPC request id
+	 * @param body the full request body
+	 * @return a JSON-RPC response with the task handle, or a JSON-RPC error
+	 */
+	private ResponseEntity<Object> handleTaskGet(final JsonNode idNode, final JsonNode body) {
+		final String taskId = extractTaskId(body);
+		if (taskId == null) {
+			return jsonRpcError(idNode, -32602, "Invalid params: missing or invalid taskId");
+		}
+		try {
+			final TaskHandle handle = taskService().getTask(taskId);
+			return jsonRpcResult(idNode, taskHandleToNode(handle));
+		}
+		catch (final TaskNotFoundException ex) {
+			return jsonRpcError(idNode, -32602, "Failed to retrieve task: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Handle a {@code tasks/list} request: return all currently tracked tasks.
+	 * @param idNode the JSON-RPC request id
+	 * @return a JSON-RPC response with a {@code tasks} array
+	 */
+	private ResponseEntity<Object> handleTaskList(final JsonNode idNode) {
+		final java.util.List<TaskHandle> handles = taskService().listTasks();
+		final ArrayNode tasksArray = JsonNodeFactory.instance.arrayNode(handles.size());
+		for (final TaskHandle handle : handles) {
+			tasksArray.add(taskHandleToNode(handle));
+		}
+		final ObjectNode result = JsonNodeFactory.instance.objectNode();
+		result.set("tasks", tasksArray);
+		return jsonRpcResult(idNode, result);
+	}
+
+	/**
+	 * Handle a {@code tasks/cancel} request: cancel the task and return the updated
+	 * handle.
+	 * @param idNode the JSON-RPC request id
+	 * @param body the full request body
+	 * @return a JSON-RPC response with the cancelled task handle, or a JSON-RPC error
+	 */
+	private ResponseEntity<Object> handleTaskCancel(final JsonNode idNode, final JsonNode body) {
+		final String taskId = extractTaskId(body);
+		if (taskId == null) {
+			return jsonRpcError(idNode, -32602, "Invalid params: missing or invalid taskId");
+		}
+		try {
+			final TaskHandle handle = taskService().cancelTask(taskId);
+			return jsonRpcResult(idNode, taskHandleToNode(handle));
+		}
+		catch (final TaskNotCancelableException ex) {
+			return jsonRpcError(idNode, -32602, ex.getMessage());
+		}
+		catch (final TaskNotFoundException ex) {
+			return jsonRpcError(idNode, -32602, "Failed to retrieve task: " + ex.getMessage());
+		}
+	}
+
+	/**
+	 * Extract {@code taskId} from the {@code params} object of a task method call.
+	 * @param body the JSON-RPC request body
+	 * @return the task id string, or {@code null} if missing or invalid
+	 */
+	private static String extractTaskId(final JsonNode body) {
+		final JsonNode params = body.get("params");
+		if (params == null || !params.isObject()) {
+			return null;
+		}
+		final JsonNode taskIdNode = params.get("taskId");
+		if (taskIdNode == null || !taskIdNode.isTextual()) {
+			return null;
+		}
+		return taskIdNode.asText();
+	}
+
+	/**
+	 * Build a successful JSON-RPC response with a result object.
+	 * @param idNode the request id
+	 * @param resultNode the result object to include
+	 * @return a 200 OK response with the JSON-RPC envelope
+	 */
+	private ResponseEntity<Object> jsonRpcResult(final JsonNode idNode, final JsonNode resultNode) {
+		final ObjectNode response = this.objectMapper.createObjectNode();
+		response.put("jsonrpc", "2.0");
+		response.set("id", idNode);
+		response.set("result", resultNode);
+		return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(response);
+	}
+
+	/**
+	 * Build a JSON-RPC error response with the given error code and message.
+	 * @param idNode the request id
+	 * @param code the JSON-RPC error code
+	 * @param message the error message
+	 * @return a 200 OK response with the JSON-RPC error envelope (per spec, errors are
+	 * returned with HTTP 200)
+	 */
+	private ResponseEntity<Object> jsonRpcError(final JsonNode idNode, final int code, final String message) {
+		final ObjectNode response = this.objectMapper.createObjectNode();
+		response.put("jsonrpc", "2.0");
+		response.set("id", idNode);
+		final ObjectNode error = this.objectMapper.createObjectNode();
+		error.put("code", code);
+		error.put("message", message);
+		response.set("error", error);
+		return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(response);
+	}
+
+	/**
+	 * Convert a {@link TaskHandle} to a JSON object node matching the SEP-1686 Task
+	 * schema.
+	 * @param handle the task handle to serialize
+	 * @return a JSON object node with all task fields
+	 */
+	private static ObjectNode taskHandleToNode(final TaskHandle handle) {
+		final ObjectNode node = JsonNodeFactory.instance.objectNode();
+		node.put("taskId", handle.taskId());
+		node.put("status", handle.status());
+		if (handle.statusMessage() != null) {
+			node.put("statusMessage", handle.statusMessage());
+		}
+		node.put("createdAt", handle.createdAt());
+		node.put("lastUpdatedAt", handle.lastUpdatedAt());
+		node.put("ttl", handle.ttl());
+		node.put("pollInterval", handle.pollInterval());
+		return node;
+	}
+
 	/**
 	 * Pushes a single message frame to the SSE emitter; logs/aborts on IO error.
 	 * @param emitter the SSE emitter to send to
@@ -443,6 +665,60 @@ public class StreamableHttpProxyController {
 		}
 		emitter.complete();
 		return emitter;
+	}
+
+	// ---------------------------------------------------------------------
+	// Initialize response capability injection
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Injects {@code capabilities.tasks} into an initialize response when absent.
+	 *
+	 * <p>
+	 * The UI Tasks tab is gated by a top-level {@code serverCapabilities.tasks} field in
+	 * the initialize response. The demo server's MCP Java SDK does not know about
+	 * {@code tasks}, so the proxy adds the field at the JSON level: only when the
+	 * response is a successful initialize reply ({@code includeSessionHeader} signals the
+	 * first POST of a session, and {@code body.method} equals {@code initialize}) and the
+	 * upstream did not already advertise {@code tasks}. Malformed or error responses pass
+	 * through untouched.
+	 * @param response the upstream initialize response JSON tree
+	 * @param body the original JSON-RPC request body
+	 * @param includeSessionHeader whether this is the first POST of a session
+	 */
+	private static void injectTasksCapability(final JsonNode response, final JsonNode body,
+			final boolean includeSessionHeader) {
+		if (!includeSessionHeader || body == null) {
+			return;
+		}
+		final JsonNode methodNode = body.get("method");
+		if (methodNode == null || !"initialize".equals(methodNode.asText())) {
+			return;
+		}
+		if (response == null || !response.isObject()) {
+			return;
+		}
+		final JsonNode resultNode = response.get("result");
+		if (resultNode == null || !resultNode.isObject()) {
+			return;
+		}
+		final JsonNode capabilitiesNode = resultNode.get("capabilities");
+		if (capabilitiesNode == null || !capabilitiesNode.isObject()) {
+			return;
+		}
+		final ObjectNode capabilities = (ObjectNode) capabilitiesNode;
+		if (capabilities.has("tasks")) {
+			return;
+		}
+		final ObjectNode tasks = JsonNodeFactory.instance.objectNode();
+		tasks.set("list", JsonNodeFactory.instance.objectNode());
+		tasks.set("cancel", JsonNodeFactory.instance.objectNode());
+		final ObjectNode requests = JsonNodeFactory.instance.objectNode();
+		final ObjectNode tools = JsonNodeFactory.instance.objectNode();
+		tools.set("call", JsonNodeFactory.instance.objectNode());
+		requests.set("tools", tools);
+		tasks.set("requests", requests);
+		capabilities.set("tasks", tasks);
 	}
 
 }
