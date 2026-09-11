@@ -16,6 +16,8 @@
 
 package io.inspector.mcp.core.task;
 
+import java.util.List;
+
 /**
  * Service interface for the SEP-1686 task protocol methods consumed by the proxy layer.
  *
@@ -50,5 +52,11 @@ public interface TaskService {
 	 * @throws TaskNotCancelableException if the task is already in a terminal state
 	 */
 	TaskHandle cancelTask(String taskId) throws TaskNotFoundException, TaskNotCancelableException;
+
+	/**
+	 * Return all currently tracked tasks as a list of {@link TaskHandle}s.
+	 * @return an unmodifiable list of task handles; never {@code null}
+	 */
+	List<TaskHandle> listTasks();
 
 }

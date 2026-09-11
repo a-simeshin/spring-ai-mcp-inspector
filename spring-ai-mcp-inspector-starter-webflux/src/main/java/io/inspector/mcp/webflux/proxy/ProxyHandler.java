@@ -45,6 +45,7 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -543,10 +544,16 @@ public class ProxyHandler {
 			}
 			return accepted.build();
 		}
-		// Intercept tasks/get and tasks/cancel if a TaskService is available.
+		// Intercept tasks/get, tasks/list and tasks/cancel if a TaskService is available.
 		if (this.taskService != null) {
 			final Mono<ServerResponse> taskResponse = tryHandleTaskMethod(idNode, body);
 			if (taskResponse != null) {
+				if (includeSessionHeader) {
+					return taskResponse.map((resp) -> {
+						resp.headers().add(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
+						return resp;
+					});
+				}
 				return taskResponse;
 			}
 		}
@@ -572,7 +579,9 @@ public class ProxyHandler {
 		}
 		session.touch();
 		return awaiter.flatMap((node) -> {
-			injectTasksCapability(node, body, includeSessionHeader);
+			if (ProxyHandler.this.taskService != null) {
+				injectTasksCapability(node, body, includeSessionHeader);
+			}
 			final ServerResponse.BodyBuilder ok = ServerResponse.ok().contentType(MediaType.APPLICATION_JSON);
 			if (includeSessionHeader) {
 				ok.header(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
@@ -624,12 +633,13 @@ public class ProxyHandler {
 	}
 
 	// ---------------------------------------------------------------------
-	// Task method interception (tasks/get, tasks/cancel)
+	// Task method interception (tasks/get, tasks/list, tasks/cancel)
 	// ---------------------------------------------------------------------
 
 	/**
-	 * Checks whether {@code body} is a {@code tasks/get} or {@code tasks/cancel} JSON-RPC
-	 * request and handles it locally via the {@link #taskService}.
+	 * Checks whether {@code body} is a {@code tasks/get}, {@code tasks/list}, or
+	 * {@code tasks/cancel} JSON-RPC request and handles it locally via the
+	 * {@link #taskService}.
 	 * @param idNode the JSON-RPC request id
 	 * @param body the full JSON-RPC request body
 	 * @return a response Mono if the method was handled, or {@code null} to fall through
@@ -643,6 +653,9 @@ public class ProxyHandler {
 		final String method = methodNode.asText();
 		if ("tasks/get".equals(method)) {
 			return handleTaskGet(idNode, body);
+		}
+		if ("tasks/list".equals(method)) {
+			return handleTaskList(idNode);
 		}
 		if ("tasks/cancel".equals(method)) {
 			return handleTaskCancel(idNode, body);
@@ -668,6 +681,22 @@ public class ProxyHandler {
 		catch (final TaskNotFoundException ex) {
 			return jsonRpcError(idNode, -32602, "Failed to retrieve task: " + ex.getMessage());
 		}
+	}
+
+	/**
+	 * Handle a {@code tasks/list} request: return all currently tracked tasks.
+	 * @param idNode the JSON-RPC request id
+	 * @return a JSON-RPC response with a {@code tasks} array
+	 */
+	private Mono<ServerResponse> handleTaskList(final JsonNode idNode) {
+		final java.util.List<TaskHandle> handles = this.taskService.listTasks();
+		final ArrayNode tasksArray = JsonNodeFactory.instance.arrayNode(handles.size());
+		for (final TaskHandle handle : handles) {
+			tasksArray.add(taskHandleToNode(handle));
+		}
+		final ObjectNode result = JsonNodeFactory.instance.objectNode();
+		result.set("tasks", tasksArray);
+		return jsonRpcResult(idNode, result);
 	}
 
 	/**

@@ -1976,10 +1976,23 @@ class ProxyHandlerTests {
 	@DisplayName("Initialize capability injection")
 	class InitializeCapabilityInjection {
 
+		private io.inspector.mcp.core.task.TaskService taskService;
+
+		private ProxyHandler handlerWithTasks;
+
+		@BeforeEach
+		void setUpCapabilityInjection() {
+			this.taskService = mock(io.inspector.mcp.core.task.TaskService.class);
+			this.handlerWithTasks = new ProxyHandler(ProxyHandlerTests.this.registry,
+					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
+					ProxyHandlerTests.this.transportDetector, ProxyHandlerTests.this.objectMapper,
+					ProxyHandlerTests.this.properties, this.taskService);
+		}
+
 		@Test
 		@Story("Initialize capability injection")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("postMcp() with an initialize request injects capabilities.tasks when the upstream does not advertise it")
+		@Description("postMcp() with an initialize request injects capabilities.tasks when a TaskService is available and the upstream does not advertise it")
 		void postMcp_initializeRequest_injectsTasksCapability() throws Exception {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
@@ -1997,7 +2010,7 @@ class ProxyHandlerTests {
 						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
 
 			// when
-			final ServerResponse serverResponse = ProxyHandlerTests.this.handler.postMcp(request).block();
+			final ServerResponse serverResponse = this.handlerWithTasks.postMcp(request).block();
 
 			// then
 			assertThat(serverResponse).isNotNull();
@@ -2073,6 +2086,68 @@ class ProxyHandlerTests {
 			final JsonNode responseBody = entityJson(serverResponse);
 			assertThat(responseBody.has("error")).as("error response must pass through").isTrue();
 			assertThat(responseBody.path("error").path("code").asInt()).isEqualTo(-32603);
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with an initialize request does not inject tasks when no TaskService bean is available")
+		void postMcp_initializeRequest_withoutTaskService_doesNotInjectTasks() throws Exception {
+			// given: default handler has no TaskService
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final JsonNode response = ProxyHandlerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"logging\":{}}}}");
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when: using the default handler without TaskService
+			final ServerResponse serverResponse = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then: no tasks capability is injected
+			assertThat(serverResponse).isNotNull();
+			assertThat(serverResponse.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = entityJson(serverResponse);
+			assertThat(responseBody.path("result").path("capabilities").has("tasks"))
+				.as("tasks must not be injected without a TaskService")
+				.isFalse();
+		}
+
+		@Test
+		@Story("task method on new session")
+		@Severity(SeverityLevel.MINOR)
+		@Description("a task method intercepted on the first POST includes the session-id header in the response")
+		void tasksGet_onNewSession_includesSessionIdHeader() throws Exception {
+			// given: a new session request (no session id) that opens a session and
+			// dispatches a task/get which is intercepted
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> Mono.empty());
+			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-1",
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+			given(this.taskService.getTask("t-1")).willReturn(handle);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest
+				.post("/mcp-inspector-api/mcp?url=http://target/mcp")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}"));
+
+			// when: no session-id header = first POST of a new session
+			final ServerResponse serverResponse = this.handlerWithTasks.postMcp(request).block();
+
+			// then - session-id header is present even though the task was handled
+			// locally
+			assertThat(serverResponse).isNotNull();
+			assertThat(serverResponse.statusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(serverResponse.headers().get(ProxyConstants.MCP_SESSION_ID_HEADER))
+				.as("session-id header must be present on first POST task response")
+				.isNotEmpty();
 		}
 
 	}

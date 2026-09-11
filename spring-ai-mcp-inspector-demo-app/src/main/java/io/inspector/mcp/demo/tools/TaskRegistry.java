@@ -13,6 +13,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
@@ -34,13 +37,14 @@ import org.springframework.stereotype.Component;
  * Owns the lifecycle state machine:
  * <ul>
  * <li>{@code working} - the background computation is in progress</li>
- * <li>{@code success} - the computation completed successfully; result is available</li>
+ * <li>{@code completed} - the computation completed successfully; result is
+ * available</li>
  * <li>{@code failed} - the computation terminated with an error</li>
  * <li>{@code cancelled} - the task was cancelled before completion</li>
  * </ul>
  *
  * <p>
- * Terminal-state tasks ({@code success}, {@code failed}, {@code cancelled}) are evicted
+ * Terminal-state tasks ({@code completed}, {@code failed}, {@code cancelled}) are evicted
  * by a periodic sweeper after their {@link #ttl()} elapses. {@link #keepAlive(String)}
  * refreshes the expiry of any existing task.
  */
@@ -94,7 +98,7 @@ public class TaskRegistry implements TaskService {
 	}
 
 	/**
-	 * Transition the given task from {@code working} to {@code success}.
+	 * Transition the given task from {@code working} to {@code completed}.
 	 * @param taskId the task to complete
 	 * @param result the result payload to attach
 	 * @return {@code true} if the transition was applied, {@code false} if the task was
@@ -105,7 +109,7 @@ public class TaskRegistry implements TaskService {
 		if (entry == null) {
 			return false;
 		}
-		if (entry.status.compareAndSet("working", "success")) {
+		if (entry.status.compareAndSet("working", "completed")) {
 			entry.result.set(result);
 			return true;
 		}
@@ -196,6 +200,15 @@ public class TaskRegistry implements TaskService {
 		return toHandle(entry);
 	}
 
+	@Override
+	public List<TaskHandle> listTasks() {
+		final List<TaskHandle> result = new ArrayList<>(tasks.size());
+		for (final Entry entry : tasks.values()) {
+			result.add(toHandle(entry));
+		}
+		return Collections.unmodifiableList(result);
+	}
+
 	private static TaskHandle toHandle(final Entry entry) {
 		final String lastRef = entry.lastKeepAlive.get() != null ? ISO_FORMATTER.format(entry.lastKeepAlive.get())
 				: ISO_FORMATTER.format(entry.createdAt);
@@ -204,7 +217,7 @@ public class TaskRegistry implements TaskService {
 	}
 
 	private static boolean isTerminal(final String status) {
-		return "success".equals(status) || "failed".equals(status) || "cancelled".equals(status);
+		return "completed".equals(status) || "failed".equals(status) || "cancelled".equals(status);
 	}
 
 	/**

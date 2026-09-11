@@ -47,6 +47,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -344,10 +345,16 @@ public class StreamableHttpProxyController {
 			}
 			return builder.build();
 		}
-		// Intercept tasks/get and tasks/cancel if a TaskService is available.
+		// Intercept tasks/get, tasks/list and tasks/cancel if a TaskService is available.
 		if (taskService() != null) {
 			final ResponseEntity<Object> taskResponse = tryHandleTaskMethod(idNode, body);
 			if (taskResponse != null) {
+				if (includeSessionHeader) {
+					final ResponseEntity.BodyBuilder builder = ResponseEntity.status(taskResponse.getStatusCode())
+						.contentType(MediaType.APPLICATION_JSON);
+					builder.header(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
+					return builder.body(taskResponse.getBody());
+				}
 				return taskResponse;
 			}
 		}
@@ -377,7 +384,9 @@ public class StreamableHttpProxyController {
 		session.touch();
 		try {
 			final JsonNode response = awaiter.block(requestTimeout);
-			injectTasksCapability(response, body, includeSessionHeader);
+			if (taskService() != null) {
+				injectTasksCapability(response, body, includeSessionHeader);
+			}
 			final ResponseEntity.BodyBuilder builder = ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON);
 			if (includeSessionHeader) {
 				builder.header(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
@@ -473,12 +482,13 @@ public class StreamableHttpProxyController {
 	}
 
 	// ---------------------------------------------------------------------
-	// Task method interception (tasks/get, tasks/cancel)
+	// Task method interception (tasks/get, tasks/list, tasks/cancel)
 	// ---------------------------------------------------------------------
 
 	/**
-	 * Checks whether {@code body} is a {@code tasks/get} or {@code tasks/cancel} JSON-RPC
-	 * request and handles it locally via the {@link #taskService}.
+	 * Checks whether {@code body} is a {@code tasks/get}, {@code tasks/list}, or
+	 * {@code tasks/cancel} JSON-RPC request and handles it locally via the
+	 * {@link #taskService}.
 	 * @param idNode the JSON-RPC request id
 	 * @param body the full JSON-RPC request body
 	 * @return a response entity if the method was handled, or {@code null} to fall
@@ -492,6 +502,9 @@ public class StreamableHttpProxyController {
 		final String method = methodNode.asText();
 		if ("tasks/get".equals(method)) {
 			return handleTaskGet(idNode, body);
+		}
+		if ("tasks/list".equals(method)) {
+			return handleTaskList(idNode);
 		}
 		if ("tasks/cancel".equals(method)) {
 			return handleTaskCancel(idNode, body);
@@ -517,6 +530,22 @@ public class StreamableHttpProxyController {
 		catch (final TaskNotFoundException ex) {
 			return jsonRpcError(idNode, -32602, "Failed to retrieve task: " + ex.getMessage());
 		}
+	}
+
+	/**
+	 * Handle a {@code tasks/list} request: return all currently tracked tasks.
+	 * @param idNode the JSON-RPC request id
+	 * @return a JSON-RPC response with a {@code tasks} array
+	 */
+	private ResponseEntity<Object> handleTaskList(final JsonNode idNode) {
+		final java.util.List<TaskHandle> handles = taskService().listTasks();
+		final ArrayNode tasksArray = JsonNodeFactory.instance.arrayNode(handles.size());
+		for (final TaskHandle handle : handles) {
+			tasksArray.add(taskHandleToNode(handle));
+		}
+		final ObjectNode result = JsonNodeFactory.instance.objectNode();
+		result.set("tasks", tasksArray);
+		return jsonRpcResult(idNode, result);
 	}
 
 	/**
