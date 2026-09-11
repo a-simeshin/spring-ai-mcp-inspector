@@ -1,22 +1,32 @@
 Files changed:
-- src/components/AppsTab.tsx: export hasUIMetadata; prefilledToolCall.result
-  is now optional (absent = preselect-without-run from ToolsTab).
+- src/components/AppsTab.tsx: re-export hasUIMetadata from shared guard;
+  prefilledToolCall.result is now optional (absent = preselect-without-run
+  from ToolsTab); setIsAppOpen(true) is gated on result presence; Back to
+  Input button is shown even for tools with empty inputSchema.properties.
 - src/components/ToolsTab.tsx: added optional onOpenAsApp prop; renders an
   "Open as App" button next to "Run Tool" for tools with
   _meta.ui.resourceUri.
 - src/App.tsx: wired onOpenAsApp to set prefilledToolCall (without result)
   and switch activeTab to "apps"; extended PrefilledAppsToolCall type to
-  make result optional.
+  make result optional; hasAppResourceUri replaced by shared hasUIMetadata
+  guard.
+- src/utils/uiMetadataGuard.ts: new shared non-throwing boundary for
+  getToolUiResourceUri with bounded console warning (one per tool name per
+  session).
 - src/components/__tests__/ui-resource-detection.test.ts: unit tests for
   hasUIMetadata (nested key, deprecated flat key, absent meta, empty
-  string, non-ui:// value throws, null, number).
+  string, non-ui:// value returns false, null, number, object).
+- src/components/__tests__/AppsTab.test.tsx: regression test for malformed
+  resourceUri filtered without console error; preselect-without-run test
+  (no auto-open); PATCH marker header.
 - src/components/__tests__/ToolsTab.test.tsx: tests for the "Open as App"
   button visibility and click behavior.
 
 Reason: SEP-1865 detection is tool-metadata-driven (_meta.ui.resourceUri),
 not content-sniffing. The button closes the loop between Tools tab and Apps
 tab: the user can open an App for a tool directly from Tools without
-running it first.
+running it first. The shared guard makes the detection boundary total and
+non-throwing for untrusted tool metadata, with a bounded diagnostic.
 
-Covered by: unit tests in ui-resource-detection.test.ts and
-ToolsTab.test.tsx.
+Covered by: unit tests in ui-resource-detection.test.ts, AppsTab.test.tsx,
+and ToolsTab.test.tsx.

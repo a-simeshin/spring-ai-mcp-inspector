@@ -1,7 +1,7 @@
 // [spring-ai-mcp-inspector PATCH] ui-app-detection: tests for hasUIMetadata (issue #183).
 import { describe, it, expect } from "@jest/globals";
 import { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { hasUIMetadata } from "../AppsTab";
+import { hasUIMetadata } from "@/utils/uiMetadataGuard";
 
 describe("hasUIMetadata", () => {
   it("returns true for a tool with _meta.ui.resourceUri (nested)", () => {

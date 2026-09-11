@@ -546,10 +546,12 @@ describe("AppsTab", () => {
     });
     expect(screen.getByText("Tool: noFieldsApp")).toBeInTheDocument();
 
-    // Should NOT see the back button
+    // [spring-ai-mcp-inspector PATCH] ui-app-detection: Back to Input is
+    // always shown so the user can dismiss a broken renderer even when
+    // the tool has no input fields.
     expect(
-      screen.queryByRole("button", { name: /back to input/i }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: /back to input/i }),
+    ).toBeInTheDocument();
   });
 
   it("should allow going back to input form from app renderer if fields exist", async () => {
@@ -625,6 +627,46 @@ describe("AppsTab", () => {
       "weather result",
     );
     expect(onPrefilledToolCallConsumed).toHaveBeenCalledWith(42);
+  });
+
+  // [spring-ai-mcp-inspector PATCH] ui-app-detection: preselect without
+  // run (ToolsTab "Open as App") must NOT auto-open the renderer. The
+  // user reviews parameters and clicks "Open App" explicitly.
+  it("should preselect tool without auto-opening app when prefilled call has no result", async () => {
+    const toolWithFields: Tool = {
+      name: "preselectApp",
+      inputSchema: {
+        type: "object",
+        properties: {
+          city: { type: "string" },
+        },
+      },
+      _meta: { ui: { resourceUri: "ui://preselect" } },
+    } as Tool & { _meta?: { ui?: { resourceUri?: string } } };
+    const onPrefilledToolCallConsumed = jest.fn();
+
+    renderAppsTab({
+      tools: [toolWithFields],
+      prefilledToolCall: {
+        id: 43,
+        toolName: "preselectApp",
+        params: { city: "Berlin" },
+        // No result: preselect only.
+      },
+      onPrefilledToolCallConsumed,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("App Input")).toBeInTheDocument();
+    });
+
+    // The renderer must NOT be mounted yet.
+    expect(screen.queryByTestId("app-renderer")).not.toBeInTheDocument();
+    // The "Open App" button is the manual trigger.
+    expect(
+      screen.getByRole("button", { name: /open app/i }),
+    ).toBeInTheDocument();
+    expect(onPrefilledToolCallConsumed).toHaveBeenCalledWith(43);
   });
 
   it("should not auto-render app when no prefilled tool call is provided", () => {
