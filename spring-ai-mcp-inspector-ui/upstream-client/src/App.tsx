@@ -1464,7 +1464,7 @@ const App = () => {
               value={activeTab}
               className="w-full p-4"
               onValueChange={(value) => {
-                setActiveTab(value);
+                // [spring-ai-mcp-inspector PATCH] Tab state flows through the hashchange listener only (#200): calling setActiveTab here races with the async hashchange dispatch in real browsers and leaves the pane unswitched.
                 window.location.hash = value;
               }}
             >
