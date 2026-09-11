@@ -1,0 +1,19 @@
+Files changed:
+- src/utils/uiMetadataGuard.ts: new shared non-throwing boundary for
+  getToolUiResourceUri with bounded console warning (one per tool name per
+  session).
+- src/components/AppsTab.tsx: local hasUIMetadata replaced by import from
+  shared guard; re-export preserved for ToolsTab.
+- src/App.tsx: local hasAppResourceUri replaced by shared hasUIMetadata
+  guard; unused getToolUiResourceUri import removed.
+- src/components/__tests__/ui-resource-detection.test.ts: unit tests for
+  hasUIMetadata with malformed resourceUri values (null, number, object)
+  guarded by try/catch returning false without throwing.
+
+Reason: the bare hasUIMetadata in AppsTab.tsx called getToolUiResourceUri
+without try/catch, causing a crash when a server sends malformed
+_meta.ui.resourceUri (e.g. null, number, or object). The shared guard
+catches the upstream exception and returns false with a bounded console
+warning.
+
+Covered by: unit tests in ui-resource-detection.test.ts.
