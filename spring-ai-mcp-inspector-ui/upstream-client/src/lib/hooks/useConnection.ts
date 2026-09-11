@@ -139,6 +139,14 @@ export function useConnection({
   const { toast } = useToast();
   const [serverCapabilities, setServerCapabilities] =
     useState<ServerCapabilities | null>(null);
+
+  // [spring-ai-mcp-inspector PATCH] Live ref so listTasks/cancelTask read the
+  // current capabilities at call time, not a stale closure. disconnect() sets
+  // this to null, which stops any in-flight polling loop. See issue #212.
+  const serverCapabilitiesRef = useRef<ServerCapabilities | null>(null);
+  useEffect(() => {
+    serverCapabilitiesRef.current = serverCapabilities;
+  }, [serverCapabilities]);
   const [mcpClient, setMcpClient] = useState<Client | null>(null);
   const [clientTransport, setClientTransport] = useState<Transport | null>(
     null,
@@ -1228,6 +1236,11 @@ export function useConnection({
   };
 
   const cancelTask = async (taskId: string) => {
+    // [spring-ai-mcp-inspector PATCH] Gate tasks/cancel on the operation-level
+    // sub-capability (spec: tasks.cancel controls tasks/cancel). See issue #212.
+    if (!serverCapabilitiesRef.current?.tasks?.cancel) {
+      return;
+    }
     return makeRequest(
       {
         method: "tasks/cancel",
@@ -1238,6 +1251,11 @@ export function useConnection({
   };
 
   const listTasks = async (cursor?: string) => {
+    // [spring-ai-mcp-inspector PATCH] Gate tasks/list on the operation-level
+    // sub-capability (spec: tasks.list controls tasks/list). See issue #212.
+    if (!serverCapabilitiesRef.current?.tasks?.list) {
+      return;
+    }
     return makeRequest(
       {
         method: "tasks/list",

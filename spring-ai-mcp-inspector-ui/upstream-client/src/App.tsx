@@ -13,6 +13,7 @@ import {
   Resource,
   ResourceTemplate,
   Root,
+  ServerCapabilities,
   ServerNotification,
   Tool,
   LoggingLevel,
@@ -441,7 +442,7 @@ const App = () => {
 
       if (
         notification.method === "notifications/tasks/list_changed" &&
-        serverCapabilities?.tasks
+        serverCapabilitiesRef.current?.tasks
       ) {
         void listTasks();
       }
@@ -517,6 +518,14 @@ const App = () => {
     metadata,
   });
 
+  // [spring-ai-mcp-inspector PATCH] Keep a live ref of serverCapabilities so the
+  // notification callback (installed before connect completes) reads the current
+  // value, not the stale null closure from the first render. See issue #212.
+  const serverCapabilitiesRef = useRef<ServerCapabilities | null>(null);
+  useEffect(() => {
+    serverCapabilitiesRef.current = serverCapabilities;
+  }, [serverCapabilities]);
+
   useEffect(() => {
     if (serverCapabilities) {
       const hash = window.location.hash.slice(1);
@@ -555,11 +564,13 @@ const App = () => {
   }, [serverCapabilities]);
 
   useEffect(() => {
-    if (mcpClient && activeTab === "tasks" && serverCapabilities?.tasks) {
+    // [spring-ai-mcp-inspector PATCH] Gate on the operation-level sub-capability
+    // (tasks.list controls tasks/list per MCP spec). See issue #212.
+    if (mcpClient && activeTab === "tasks" && serverCapabilities?.tasks?.list) {
       void listTasks();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mcpClient, activeTab, serverCapabilities?.tasks]);
+  }, [mcpClient, activeTab, serverCapabilities?.tasks?.list]);
 
   useEffect(() => {
     if (mcpClient && activeTab === "apps" && serverCapabilities?.tools) {
@@ -1159,6 +1170,22 @@ const App = () => {
         // Polling loop
         let taskCompleted = false;
         while (!taskCompleted) {
+          // [spring-ai-mcp-inspector PATCH] Bail out if the server stopped
+          // advertising tasks (disconnect/reconnect) mid-poll. Without this,
+          // a stale loop keeps firing tasks/get on a capability-less server.
+          if (!serverCapabilitiesRef.current?.tasks) {
+            taskCompleted = true;
+            setIsPollingTask(false);
+            setToolResult({
+              content: [
+                {
+                  type: "text",
+                  text: "Task polling stopped: server no longer advertises the tasks capability.",
+                },
+              ],
+            });
+            break;
+          }
           try {
             // Wait for 1 second before polling
             await new Promise((resolve) => setTimeout(resolve, pollInterval));
@@ -1280,8 +1307,12 @@ const App = () => {
   };
 
   const listTasks = useCallback(async () => {
+    // [spring-ai-mcp-inspector PATCH] Gate tasks/list on the operation-level
+    // sub-capability (spec: tasks.list controls tasks/list). See issue #212.
+    if (!serverCapabilitiesRef.current?.tasks?.list) return;
     try {
       const response = await listMcpTasks(nextTaskCursor);
+      if (!response) return; // useConnection returned undefined (gated)
       setTasks(response.tasks);
       setNextTaskCursor(response.nextCursor);
       // Inline error clear to avoid extra dependency on clearError
@@ -1295,8 +1326,12 @@ const App = () => {
   }, [listMcpTasks, nextTaskCursor]);
 
   const cancelTask = async (taskId: string) => {
+    // [spring-ai-mcp-inspector PATCH] Gate tasks/cancel on the operation-level
+    // sub-capability (spec: tasks.cancel controls tasks/cancel). See issue #212.
+    if (!serverCapabilitiesRef.current?.tasks?.cancel) return;
     try {
       const response = await cancelMcpTask(taskId);
+      if (!response) return; // useConnection returned undefined (gated)
       setTasks((prev) => prev.map((t) => (t.taskId === taskId ? response : t)));
       if (selectedTask?.taskId === taskId) {
         setSelectedTask(response);

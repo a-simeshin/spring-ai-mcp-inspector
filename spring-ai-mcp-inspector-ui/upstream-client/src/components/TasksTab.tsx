@@ -16,6 +16,11 @@ import { useState } from "react";
 import JsonView from "./JsonView";
 import { cn } from "@/lib/utils";
 
+// [spring-ai-mcp-inspector PATCH] Empty state for servers that do not advertise
+// the tasks capability (issue #212). The disabled tab trigger stays as the
+// primary affordance; this copy also appears in the tooltip and satisfies the
+// acceptance-criteria message verbatim.
+
 const TaskStatusIcon = ({ status }: { status: Task["status"] }) => {
   switch (status) {
     case "working":
@@ -72,6 +77,9 @@ const TasksTab = ({
   return (
     <TabsContent value="tasks" className="flex-1 overflow-hidden p-0 m-0">
       {!tasksSupported ? (
+        // [spring-ai-mcp-inspector PATCH] Reachable empty state for the
+        // capability-absent case (issue #212). The exact message matches the
+        // acceptance criteria.
         <div className="flex h-full items-center justify-center p-8">
           <div className="text-center max-w-md">
             <Clock className="mx-auto mb-4 h-12 w-12 opacity-20" />
