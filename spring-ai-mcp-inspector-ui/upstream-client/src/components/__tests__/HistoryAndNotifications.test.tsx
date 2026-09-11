@@ -286,4 +286,70 @@ describe("HistoryAndNotifications", () => {
     // Notifications should now be empty
     expect(screen.getByText("No notifications yet")).toBeTruthy();
   });
+
+  // [spring-ai-mcp-inspector PATCH] history-error-styling: tests for failed-entry error styling (#195).
+  it("applies error styling to failed history entries", () => {
+    const mixedHistory = [
+      {
+        request: JSON.stringify({ method: "tools/call", params: { name: "echo" } }),
+        response: JSON.stringify({ content: [{ type: "text", text: "ok" }] }),
+      },
+      {
+        request: JSON.stringify({ method: "tools/call", params: { name: "errorTool" } }),
+        response: JSON.stringify({
+          content: [{ type: "text", text: "Something went wrong" }],
+          isError: true,
+        }),
+        isError: true,
+      },
+    ];
+
+    const { container } = render(
+      <HistoryAndNotifications
+        requestHistory={mixedHistory}
+        serverNotifications={[]}
+      />,
+    );
+
+    // Rows are reversed (newest first): index 0 = errorTool, index 1 = echo
+    const rows = container.querySelectorAll("ul > li");
+    expect(rows).toHaveLength(2);
+
+    // Failed entry (errorTool) should have red accent border and red text
+    const failedRow = rows[0];
+    expect(failedRow.className).toContain("border-red-500");
+    expect(failedRow.className).toContain("border-l-4");
+    const failedMethodSpan = failedRow.querySelector("span");
+    expect(failedMethodSpan?.className).toContain("text-red-600");
+
+    // Successful entry (echo) should NOT have error styling
+    const successRow = rows[1];
+    expect(successRow.className).not.toContain("border-red-500");
+    expect(successRow.className).not.toContain("border-l-4");
+    const successMethodSpan = successRow.querySelector("span");
+    expect(successMethodSpan?.className).not.toContain("text-red-600");
+  });
+
+  it("applies error styling to entries with transport error in response", () => {
+    const historyWithTransportError = [
+      {
+        request: JSON.stringify({ method: "tools/call", params: { name: "broken" } }),
+        response: JSON.stringify({ error: "Connection refused" }),
+        isError: true,
+      },
+    ];
+
+    const { container } = render(
+      <HistoryAndNotifications
+        requestHistory={historyWithTransportError}
+        serverNotifications={[]}
+      />,
+    );
+
+    const row = container.querySelector("ul > li");
+    expect(row?.className).toContain("border-red-500");
+    expect(row?.className).toContain("border-l-4");
+    const methodSpan = row?.querySelector("span");
+    expect(methodSpan?.className).toContain("text-red-600");
+  });
 });
