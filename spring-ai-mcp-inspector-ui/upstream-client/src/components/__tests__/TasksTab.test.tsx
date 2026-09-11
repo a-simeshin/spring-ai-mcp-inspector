@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] TasksTab behavior tests: list poll, per-task poll, terminal-state stop (#182).
 import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Task } from "@modelcontextprotocol/sdk/types.js";
