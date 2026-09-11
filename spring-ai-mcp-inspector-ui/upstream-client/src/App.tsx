@@ -114,9 +114,8 @@ import MetadataTab from "./components/MetadataTab";
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
 
 // [spring-ai-mcp-inspector PATCH] MCP Tasks are an experimental/extension
-// capability (SEP-1686). Spring AI / MCP Java SDK 2.0.0 servers structurally
-// cannot advertise them, so the Tasks tab is always disabled and the user
-// cannot infer why. The hint text below is attached to the Tooltip wrapper span
+// capability (SEP-1686). When the server advertises the 'tasks' capability the
+// tab is enabled; otherwise a tooltip explains why and links to the proposal.
 // (title + aria-label), NOT to the disabled trigger: tabs.tsx applies
 // `disabled:pointer-events-none`, which blocks hover on the trigger itself.
 const MCP_TASKS_DOCS_URL = "https://modelcontextprotocol.io/seps/1686-tasks";
@@ -1307,6 +1306,20 @@ const App = () => {
     }
   };
 
+  // [spring-ai-mcp-inspector PATCH] Per-task polling via tasks/get MCP
+  // method. Used by TasksTab to poll individual 'working' tasks at their
+  // own pollInterval. Wired through sendMCPRequest like other MCP methods.
+  const getTask = async (taskId: string) => {
+    const response = await sendMCPRequest(
+      {
+        method: "tasks/get",
+        params: { taskId },
+      },
+      GetTaskResultSchema,
+    );
+    return response;
+  };
+
   const handleRootsChange = async () => {
     await sendNotification({ method: "notifications/roots/list_changed" });
   };
@@ -1741,25 +1754,29 @@ const App = () => {
                         readResource(uri);
                       }}
                     />
-                    <TasksTab
-                      tasks={tasks}
-                      listTasks={() => {
-                        clearError("tasks");
-                        listTasks();
-                      }}
-                      clearTasks={() => {
-                        setTasks([]);
-                        setNextTaskCursor(undefined);
-                      }}
-                      cancelTask={cancelTask}
-                      selectedTask={selectedTask}
-                      setSelectedTask={(task) => {
-                        clearError("tasks");
-                        setSelectedTask(task);
-                      }}
-                      error={errors.tasks}
-                      nextCursor={nextTaskCursor}
-                    />
+                    {!!serverCapabilities?.tasks && (
+                      <TasksTab
+                        activeTab={activeTab}
+                        tasks={tasks}
+                        listTasks={() => {
+                          clearError("tasks");
+                          listTasks();
+                        }}
+                        clearTasks={() => {
+                          setTasks([]);
+                          setNextTaskCursor(undefined);
+                        }}
+                        cancelTask={cancelTask}
+                        getTask={getTask}
+                        selectedTask={selectedTask}
+                        setSelectedTask={(task) => {
+                          clearError("tasks");
+                          setSelectedTask(task);
+                        }}
+                        error={errors.tasks}
+                        nextCursor={nextTaskCursor}
+                      />
+                    )}
                     <AppsTab
                       sandboxPath={`${getMCPProxyAddress(config)}/sandbox`}
                       tools={tools}
