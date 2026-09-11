@@ -111,44 +111,88 @@ jest.mock("../components/TasksTab", () => {
 });
 /* eslint-enable @typescript-eslint/no-require-imports */
 
-jest.mock("../components/AppsTab", () => ({
-  __esModule: true,
-  default: () => <div>AppsTab</div>,
-}));
+/* eslint-disable @typescript-eslint/no-require-imports */
+jest.mock("../components/AppsTab", () => {
+  const { TabsContent } = require("@/components/ui/tabs");
+  return {
+    __esModule: true,
+    default: () => (
+      <TabsContent value="apps" data-testid="apps-pane">
+        Apps content pane
+      </TabsContent>
+    ),
+  };
+});
 
 jest.mock("../components/ConsoleTab", () => ({
   __esModule: true,
   default: () => <div>ConsoleTab</div>,
 }));
 
-jest.mock("../components/PingTab", () => ({
-  __esModule: true,
-  default: () => <div>PingTab</div>,
-}));
+jest.mock("../components/PingTab", () => {
+  const { TabsContent } = require("@/components/ui/tabs");
+  return {
+    __esModule: true,
+    default: () => (
+      <TabsContent value="ping" data-testid="ping-pane">
+        Ping content pane
+      </TabsContent>
+    ),
+  };
+});
 
-jest.mock("../components/SamplingTab", () => ({
-  __esModule: true,
-  default: () => <div>SamplingTab</div>,
-}));
+jest.mock("../components/SamplingTab", () => {
+  const { TabsContent } = require("@/components/ui/tabs");
+  return {
+    __esModule: true,
+    default: () => (
+      <TabsContent value="sampling" data-testid="sampling-pane">
+        Sampling content pane
+      </TabsContent>
+    ),
+  };
+});
 
-jest.mock("../components/RootsTab", () => ({
-  __esModule: true,
-  default: () => <div>RootsTab</div>,
-}));
+jest.mock("../components/RootsTab", () => {
+  const { TabsContent } = require("@/components/ui/tabs");
+  return {
+    __esModule: true,
+    default: () => (
+      <TabsContent value="roots" data-testid="roots-pane">
+        Roots content pane
+      </TabsContent>
+    ),
+  };
+});
 
-jest.mock("../components/ElicitationTab", () => ({
-  __esModule: true,
-  default: () => <div>ElicitationTab</div>,
-}));
+jest.mock("../components/ElicitationTab", () => {
+  const { TabsContent } = require("@/components/ui/tabs");
+  return {
+    __esModule: true,
+    default: () => (
+      <TabsContent value="elicitations" data-testid="elicitations-pane">
+        Elicitations content pane
+      </TabsContent>
+    ),
+  };
+});
 
-jest.mock("../components/MetadataTab", () => ({
-  __esModule: true,
-  default: () => <div>MetadataTab</div>,
-}));
+jest.mock("../components/MetadataTab", () => {
+  const { TabsContent } = require("@/components/ui/tabs");
+  return {
+    __esModule: true,
+    default: () => (
+      <TabsContent value="metadata" data-testid="metadata-pane">
+        Metadata content pane
+      </TabsContent>
+    ),
+  };
+});
+/* eslint-enable @typescript-eslint/no-require-imports */
 
 jest.mock("../components/AuthDebugger", () => ({
   __esModule: true,
-  default: () => <div>AuthDebugger</div>,
+  default: () => <div data-testid="auth-pane">AuthDebugger</div>,
 }));
 
 jest.mock("../components/HistoryAndNotifications", () => ({
@@ -295,20 +339,26 @@ describe("App - tab click switching content pane (regression t_c0dcfe9a)", () =>
       expect(resourcesTrigger).toHaveAttribute("aria-selected", "true");
     });
 
+    // Verify the default Resources pane is visible and active
+    const resourcesPane = screen.getByTestId("resources-pane");
+    expect(resourcesPane).toBeVisible();
+
     // Tab order in the template: Resources, Prompts, Tools, Tasks, Apps,
     // Ping, Sampling, Elicitations, Roots, Auth, Metadata
     const tabNames = [
-      { name: /^Prompts$/i, value: "prompts" },
-      { name: /^Tools$/i, value: "tools" },
-      { name: /^Tasks$/i, value: "tasks" },
-      { name: /^Apps$/i, value: "apps" },
-      { name: /^Ping$/i, value: "ping" },
-      { name: /^Sampling$/i, value: "sampling" },
-      { name: /^Elicitations$/i, value: "elicitations" },
-      { name: /^Roots$/i, value: "roots" },
-      { name: /^Auth$/i, value: "auth" },
-      { name: /^Metadata$/i, value: "metadata" },
+      { name: /^Prompts$/i, value: "prompts", pane: "prompts-pane" },
+      { name: /^Tools$/i, value: "tools", pane: "tools-pane" },
+      { name: /^Tasks$/i, value: "tasks", pane: "tasks-pane" },
+      { name: /^Apps$/i, value: "apps", pane: "apps-pane" },
+      { name: /^Ping$/i, value: "ping", pane: "ping-pane" },
+      { name: /^Sampling$/i, value: "sampling", pane: "sampling-pane" },
+      { name: /^Elicitations$/i, value: "elicitations", pane: "elicitations-pane" },
+      { name: /^Roots$/i, value: "roots", pane: "roots-pane" },
+      { name: /^Auth$/i, value: "auth", pane: "auth-pane" },
+      { name: /^Metadata$/i, value: "metadata", pane: "metadata-pane" },
     ];
+
+    let prevPane: HTMLElement = resourcesPane;
 
     for (const tab of tabNames) {
       const trigger = screen.getByRole("tab", { name: tab.name });
@@ -318,6 +368,19 @@ describe("App - tab click switching content pane (regression t_c0dcfe9a)", () =>
         expect(trigger).toHaveAttribute("aria-selected", "true");
         expect(trigger).toHaveAttribute("data-state", "active");
       });
+
+      // Verify the new pane is visible (Radix switches content pane visibility)
+      const newPane = screen.getByTestId(tab.pane);
+      await waitFor(() => {
+        expect(newPane).toBeVisible();
+      });
+
+      // Verify the previous pane is hidden (Radix hides inactive content)
+      await waitFor(() => {
+        expect(prevPane).not.toBeVisible();
+      });
+
+      prevPane = newPane;
     }
   });
 });

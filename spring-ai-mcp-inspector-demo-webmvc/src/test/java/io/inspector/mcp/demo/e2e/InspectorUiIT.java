@@ -457,6 +457,9 @@ class InspectorUiIT {
 		// Confirm the trigger is now the active one (Radix sets data-state=active on
 		// click).
 		$("[role=tab][data-state=active][id$='-trigger-" + value + "']").shouldBe(visible, Duration.ofSeconds(5));
+		// Confirm the corresponding content pane is active. Radix TabsContent
+		// renders [role=tabpanel] with data-state=active and id suffix -content-{value}.
+		$("[role=tabpanel][data-state=active][id$='-content-" + value + "']").shouldBe(visible, Duration.ofSeconds(5));
 	}
 
 	/**
