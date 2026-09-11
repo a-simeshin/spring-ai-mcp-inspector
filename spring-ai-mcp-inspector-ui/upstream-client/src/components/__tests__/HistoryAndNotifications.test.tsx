@@ -287,6 +287,7 @@ describe("HistoryAndNotifications", () => {
     expect(screen.getByText("No notifications yet")).toBeTruthy();
   });
 
+  // [spring-ai-mcp-inspector PATCH] history-error-styling: tests for failed-entry error styling (#195).
   it("applies error styling to failed history entries", () => {
     const mixedHistory = [
       {
