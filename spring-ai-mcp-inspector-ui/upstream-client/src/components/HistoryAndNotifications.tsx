@@ -9,7 +9,8 @@ const HistoryAndNotifications = ({
   onClearHistory,
   onClearNotifications,
 }: {
-  requestHistory: Array<{ request: string; response?: string }>;
+  // [spring-ai-mcp-inspector PATCH] history-error-styling: isError flag on entries
+  requestHistory: Array<{ request: string; response?: string; isError?: boolean }>;
   serverNotifications: ServerNotification[];
   onClearHistory?: () => void;
   onClearNotifications?: () => void;
@@ -55,7 +56,7 @@ const HistoryAndNotifications = ({
               .map((request, index) => (
                 <li
                   key={index}
-                  className="text-sm text-foreground bg-secondary py-2 px-3 rounded"
+                  className={`text-sm text-foreground bg-secondary py-2 px-3 rounded ${request.isError ? "border-l-4 border-red-500" : ""}`}
                 >
                   <div
                     className="flex justify-between items-center cursor-pointer"
@@ -63,7 +64,8 @@ const HistoryAndNotifications = ({
                       toggleRequestExpansion(requestHistory.length - 1 - index)
                     }
                   >
-                    <span className="font-mono">
+                    {/* [spring-ai-mcp-inspector PATCH] history-error-styling: red text for failed entries (#195). */}
+                    <span className={`font-mono ${request.isError ? "text-red-600 dark:text-red-400" : ""}`}>
                       {requestHistory.length - index}.{" "}
                       {JSON.parse(request.request).method}
                     </span>
