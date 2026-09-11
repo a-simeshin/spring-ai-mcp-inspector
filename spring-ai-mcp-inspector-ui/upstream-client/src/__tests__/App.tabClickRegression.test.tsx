@@ -1,3 +1,6 @@
+// [spring-ai-mcp-inspector PATCH] Regression test for tab click race (#200):
+// verifies that removing the synchronous setActiveTab from onValueChange does
+// not break tab switching. Hashchange listener is the sole state source.
 // Must run before react-dom loads (jsdom lacks PointerEvent; React only
 // attaches pointermove listeners when the constructor exists).
 import "../testUtils/pointerEventsPolyfill";
