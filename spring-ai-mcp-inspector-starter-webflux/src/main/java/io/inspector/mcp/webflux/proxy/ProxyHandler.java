@@ -572,6 +572,7 @@ public class ProxyHandler {
 		}
 		session.touch();
 		return awaiter.flatMap((node) -> {
+			injectTasksCapability(node, body, includeSessionHeader);
 			final ServerResponse.BodyBuilder ok = ServerResponse.ok().contentType(MediaType.APPLICATION_JSON);
 			if (includeSessionHeader) {
 				ok.header(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
@@ -836,6 +837,60 @@ public class ProxyHandler {
 		// — keeps the proxy ?url= WAF-safe; the proxy resolves it to loopback
 		// server-side.
 		return path;
+	}
+
+	// ---------------------------------------------------------------------
+	// Initialize response capability injection
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Injects {@code capabilities.tasks} into an initialize response when absent.
+	 *
+	 * <p>
+	 * The UI Tasks tab is gated by a top-level {@code serverCapabilities.tasks} field in
+	 * the initialize response. The demo server's MCP Java SDK does not know about
+	 * {@code tasks}, so the proxy adds the field at the JSON level: only when the
+	 * response is a successful initialize reply ({@code includeSessionHeader} signals the
+	 * first POST of a session, and {@code body.method} equals {@code initialize}) and the
+	 * upstream did not already advertise {@code tasks}. Malformed or error responses pass
+	 * through untouched.
+	 * @param response the upstream initialize response JSON tree
+	 * @param body the original JSON-RPC request body
+	 * @param includeSessionHeader whether this is the first POST of a session
+	 */
+	private static void injectTasksCapability(final JsonNode response, final JsonNode body,
+			final boolean includeSessionHeader) {
+		if (!includeSessionHeader || body == null) {
+			return;
+		}
+		final JsonNode methodNode = body.get("method");
+		if (methodNode == null || !"initialize".equals(methodNode.asText())) {
+			return;
+		}
+		if (response == null || !response.isObject()) {
+			return;
+		}
+		final JsonNode resultNode = response.get("result");
+		if (resultNode == null || !resultNode.isObject()) {
+			return;
+		}
+		final JsonNode capabilitiesNode = resultNode.get("capabilities");
+		if (capabilitiesNode == null || !capabilitiesNode.isObject()) {
+			return;
+		}
+		final ObjectNode capabilities = (ObjectNode) capabilitiesNode;
+		if (capabilities.has("tasks")) {
+			return;
+		}
+		final ObjectNode tasks = JsonNodeFactory.instance.objectNode();
+		tasks.set("list", JsonNodeFactory.instance.objectNode());
+		tasks.set("cancel", JsonNodeFactory.instance.objectNode());
+		final ObjectNode requests = JsonNodeFactory.instance.objectNode();
+		final ObjectNode tools = JsonNodeFactory.instance.objectNode();
+		tools.set("call", JsonNodeFactory.instance.objectNode());
+		requests.set("tools", tools);
+		tasks.set("requests", requests);
+		capabilities.set("tasks", tasks);
 	}
 
 }

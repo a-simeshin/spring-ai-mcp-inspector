@@ -201,6 +201,55 @@ class ProxyTaskProtocolIT {
 			.containsIgnoringCase("terminal");
 	}
 
+	@Test
+	@DisplayName("initialize response includes injected capabilities.tasks")
+	@Story("Initialize capability injection")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("The proxy must inject capabilities.tasks into the initialize response so the UI Tasks tab "
+			+ "is enabled. The injected object must contain list, cancel, and requests.tools.call sub-objects.")
+	void initialize_responseIncludesInjectedTasksCapability() throws Exception {
+		// given
+		app = ProxyAppHarness.start("STREAMABLE", false, null);
+		int port = ProxyAppHarness.port(app);
+		String targetUrl = "http://127.0.0.1:" + port + "/mcp";
+		String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
+
+		// when: initialize a session
+		ObjectNode init = MAPPER.createObjectNode();
+		init.put("jsonrpc", "2.0");
+		init.put("method", "initialize");
+		init.put("id", 1);
+		ObjectNode params = init.putObject("params");
+		params.put("protocolVersion", "2025-11-25");
+		params.putObject("capabilities");
+		ObjectNode info = params.putObject("clientInfo");
+		info.put("name", "task-protocol-it");
+		info.put("version", "0.1.0");
+
+		HttpRequest request = HttpRequest
+			.newBuilder(URI.create(proxyBase + "/mcp?url=" + URLEncoder.encode(targetUrl, StandardCharsets.UTF_8)))
+			.timeout(BUDGET)
+			.header("Content-Type", "application/json")
+			.header("Accept", "application/json, text/event-stream")
+			.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(init)))
+			.build();
+		HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+
+		// then: 200 and the response must contain capabilities.tasks
+		assertThat(response.statusCode()).as("initialize HTTP status").isEqualTo(200);
+		JsonNode initResponse = MAPPER.readTree(response.body());
+		JsonNode capabilities = initResponse.path("result").path("capabilities");
+		assertThat(capabilities.isObject()).as("capabilities must be an object").isTrue();
+		assertThat(capabilities.has("tasks")).as("capabilities must contain injected tasks").isTrue();
+		JsonNode tasks = capabilities.get("tasks");
+		assertThat(tasks.isObject()).as("tasks must be an object").isTrue();
+		assertThat(tasks.has("list")).as("tasks must contain list").isTrue();
+		assertThat(tasks.has("cancel")).as("tasks must contain cancel").isTrue();
+		assertThat(tasks.path("requests").path("tools").path("call").isObject())
+			.as("tasks.requests.tools.call must be an object")
+			.isTrue();
+	}
+
 	// ---------------------------------------------------------------------
 	// helpers
 	// ---------------------------------------------------------------------

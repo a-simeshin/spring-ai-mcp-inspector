@@ -1972,4 +1972,109 @@ class ProxyHandlerTests {
 
 	}
 
+	@Nested
+	@DisplayName("Initialize capability injection")
+	class InitializeCapabilityInjection {
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() with an initialize request injects capabilities.tasks when the upstream does not advertise it")
+		void postMcp_initializeRequest_injectsTasksCapability() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final JsonNode response = ProxyHandlerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"logging\":{}}}}");
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse serverResponse = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then
+			assertThat(serverResponse).isNotNull();
+			assertThat(serverResponse.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = entityJson(serverResponse);
+			final JsonNode tasks = responseBody.path("result").path("capabilities").path("tasks");
+			assertThat(tasks.isObject()).as("capabilities.tasks must be injected").isTrue();
+			assertThat(tasks.has("list")).as("tasks must contain list").isTrue();
+			assertThat(tasks.has("cancel")).as("tasks must contain cancel").isTrue();
+			assertThat(tasks.path("requests").path("tools").path("call").isObject())
+				.as("tasks.requests.tools.call must be an object")
+				.isTrue();
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with an initialize request does not overwrite capabilities.tasks when the upstream already advertises it")
+		void postMcp_initializeRequest_whenTasksAlreadyPresent_doesNotOverwrite() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final JsonNode response = ProxyHandlerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":{\"tasks\":{\"custom\":true}}}}");
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse serverResponse = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then
+			assertThat(serverResponse).isNotNull();
+			assertThat(serverResponse.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = entityJson(serverResponse);
+			assertThat(responseBody.path("result").path("capabilities").path("tasks").path("custom").asBoolean())
+				.as("upstream tasks must be preserved")
+				.isTrue();
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with an initialize request passes through malformed responses unchanged")
+		void postMcp_initializeRequest_whenMalformedResponse_passesThroughUnchanged() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final JsonNode response = ProxyHandlerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"Internal error\"}}");
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse serverResponse = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then - no injection happens, no crash
+			assertThat(serverResponse).isNotNull();
+			assertThat(serverResponse.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = entityJson(serverResponse);
+			assertThat(responseBody.has("error")).as("error response must pass through").isTrue();
+			assertThat(responseBody.path("error").path("code").asInt()).isEqualTo(-32603);
+		}
+
+	}
+
 }
