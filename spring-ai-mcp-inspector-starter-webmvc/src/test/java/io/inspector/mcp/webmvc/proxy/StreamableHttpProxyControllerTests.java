@@ -115,7 +115,7 @@ class StreamableHttpProxyControllerTests {
 	}
 
 	@Nested
-	@DisplayName("POST /mcp - new session")
+	@DisplayName("POST /mcp — new session")
 	class PostNewSession {
 
 		@Test
@@ -123,7 +123,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() without a session id and without url resolves to loopback and calls the transport factory")
 		void postMcp_withoutSessionAndUrl_resolvesToLoopbackAndOpensSession() throws Exception {
-			// given - null url is resolved to http://127.0.0.1:8080/mcp by
+			// given — null url is resolved to http://127.0.0.1:8080/mcp by
 			// ProxyTargetResolver;
 			// the factory is stubbed to return a transport so the session opens cleanly
 			final McpClientTransport target = mock(McpClientTransport.class);
@@ -139,12 +139,12 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
 
-			// when - no url: ProxyTargetResolver resolves blank to
+			// when — no url: ProxyTargetResolver resolves blank to
 			// http://127.0.0.1:8080/mcp
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
 					null, body);
 
-			// then - NOT 400; the factory is called with the loopback URI and a session
+			// then — NOT 400; the factory is called with the loopback URI and a session
 			// is
 			// opened
 			assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.BAD_REQUEST);
@@ -168,7 +168,7 @@ class StreamableHttpProxyControllerTests {
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
 					"http://target/mcp", body);
 
-			// then - non-2xx with the machine-readable error contract; stack details
+			// then — non-2xx with the machine-readable error contract; stack details
 			// stay out of the body
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
 			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(response.getBody())
@@ -259,7 +259,7 @@ class StreamableHttpProxyControllerTests {
 	}
 
 	@Nested
-	@DisplayName("POST /mcp - existing session")
+	@DisplayName("POST /mcp — existing session")
 	class PostExistingSession {
 
 		@Test
@@ -328,7 +328,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() request returns a structured 504 MCP_CONNECT_FAILED payload when no matching response arrives in time")
 		void postMcp_existingSessionRequest_timesOutReturns504() throws Exception {
-			// given - no response ever emitted on the sink
+			// given — no response ever emitted on the sink
 			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
@@ -338,7 +338,7 @@ class StreamableHttpProxyControllerTests {
 			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp("s1", null,
 					body);
 
-			// then - the timeout is surfaced as a machine-readable reason=timeout
+			// then — the timeout is surfaced as a machine-readable reason=timeout
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
 			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
 				.path("error");
@@ -352,7 +352,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("postMcp() request ignores non-matching frames (wrong id, null id, non-object) and returns the matching one")
 		void postMcp_existingSessionRequest_skipsNonMatchingFrames() throws Exception {
-			// given - the replay sink already holds noise frames before the real answer
+			// given — the replay sink already holds noise frames before the real answer
 			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 			session.targetToBrowser()
@@ -595,7 +595,7 @@ class StreamableHttpProxyControllerTests {
 	}
 
 	@Nested
-	@DisplayName("openSession() - inbound header forwarding")
+	@DisplayName("openSession() — inbound header forwarding")
 	class HeaderForwarding {
 
 		@Test
@@ -603,7 +603,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("openSession() with no request attributes uses the single-arg transport factory overload")
 		void openSession_withoutRequestAttributes_usesSingleArgOverload() throws Exception {
-			// given - no RequestContextHolder bound (tearDown clears it)
+			// given — no RequestContextHolder bound (tearDown clears it)
 			final McpClientTransport target = mock(McpClientTransport.class);
 			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
 				.willReturn(target);
@@ -652,7 +652,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("openSession() with request attributes but no relevant headers falls back to the single-arg overload")
 		void openSession_withRequestButNoHeaders_usesSingleArgOverload() throws Exception {
-			// given - a bound request that carries neither Authorization nor the
+			// given — a bound request that carries neither Authorization nor the
 			// custom-header list
 			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
@@ -701,7 +701,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("openSession() skips blank and absent custom header names from the x-custom-auth-headers list")
 		void openSession_skipsBlankAndAbsentCustomHeaderNames() throws Exception {
-			// given - empty token, a present header and a named-but-absent header
+			// given — empty token, a present header and a named-but-absent header
 			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
 			request.addHeader("x-custom-auth-headers", "X-Present, , X-Missing");
 			request.addHeader("X-Present", "yes");
@@ -715,7 +715,7 @@ class StreamableHttpProxyControllerTests {
 			// when
 			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", body);
 
-			// then - only the present header survives; null authorization is forwarded
+			// then — only the present header survives; null authorization is forwarded
 			verify(StreamableHttpProxyControllerTests.this.transportFactory)
 				.openStreamable(eq(URI.create("http://target/mcp")), eq(null), eq(Map.of("X-Present", "yes")));
 		}
@@ -731,7 +731,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() new-session request that times out tears down the orphaned session and returns a structured 504")
 		void postMcp_newSessionRequestTimesOut_closesSessionAndReturns504() throws Exception {
-			// given - a short request timeout so the await fails fast, and a transport
+			// given — a short request timeout so the await fails fast, and a transport
 			// that
 			// builds but whose proxy never emits a matching response
 			final McpInspectorProperties props = new McpInspectorProperties();
@@ -765,7 +765,7 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("postMcp() new-session request whose upstream dies with ConnectException fails fast with a structured 502 connection_refused")
 		void postMcp_newSessionUpstreamRefused_failsFastWithStructured502() throws Exception {
-			// given - the session opens, but the upstream transport errors immediately
+			// given — the session opens, but the upstream transport errors immediately
 			// (emulated connect refusal on the first send), releasing the awaiter
 			final McpClientTransport target = mock(McpClientTransport.class);
 			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
@@ -782,7 +782,7 @@ class StreamableHttpProxyControllerTests {
 			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
 					"http://target/mcp", body);
 
-			// then - the refusal is classified, not masked as a timeout
+			// then — the refusal is classified, not masked as a timeout
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
 			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
 				.path("error");
@@ -1013,16 +1013,116 @@ class StreamableHttpProxyControllerTests {
 			verify(StreamableHttpProxyControllerTests.this.registry).get("s1");
 		}
 
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/list is intercepted locally when a TaskService is available, returns a list of task handles")
+		void tasksList_interceptedLocally_returnsTaskList() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tasks/list\"}");
+			final TaskHandle handle = new TaskHandle("t-1", "working", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000);
+			given(this.taskService.listTasks()).willReturn(java.util.List.of(handle));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("result").get("tasks")).isNotNull();
+			assertThat(responseBody.get("result").get("tasks").isArray()).isTrue();
+			assertThat(responseBody.get("result").get("tasks").get(0).get("taskId").asText()).isEqualTo("t-1");
+			verify(this.taskService).listTasks();
+		}
+
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.MINOR)
+		@Description("tasks/list returns an empty array when no tasks are tracked")
+		void tasksList_whenNoTasks_returnsEmptyArray() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tasks/list\"}");
+			given(this.taskService.listTasks()).willReturn(java.util.List.of());
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("result").get("tasks")).isNotNull();
+			assertThat(responseBody.get("result").get("tasks").isArray()).isTrue();
+			assertThat(responseBody.get("result").get("tasks")).isEmpty();
+		}
+
+		@Test
+		@Story("task method on new session")
+		@Severity(SeverityLevel.MINOR)
+		@Description("a task method intercepted on the first POST includes the session-id header in the response")
+		void tasksGet_onNewSession_includesSessionIdHeader() throws Exception {
+			// given: a new session request (no session id) that opens a session and
+			// relays
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}");
+			final TaskHandle handle = new TaskHandle("t-1", "working", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000);
+			given(this.taskService.getTask("t-1")).willReturn(handle);
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				return Mono.empty();
+			});
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
+
+			// then - session-id header is present even though the task was handled
+			// locally
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(response.getHeaders().getFirst(ProxyConstants.MCP_SESSION_ID_HEADER))
+				.as("session-id header must be present on first POST task response")
+				.isNotBlank();
+		}
+
 	}
 
 	@Nested
 	@DisplayName("Initialize capability injection")
 	class InitializeCapabilityInjection {
 
+		private TaskService taskService;
+
+		private StreamableHttpProxyController controllerWithTasks;
+
+		@BeforeEach
+		void setUpCapabilityInjection() {
+			this.taskService = mock(TaskService.class);
+			this.controllerWithTasks = new StreamableHttpProxyController(
+					StreamableHttpProxyControllerTests.this.registry,
+					StreamableHttpProxyControllerTests.this.transportFactory,
+					StreamableHttpProxyControllerTests.this.mcpProxy,
+					StreamableHttpProxyControllerTests.this.objectMapper, null, null,
+					new org.springframework.beans.factory.ObjectProvider<TaskService>() {
+						@Override
+						public TaskService getObject() {
+							return InitializeCapabilityInjection.this.taskService;
+						}
+					});
+		}
+
 		@Test
 		@Story("Initialize capability injection")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("postMcp() with an initialize request injects capabilities.tasks when the upstream does not advertise it")
+		@Description("postMcp() with an initialize request injects capabilities.tasks when a TaskService is available and the upstream does not advertise it")
 		void postMcp_initializeRequest_injectsTasksCapability() throws Exception {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
@@ -1039,8 +1139,7 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
 
 			// when
-			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
-					"http://target/mcp", body);
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
 
 			// then
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1085,6 +1184,38 @@ class StreamableHttpProxyControllerTests {
 			assertThat(responseBody.path("result").path("capabilities").path("tasks").path("custom").asBoolean())
 				.as("upstream tasks must be preserved")
 				.isTrue();
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with an initialize request does not inject tasks when no TaskService bean is available")
+		void postMcp_initializeRequest_withoutTaskService_doesNotInjectTasks() throws Exception {
+			// given: default controller has no TaskService
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode response = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"logging\":{}}}}");
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when: using the default controller without TaskService
+			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", body);
+
+			// then: no tasks capability is injected
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = StreamableHttpProxyControllerTests.this.objectMapper
+				.valueToTree(entity.getBody());
+			assertThat(responseBody.path("result").path("capabilities").has("tasks"))
+				.as("tasks must not be injected without a TaskService")
+				.isFalse();
 		}
 
 		@Test

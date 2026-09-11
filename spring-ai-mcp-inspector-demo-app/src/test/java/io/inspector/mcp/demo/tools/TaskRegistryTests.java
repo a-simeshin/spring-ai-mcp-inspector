@@ -65,7 +65,7 @@ class TaskRegistryTests {
 	}
 
 	@Test
-	void completeTaskTransitionsToSuccessWithResult() {
+	void completeTaskTransitionsToCompletedWithResult() {
 		// given
 		final Entry entry = registry.createTask(Duration.ofMinutes(1), 2, "demo://task/status");
 		final Object result = "report content";
@@ -75,7 +75,7 @@ class TaskRegistryTests {
 
 		// then
 		Assertions.assertThat(transitioned).isTrue();
-		Assertions.assertThat(entry.status.get()).isEqualTo("success");
+		Assertions.assertThat(entry.status.get()).isEqualTo("completed");
 		Assertions.assertThat(entry.result.get()).isEqualTo("report content");
 		Assertions.assertThat(entry.error.get()).isNull();
 	}
@@ -129,7 +129,7 @@ class TaskRegistryTests {
 		final Entry entry = registry.createTask(Duration.ofMinutes(1), 2, "demo://task/status");
 		registry.completeTask(entry.taskId, "done");
 
-		// when: attempting to transition from 'success'
+		// when: attempting to transition from 'completed'
 		final boolean reComplete = registry.completeTask(entry.taskId, "again");
 		final boolean reFail = registry.failTask(entry.taskId, "again");
 		final boolean reCancel = registry.cancelTaskLegacy(entry.taskId);
@@ -138,7 +138,7 @@ class TaskRegistryTests {
 		Assertions.assertThat(reComplete).isFalse();
 		Assertions.assertThat(reFail).isFalse();
 		Assertions.assertThat(reCancel).isFalse();
-		Assertions.assertThat(entry.status.get()).isEqualTo("success");
+		Assertions.assertThat(entry.status.get()).isEqualTo("completed");
 	}
 
 	@Test
