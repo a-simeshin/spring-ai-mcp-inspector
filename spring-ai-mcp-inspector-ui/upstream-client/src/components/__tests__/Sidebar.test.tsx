@@ -5,6 +5,8 @@ import Sidebar from "../Sidebar";
 import { DEFAULT_INSPECTOR_CONFIG } from "@/lib/constants";
 import { InspectorConfig } from "@/lib/configurationTypes";
 import { TooltipProvider } from "@/components/ui/tooltip";
+// [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+import type { SavedConnection } from "@/lib/types/savedConnection";
 
 // Mock theme hook
 jest.mock("../../lib/hooks/useTheme", () => ({
@@ -63,6 +65,12 @@ describe("Sidebar", () => {
     setConfig: jest.fn(),
     connectionType: "proxy" as const,
     setConnectionType: jest.fn(),
+    // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+    savedConnections: [],
+    activeConnectionId: undefined,
+    onSaveConnection: jest.fn() as (name: string) => SavedConnection,
+    onDeleteConnection: jest.fn(),
+    onSelectConnection: jest.fn(),
   };
 
   const renderSidebar = (props = {}) => {

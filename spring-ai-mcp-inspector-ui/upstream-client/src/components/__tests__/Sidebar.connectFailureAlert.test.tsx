@@ -6,6 +6,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { DEFAULT_INSPECTOR_CONFIG } from "@/lib/constants";
 import type { ConnectFailure } from "@/lib/connectErrors";
 import { LoggingLevel } from "@modelcontextprotocol/sdk/types.js";
+// [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+import type { SavedConnection } from "@/lib/types/savedConnection";
 
 jest.mock("@/lib/hooks/useToast", () => ({
   useToast: () => ({ toast: jest.fn() }),
@@ -57,6 +59,12 @@ const baseProps = {
   connectionType: "proxy" as const,
   setConnectionType: jest.fn(),
   serverImplementation: null,
+  // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+  savedConnections: [],
+  activeConnectionId: undefined,
+  onSaveConnection: jest.fn() as (name: string) => SavedConnection,
+  onDeleteConnection: jest.fn(),
+  onSelectConnection: jest.fn(),
 };
 
 describe("Sidebar connect-failure alert", () => {
