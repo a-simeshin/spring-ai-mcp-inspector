@@ -284,9 +284,9 @@ describe("Sidebar saved connections UI", () => {
   describe("Restored secrets warning", () => {
     // [spring-ai-mcp-inspector PATCH] After restoring a saved connection whose
     // header/env values were stripped to empty strings, the warning must still
-    // appear: the presence of an Authorization header name or any env key is
-    // the trigger, not the value content. Regression test for the review
-    // finding that the warning disappeared after restore (Sidebar.tsx:475).
+    // appear: the presence of ANY enabled header name or any env key is the
+    // trigger, not the value content. Regression test for the review finding
+    // that the warning disappeared after restore (Sidebar.tsx:477).
     it("shows warning when restored entry has Authorization header name with empty value", () => {
       renderSidebar({
         customHeaders: [
@@ -327,7 +327,7 @@ describe("Sidebar saved connections UI", () => {
       ).toBeInTheDocument();
     });
 
-    it("does not show warning when no Authorization header and no env keys", () => {
+    it("shows warning when any enabled header with non-empty name is present, even without Authorization or env keys", () => {
       renderSidebar({
         customHeaders: [
           { name: "X-Custom", value: "some-value", enabled: true },
@@ -335,10 +335,10 @@ describe("Sidebar saved connections UI", () => {
         env: {},
       });
       expect(
-        screen.queryByText(
+        screen.getByText(
           "Header and environment variable values are not saved, only their names; re-enter them after restoring.",
         ),
-      ).not.toBeInTheDocument();
+      ).toBeInTheDocument();
     });
   });
 

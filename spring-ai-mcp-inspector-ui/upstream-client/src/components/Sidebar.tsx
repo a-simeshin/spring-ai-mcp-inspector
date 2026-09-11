@@ -472,12 +472,13 @@ const Sidebar = ({
                 {/* [spring-ai-mcp-inspector PATCH] Warn that header and env
                     values are not persisted, only their names. Combined into
                     one <p>; text explains what IS stored vs what gets lost.
-                    Check name/key presence, not value: after restore, values
-                    are stripped empty and the warning must still show. */}
+                    Check any enabled header name or env key presence, not
+                    value: after restore, values are stripped empty and the
+                    warning must still show. */}
                 {(customHeaders.some(
                   (h) =>
                     h.enabled &&
-                    h.name.toLowerCase() === "authorization",
+                    h.name.trim() !== "",
                 ) ||
                   (env && Object.keys(env).length > 0)) && (
                   <p className="text-xs text-amber-600 dark:text-amber-400 px-1">
