@@ -241,6 +241,52 @@ describe("TasksTab behavior tests", () => {
       jest.advanceTimersByTime(2000); // total 3000
       expect(getTask).toHaveBeenCalledTimes(4); // t1@1000, t1@2000, t1@3000, t2@3000
     });
+
+    it("uses the latest getTask callback when parent re-renders with same task IDs", () => {
+      // Regression: effect deps are [activeTaskIdString] only, so the interval
+      // must read getTask/setSelectedTask through refs at call time rather
+      // than capturing them at effect setup. Otherwise a fresh callback from
+      // a parent re-render is never used and the poll goes stale.
+      const firstGetTask = jest.fn().mockResolvedValue(
+        makeTask({ taskId: "t1", status: "working" }),
+      );
+      const secondGetTask = jest.fn().mockResolvedValue(
+        makeTask({ taskId: "t1", status: "working" }),
+      );
+      const tasks = [
+        makeTask({ taskId: "t1", status: "working", pollInterval: 1000 }),
+      ];
+
+      const { rerender } = render(
+        <TasksTab
+          {...defaultProps}
+          tasks={tasks}
+          getTask={firstGetTask}
+        />,
+      );
+
+      jest.advanceTimersByTime(1000);
+      expect(firstGetTask).toHaveBeenCalledTimes(1);
+      expect(secondGetTask).not.toHaveBeenCalled();
+
+      // Parent re-renders: fresh tasks array (same IDs), fresh getTask
+      // callback identity. Active ID string is unchanged, so the effect
+      // does NOT re-run and the existing interval survives.
+      rerender(
+        <TasksTab
+          {...defaultProps}
+          tasks={[makeTask({ taskId: "t1", status: "working", pollInterval: 1000 })]}
+          getTask={secondGetTask}
+        />,
+      );
+
+      jest.advanceTimersByTime(1000);
+      // The still-running interval must call the NEW callback via the ref,
+      // not the stale one captured when the effect first ran.
+      expect(secondGetTask).toHaveBeenCalledTimes(1);
+      expect(secondGetTask).toHaveBeenCalledWith("t1");
+      expect(firstGetTask).toHaveBeenCalledTimes(1); // unchanged
+    });
   });
 
   describe("terminal statuses", () => {

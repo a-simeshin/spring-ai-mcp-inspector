@@ -198,8 +198,6 @@ const TasksTab = ({
     .join(",");
   useEffect(() => {
     const intervals = taskPollIntervalsRef.current;
-    const getTaskFn = getTaskRef.current;
-    const setSelectedTaskFn = setSelectedTaskRef.current;
     const activeIds = activeTaskIdString
       ? new Set(activeTaskIdString.split(","))
       : new Set<string>();
@@ -221,10 +219,12 @@ const TasksTab = ({
         task.pollInterval ?? DEFAULT_TASK_POLL_INTERVAL_MS;
       const intervalId = setInterval(async () => {
         try {
-          const updated = await getTaskFn(task.taskId);
+          // Read refs at call time so we always use the latest callback,
+          // not the one captured when the effect ran.
+          const updated = await getTaskRef.current(task.taskId);
           // Update selectedTask if this is the currently selected task
           if (selectedTaskRef.current?.taskId === task.taskId) {
-            setSelectedTaskFn(updated);
+            setSelectedTaskRef.current(updated);
           }
         } catch (e) {
           // Ignore polling errors for individual tasks
