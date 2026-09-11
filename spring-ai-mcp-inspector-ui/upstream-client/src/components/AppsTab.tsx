@@ -17,7 +17,9 @@ import {
   CompatibilityCallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { getToolUiResourceUri } from "@modelcontextprotocol/ext-apps/app-bridge";
+// [spring-ai-mcp-inspector PATCH] ui-app-detection: shared non-throwing
+// guard for _meta.ui.resourceUri (issue #183).
+import { hasUIMetadata } from "@/utils/uiMetadataGuard";
 import AppRenderer from "./AppRenderer";
 import ListPane from "./ListPane";
 import IconDisplay, { WithIcons } from "./IconDisplay";
@@ -63,10 +65,10 @@ interface AppsTabProps {
   onNotification?: (notification: ServerNotification) => void;
 }
 
-// Type guard to check if a tool has UI metadata
-const hasUIMetadata = (tool: Tool): boolean => {
-  return !!getToolUiResourceUri(tool);
-};
+// [spring-ai-mcp-inspector PATCH] ui-app-detection: re-exported for
+// ToolsTab "Open as App" button (issue #183). Implementation lives in
+// src/utils/uiMetadataGuard.ts.
+export { hasUIMetadata };
 
 const cloneToolParams = (
   source: Record<string, unknown>,
