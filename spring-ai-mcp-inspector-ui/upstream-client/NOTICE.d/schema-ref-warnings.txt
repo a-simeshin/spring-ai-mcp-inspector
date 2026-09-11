@@ -7,10 +7,17 @@ File: src/utils/schemaUtils.ts
   and outputSchema of a Tool.
 - Both functions are read-only (no mutation of the stored schema).
 - collectUnresolvedRefs traverses all standard schema-bearing locations:
-  properties, items, anyOf, oneOf, allOf, $defs, not, if/then/else,
-  contains, prefixItems, additionalProperties, additionalItems,
-  propertyNames, dependentSchemas, patternProperties, contentSchema,
-  unevaluatedProperties, unevaluatedItems (no mutation of stored schema).
+  properties, items, anyOf, oneOf, allOf, $defs, definitions, dependencies,
+  not, if/then/else, contains, prefixItems, additionalProperties,
+  additionalItems, propertyNames, dependentSchemas, patternProperties,
+  contentSchema, unevaluatedProperties, unevaluatedItems
+  (no mutation of stored schema).
+- decodePointerToken applies RFC 6901 percent-decoding (~1 -> /, ~0 -> ~,
+  then URI percent-decoding).
+- canResolveRef excludes external URIs and plain-name ($anchor) refs from
+  the spring-ai#5888 detector (they are not local JSON Pointers).
+- resolveRef uses the same hasOwnProperty + RFC 6901 decoded segment lookup
+  as the detector (consistency fix).
 
 File: src/components/ToolsTab.tsx
 - Computes per-tool warnings via useMemo when the tools list changes.
@@ -20,4 +27,4 @@ File: src/components/ToolsTab.tsx
   unresolved refs is selected, listing each broken pointer path and linking
   to https://github.com/spring-projects/spring-ai/issues/5888.
 
-Covered by: src/utils/__tests__/schemaUtils.test.ts (22 unit tests)
+Covered by: src/utils/__tests__/schemaUtils.test.ts (37 unit tests)

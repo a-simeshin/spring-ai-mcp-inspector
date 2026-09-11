@@ -199,7 +199,7 @@ export function resolveRef(
     // Add current ref to visited set
     visitedRefs.add(ref);
 
-    const path = ref.substring(2).split("/");
+    const path = ref.substring(2).split("/").map(decodePointerToken);
     let current: unknown = rootSchema;
 
     for (const segment of path) {
@@ -207,7 +207,7 @@ export function resolveRef(
         current &&
         typeof current === "object" &&
         current !== null &&
-        segment in current
+        Object.prototype.hasOwnProperty.call(current, segment)
       ) {
         current = (current as Record<string, unknown>)[segment];
       } else {
@@ -308,7 +308,7 @@ export function normalizeUnionType(schema: JsonSchemaType): JsonSchemaType {
  * Order matters: ~1 -> / first, then ~0 -> ~.
  */
 function decodePointerToken(token: string): string {
-  return token.replace(/~1/g, "/").replace(/~0/g, "~");
+  return decodeURIComponent(token.replace(/~1/g, "/").replace(/~0/g, "~"));
 }
 
 /**
@@ -319,7 +319,10 @@ function decodePointerToken(token: string): string {
 function canResolveRef(ref: string, rootSchema: JsonSchemaType): boolean {
   if (ref === "#") return true; // RFC 6901: empty fragment means the root document
 
-  if (!ref.startsWith("#/")) return false;
+  // External URIs and plain-name ($anchor) refs are not local JSON Pointers
+  // and are NOT the spring-ai#5888 bug. Exclude them from this detector:
+  // they are not "unresolvable within the schema document".
+  if (!ref.startsWith("#/")) return true;
 
   const path = ref.substring(2).split("/").map(decodePointerToken);
   let current: unknown = rootSchema;

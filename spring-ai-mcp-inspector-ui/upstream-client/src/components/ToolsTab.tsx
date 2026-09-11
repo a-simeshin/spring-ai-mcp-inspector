@@ -256,6 +256,7 @@ const ToolsTab = ({
     return errors;
   };
 
+  // [spring-ai-mcp-inspector PATCH] $ref schema warnings (Spring AI #5888 detector)
   // Compute warnings for each tool: detect unresolvable $ref pointers in schemas
   const toolWarnings = useMemo(() => {
     const map = new Map<string, UnresolvedRefInfo[]>();
@@ -346,6 +347,7 @@ const ToolsTab = ({
               <div className="flex-shrink-0 mt-1">
                 <IconDisplay icons={(tool as ExtendedTool).icons} size="sm" />
               </div>
+              {/* [spring-ai-mcp-inspector PATCH] $ref schema warnings (Spring AI #5888 detector) */}
               {toolWarnings.has(tool.name) && (
                 <AlertTriangle
                   className="w-4 h-4 text-amber-500 flex-shrink-0 mt-1"
@@ -420,6 +422,7 @@ const ToolsTab = ({
                   }
                   declared={hasAnnotations(selectedTool)}
                 />
+                {/* [spring-ai-mcp-inspector PATCH] $ref schema warnings (Spring AI #5888 detector) */}
                 {selectedTool && toolWarnings.has(selectedTool.name) && (() => {
                   const warnings = toolWarnings.get(selectedTool.name)!;
                   return (

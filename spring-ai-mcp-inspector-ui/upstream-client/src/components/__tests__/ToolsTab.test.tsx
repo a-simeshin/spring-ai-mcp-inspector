@@ -1357,5 +1357,4 @@ describe("Responsive layout", () => {
       );
     });
   });
->>>>>>> 65a2da3 (fix(ui): RFC 6901 decode and full schema traversal for $ref detector)
 });
