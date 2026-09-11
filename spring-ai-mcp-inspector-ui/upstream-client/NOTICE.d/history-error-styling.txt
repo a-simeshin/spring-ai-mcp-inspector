@@ -1,0 +1,16 @@
+history-error-styling: failed tools/call rows in History carry persistent error marker
+
+Upstream: requestHistory entries are { request, response? } with no failure state.
+The History panel renders all rows identically, so failed calls (MCP isError=true
+or transport errors) are indistinguishable from successful ones without expanding
+each entry (#195).
+
+Change: pushHistory() in useConnection.ts now computes an isError flag when a
+history entry is recorded (true when the response has an `error` key or
+`isError: true`). HistoryAndNotifications.tsx applies `border-l-4 border-red-500`
+on the row and `text-red-600 dark:text-red-400` on the method text for failed
+entries. Successful entries keep the neutral style. Row height and spacing are
+unchanged (color + border only, no new elements).
+
+Tests: HistoryAndNotifications.test.tsx covers failed-isError entry (red style),
+transport-error entry (red style), and successful entry (neutral style).
