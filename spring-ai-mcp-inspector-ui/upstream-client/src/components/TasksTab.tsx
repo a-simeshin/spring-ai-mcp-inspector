@@ -21,17 +21,18 @@ const MCP_TASKS_DOCS_URL =
 const LIST_POLL_INTERVAL_MS = 2000;
 const DEFAULT_TASK_POLL_INTERVAL_MS = 2000;
 const TTL_COUNTDOWN_INTERVAL_MS = 1000;
-const TERMINAL_STATUSES: Task["status"][] = [
+const TERMINAL_STATUSES: readonly (Task["status"] | "success")[] = [
   "completed",
+  "success",
   "failed",
   "cancelled",
-];
+] as const;
 
 const TaskStatusIcon = ({
   status,
   className,
 }: {
-  status: Task["status"];
+  status: Task["status"] | "success";
   className?: string;
 }) => {
   switch (status) {
@@ -46,6 +47,7 @@ const TaskStatusIcon = ({
         <AlertTriangle className={cn("h-4 w-4 text-yellow-500", className)} />
       );
     case "completed":
+    case "success":
       return (
         <CheckCircle2 className={cn("h-4 w-4 text-green-500", className)} />
       );
@@ -83,6 +85,7 @@ const TasksTab = ({
   setSelectedTask,
   error,
   nextCursor,
+  activeTab,
 }: {
   tasks: Task[];
   listTasks: () => void;
@@ -93,6 +96,7 @@ const TasksTab = ({
   setSelectedTask: (task: Task | null) => void;
   error: string | null;
   nextCursor?: string;
+  activeTab: string;
 }) => {
   const [isCancelling, setIsCancelling] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
@@ -112,13 +116,24 @@ const TasksTab = ({
     selectedTaskRef.current = selectedTask;
   }, [selectedTask]);
 
-  // Auto-poll the task list every ~2s
+  // Stable refs for callbacks to avoid effect re-run on every render
+  const getTaskRef = useRef(getTask);
   useEffect(() => {
+    getTaskRef.current = getTask;
+  }, [getTask]);
+  const setSelectedTaskRef = useRef(setSelectedTask);
+  useEffect(() => {
+    setSelectedTaskRef.current = setSelectedTask;
+  }, [setSelectedTask]);
+
+  // Auto-poll the task list every ~2s when the tab is active
+  useEffect(() => {
+    if (activeTab !== "tasks") return;
     const interval = setInterval(() => {
       listTasks();
     }, LIST_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [listTasks]);
+  }, [listTasks, activeTab]);
 
   // TTL countdown update every second
   useEffect(() => {
@@ -173,18 +188,25 @@ const TasksTab = ({
     };
   }, [tasks]);
 
-  // Per-task polling: for each 'working' task, poll tasks/get at its pollInterval
+  // Per-task polling: for each non-terminal task, poll tasks/get at its pollInterval
+  // Keyed on active task IDs (string join) to avoid re-creating intervals every 2s
+  // when the tasks array reference changes but the set of active IDs does not.
+  const activeTaskIdString = tasks
+    .filter((t) => !TERMINAL_STATUSES.includes(t.status))
+    .map((t) => t.taskId)
+    .sort()
+    .join(",");
   useEffect(() => {
     const intervals = taskPollIntervalsRef.current;
-    const activeTaskIds = new Set(
-      tasks
-        .filter((t) => !TERMINAL_STATUSES.includes(t.status))
-        .map((t) => t.taskId),
-    );
+    const getTaskFn = getTaskRef.current;
+    const setSelectedTaskFn = setSelectedTaskRef.current;
+    const activeIds = activeTaskIdString
+      ? new Set(activeTaskIdString.split(","))
+      : new Set<string>();
 
     // Stop polling for tasks that are no longer active or no longer in the list
     for (const [taskId] of intervals) {
-      if (!activeTaskIds.has(taskId)) {
+      if (!activeIds.has(taskId)) {
         clearInterval(intervals.get(taskId));
         intervals.delete(taskId);
       }
@@ -199,10 +221,10 @@ const TasksTab = ({
         task.pollInterval ?? DEFAULT_TASK_POLL_INTERVAL_MS;
       const intervalId = setInterval(async () => {
         try {
-          const updated = await getTask(task.taskId);
+          const updated = await getTaskFn(task.taskId);
           // Update selectedTask if this is the currently selected task
           if (selectedTaskRef.current?.taskId === task.taskId) {
-            setSelectedTask(updated);
+            setSelectedTaskFn(updated);
           }
         } catch (e) {
           // Ignore polling errors for individual tasks
@@ -216,12 +238,16 @@ const TasksTab = ({
     }
 
     return () => {
+      // Only clean up during unmount: intervals for surviving active tasks
+      // are reused. The 'activeIds' deps guard re-creates intervals only when
+      // the active set changes.
       for (const [, intervalId] of intervals) {
         clearInterval(intervalId);
       }
       intervals.clear();
     };
-  }, [tasks, getTask, setSelectedTask]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTaskIdString]);
 
   const displayedTask = selectedTask
     ? tasks.find((t) => t.taskId === selectedTask.taskId) || selectedTask
@@ -321,7 +347,8 @@ const TasksTab = ({
                                 "inline-block px-1 py-0.5 rounded text-[10px] font-medium uppercase",
                                 task.status === "working" &&
                                   "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
-                                task.status === "completed" &&
+                                (task.status === "completed" ||
+                                  (task.status as string) === "success") &&
                                   "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300",
                                 task.status === "failed" &&
                                   "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
@@ -437,7 +464,8 @@ const TasksTab = ({
                       className={cn(
                         "font-semibold capitalize",
                         displayedTask.status === "working" && "text-blue-500",
-                        displayedTask.status === "completed" &&
+                        (displayedTask.status === "completed" ||
+                          (displayedTask.status as string) === "success") &&
                           "text-green-500",
                         displayedTask.status === "failed" && "text-red-500",
                         displayedTask.status === "cancelled" &&

@@ -1,9 +1,19 @@
 src/App.tsx: wire up getTask() callback for per-task polling and
 pass it to TasksTab. The TasksTab component now auto-polls the
-task list every 2s, polls each 'working' task via tasks/get at its
-own pollInterval, shows TTL countdown, status transition animations,
-and an empty state with a SEP-1686 spec link. Covered by existing
-622 test suite (TasksTab mocked in App tests; no console errors).
+task list every 2s when the tab is active, polls each 'working'
+task via tasks/get at its own pollInterval, shows TTL countdown,
+status transition animations, and an empty state with a SEP-1686
+spec link. Mount is gated on serverCapabilities?.tasks so the
+component and its polls are never rendered against servers that
+do not advertise MCP Tasks support. Covered by 13 behavior tests
+in src/components/__tests__/TasksTab.test.tsx (fake timers for
+list poll, per-task poll, terminal-state stop, tab-inactive poll
+suppression, cancel interaction). Mutation check disproved the
+original claim of coverage from the 622 test suite: those tests
+mocked TasksTab and could not detect broken polling logic.
 src/components/TasksTab.tsx: full rewrite with auto-polling,
-per-task polling, TTL countdown, details drawer (keepAlive/ttl/
-pollInterval), status animations, and empty/selected states.
+per-task polling (stable callback refs + effect keyed on active
+task ID string, not array identity), TTL countdown, details
+drawer (keepAlive/ttl/pollInterval), status animations, and
+empty/selected states. TERMINAL_STATUSES includes 'success'
+(backend #196) alongside SDK 'completed'.

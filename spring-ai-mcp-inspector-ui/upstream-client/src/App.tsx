@@ -1754,26 +1754,29 @@ const App = () => {
                         readResource(uri);
                       }}
                     />
-                    <TasksTab
-                      tasks={tasks}
-                      listTasks={() => {
-                        clearError("tasks");
-                        listTasks();
-                      }}
-                      clearTasks={() => {
-                        setTasks([]);
-                        setNextTaskCursor(undefined);
-                      }}
-                      cancelTask={cancelTask}
-                      getTask={getTask}
-                      selectedTask={selectedTask}
-                      setSelectedTask={(task) => {
-                        clearError("tasks");
-                        setSelectedTask(task);
-                      }}
-                      error={errors.tasks}
-                      nextCursor={nextTaskCursor}
-                    />
+                    {!!serverCapabilities?.tasks && (
+                      <TasksTab
+                        activeTab={activeTab}
+                        tasks={tasks}
+                        listTasks={() => {
+                          clearError("tasks");
+                          listTasks();
+                        }}
+                        clearTasks={() => {
+                          setTasks([]);
+                          setNextTaskCursor(undefined);
+                        }}
+                        cancelTask={cancelTask}
+                        getTask={getTask}
+                        selectedTask={selectedTask}
+                        setSelectedTask={(task) => {
+                          clearError("tasks");
+                          setSelectedTask(task);
+                        }}
+                        error={errors.tasks}
+                        nextCursor={nextTaskCursor}
+                      />
+                    )}
                     <AppsTab
                       sandboxPath={`${getMCPProxyAddress(config)}/sandbox`}
                       tools={tools}
