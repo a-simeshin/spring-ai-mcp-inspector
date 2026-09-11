@@ -439,7 +439,10 @@ const App = () => {
     onNotification: (notification) => {
       setNotifications((prev) => [...prev, notification as ServerNotification]);
 
-      if (notification.method === "notifications/tasks/list_changed") {
+      if (
+        notification.method === "notifications/tasks/list_changed" &&
+        serverCapabilities?.tasks
+      ) {
         void listTasks();
       }
 
@@ -552,11 +555,11 @@ const App = () => {
   }, [serverCapabilities]);
 
   useEffect(() => {
-    if (mcpClient && activeTab === "tasks") {
+    if (mcpClient && activeTab === "tasks" && serverCapabilities?.tasks) {
       void listTasks();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mcpClient, activeTab]);
+  }, [mcpClient, activeTab, serverCapabilities?.tasks]);
 
   useEffect(() => {
     if (mcpClient && activeTab === "apps" && serverCapabilities?.tools) {
@@ -1743,6 +1746,7 @@ const App = () => {
                     />
                     <TasksTab
                       tasks={tasks}
+                      tasksSupported={!!serverCapabilities?.tasks}
                       listTasks={() => {
                         clearError("tasks");
                         listTasks();

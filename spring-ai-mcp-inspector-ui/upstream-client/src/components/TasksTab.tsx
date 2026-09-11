@@ -35,6 +35,7 @@ const TaskStatusIcon = ({ status }: { status: Task["status"] }) => {
 
 const TasksTab = ({
   tasks,
+  tasksSupported,
   listTasks,
   clearTasks,
   cancelTask,
@@ -44,6 +45,7 @@ const TasksTab = ({
   nextCursor,
 }: {
   tasks: Task[];
+  tasksSupported: boolean;
   listTasks: () => void;
   clearTasks: () => void;
   cancelTask: (taskId: string) => Promise<void>;
@@ -69,7 +71,17 @@ const TasksTab = ({
 
   return (
     <TabsContent value="tasks" className="flex-1 overflow-hidden p-0 m-0">
-      <div className="flex h-full overflow-hidden p-4 gap-4">
+      {!tasksSupported ? (
+        <div className="flex h-full items-center justify-center p-8">
+          <div className="text-center max-w-md">
+            <Clock className="mx-auto mb-4 h-12 w-12 opacity-20" />
+            <h3 className="text-lg font-medium mb-2">Tasks Not Available</h3>
+            <p className="text-muted-foreground">
+              Server does not advertise the tasks capability; long-running task tracking is unavailable.
+            </p>
+          </div>
+        </div>
+      ) : (<>
         <div className="w-1/3">
           <ListPane
             title="Tasks"
@@ -221,7 +233,7 @@ const TasksTab = ({
             </div>
           )}
         </div>
-      </div>
+      </>)}
     </TabsContent>
   );
 };
