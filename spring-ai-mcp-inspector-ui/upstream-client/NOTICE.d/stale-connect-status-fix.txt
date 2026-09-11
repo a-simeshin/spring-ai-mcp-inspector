@@ -1,0 +1,11 @@
+src/lib/hooks/useConnection.ts: clear server info on connect start,
+failure, and disconnect. Before this fix, a failed Connect attempt
+(e.g. invalid URL http://127.0.0.1:9999/mcp) showed a toast error
+but left serverImplementation and serverCapabilities untouched,
+so the sidebar still displayed "Connected" with the previous
+session's server name and version. Fix: clear serverImplementation
+at the start of connect() (stale state gone before the attempt),
+clear serverImplementation and serverCapabilities in both catch
+paths (inner transport-connect catch and outer catch), and clear
+both plus connectionError in disconnect(). Covered by regression
+tests in useConnection.test.tsx.

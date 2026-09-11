@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] Regression tests for stale Connected status fix (NOTICE.d/stale-connect-status-fix.txt).
 import { renderHook, act } from "@testing-library/react";
 import { useConnection } from "../useConnection";
 import { z } from "zod/v3";
@@ -145,6 +146,7 @@ jest.mock("../../auth", () => ({
   InspectorOAuthClientProvider: jest.fn().mockImplementation(() => ({
     tokens: jest.fn().mockResolvedValue({ access_token: "mock-token" }),
     redirectUrl: "http://localhost:3000/oauth/callback",
+    clear: jest.fn(),
   })),
   clearClientInformationFromSessionStorage: jest.fn(),
   saveClientInformationToSessionStorage: jest.fn(),
@@ -1865,6 +1867,72 @@ describe("useConnection", () => {
           message: "connection to the MCP server was refused",
         }),
       );
+    });
+
+    test("a failed connect after a successful one clears serverImplementation", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // Successful connect: serverImplementation is set
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("connected");
+      expect(result.current.serverImplementation).toEqual({
+        name: "test-server",
+        version: "1.0.0",
+      });
+
+      // Disconnect clears serverImplementation
+      await act(async () => {
+        await result.current.disconnect();
+      });
+
+      expect(result.current.connectionStatus).toBe("disconnected");
+      expect(result.current.serverImplementation).toBeNull();
+
+      // Failed connect: serverImplementation stays null (not stale)
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.serverImplementation).toBeNull();
+    });
+
+    test("a new connect attempt clears the previous error", async () => {
+      // First connect fails
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.connectionError).not.toBeNull();
+
+      // Second connect succeeds: error is cleared at start
+      mockClient.connect.mockResolvedValueOnce(undefined);
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("connected");
+      expect(result.current.connectionError).toBeNull();
     });
   });
 });
