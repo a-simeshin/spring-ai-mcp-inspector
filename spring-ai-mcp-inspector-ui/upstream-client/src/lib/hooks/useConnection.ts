@@ -459,8 +459,10 @@ export function useConnection({
   };
 
   const connect = async (_e?: unknown, retryCount: number = 0) => {
-    // Clear any previous failure so a new attempt starts fresh.
+    // [spring-ai-mcp-inspector PATCH] Clear previous server info so a failed
+    // reconnect does not show stale "Connected" from the previous session.
     setConnectionError(null);
+    setServerImplementation(null);
 
     const clientCapabilities = {
       capabilities: {
@@ -886,6 +888,8 @@ export function useConnection({
           // See NOTICE.d/connect-401-banner.txt.
           setConnectionError(connectionFailureFromError(error));
           setConnectionStatus("error");
+          setServerImplementation(null);
+          setServerCapabilities(null);
           return;
         }
         // [spring-ai-mcp-inspector PATCH] Surface connection failures in the
@@ -897,8 +901,12 @@ export function useConnection({
         // about. Before this patch the rethrow reached the outer catch, which
         // set the same "error" status; only the toast is dropped, since the
         // alert now carries the reason in place.
+        // [spring-ai-mcp-inspector PATCH] Also clear server info so a failed
+        // reconnect does not show stale "Connected" from the previous session.
         setConnectionError(connectionFailureFromError(error));
         setConnectionStatus("error");
+        setServerImplementation(null);
+        setServerCapabilities(null);
         return;
       }
       setServerCapabilities(capabilities ?? null);
@@ -1223,7 +1231,11 @@ export function useConnection({
         });
       }
       console.error(e);
+      // [spring-ai-mcp-inspector PATCH] Also clear server info so a failed
+      // reconnect does not show stale "Connected" from the previous session.
       setConnectionStatus("error");
+      setServerImplementation(null);
+      setServerCapabilities(null);
     }
   };
 
@@ -1266,8 +1278,12 @@ export function useConnection({
     setMcpClient(null);
     setClientTransport(null);
     setConnectionStatus("disconnected");
+    // [spring-ai-mcp-inspector PATCH] Clear error and server info on
+    // disconnect so stale "Connected" state does not persist across reconnects.
+    setConnectionError(null);
     setCompletionsSupported(false);
     setServerCapabilities(null);
+    setServerImplementation(null);
     setMcpSessionId(null);
     setMcpProtocolVersion(null);
   };
