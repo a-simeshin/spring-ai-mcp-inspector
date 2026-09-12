@@ -32,16 +32,13 @@ import java.util.List;
  * @param until include events on or before this instant (may be {@code null})
  * @param eventTypes include only events of these types (empty = all types, may be
  * {@code null})
- * @param clientName filter by client name in payload (may be {@code null})
- * @param direction filter by traffic direction in payload, e.g. {@code client->server} or
- * {@code server->client} (may be {@code null})
  * @param endpoint filter by payload endpoint value, e.g. {@code client-diagnostics} (may
  * be {@code null})
  * @param limit maximum number of events to return (default 500)
  * @author Artem Simeshin
  */
 public record TimelineQuery(String correlationId, String sessionId, Instant since, Instant until,
-		List<TimelineEventType> eventTypes, String clientName, String direction, String endpoint, int limit) {
+		List<TimelineEventType> eventTypes, String endpoint, int limit) {
 
 	/** Default limit when none is specified. */
 	public static final int DEFAULT_LIMIT = 500;
@@ -79,7 +76,7 @@ public record TimelineQuery(String correlationId, String sessionId, Instant sinc
 	 * @return a new query with just the correlation filter
 	 */
 	public static TimelineQuery byCorrelationId(final String correlationId) {
-		return new TimelineQuery(correlationId, null, null, null, null, null, null, null, DEFAULT_LIMIT);
+		return new TimelineQuery(correlationId, null, null, null, null, null, DEFAULT_LIMIT);
 	}
 
 	/**
@@ -87,7 +84,7 @@ public record TimelineQuery(String correlationId, String sessionId, Instant sinc
 	 * @return a new query (never {@code null})
 	 */
 	public static TimelineQuery all() {
-		return new TimelineQuery(null, null, null, null, null, null, null, null, DEFAULT_LIMIT);
+		return new TimelineQuery(null, null, null, null, null, null, DEFAULT_LIMIT);
 	}
 
 	/**
@@ -112,10 +109,6 @@ public record TimelineQuery(String correlationId, String sessionId, Instant sinc
 		private Instant until;
 
 		private List<TimelineEventType> eventTypes;
-
-		private String clientName;
-
-		private String direction;
 
 		private String endpoint;
 
@@ -149,16 +142,6 @@ public record TimelineQuery(String correlationId, String sessionId, Instant sinc
 			return this;
 		}
 
-		public Builder clientName(final String clientName) {
-			this.clientName = clientName;
-			return this;
-		}
-
-		public Builder direction(final String direction) {
-			this.direction = direction;
-			return this;
-		}
-
 		public Builder endpoint(final String endpoint) {
 			this.endpoint = endpoint;
 			return this;
@@ -183,7 +166,7 @@ public record TimelineQuery(String correlationId, String sessionId, Instant sinc
 
 		public TimelineQuery build() {
 			return new TimelineQuery(this.correlationId, this.sessionId, this.since, this.until, this.eventTypes,
-					this.clientName, this.direction, this.endpoint, this.limit);
+					this.endpoint, this.limit);
 		}
 
 	}

@@ -143,10 +143,10 @@ function isClientEvent(payload: Record<string, unknown> | null): boolean {
   return payload?.endpoint === "client";
 }
 
-// Badge colours for diagnostic types.
+// Badge colors for diagnostic types (aligned to SEVERITY_BADGE palette).
 const DIAGNOSTIC_BADGE: Record<string, string> = {
-  ORPHAN_HANDLER: "bg-red-700 text-white",
-  ORPHAN_CLIENT: "bg-amber-600 text-white",
+  ORPHAN_HANDLER: "bg-red-800 text-red-200",
+  ORPHAN_CLIENT: "bg-amber-800 text-amber-200",
   TRANSPORT_MISMATCH: "bg-orange-600 text-white",
   DUPLICATE_BINDING: "bg-purple-700 text-white",
 };
@@ -190,6 +190,14 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
     <div
       className={`border-l-2 pl-3 py-1.5 mb-1 rounded-r cursor-pointer hover:opacity-80 ${bgClass} ${colorClass}`}
       onClick={() => setExpanded(!expanded)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setExpanded(!expanded);
+        }
+      }}
     >
       <div className="flex items-center gap-2 text-xs">
         <span className="font-mono opacity-70 shrink-0 w-14">{formatTimestamp(event.timestamp)}</span>
@@ -202,7 +210,7 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
           </span>
         ) : null}
         {isClient ? (
-          <span className="opacity-60 shrink-0 font-mono text-[10px]">
+          <span className="opacity-60 shrink-0 font-mono text-[10px]" title="Direction relative to the inspected application">
             {String(payload.direction ?? "")}
           </span>
         ) : null}
@@ -301,8 +309,7 @@ const TimelineTab = () => {
     ),
   ].sort();
   // Direction options are always the two known values from the client traffic recorder.
-  const directionOptions = ["client->server", "server->client"];
-  const directions = directionOptions.filter((d) => d !== "");
+  const directions = ["client->server", "server->client"];
 
   // Filter by client name and direction on the client side.
   const isFilterActive = directionFilter !== "" || clientNameFilter !== "";
@@ -316,7 +323,7 @@ const TimelineTab = () => {
   return (
     <TabsContent value="timeline" className="h-96">
       <div className="bg-gray-900 text-gray-100 p-4 rounded-lg h-full font-mono text-sm overflow-auto flex flex-col">
-        <div className="flex items-center justify-between mb-2 shrink-0">
+        <div className="flex items-center justify-between mb-2 shrink-0 flex-wrap gap-2">
           <span className="text-xs opacity-50">
             {isFilterActive
               ? `${filteredEvents.length} of ${events.length} event${events.length !== 1 ? "s" : ""}`

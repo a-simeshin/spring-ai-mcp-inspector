@@ -266,89 +266,27 @@ class BoundedTimelineServiceTests {
 	}
 
 	@Test
-	@DisplayName("query filters by clientName in payload")
-	void queryByClientNameFilter() {
-		final ObjectNode payload1 = JsonNodeFactory.instance.objectNode();
-		payload1.put("clientName", "clientA");
-		final ObjectNode payload2 = JsonNodeFactory.instance.objectNode();
-		payload2.put("clientName", "clientB");
-		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), null, null,
-				TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), payload1));
-		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), null, null,
-				TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), payload2));
-		final List<TimelineEvent> result = this.service.query(TimelineQuery.builder().clientName("clientA").build());
-		assertThat(result).hasSize(1);
-		assertThat(result.get(0).payload().get("clientName").asText()).isEqualTo("clientA");
-	}
-
-	@Test
-	@DisplayName("query filters by direction in payload")
-	void queryByDirectionFilter() {
-		final ObjectNode payload1 = JsonNodeFactory.instance.objectNode();
-		payload1.put("direction", "client->server");
-		final ObjectNode payload2 = JsonNodeFactory.instance.objectNode();
-		payload2.put("direction", "server->client");
-		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), null, null,
-				TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), payload1));
-		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), null, null,
-				TimelineEventType.MCP_JSONRPC_RESPONSE, Instant.now(), payload2));
-		final List<TimelineEvent> result = this.service
-			.query(TimelineQuery.builder().direction("server->client").build());
-		assertThat(result).hasSize(1);
-		assertThat(result.get(0).payload().get("direction").asText()).isEqualTo("server->client");
-	}
-
-	@Test
-	@DisplayName("query with clientName filter returns empty when payload has no clientName field")
-	void queryByClientNameFilter_noClientNameInPayload() {
-		final ObjectNode payload = JsonNodeFactory.instance.objectNode();
-		payload.put("method", "tools/list");
-		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), null, null,
-				TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), payload));
-		final List<TimelineEvent> result = this.service.query(TimelineQuery.builder().clientName("clientA").build());
-		assertThat(result).isEmpty();
-	}
-
-	@Test
-	@DisplayName("query with direction filter returns empty when payload has no direction field")
-	void queryByDirectionFilter_noDirectionInPayload() {
-		final ObjectNode payload = JsonNodeFactory.instance.objectNode();
-		payload.put("method", "tools/list");
-		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), null, null,
-				TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), payload));
-		final List<TimelineEvent> result = this.service
-			.query(TimelineQuery.builder().direction("client->server").build());
-		assertThat(result).isEmpty();
-	}
-
-	@Test
-	@DisplayName("query with clientName filter matches when payload is null returns empty")
-	void queryByClientNameFilter_nullPayload() {
-		this.service.append(new TimelineEvent(UUID.randomUUID().toString(), null, null,
-				TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), null));
-		final List<TimelineEvent> result = this.service.query(TimelineQuery.builder().clientName("clientA").build());
-		assertThat(result).isEmpty();
-	}
-
-	@Test
-	@DisplayName("query with endpoint filter returns matching events across 501 events")
-	void queryByEndpointFilter_501Events() {
+	@DisplayName("query with endpoint filter finds diagnostics event older than the last 500")
+	void queryByEndpointFilter_diagnosticsOlderThanLast500() {
 		final ObjectNode diagPayload = JsonNodeFactory.instance.objectNode();
 		diagPayload.put("endpoint", "client-diagnostics");
 		final ObjectNode otherPayload = JsonNodeFactory.instance.objectNode();
 		otherPayload.put("endpoint", "client");
-		// Fill the service with 500 non-diagnostics events then 1 diagnostics event
+		// Use a service with enough capacity to hold all events (2000) so no
+		// eviction happens. Append diagnostics FIRST, then 500 non-diagnostics
+		// events; the diagnostics event is older than the last 500.
+		final BoundedTimelineService large = new BoundedTimelineService(2000);
+		large.append(new TimelineEvent("diag-1", UUID.randomUUID().toString(), null, TimelineEventType.APP_LOG,
+				Instant.now(), diagPayload));
 		for (int i = 0; i < 500; i++) {
-			this.service.append(new TimelineEvent("other-" + i, UUID.randomUUID().toString(), null,
+			large.append(new TimelineEvent("other-" + i, UUID.randomUUID().toString(), null,
 					TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), otherPayload));
 		}
-		final TimelineEvent diagEvent = new TimelineEvent("diag-1", UUID.randomUUID().toString(), null,
-				TimelineEventType.APP_LOG, Instant.now(), diagPayload);
-		this.service.append(diagEvent);
 		// Query with endpoint filter and default limit (500)
-		final List<TimelineEvent> result = this.service
+		final List<TimelineEvent> result = large
 			.query(TimelineQuery.builder().endpoint("client-diagnostics").limit(500).build());
-		// Must find the single diagnostics event (endpoint filter applied before limit)
+		// Must find the single diagnostics event: endpoint filter is applied
+		// before the limit, so events older than the last 500 are still found.
 		assertThat(result).hasSize(1);
 		assertThat(result.get(0).id()).isEqualTo("diag-1");
 	}

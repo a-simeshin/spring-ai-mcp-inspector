@@ -299,7 +299,7 @@ describe("TimelineTab", () => {
 
   it("highlights orphan/error client events", async () => {
     mockFetch([CLIENT_ORPHAN_EVENT]);
-    renderTab();
+    const { container } = renderTab();
 
     await waitFor(() =>
       expect(screen.getByText("1 event")).toBeInTheDocument(),
@@ -307,6 +307,13 @@ describe("TimelineTab", () => {
     // The orphan event renders without crashing.
     const dirLabels = screen.getAllByText("server->client");
     expect(dirLabels.length).toBeGreaterThanOrEqual(1);
+    // Orphan events get a red highlight: red border and red background.
+    // Find the row by querying all divs with border-l-2 class.
+    const rows = container.querySelectorAll("div[class*=border-l-]");
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    const row = rows[0];
+    expect(row.className).toContain("border-l-red-500");
+    expect(row.className).toContain("bg-red-950/30");
   });
 
   it("filters by direction when the dropdown is selected", async () => {
@@ -333,46 +340,6 @@ describe("TimelineTab", () => {
     // Both selects are always rendered, even with no direction/clientName data.
     expect(screen.getByLabelText("Filter by direction")).toBeInTheDocument();
     expect(screen.getByLabelText("Filter by client name")).toBeInTheDocument();
-  });
-
-  it("shows 'No events match the current filter' when filter is active on empty results", async () => {
-    mockFetch([CLIENT_REQUEST_EVENT, CLIENT_RESPONSE_EVENT]);
-    renderTab();
-
-    await waitFor(() =>
-      expect(screen.getByText("2 events")).toBeInTheDocument(),
-    );
-    // Pick a direction that exists in the dropdown, then filter out everything.
-    // First, filter by "server->client" (matches only CLIENT_RESPONSE_EVENT).
-    const directionSelect = screen.getByLabelText("Filter by direction");
-    fireEvent.change(directionSelect, { target: { value: "server->client" } });
-    await waitFor(() =>
-      expect(screen.getByText("1 of 2 events")).toBeInTheDocument(),
-    );
-    // Now ALSO filter by a non-existent client name to get zero matches.
-    // But since the client name dropdown only shows names from events, we
-    // can't pick a non-existent name. Instead, pick a direction that has 0
-    // matches after the client filter. We can do it the other way: pick a
-    // client name first, then a direction that no events from that client have.
-    // Actually simpler: mockFetch only one event type, filter by the other direction.
-  });
-
-  it("shows 'No events match the current filter' with single event when filter excludes all", async () => {
-    // Two events with DIFFERENT directions so "server->client" is a real option.
-    mockFetch([CLIENT_REQUEST_EVENT, CLIENT_RESPONSE_EVENT]);
-    renderTab();
-
-    await waitFor(() =>
-      expect(screen.getByText("2 events")).toBeInTheDocument(),
-    );
-    // CLIENT_REQUEST_EVENT has direction "client->server".
-    // CLIENT_RESPONSE_EVENT has direction "server->client".
-    // Filter by "server->client" to get exactly 1 match (the response event).
-    const directionSelect = screen.getByLabelText("Filter by direction");
-    fireEvent.change(directionSelect, { target: { value: "server->client" } });
-    await waitFor(() =>
-      expect(screen.getByText("1 of 2 events")).toBeInTheDocument(),
-    );
   });
 
   it("shows 'No events match the current filter' when direction filter excludes all", async () => {
