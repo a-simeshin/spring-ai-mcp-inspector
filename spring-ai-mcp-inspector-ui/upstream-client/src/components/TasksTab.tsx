@@ -16,6 +16,11 @@ import { useState } from "react";
 import JsonView from "./JsonView";
 import { cn } from "@/lib/utils";
 
+// [spring-ai-mcp-inspector PATCH] Empty state for servers that do not advertise
+// the tasks capability (issue #212). The tab trigger is enabled (clickable) and
+// opens this capability-gap body. A tooltip on the trigger explains why.
+// The copy satisfies the acceptance-criteria message verbatim.
+
 const TaskStatusIcon = ({ status }: { status: Task["status"] }) => {
   switch (status) {
     case "working":
@@ -35,18 +40,22 @@ const TaskStatusIcon = ({ status }: { status: Task["status"] }) => {
 
 const TasksTab = ({
   tasks,
+  tasksSupported,
   listTasks,
   clearTasks,
   cancelTask,
+  cancelSupported,
   selectedTask,
   setSelectedTask,
   error,
   nextCursor,
 }: {
   tasks: Task[];
+  tasksSupported: boolean;
   listTasks: () => void;
   clearTasks: () => void;
   cancelTask: (taskId: string) => Promise<void>;
+  cancelSupported?: boolean;
   selectedTask: Task | null;
   setSelectedTask: (task: Task | null) => void;
   error: string | null;
@@ -69,7 +78,20 @@ const TasksTab = ({
 
   return (
     <TabsContent value="tasks" className="flex-1 overflow-hidden p-0 m-0">
-      <div className="flex h-full overflow-hidden p-4 gap-4">
+      {!tasksSupported ? (
+        // [spring-ai-mcp-inspector PATCH] Reachable empty state for the
+        // capability-absent case (issue #212). The exact message matches the
+        // acceptance criteria.
+        <div className="flex h-full items-center justify-center p-8">
+          <div className="text-center max-w-md">
+            <Clock className="mx-auto mb-4 h-12 w-12 opacity-20" />
+            <h3 className="text-lg font-medium mb-2">Tasks Not Available</h3>
+            <p className="text-muted-foreground">
+              Server does not advertise the tasks capability; long-running task tracking is unavailable.
+            </p>
+          </div>
+        </div>
+      ) : (<>
         <div className="w-1/3">
           <ListPane
             title="Tasks"
@@ -119,9 +141,21 @@ const TasksTab = ({
                   <Button
                     variant="destructive"
                     size="sm"
-                    aria-label={`Cancel task ${displayedTask.taskId}`}
+                    aria-label={
+                      cancelSupported === false
+                        ? `Cancel task ${displayedTask.taskId} - server does not advertise tasks/cancel capability`
+                        : `Cancel task ${displayedTask.taskId}`
+                    }
                     onClick={() => handleCancel(displayedTask.taskId)}
-                    disabled={isCancelling === displayedTask.taskId}
+                    disabled={
+                      cancelSupported === false ||
+                      isCancelling === displayedTask.taskId
+                    }
+                    title={
+                      cancelSupported === false
+                        ? "Server does not advertise the tasks/cancel capability."
+                        : undefined
+                    }
                   >
                     {isCancelling === displayedTask.taskId ? (
                       <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
@@ -221,7 +255,7 @@ const TasksTab = ({
             </div>
           )}
         </div>
-      </div>
+      </>)}
     </TabsContent>
   );
 };

@@ -5,6 +5,8 @@ import {
   ClientRequest,
   CreateTaskResultSchema,
   JSONRPCMessage,
+  ListTasksResultSchema,
+  CancelTaskResultSchema,
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 import type {
@@ -145,6 +147,7 @@ jest.mock("../../auth", () => ({
   InspectorOAuthClientProvider: jest.fn().mockImplementation(() => ({
     tokens: jest.fn().mockResolvedValue({ access_token: "mock-token" }),
     redirectUrl: "http://localhost:3000/oauth/callback",
+    clear: jest.fn(),
   })),
   clearClientInformationFromSessionStorage: jest.fn(),
   saveClientInformationToSessionStorage: jest.fn(),
@@ -1867,4 +1870,295 @@ describe("useConnection", () => {
       );
     });
   });
+
+  // [spring-ai-mcp-inspector PATCH] Regression tests for tasks/* capability
+  // gating (issue #212, PR #214). These verify that:
+  //   - no wire request is sent when the operation sub-capability is absent
+  //   - a positive branch works when the capability IS advertised
+  //   - a genuine error from the server still surfaces (not swallowed)
+  describe("tasks capability gating", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    test("listTasks sends no wire request when serverCapabilities is null", async () => {
+      mockClient.getServerCapabilities.mockReturnValue(null);
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      // Clear the call history from connect (initialize + capability push).
+      mockRequest.mockClear();
+
+      const listResult = await result.current.listTasks();
+      expect(listResult).toBeUndefined();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test("listTasks sends no wire request when tasks.list sub-capability is absent", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: {},
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      mockRequest.mockClear();
+
+      const listResult = await result.current.listTasks();
+      expect(listResult).toBeUndefined();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test("listTasks sends no wire request when tasks is absent from capabilities", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      mockRequest.mockClear();
+
+      const listResult = await result.current.listTasks();
+      expect(listResult).toBeUndefined();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test("listTasks sends tasks/list when tasks.list sub-capability is present", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {} },
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      mockRequest.mockClear();
+
+      await act(async () => {
+        await result.current.listTasks();
+      });
+
+      expect(mockRequest).toHaveBeenCalledWith(
+        { method: "tasks/list", params: { cursor: undefined } },
+        ListTasksResultSchema,
+        expect.any(Object),
+      );
+    });
+
+    test("listTasks surfaces genuine server error (not swallowed)", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {} },
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      mockRequest.mockClear();
+      mockRequest.mockRejectedValueOnce(new Error("tasks/list: Method not found"));
+
+      await act(async () => {
+        await expect(result.current.listTasks()).rejects.toThrow(
+          "tasks/list: Method not found",
+        );
+      });
+    });
+
+    test("cancelTask sends no wire request when tasks.cancel sub-capability is absent", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {} },
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      mockRequest.mockClear();
+
+      const cancelResult = await result.current.cancelTask("task-1");
+      expect(cancelResult).toBeUndefined();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test("cancelTask sends tasks/cancel when tasks.cancel sub-capability is present", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {}, cancel: {} },
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      mockRequest.mockClear();
+
+      await act(async () => {
+        await result.current.cancelTask("task-1");
+      });
+
+      expect(mockRequest).toHaveBeenCalledWith(
+        { method: "tasks/cancel", params: { taskId: "task-1" } },
+        CancelTaskResultSchema,
+        expect.any(Object),
+      );
+    });
+
+    test("disconnect stops stale listTasks calls", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {} },
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      await act(async () => {
+        await result.current.disconnect();
+      });
+
+      mockRequest.mockClear();
+
+      // After disconnect, serverCapabilities is null: listTasks must be a no-op.
+      const listResult = await result.current.listTasks();
+      expect(listResult).toBeUndefined();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Regression: delayed-close must not leak
+    // tasks/list, tasks/get or tasks/result during the disconnect window.
+    // The fix synchronously nulls serverCapabilitiesRef BEFORE awaiting close()
+    // (useConnection.ts:1283-1285), so any work that reads capabilities during
+    // the pending window must see null. The mutation that reverts lines
+    // 1283-1285 makes this test go red.
+    test("delayed close: no tasks/* requests during disconnect window", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {} },
+        tools: { listChanged: true },
+      });
+
+      // Hold close() open: disconnect will await this deferred promise.
+      let resolveClose!: () => void;
+      const closePromise = new Promise<void>((resolve) => {
+        resolveClose = resolve;
+      });
+      mockClient.close.mockReturnValue(closePromise);
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      // Baseline: listTasks works when capabilities are present.
+      mockRequest.mockClear();
+      await act(async () => {
+        await result.current.listTasks();
+      });
+      expect(mockRequest).toHaveBeenCalledWith(
+        { method: "tasks/list", params: { cursor: undefined } },
+        ListTasksResultSchema,
+        expect.any(Object),
+      );
+
+      // Clear wire log so we only observe the disconnect window.
+      mockRequest.mockClear();
+
+      // Disconnect WITHOUT awaiting: close() is deferred, so disconnect stays
+      // in its pending state while we check for leaked task requests.
+      let disconnectPromise: Promise<void>;
+      await act(async () => {
+        disconnectPromise = result.current.disconnect();
+      });
+
+      // At this point disconnect() is in-flight: the synchronous
+      // invalidation of serverCapabilitiesRef has run, but
+      // mcpClient.close() is still pending. Any stale work must see
+      // capabilities as null.
+      //
+      // Give React a tick to flush the state updates.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+
+      // Attempt to list tasks during the disconnect window.
+      const duringResult = await result.current.listTasks();
+      expect(duringResult).toBeUndefined();
+
+      // Cancel task during the disconnect window.
+      const cancelResult = await result.current.cancelTask("task-1");
+      expect(cancelResult).toBeUndefined();
+
+      // No tasks/* requests should have reached the wire.
+      const taskRequests = mockRequest.mock.calls
+        .map(([req]) => (req as { method: string }).method)
+        .filter(
+          (m) =>
+            m === "tasks/list" ||
+            m === "tasks/get" ||
+            m === "tasks/result",
+        );
+      expect(taskRequests).toEqual([]);
+
+      // Release the deferred close so the test doesn't leak.
+      resolveClose();
+      await act(async () => {
+        await disconnectPromise;
+      });
+    });
+  });
+
+    test("listTasks genuine failure shows toast notification", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {} },
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      mockRequest.mockClear();
+      mockRequest.mockRejectedValueOnce(new Error("tasks/list: Method not found"));
+
+      await act(async () => {
+        await expect(result.current.listTasks()).rejects.toThrow(
+          "tasks/list: Method not found",
+        );
+      });
+
+      // The toast must fire with the error message, not be swallowed.
+      expect(mockToast).toHaveBeenCalledWith({
+        title: "Error",
+        description: "tasks/list: Method not found",
+        variant: "destructive",
+      });
+    });
 });

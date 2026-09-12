@@ -13,6 +13,7 @@ import {
   Resource,
   ResourceTemplate,
   Root,
+  ServerCapabilities,
   ServerNotification,
   Tool,
   LoggingLevel,
@@ -121,7 +122,7 @@ const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
 // `disabled:pointer-events-none`, which blocks hover on the trigger itself.
 const MCP_TASKS_DOCS_URL = "https://modelcontextprotocol.io/seps/1686-tasks";
 const MCP_TASKS_DISABLED_HINT =
-  "This server does not support MCP Tasks. See the SEP-1686 proposal.";
+  "Server does not advertise the tasks capability; long-running task tracking is unavailable.";
 
 type PrefilledAppsToolCall = {
   id: number;
@@ -370,7 +371,7 @@ const App = () => {
       ...(serverCapabilities?.resources ? ["resources"] : []),
       ...(serverCapabilities?.prompts ? ["prompts"] : []),
       ...(serverCapabilities?.tools ? ["tools"] : []),
-      ...(serverCapabilities?.tasks ? ["tasks"] : []),
+      "tasks",
       "apps",
       "ping",
       "sampling",
@@ -439,7 +440,10 @@ const App = () => {
     onNotification: (notification) => {
       setNotifications((prev) => [...prev, notification as ServerNotification]);
 
-      if (notification.method === "notifications/tasks/list_changed") {
+      if (
+        notification.method === "notifications/tasks/list_changed" &&
+        serverCapabilitiesRef.current?.tasks?.list
+      ) {
         void listTasks();
       }
 
@@ -514,6 +518,14 @@ const App = () => {
     metadata,
   });
 
+  // [spring-ai-mcp-inspector PATCH] Keep a live ref of serverCapabilities so the
+  // notification callback (installed before connect completes) reads the current
+  // value, not the stale null closure from the first render. See issue #212.
+  const serverCapabilitiesRef = useRef<ServerCapabilities | null>(null);
+  useEffect(() => {
+    serverCapabilitiesRef.current = serverCapabilities;
+  }, [serverCapabilities]);
+
   useEffect(() => {
     if (serverCapabilities) {
       const hash = window.location.hash.slice(1);
@@ -522,7 +534,7 @@ const App = () => {
         ...(serverCapabilities?.resources ? ["resources"] : []),
         ...(serverCapabilities?.prompts ? ["prompts"] : []),
         ...(serverCapabilities?.tools ? ["tools"] : []),
-        ...(serverCapabilities?.tasks ? ["tasks"] : []),
+        "tasks",
         "apps",
         "ping",
         "sampling",
@@ -541,9 +553,7 @@ const App = () => {
             ? "prompts"
             : serverCapabilities?.tools
               ? "tools"
-              : serverCapabilities?.tasks
-                ? "tasks"
-                : "ping";
+              : "tasks";
 
         setActiveTab(defaultTab);
         window.location.hash = defaultTab;
@@ -552,11 +562,13 @@ const App = () => {
   }, [serverCapabilities]);
 
   useEffect(() => {
-    if (mcpClient && activeTab === "tasks") {
+    // [spring-ai-mcp-inspector PATCH] Gate on the operation-level sub-capability
+    // (tasks.list controls tasks/list per MCP spec). See issue #212.
+    if (mcpClient && activeTab === "tasks" && serverCapabilities?.tasks?.list) {
       void listTasks();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mcpClient, activeTab]);
+  }, [mcpClient, activeTab, serverCapabilities?.tasks?.list]);
 
   useEffect(() => {
     if (mcpClient && activeTab === "apps" && serverCapabilities?.tools) {
@@ -856,7 +868,7 @@ const App = () => {
             ...(serverCapabilities?.resources ? ["resources"] : []),
             ...(serverCapabilities?.prompts ? ["prompts"] : []),
             ...(serverCapabilities?.tools ? ["tools"] : []),
-            ...(serverCapabilities?.tasks ? ["tasks"] : []),
+            "tasks",
             "apps",
             "ping",
             "sampling",
@@ -1156,9 +1168,42 @@ const App = () => {
         // Polling loop
         let taskCompleted = false;
         while (!taskCompleted) {
+          // [spring-ai-mcp-inspector PATCH] Bail out if the server stopped
+          // advertising tasks (disconnect/reconnect) mid-poll. Without this,
+          // a stale loop keeps firing tasks/get on a capability-less server.
+          if (!serverCapabilitiesRef.current?.tasks) {
+            taskCompleted = true;
+            setIsPollingTask(false);
+            setToolResult({
+              content: [
+                {
+                  type: "text",
+                  text: "Task polling stopped: server no longer advertises the tasks capability.",
+                },
+              ],
+            });
+            break;
+          }
           try {
             // Wait for 1 second before polling
             await new Promise((resolve) => setTimeout(resolve, pollInterval));
+
+            // [spring-ai-mcp-inspector PATCH] Re-check capability after the
+            // wait: disconnect/reconnect during the pollInterval delay could
+            // leave the server without tasks support. See issue #212.
+            if (!serverCapabilitiesRef.current?.tasks) {
+              taskCompleted = true;
+              setIsPollingTask(false);
+              setToolResult({
+                content: [
+                  {
+                    type: "text",
+                    text: "Task polling stopped: server no longer advertises the tasks capability.",
+                  },
+                ],
+              });
+              break;
+            }
 
             const taskStatus = await sendMCPRequest(
               {
@@ -1180,6 +1225,22 @@ const App = () => {
 
               if (taskStatus.status === "completed") {
                 console.log(`Fetching result for task ${taskId}`);
+                // [spring-ai-mcp-inspector PATCH] tasks/result also requires
+                // the tasks capability. The server may have dropped it between
+                // tasks/get and tasks/result. See issue #212.
+                if (!serverCapabilitiesRef.current?.tasks) {
+                  taskCompleted = true;
+                  setIsPollingTask(false);
+                  setToolResult({
+                    content: [
+                      {
+                        type: "text",
+                        text: "Task polling stopped: server no longer advertises the tasks capability.",
+                      },
+                    ],
+                  });
+                  break;
+                }
                 const result = await sendMCPRequest(
                   {
                     method: "tasks/result",
@@ -1277,8 +1338,12 @@ const App = () => {
   };
 
   const listTasks = useCallback(async () => {
+    // [spring-ai-mcp-inspector PATCH] Gate tasks/list on the operation-level
+    // sub-capability (spec: tasks.list controls tasks/list). See issue #212.
+    if (!serverCapabilitiesRef.current?.tasks?.list) return;
     try {
       const response = await listMcpTasks(nextTaskCursor);
+      if (!response) return; // useConnection returned undefined (gated)
       setTasks(response.tasks);
       setNextTaskCursor(response.nextCursor);
       // Inline error clear to avoid extra dependency on clearError
@@ -1292,8 +1357,12 @@ const App = () => {
   }, [listMcpTasks, nextTaskCursor]);
 
   const cancelTask = async (taskId: string) => {
+    // [spring-ai-mcp-inspector PATCH] Gate tasks/cancel on the operation-level
+    // sub-capability (spec: tasks.cancel controls tasks/cancel). See issue #212.
+    if (!serverCapabilitiesRef.current?.tasks?.cancel) return;
     try {
       const response = await cancelMcpTask(taskId);
+      if (!response) return; // useConnection returned undefined (gated)
       setTasks((prev) => prev.map((t) => (t.taskId === taskId ? response : t)));
       if (selectedTask?.taskId === taskId) {
         setSelectedTask(response);
@@ -1497,15 +1566,14 @@ const App = () => {
                   <Hammer className="w-4 h-4 mr-2" />
                   Tools
                 </TabsTrigger>
-                {/* [spring-ai-mcp-inspector PATCH] The disabled trigger has
-                    pointer-events:none (components/ui/tabs.tsx), so the tooltip
-                    and the native title must live on a live wrapper span, and
-                    aria-label on the same wrapper keeps the reason reachable
-                    for assistive tech. tabIndex keeps the wrapper reachable by
-                    keyboard: Radix TooltipTrigger does not make a plain span
-                    focusable, and the disabled trigger itself never receives
-                    focus. The enabled branch stays unchanged. */}
-                {serverCapabilities?.tasks ? (
+                {/* [spring-ai-mcp-inspector PATCH] When tasks.list is absent, the
+                    trigger is rendered inside a tooltip wrapper so hovering
+                    explains the capability gap. Unlike a disabled trigger,
+                    clicking activates the Tasks tab and shows the issue #212
+                    capability-gap body (TasksTab with tasksSupported=false).
+                    WAI-ARIA title and aria-label on the wrapper keep the
+                    reason reachable for assistive tech. */}
+                {serverCapabilities?.tasks?.list ? (
                   <TabsTrigger value="tasks">
                     <ListTodo className="w-4 h-4 mr-2" />
                     Tasks
@@ -1520,14 +1588,15 @@ const App = () => {
                           title={MCP_TASKS_DISABLED_HINT}
                           aria-label={MCP_TASKS_DISABLED_HINT}
                         >
-                          <TabsTrigger value="tasks" disabled>
+                          <TabsTrigger value="tasks">
                             <ListTodo className="w-4 h-4 mr-2" />
                             Tasks
                           </TabsTrigger>
                         </span>
                       </TooltipTrigger>
                       <TooltipContent side="bottom" className="max-w-xs text-center">
-                        This server does not support MCP Tasks.{" "}
+                        Server does not advertise the tasks capability;
+                        long-running task tracking is unavailable.{" "}
                         <a
                           href={MCP_TASKS_DOCS_URL}
                           target="_blank"
@@ -1588,7 +1657,8 @@ const App = () => {
               <div className="w-full">
                 {!serverCapabilities?.resources &&
                 !serverCapabilities?.prompts &&
-                !serverCapabilities?.tools ? (
+                !serverCapabilities?.tools &&
+                !serverCapabilities?.tasks?.list ? (
                   <>
                     <div className="flex items-center justify-center p-4">
                       <p className="text-lg text-gray-500 dark:text-gray-400">
@@ -1596,6 +1666,23 @@ const App = () => {
                         capabilities
                       </p>
                     </div>
+                    {/* [spring-ai-mcp-inspector PATCH] Show the tasks empty
+                        state even when the server has no capabilities at all,
+                        so the issue #212 message stays reachable. */}
+                    {activeTab === "tasks" && (
+                      <TasksTab
+                        tasks={tasks}
+                        tasksSupported={false}
+                        listTasks={() => {}}
+                        clearTasks={() => {}}
+                        cancelTask={cancelTask}
+                        cancelSupported={false}
+                        selectedTask={selectedTask}
+                        setSelectedTask={setSelectedTask}
+                        error={errors.tasks}
+                        nextCursor={nextTaskCursor}
+                      />
+                    )}
                     <PingTab
                       onPingClick={() => {
                         void sendMCPRequest(
@@ -1743,6 +1830,7 @@ const App = () => {
                     />
                     <TasksTab
                       tasks={tasks}
+                      tasksSupported={!!serverCapabilities?.tasks?.list}
                       listTasks={() => {
                         clearError("tasks");
                         listTasks();
@@ -1752,6 +1840,7 @@ const App = () => {
                         setNextTaskCursor(undefined);
                       }}
                       cancelTask={cancelTask}
+                      cancelSupported={!!serverCapabilities?.tasks?.cancel}
                       selectedTask={selectedTask}
                       setSelectedTask={(task) => {
                         clearError("tasks");

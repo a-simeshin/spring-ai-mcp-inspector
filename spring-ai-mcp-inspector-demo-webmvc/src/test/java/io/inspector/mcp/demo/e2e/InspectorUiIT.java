@@ -2075,12 +2075,17 @@ class InspectorUiIT {
 			if (!trigger.exists()) {
 				return false;
 			}
-			// App.tsx sets `disabled={!serverCapabilities?.tasks}` on the TabsTrigger —
-			// Radix reflects disabled state on data-disabled / aria-disabled and the
-			// underlying <button disabled> attribute.
-			String disabled = trigger.getAttribute("disabled");
-			String ariaDisabled = trigger.getAttribute("aria-disabled");
-			return !(disabled != null || "true".equals(ariaDisabled));
+			// After PR #214 the tasks tab trigger is always enabled; clicking it shows
+			// the capability-gap body when tasks is absent. The reliable probe is the
+			// Tools tab "Run as task" checkbox (gated on serverSupportsTaskRequests)
+			// which only renders when the server actually advertises tasks.
+			SelenideElement toolsTrigger = $("[role=tab][id$='-trigger-tools']");
+			toolsTrigger.click();
+			SelenideElement runAsTaskCheckbox = $("#run-as-task");
+			boolean exists = runAsTaskCheckbox.exists();
+			// Restore the tasks tab so the calling tests start from a consistent state.
+			trigger.click();
+			return exists;
 		}
 
 		@Test
