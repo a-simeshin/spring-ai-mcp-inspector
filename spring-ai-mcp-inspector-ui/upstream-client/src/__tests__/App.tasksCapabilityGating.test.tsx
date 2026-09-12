@@ -499,59 +499,70 @@ describe("App - tasks capability gating", () => {
   );
 
   it(
-    "Regression - notifications/tasks/list_changed triggers listTasks after first connect",
+    "Regression - notifications/tasks/list_changed AFTER connect completes " +
+      "triggers listTasks (first-connect scenario)",
     async () => {
-      // Verify that when a tasks/list_changed notification arrives after connect,
-      // the handler reads the current capabilities (not a stale null closure)
-      // and calls listTasks.
+      // Verify that notifications/tasks/list_changed arriving AFTER the
+      // server announces capabilities triggers listTasks. Before the fix at
+      // 156c7e0 (pre-serverCapabilitiesRef), the onNotification closure
+      // captured serverCapabilities from the render where it was installed.
+      // When App first renders BEFORE connect completes, serverCapabilities
+      // is null, so the handler was a permanent no-op. The fix uses
+      // serverCapabilitiesRef.current which is live across renders.
       const listTasksMock = jest
         .fn()
         .mockResolvedValue({ tasks: SAMPLE_TASKS, nextCursor: undefined });
-      mockUseConnection.mockImplementation((opts) => {
-        // Capture the real onNotification callback that App passes to
-        // useConnection. The stale-closure bug lived in this callback: it
-        // read serverCapabilities from the render closure (null at install
-        // time) instead of serverCapabilitiesRef.current.
+
+      // Phase 1: install the notification handler with null capabilities
+      // (before connect completes). mockImplementationOnce fires only on the
+      // first render, so capturedOnNotification gets the install-time closure.
+      mockUseConnection.mockImplementationOnce((opts) => {
         if (opts?.onNotification) {
           capturedOnNotification = opts.onNotification as (
             notification: unknown,
           ) => void;
         }
-        return connectedState(
+        return connectedState(null, listTasksMock);
+      });
+      // Subsequent renders (rerender below) return capabilities including
+      // tasks.list.
+      mockUseConnection.mockReturnValue(
+        connectedState(
           {
             tasks: { listChanged: true, list: {} },
             tools: { listChanged: true },
           },
           listTasksMock,
-        );
-      });
+        ),
+      );
 
-      window.location.hash = "#tasks";
-      render(<App />);
-
-      // Wait for initial tasks/list call(s) from the activeTab effect.
-      await waitFor(() => {
-        expect(listTasksMock).toHaveBeenCalled();
-      });
-      const callsBeforeNotification = listTasksMock.mock.calls.length;
-
-      // The captured onNotification callback must have been installed.
+      const { rerender } = render(<App />);
       expect(capturedOnNotification).not.toBeNull();
 
-      // Fire the tasks/list_changed notification as the server would after
-      // connect. Before the serverCapabilitiesRef fix this callback captured
-      // a null serverCapabilities in its closure and the handler was a no-op.
-      capturedOnNotification!({
-        method: "notifications/tasks/list_changed",
+      // Phase 2: connect completes, capabilities arrive. The effect at
+      // App.tsx:525-527 updates serverCapabilitiesRef.current so the
+      // already-installed notification handler reads the live value.
+      rerender(<App />);
+
+      // Let the effect update serverCapabilitiesRef.current.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
       });
 
-      // listTasks must be called again: the notification handler
-      // gates on serverCapabilitiesRef.current?.tasks?.list (live ref) and
-      // then calls listTasks().
+      // Fire the notification handler that was installed in Phase 1.
+      // In pre-fix code the stale closure guards on null capabilities
+      // and the handler is a no-op. With the fix, serverCapabilitiesRef
+      // points to the Phase 2 capabilities, so listTasks is called.
+      act(() => {
+        capturedOnNotification!({
+          method: "notifications/tasks/list_changed",
+        });
+      });
+
+      // listTasks must have been called: the fixed notification handler
+      // reads serverCapabilitiesRef.current?.tasks?.list.
       await waitFor(() => {
-        expect(listTasksMock.mock.calls.length).toBeGreaterThan(
-          callsBeforeNotification,
-        );
+        expect(listTasksMock).toHaveBeenCalled();
       });
     },
   );
