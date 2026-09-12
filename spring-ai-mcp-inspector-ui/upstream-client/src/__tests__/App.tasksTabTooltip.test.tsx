@@ -1,5 +1,10 @@
 // Must run before react-dom loads (jsdom lacks PointerEvent; React only
 // attaches pointermove listeners when the constructor exists).
+//
+// [spring-ai-mcp-inspector PATCH] Tooltip text updated for issue #212
+// ("Server does not advertise the tasks capability; long-running task
+// tracking is unavailable.") to match MCP_TASKS_DISABLED_HINT in App.tsx.
+// See NOTICE.d/tasks-capability-gating.txt.
 import "../testUtils/pointerEventsPolyfill";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
