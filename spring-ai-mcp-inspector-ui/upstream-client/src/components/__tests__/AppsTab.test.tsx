@@ -669,6 +669,64 @@ describe("AppsTab", () => {
     expect(onPrefilledToolCallConsumed).toHaveBeenCalledWith(43);
   });
 
+  // [spring-ai-mcp-inspector PATCH] ui-app-detection: regression test for
+  // closing the renderer when a result-less preselection arrives while an
+  // app is already open (issue #183, PR #198 review).
+  it("should close the open renderer when a result-less preselection arrives", async () => {
+    const toolWithFields: Tool = {
+      name: "preselectApp",
+      inputSchema: {
+        type: "object",
+        properties: {
+          city: { type: "string" },
+        },
+      },
+      _meta: { ui: { resourceUri: "ui://preselect" } },
+    } as Tool & { _meta?: { ui?: { resourceUri?: string } } };
+    const onPrefilledToolCallConsumed = jest.fn();
+    const prefilledResult: CompatibilityCallToolResult = {
+      content: [{ type: "text", text: "weather result" }],
+    };
+
+    const { rerender } = renderAppsTab({
+      tools: [toolWithFields],
+      prefilledToolCall: {
+        id: 44,
+        toolName: "preselectApp",
+        params: { city: "Lisbon" },
+        result: prefilledResult,
+      },
+      onPrefilledToolCallConsumed,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("app-renderer")).toBeInTheDocument();
+    });
+
+    // Now send a preselection WITHOUT result: the renderer must close and
+    // the input form must become visible.
+    rerender(
+      <Tabs defaultValue="apps">
+        <AppsTab
+          {...defaultProps}
+          tools={[toolWithFields]}
+          prefilledToolCall={{
+            id: 45,
+            toolName: "preselectApp",
+            params: { city: "Berlin" },
+          }}
+          onPrefilledToolCallConsumed={onPrefilledToolCallConsumed}
+        />
+      </Tabs>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("app-renderer")).not.toBeInTheDocument();
+      expect(screen.getByText("App Input")).toBeInTheDocument();
+    });
+    expect(onPrefilledToolCallConsumed).toHaveBeenCalledWith(45);
+  });
+
   it("should not auto-render app when no prefilled tool call is provided", () => {
     const toolWithFields: Tool = {
       name: "manualApp",

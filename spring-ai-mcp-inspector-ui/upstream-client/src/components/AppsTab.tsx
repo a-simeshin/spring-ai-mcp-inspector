@@ -205,8 +205,12 @@ const AppsTab = ({
     // tool result (i.e. it was run from the Tools tab). A preselect
     // without result (ToolsTab "Open as App") must leave the input form
     // visible so the user reviews parameters and clicks "Open App".
+    // [spring-ai-mcp-inspector PATCH] ui-app-detection: close the renderer
+    // when a preselect arrives without result while one is already open.
     if (prefilledToolCall.result !== undefined) {
       setIsAppOpen(true);
+    } else {
+      setIsAppOpen(false);
     }
     setIsMaximized(false);
     consumedPrefilledCallIdRef.current = prefilledToolCall.id;

@@ -18,7 +18,8 @@ Files changed:
   string, non-ui:// value returns false, null, number, object).
 - src/components/__tests__/AppsTab.test.tsx: regression test for malformed
   resourceUri filtered without console error; preselect-without-run test
-  (no auto-open); PATCH marker header.
+  (no auto-open); regression test for closing the renderer when a
+  result-less preselection arrives while an app is open; PATCH marker header.
 - src/components/__tests__/ToolsTab.test.tsx: tests for the "Open as App"
   button visibility and click behavior.
 
