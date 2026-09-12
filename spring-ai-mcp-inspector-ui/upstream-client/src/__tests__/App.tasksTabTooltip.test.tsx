@@ -132,10 +132,11 @@ jest.mock("../lib/hooks/useConnection", () => ({
   useConnection: jest.fn(),
 }));
 
-// The Tasks tab is disabled when the server does not advertise the MCP Tasks
-// capability (SEP-1686). In that case the trigger is wrapped in a Tooltip that
-// explains why and links to the proposal. When the server DOES advertise it,
-// the tab is a plain enabled trigger with no tooltip.
+// The Tasks tab is enabled but wrapped in a Tooltip when the server does not
+// advertise the MCP Tasks capability (SEP-1686). Clicking the tab shows the
+// capability-gap body; hovering the wrapper span shows the tooltip with the
+// reason and a link to the proposal. When the server DOES advertise it,
+// the tab is a plain enabled trigger with no tooltip wrapper.
 const MCP_TASKS_DOCS_URL = "https://modelcontextprotocol.io/seps/1686-tasks";
 const MCP_TASKS_DISABLED_HINT =
   "Server does not advertise the tasks capability; long-running task tracking is unavailable.";
@@ -163,7 +164,7 @@ function connectionState(serverCapabilities: Record<string, unknown>) {
   } as ReturnType<typeof useConnection>;
 }
 
-describe("App - Tasks tab disabled-state tooltip", () => {
+describe("App - Tasks tab tooltip for capability gap", () => {
   const mockUseConnection = jest.mocked(useConnection);
 
   beforeEach(() => {
@@ -178,12 +179,14 @@ describe("App - Tasks tab disabled-state tooltip", () => {
     render(<App />);
 
     const tasksTab = screen.getByRole("tab", { name: /^Tasks$/i });
-    expect(tasksTab).toBeDisabled();
+    // The trigger is enabled (not disabled) so the user can click it to
+    // see the capability-gap body. The tooltip wrapper still provides
+    // the explanation on hover.
+    expect(tasksTab).not.toBeDisabled();
 
-    // The wrapper span (the disabled trigger's parent) is the accessible
-    // container: the disabled trigger itself has pointer-events:none and never
-    // receives hover or focus, so the reason must live on the wrapper as a
-    // native title and an aria-label.
+    // The wrapper span (the enabled trigger's parent) is the accessible
+    // container: it carries the native title and an aria-label so the
+    // reason is discoverable even without hovering.
     const wrapper = tasksTab.parentElement!;
     expect(wrapper).toHaveAttribute("title", MCP_TASKS_DISABLED_HINT);
     expect(wrapper).toHaveAttribute("aria-label", MCP_TASKS_DISABLED_HINT);
@@ -193,9 +196,8 @@ describe("App - Tasks tab disabled-state tooltip", () => {
       screen.queryByText(/Server does not advertise the tasks capability/i),
     ).not.toBeInTheDocument();
 
-    // Hover the (non-interactive) disabled trigger through its wrapper span.
-    // Radix Tooltip opens on pointermove (700ms delay), so fire on the
-    // TooltipTrigger span.
+    // Hover the enabled trigger through its wrapper span. Radix Tooltip
+    // opens on pointermove (700ms delay), so fire on the TooltipTrigger span.
     fireEvent.pointerMove(wrapper);
 
     await waitFor(
@@ -226,10 +228,11 @@ describe("App - Tasks tab disabled-state tooltip", () => {
     render(<App />);
 
     const tasksTab = screen.getByRole("tab", { name: /^Tasks$/i });
-    expect(tasksTab).toBeDisabled();
+    // The trigger is enabled (not disabled) so the user can click it to
+    // see the capability-gap body.
+    expect(tasksTab).not.toBeDisabled();
 
-    // The wrapper span is the keyboard entry point: the disabled trigger is
-    // not focusable (disabled TabsTrigger), so tabIndex keeps the wrapper in
+    // The wrapper span is the keyboard entry point: tabIndex keeps it in
     // the tab order and Radix Tooltip opens on focus.
     const wrapper = tasksTab.parentElement!;
     expect(wrapper).toHaveAttribute("tabindex", "0");

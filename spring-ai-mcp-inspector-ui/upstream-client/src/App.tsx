@@ -371,7 +371,7 @@ const App = () => {
       ...(serverCapabilities?.resources ? ["resources"] : []),
       ...(serverCapabilities?.prompts ? ["prompts"] : []),
       ...(serverCapabilities?.tools ? ["tools"] : []),
-      ...(serverCapabilities?.tasks?.list ? ["tasks"] : []),
+      "tasks",
       "apps",
       "ping",
       "sampling",
@@ -534,7 +534,7 @@ const App = () => {
         ...(serverCapabilities?.resources ? ["resources"] : []),
         ...(serverCapabilities?.prompts ? ["prompts"] : []),
         ...(serverCapabilities?.tools ? ["tools"] : []),
-        ...(serverCapabilities?.tasks?.list ? ["tasks"] : []),
+        "tasks",
         "apps",
         "ping",
         "sampling",
@@ -553,9 +553,7 @@ const App = () => {
             ? "prompts"
             : serverCapabilities?.tools
               ? "tools"
-              : serverCapabilities?.tasks?.list
-                ? "tasks"
-                : "ping";
+              : "tasks";
 
         setActiveTab(defaultTab);
         window.location.hash = defaultTab;
@@ -870,7 +868,7 @@ const App = () => {
             ...(serverCapabilities?.resources ? ["resources"] : []),
             ...(serverCapabilities?.prompts ? ["prompts"] : []),
             ...(serverCapabilities?.tools ? ["tools"] : []),
-            ...(serverCapabilities?.tasks?.list ? ["tasks"] : []),
+            "tasks",
             "apps",
             "ping",
             "sampling",
@@ -1568,14 +1566,13 @@ const App = () => {
                   <Hammer className="w-4 h-4 mr-2" />
                   Tools
                 </TabsTrigger>
-                {/* [spring-ai-mcp-inspector PATCH] The disabled trigger has
-                    pointer-events:none (components/ui/tabs.tsx), so the tooltip
-                    and the native title must live on a live wrapper span, and
-                    aria-label on the same wrapper keeps the reason reachable
-                    for assistive tech. tabIndex keeps the wrapper reachable by
-                    keyboard: Radix TooltipTrigger does not make a plain span
-                    focusable, and the disabled trigger itself never receives
-                    focus. The enabled branch stays unchanged. */}
+                {/* [spring-ai-mcp-inspector PATCH] When tasks.list is absent, the
+                    trigger is rendered inside a tooltip wrapper so hovering
+                    explains the capability gap. Unlike a disabled trigger,
+                    clicking activates the Tasks tab and shows the issue #212
+                    capability-gap body (TasksTab with tasksSupported=false).
+                    WAI-ARIA title and aria-label on the wrapper keep the
+                    reason reachable for assistive tech. */}
                 {serverCapabilities?.tasks?.list ? (
                   <TabsTrigger value="tasks">
                     <ListTodo className="w-4 h-4 mr-2" />
@@ -1591,7 +1588,7 @@ const App = () => {
                           title={MCP_TASKS_DISABLED_HINT}
                           aria-label={MCP_TASKS_DISABLED_HINT}
                         >
-                          <TabsTrigger value="tasks" disabled>
+                          <TabsTrigger value="tasks">
                             <ListTodo className="w-4 h-4 mr-2" />
                             Tasks
                           </TabsTrigger>

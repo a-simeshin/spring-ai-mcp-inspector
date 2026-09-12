@@ -109,9 +109,11 @@ describe("App - URL Fragment Routing", () => {
   });
 
   test("sets default hash based on server capabilities priority", async () => {
-    // Tab priority follows UI order: Resources | Prompts | Tools | Ping | Sampling | Roots | Auth
+    // Tab priority follows UI order: Resources | Prompts | Tools | Tasks | Ping | Sampling | Roots | Auth
     //
-    // Server capabilities determine the first three tabs; if none are present, falls back to Ping.
+    // Server capabilities determine the first three tabs; if none are present,
+    // falls back to Tasks (the tasks tab is always valid: it shows the
+    // capability-gap body when tasks.list is absent, per issue #212).
 
     const testCases = [
       {
@@ -126,7 +128,7 @@ describe("App - URL Fragment Routing", () => {
         capabilities: { tools: { listChanged: true, subscribe: true } },
         expected: "#tools",
       },
-      { capabilities: {}, expected: "#ping" },
+      { capabilities: {}, expected: "#tasks" },
     ];
 
     const { rerender } = render(<App />);

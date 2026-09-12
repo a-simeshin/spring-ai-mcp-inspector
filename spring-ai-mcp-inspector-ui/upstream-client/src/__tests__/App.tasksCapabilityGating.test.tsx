@@ -1,7 +1,7 @@
 // Must run before react-dom loads (jsdom lacks PointerEvent; React only
 // attaches pointermove listeners when the constructor exists).
 import "../testUtils/pointerEventsPolyfill";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 // [spring-ai-mcp-inspector PATCH] Regression tests for tasks capability gating
 // (issue #212, PR #214). Covers capability-absent (no wire request), empty tasks
 // object, missing sub-capability, capability-present (positive), and genuine
@@ -321,7 +321,8 @@ describe("App - tasks capability gating", () => {
   );
 
   it(
-    "Branch A - tasks only with requests sub-capability (no list) does not trigger tasks/list",
+    "Branch A - tasks only with requests sub-capability (no list) does not trigger tasks/list, " +
+      "and clicking the tab shows the capability-gap body",
     async () => {
       const listTasksMock = jest.fn();
       // Server advertises tasks: { requests: { tools: { call: true } } }
@@ -345,10 +346,24 @@ describe("App - tasks capability gating", () => {
       // The activeTab effect gates on serverCapabilities?.tasks?.list.
       expect(listTasksMock).not.toHaveBeenCalled();
 
-      // The tab trigger should be disabled with the capability-gap hint.
+      // The tab trigger is enabled (not disabled) so the user can open
+      // it and see the capability-gap body. The tooltip wrapper still
+      // provides the explanation on hover.
       const tasksTab = screen.getByRole("tab", { name: /tasks/i });
       expect(tasksTab).toBeInTheDocument();
-      expect(tasksTab).toBeDisabled();
+      expect(tasksTab).not.toBeDisabled();
+
+      // Click the trigger to navigate to the tasks tab and see the
+      // capability-gap body. Radix Tabs selects tabs via onMouseDown.
+      await act(async () => {
+        fireEvent.mouseDown(tasksTab);
+      });
+
+      await waitFor(() => {
+        expect(
+          screen.getByText("Tasks Not Available"),
+        ).toBeInTheDocument();
+      });
     },
   );
 
@@ -433,7 +448,49 @@ describe("App - tasks capability gating", () => {
   );
 
   it(
-    "Branch A - empty state message is visible when server has no capabilities at all",
+    "Issue #212 - clicking the Tasks tab against a server without tasks.list " +
+      "shows the capability-gap body with the exact message",
+    async () => {
+      const listTasksMock = jest.fn();
+      mockUseConnection.mockReturnValue(
+        connectedState({ tools: { listChanged: true } }, listTasksMock),
+      );
+
+      render(<App />);
+
+      // Start on the default tab (not tasks).
+      await waitFor(() => {
+        expect(screen.getByText("ToolsTab")).toBeInTheDocument();
+      });
+
+      // Click the enabled Tasks trigger. Radix Tabs selects tabs via
+      // onMouseDown, not onClick. fireEvent.mouseDown triggers
+      // onValueChange, setting activeTab="tasks" and showing the
+      // capability-gap body.
+      const tasksTab = screen.getByRole("tab", { name: /tasks/i });
+      await act(async () => {
+        fireEvent.mouseDown(tasksTab);
+      });
+
+      // The user must see the capability-gap body (TasksTab with
+      // tasksSupported=false), asserting the exact issue #212 message.
+      await waitFor(() => {
+        expect(screen.getByText("Tasks Not Available")).toBeInTheDocument();
+        expect(
+          screen.getByText(
+            /Server does not advertise the tasks capability; long-running task tracking is unavailable\./,
+          ),
+        ).toBeInTheDocument();
+      });
+
+      // No tasks/list wire request must have been issued.
+      expect(listTasksMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it(
+    "Branch A - empty state message is visible when server has no capabilities at all, " +
+      "user can click tasks tab to see the capability-gap body",
     async () => {
       const listTasksMock = jest.fn();
       // Server has NO capabilities: no resources, prompts, tools, or tasks.
@@ -445,8 +502,9 @@ describe("App - tasks capability gating", () => {
       window.location.hash = "#tasks";
       render(<App />);
 
-      // The hash routing effect will redirect to "ping" (the default when no
-      // capabilities exist). Wait for that redirect to happen.
+      // The tasks hash is always valid (no longer gated on tasks.list).
+      // The no-capabilities fallback branch renders the capability-gap
+      // message because activeTab is "tasks".
       await waitFor(() => {
         expect(
           screen.getByText(
@@ -455,19 +513,23 @@ describe("App - tasks capability gating", () => {
         ).toBeInTheDocument();
       });
 
-      // The tasks tab trigger must still be rendered (as disabled) with the
-      // tooltip containing the issue #212 message. The empty state inside
-      // TasksTab is only shown when the user somehow lands on the tasks tab
-      // (e.g., programmatic navigation or before the hash effect runs).
-      // Verify the tab trigger exists and is disabled.
+      // The tasks tab trigger must be rendered and enabled (clickable).
       const tasksTab = screen.getByRole("tab", { name: /tasks/i });
       expect(tasksTab).toBeInTheDocument();
-      expect(tasksTab).toBeDisabled();
+      expect(tasksTab).not.toBeDisabled();
+
+      // The capability-gap body ("Tasks Not Available") is visible because
+      // the tasks tab is active and renders the fallback.
+      await waitFor(() => {
+        expect(
+          screen.getByText("Tasks Not Available"),
+        ).toBeInTheDocument();
+      });
     },
   );
 
   it(
-    "Branch A - tooltip shows the issue #212 message when tasks capability is absent",
+    "Branch A - tooltip wrapper shows the issue #212 message when tasks capability is absent",
     async () => {
       const listTasksMock = jest.fn();
       mockUseConnection.mockReturnValue(
@@ -476,14 +538,15 @@ describe("App - tasks capability gating", () => {
 
       render(<App />);
 
-      // The disabled tab trigger has a tooltip with the exact message.
-      // The span wrapper has title and aria-label set to MCP_TASKS_DISABLED_HINT.
+      // The tab trigger is enabled (not disabled) so the user can click it
+      // to see the capability-gap body. The wrapper span still has title and
+      // aria-label set to MCP_TASKS_DISABLED_HINT for the tooltip.
       await waitFor(() => {
         const tasksTab = screen.getByRole("tab", { name: /tasks/i });
         expect(tasksTab).toBeInTheDocument();
-        expect(tasksTab).toBeDisabled();
+        expect(tasksTab).not.toBeDisabled();
 
-        // The disabled trigger is wrapped in a span with title + aria-label
+        // The enabled trigger is wrapped in a span with title + aria-label
         // set to the exact issue #212 message, making the reason discoverable.
         const wrapper = tasksTab.parentElement;
         expect(wrapper).toHaveAttribute(
@@ -725,6 +788,125 @@ describe("App - tasks capability gating", () => {
         ([req]) => (req as { method: string }).method,
       );
       expect(wireMethods).toEqual(["tools/call"]);
+    },
+  );
+
+  it(
+    "Regression - delayed disconnect: no tasks/list or tasks/get sent while close() is pending",
+    async () => {
+      // Before the fix (base 6b94677), disconnect() awaited
+      // terminateSession() and mcpClient.close() before clearing
+      // serverCapabilities. During the awaited window, the stale
+      // tasks.list capability let the active-tab effect and polling
+      // loop send tasks/list or tasks/get on a disconnecting client.
+      //
+      // The fix (useConnection.ts:1277-1287) synchronously nulls
+      // serverCapabilitiesRef and calls setServerCapabilities(null)
+      // BEFORE any awaited close. This test holds close() open
+      // with a deferred promise and asserts no task requests leak
+      // during the disconnect window.
+      jest.useRealTimers();
+
+      // The deferred close lets us hold disconnect() in its
+      // "in-progress" state.
+      let resolveClose!: () => void;
+      const closePromise = new Promise<void>((resolve) => {
+        resolveClose = resolve;
+      });
+
+      const mockMcpClient = {
+        request: jest.fn(),
+        notification: jest.fn(),
+        close: jest.fn(() => closePromise),
+      } as unknown as Client;
+
+      const listTasksMock = jest
+        .fn()
+        .mockResolvedValue({ tasks: [], nextCursor: undefined });
+
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const makeRequestMock = jest.fn((request: { method: string }) => {
+        // Return empty lists for mount effects.
+        return Promise.resolve({
+          tools: [],
+          resources: [],
+          prompts: [],
+          resourceTemplates: [],
+          nextCursor: undefined,
+        });
+      });
+
+      mockUseConnection.mockReturnValue({
+        ...connectedState(
+          {
+            tasks: { listChanged: true, list: {} },
+            tools: { listChanged: true },
+          },
+          listTasksMock,
+          makeRequestMock,
+        ),
+        mcpClient: mockMcpClient,
+        disconnect: jest.fn(async () => {
+          // The real disconnect: synchronous nulls, then awaits close.
+          // We model the real disconnect's early synchronous nulling:
+          // useConnection.disconnect() now nulls capabilities before
+          // awaiting close(). The mock below replicates the real
+          // behavior by nulling serverCapabilities first.
+          mockUseConnection.mockReturnValue(
+            connectedState(
+              {}, // capabilities gone (synchronous invalidation)
+              listTasksMock,
+              makeRequestMock,
+            ),
+          );
+          await closePromise;
+        }),
+      } as ReturnType<typeof useConnection>);
+
+      // Start on the tasks tab so the polling effect is active.
+      window.location.hash = "#tasks";
+      render(<App />);
+
+      await waitFor(() => {
+        expect(listTasksMock).toHaveBeenCalledTimes(1);
+      });
+
+      // Reset listTasks call count so we can detect new calls after disconnect.
+      listTasksMock.mockClear();
+      makeRequestMock.mockClear();
+
+      // Call disconnect: it synchronously nulls capabilities (the fix),
+      // then awaits close (which is deferred).
+      const { disconnect } = mockUseConnection.mock.results[0].value;
+      const disconnectPromise = disconnect();
+
+      // Let React process the synchronous state updates (capability null).
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+
+      // Now the disconnect is in progress (close is pending).
+      // The active-tab effect at App.tsx:567 gates on
+      // serverCapabilities?.tasks?.list. If the fix works, no new
+      // tasks/list or tasks/get is sent because capabilities are null.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      });
+
+      // No tasks/list or tasks/get should have been sent during
+      // the disconnect window.
+      expect(listTasksMock).not.toHaveBeenCalled();
+      const taskRequests = makeRequestMock.mock.calls
+        .map(([req]) => (req as { method: string }).method)
+        .filter(
+          (m) =>
+            m === "tasks/list" || m === "tasks/get" || m === "tasks/result",
+        );
+      expect(taskRequests).toEqual([]);
+
+      // Clean up: resolve the deferred close so disconnect completes.
+      resolveClose();
+      await disconnectPromise;
     },
   );
 });

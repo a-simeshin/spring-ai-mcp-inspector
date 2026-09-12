@@ -17,9 +17,9 @@ import JsonView from "./JsonView";
 import { cn } from "@/lib/utils";
 
 // [spring-ai-mcp-inspector PATCH] Empty state for servers that do not advertise
-// the tasks capability (issue #212). The disabled tab trigger stays as the
-// primary affordance; this copy also appears in the tooltip and satisfies the
-// acceptance-criteria message verbatim.
+// the tasks capability (issue #212). The tab trigger is enabled (clickable) and
+// opens this capability-gap body. A tooltip on the trigger explains why.
+// The copy satisfies the acceptance-criteria message verbatim.
 
 const TaskStatusIcon = ({ status }: { status: Task["status"] }) => {
   switch (status) {

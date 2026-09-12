@@ -1274,6 +1274,16 @@ export function useConnection({
     });
     receiverTasksRef.current.clear();
 
+    // [spring-ai-mcp-inspector PATCH] Synchronously invalidate capabilities
+    // and connection ref before the awaited close, so no tasks/list or
+    // tasks/get request is emitted from stale work during disconnect.
+    // The polling guard in App.tsx reads serverCapabilitiesRef.current.tasks,
+    // and the active-tab effect reads serverCapabilities.tasks.list: both
+    // must see null before terminateSession/close yields. See issue #212.
+    serverCapabilitiesRef.current = null;
+    setServerCapabilities(null);
+    setMcpClient(null);
+
     if (transportType === "streamable-http")
       await (
         clientTransport as StreamableHTTPClientTransport

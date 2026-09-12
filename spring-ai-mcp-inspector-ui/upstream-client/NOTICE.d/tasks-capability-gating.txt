@@ -21,9 +21,15 @@ Changes:
    disconnect/reconnect to a capability-less server.
 7. TasksTab.tsx: empty state with the exact message from issue #212:
    "Server does not advertise the tasks capability; long-running task tracking
-   is unavailable." The primary affordance for the absent capability is the
-   disabled tab trigger with tooltip (existing tasks-tab-tooltip.txt patch);
-   this empty state is the fallback for programmatic navigation.
+   is unavailable." The tab trigger is enabled (clickable) and opens this
+   capability-gap body. A tooltip on the trigger wrapper explains why.
+8. useConnection.ts: disconnect() synchronously invalidates
+   serverCapabilitiesRef and calls setServerCapabilities(null) BEFORE any
+   awaited close (terminateSession/mcpClient.close), so no tasks/list or
+   tasks/get request is emitted from stale work during disconnect.
+9. App.tsx: the tasks tab is always a valid route (not gated on
+   serverCapabilities?.tasks?.list). The default tab when no capabilities
+   exist is "tasks" (shows the capability-gap body), not "ping".
 
 Covered by:
 - src/__tests__/App.tasksCapabilityGating.test.tsx (App-level integration)
