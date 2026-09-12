@@ -81,6 +81,16 @@ public class TimelineController {
 	}
 
 	/**
+	 * Returns diagnostic events (client handler desync findings) from the timeline.
+	 * @return diagnostic events matching payload endpoint=client-diagnostics
+	 */
+	@GetMapping(path = "/diagnostics", produces = MediaType.APPLICATION_JSON_VALUE)
+	public List<TimelineEvent> diagnostics() {
+		return this.timelineService
+			.query(TimelineQuery.builder().endpoint("client-diagnostics").limit(TimelineQuery.MAX_LIMIT).build());
+	}
+
+	/**
 	 * Parses a comma-separated list of {@link TimelineEventType} names. Unknown or blank
 	 * names are silently skipped.
 	 * @param types the comma-separated string, may be {@code null}

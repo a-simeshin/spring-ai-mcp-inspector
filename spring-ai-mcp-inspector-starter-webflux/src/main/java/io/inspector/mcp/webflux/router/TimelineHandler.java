@@ -72,6 +72,17 @@ public class TimelineHandler {
 	}
 
 	/**
+	 * Returns diagnostic events (client handler desync findings) from the timeline.
+	 * @param request the incoming request
+	 * @return the diagnostic events as JSON
+	 */
+	public Mono<ServerResponse> diagnostics(final ServerRequest request) {
+		final List<TimelineEvent> events = this.timelineService
+			.query(TimelineQuery.builder().endpoint("client-diagnostics").limit(TimelineQuery.MAX_LIMIT).build());
+		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(events);
+	}
+
+	/**
 	 * Reads a non-blank query parameter.
 	 * @param request the incoming request
 	 * @param name the parameter name
@@ -96,7 +107,7 @@ public class TimelineHandler {
 		try {
 			return Instant.parse(raw);
 		}
-		catch (final IllegalArgumentException ex) {
+		catch (final RuntimeException ex) {
 			return null;
 		}
 	}

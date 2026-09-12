@@ -23,7 +23,11 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * {@code basePackages} — its implicit (meta) {@code @ComponentScan} must resolve to the
  * declaring class package.
  */
-@SpringBootApplication
+@SpringBootApplication(excludeName = {
+		"org.springframework.ai.mcp.client.common.autoconfigure.McpClientAutoConfiguration",
+		"org.springframework.ai.mcp.client.common.autoconfigure.McpToolCallbackAutoConfiguration",
+		"org.springframework.ai.mcp.client.common.autoconfigure.StdioTransportAutoConfiguration",
+		"org.springframework.ai.mcp.client.common.autoconfigure.annotations.McpClientAnnotationScannerAutoConfiguration" })
 public class ScanRootApplication {
 
 }

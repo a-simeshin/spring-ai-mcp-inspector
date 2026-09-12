@@ -218,4 +218,58 @@ class TimelineControllerTests {
 
 	}
 
+	@Nested
+	@DisplayName("diagnostics()")
+	@Severity(SeverityLevel.CRITICAL)
+	class Diagnostics {
+
+		@Test
+		@Story("Passes endpoint filter to timelineService")
+		@Description("diagnostics() passes endpoint=client-diagnostics filter to timelineService")
+		void diagnostics_passesEndpointFilter() {
+			// given
+			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of());
+
+			// when
+			TimelineControllerTests.this.controller.diagnostics();
+
+			// then: the query has endpoint=client-diagnostics
+			verify(TimelineControllerTests.this.timelineService)
+				.query(argThat((q) -> q.endpoint() != null && "client-diagnostics".equals(q.endpoint())));
+		}
+
+		@Test
+		@Story("Uses MAX_LIMIT")
+		@Description("diagnostics() uses MAX_LIMIT to avoid losing events to default 500 cap")
+		void diagnostics_usesMaxLimit() {
+			// given
+			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of());
+
+			// when
+			TimelineControllerTests.this.controller.diagnostics();
+
+			// then: the query has MAX_LIMIT
+			verify(TimelineControllerTests.this.timelineService)
+				.query(argThat((q) -> q.limit() == TimelineQuery.MAX_LIMIT));
+		}
+
+		@Test
+		@Story("Returns service result")
+		@Description("diagnostics() returns whatever the service returns")
+		void diagnostics_returnsServiceResult() {
+			// given
+			final TimelineEvent diagEvent = new TimelineEvent("d1", null, null, TimelineEventType.APP_LOG,
+					Instant.now(), null);
+			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of(diagEvent));
+
+			// when
+			final List<TimelineEvent> result = TimelineControllerTests.this.controller.diagnostics();
+
+			// then
+			assertThat(result).hasSize(1);
+			assertThat(result.get(0).id()).isEqualTo("d1");
+		}
+
+	}
+
 }

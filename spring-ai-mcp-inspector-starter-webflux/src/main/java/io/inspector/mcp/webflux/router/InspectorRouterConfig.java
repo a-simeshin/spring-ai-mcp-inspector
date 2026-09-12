@@ -107,6 +107,7 @@ public class InspectorRouterConfig {
 			// Same path and query contract as the WebMVC TimelineController; the
 			// route must be claimed before the /** resource catch-all below.
 			router = router.andRoute(GET(apiPath + "/timeline"), timeline::query);
+			router = router.andRoute(GET(apiPath + "/timeline/diagnostics"), timeline::diagnostics);
 		}
 		return router.and(RouterFunctions.resources(basePath + "/**", UI_ROOT,
 				(resource, headers) -> headers.setCacheControl(ASSET_CACHE_CONTROL)));
