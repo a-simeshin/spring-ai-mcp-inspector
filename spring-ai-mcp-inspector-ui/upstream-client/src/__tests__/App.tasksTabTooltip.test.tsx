@@ -133,7 +133,7 @@ jest.mock("../lib/hooks/useConnection", () => ({
 // the tab is a plain enabled trigger with no tooltip.
 const MCP_TASKS_DOCS_URL = "https://modelcontextprotocol.io/seps/1686-tasks";
 const MCP_TASKS_DISABLED_HINT =
-  "This server does not support MCP Tasks. See the SEP-1686 proposal.";
+  "Server does not advertise the tasks capability; long-running task tracking is unavailable.";
 
 function connectionState(serverCapabilities: Record<string, unknown>) {
   return {
@@ -185,7 +185,7 @@ describe("App - Tasks tab disabled-state tooltip", () => {
 
     // No tooltip content before hover
     expect(
-      screen.queryByText(/does not support MCP Tasks/i),
+      screen.queryByText(/Server does not advertise the tasks capability/i),
     ).not.toBeInTheDocument();
 
     // Hover the (non-interactive) disabled trigger through its wrapper span.
@@ -198,7 +198,7 @@ describe("App - Tasks tab disabled-state tooltip", () => {
         // Radix renders the content twice: the visible popover plus a
         // visually-hidden accessible copy (role=tooltip), so use queryAllBy.
         expect(
-          screen.queryAllByText(/does not support MCP Tasks/i),
+          screen.queryAllByText(/Server does not advertise the tasks capability/i),
         ).not.toHaveLength(0);
       },
       { timeout: 3000 },
@@ -232,7 +232,7 @@ describe("App - Tasks tab disabled-state tooltip", () => {
 
     // No tooltip content before focus
     expect(
-      screen.queryByText(/does not support MCP Tasks/i),
+      screen.queryByText(/Server does not advertise the tasks capability/i),
     ).not.toBeInTheDocument();
 
     // Focus the wrapper (what happens when the user tabs to it) and verify
@@ -242,7 +242,7 @@ describe("App - Tasks tab disabled-state tooltip", () => {
     await waitFor(
       () => {
         expect(
-          screen.queryAllByText(/does not support MCP Tasks/i),
+          screen.queryAllByText(/Server does not advertise the tasks capability/i),
         ).not.toHaveLength(0);
       },
       { timeout: 3000 },
@@ -259,7 +259,7 @@ describe("App - Tasks tab disabled-state tooltip", () => {
 
   it("keeps the Tasks tab enabled with no tooltip when the tasks capability is advertised", async () => {
     mockUseConnection.mockReturnValue(
-      connectionState({ tasks: { listChanged: true } }),
+      connectionState({ tasks: { listChanged: true, list: {} } }),
     );
 
     render(<App />);
@@ -276,7 +276,7 @@ describe("App - Tasks tab disabled-state tooltip", () => {
     await new Promise((resolve) => setTimeout(resolve, 800));
     await waitFor(() => {
       expect(
-        screen.queryByText(/does not support MCP Tasks/i),
+        screen.queryByText(/Server does not advertise the tasks capability/i),
       ).not.toBeInTheDocument();
       expect(
         screen.queryByRole("link", { name: /MCP Tasks documentation/i }),

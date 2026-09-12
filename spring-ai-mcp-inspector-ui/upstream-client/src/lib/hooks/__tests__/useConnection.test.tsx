@@ -2050,4 +2050,33 @@ describe("useConnection", () => {
       expect(mockRequest).not.toHaveBeenCalled();
     });
   });
+
+    test("listTasks genuine failure shows toast notification", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {} },
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      mockRequest.mockClear();
+      mockRequest.mockRejectedValueOnce(new Error("tasks/list: Method not found"));
+
+      await act(async () => {
+        await expect(result.current.listTasks()).rejects.toThrow(
+          "tasks/list: Method not found",
+        );
+      });
+
+      // The toast must fire with the error message, not be swallowed.
+      expect(mockToast).toHaveBeenCalledWith({
+        title: "Error",
+        description: "tasks/list: Method not found",
+        variant: "destructive",
+      });
+    });
 });
