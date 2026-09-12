@@ -23,6 +23,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   AuthProfileSummary,
   AuthProfileType,
   ApiKeyPlacement,
@@ -441,18 +448,24 @@ const AuthProfiles = ({
       <div className="space-y-2 rounded border p-3" data-testid="auth-profile-editor">
         <div className="flex items-center gap-2">
           <Label htmlFor="auth-profile-type" className="text-xs text-muted-foreground shrink-0">Type</Label>
-          <select
-            id="auth-profile-type"
+          <Select
             value={draft.type}
-            onChange={(e) => switchType(e.target.value as AuthProfileType)}
-            className="h-8 flex-1 rounded border bg-transparent px-2 text-sm"
-            data-testid="auth-profile-type"
+            onValueChange={(v) => switchType(v as AuthProfileType)}
           >
-            <option value="OAUTH2">OAuth2</option>
-            <option value="BEARER">Bearer token</option>
-            <option value="API_KEY">API key</option>
-            <option value="CUSTOM_HEADERS">Custom headers</option>
-          </select>
+            <SelectTrigger
+              id="auth-profile-type"
+              className="h-8 flex-1 rounded border bg-transparent px-2 text-sm"
+              data-testid="auth-profile-type"
+            >
+              <SelectValue placeholder="Select type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="OAUTH2">OAuth2</SelectItem>
+              <SelectItem value="BEARER">Bearer token</SelectItem>
+              <SelectItem value="API_KEY">API key</SelectItem>
+              <SelectItem value="CUSTOM_HEADERS">Custom headers</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <div className="space-y-1">
@@ -476,18 +489,24 @@ const AuthProfiles = ({
               <Label htmlFor="auth-profile-grant-mode" className="text-xs text-muted-foreground shrink-0">
                 Grant
               </Label>
-              <select
-                id="auth-profile-grant-mode"
+              <Select
                 value={draft.grantMode}
-                onChange={(e) =>
-                  updateDraft({ grantMode: e.target.value as OAuth2GrantMode })
+                onValueChange={(v) =>
+                  updateDraft({ grantMode: v as OAuth2GrantMode })
                 }
-                className="h-8 flex-1 rounded border bg-transparent px-2 text-sm"
-                data-testid="auth-profile-grant-mode"
               >
-                <option value="CLIENT_CREDENTIALS">Client credentials</option>
-                <option value="AUTHORIZATION_CODE">Authorization code (PKCE)</option>
-              </select>
+                <SelectTrigger
+                  id="auth-profile-grant-mode"
+                  className="h-8 flex-1 rounded border bg-transparent px-2 text-sm"
+                  data-testid="auth-profile-grant-mode"
+                >
+                  <SelectValue placeholder="Select grant" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="CLIENT_CREDENTIALS">Client credentials</SelectItem>
+                  <SelectItem value="AUTHORIZATION_CODE">Authorization code (PKCE)</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1">
               <Label htmlFor="auth-profile-token-url" className="text-xs">
@@ -653,18 +672,24 @@ const AuthProfiles = ({
               <Label htmlFor="auth-profile-key-placement" className="text-xs text-muted-foreground shrink-0">
                 Placement
               </Label>
-              <select
-                id="auth-profile-key-placement"
+              <Select
                 value={draft.placement}
-                onChange={(e) =>
-                  updateDraft({ placement: e.target.value as ApiKeyPlacement })
+                onValueChange={(v) =>
+                  updateDraft({ placement: v as ApiKeyPlacement })
                 }
-                className="h-8 flex-1 rounded border bg-transparent px-2 text-sm"
-                data-testid="auth-profile-key-placement"
               >
-                <option value="HEADER">Header</option>
-                <option value="QUERY">Query parameter</option>
-              </select>
+                <SelectTrigger
+                  id="auth-profile-key-placement"
+                  className="h-8 flex-1 rounded border bg-transparent px-2 text-sm"
+                  data-testid="auth-profile-key-placement"
+                >
+                  <SelectValue placeholder="Select placement" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="HEADER">Header</SelectItem>
+                  <SelectItem value="QUERY">Query parameter</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </>
         )}

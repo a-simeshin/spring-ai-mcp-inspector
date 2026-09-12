@@ -202,7 +202,12 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 		}
 		this.tokenCache.remove(profileId);
 		this.credentials.remove(profileId);
-		this.profileLocks.remove(profileId);
+		final Object lock = this.profileLocks.get(profileId);
+		if (lock != null) {
+			synchronized (lock) {
+				this.profileLocks.remove(profileId);
+			}
+		}
 		LOG.debug("oauth2-cc[{}] evicted token and stored credentials", profileId);
 	}
 

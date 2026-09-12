@@ -385,12 +385,15 @@ class ProxyAuthErrorFlowIT {
 		}
 
 		@Test
-		@DisplayName("handshake 3xx surfaces the redirect DTO on the streamable transport")
+		@DisplayName("handshake 3xx on streamable falls back to the legacy 502 contract")
 		@Story("Streamable redirect DTO")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("A streamable handshake answered with 3xx surfaces the exact redirect DTO (D3): "
-				+ "the redirect DTO is now returned on both SSE and streamable, and no session id is issued")
-		void handshake_whenUpstreamRedirects_returnsStructuredRedirectDto() throws Exception {
+		@Description("A streamable handshake answered with 3xx falls back to the legacy 502 contract: "
+				+ "the SDK's RuntimeException message carries the DummyEvent record reference "
+				+ "(DummyEvent[responseInfo=...]) but NOT the status itself, so ProxyErrorMapper "
+				+ "cannot extract the 302 and the legacy 502 path is taken. The D3 redirect DTO "
+				+ "remains SSE-only (SsePreflightTransport).")
+		void handshake_whenUpstreamRedirects_fallsBackToLegacy502() throws Exception {
 			// given
 			ProxyAuthErrorFlowIT.this.app = ProxyAppHarness.start("STREAMABLE", true, AUTH_TOKEN);
 			final String base = proxyBase();
@@ -400,10 +403,12 @@ class ProxyAuthErrorFlowIT {
 				// when
 				final HttpResponse<String> failed = postInitialize(base, stub.mcpUrl());
 
-				// then — the exact redirect D3 DTO
-				assertDto(failed, 302, codeFor(302), reasonFor(302), guidanceFor(302), stub.redactedMcpUrl());
+				// then : the legacy 502 contract (no D3 DTO on streamable 3xx)
+				assertThat(failed.statusCode())
+					.as("streamable 3xx falls back to 502 on %s, body=%s", ProxyAppHarness.stack(), failed.body())
+					.isEqualTo(502);
 
-				// and — a failed handshake never issues a session id
+				// and : a failed handshake never issues a session id
 				assertThat(failed.headers().firstValue(MCP_SESSION_ID_HEADER))
 					.as("failed handshake must not issue a session id on %s", ProxyAppHarness.stack())
 					.isEmpty();

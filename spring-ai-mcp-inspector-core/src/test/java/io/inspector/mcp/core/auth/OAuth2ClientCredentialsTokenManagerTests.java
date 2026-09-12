@@ -577,6 +577,53 @@ class OAuth2ClientCredentialsTokenManagerTests {
 		}
 
 		@Test
+		@Story("Eviction")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("evict() during an in-flight exchange leaves no stale token in cache (regression)")
+		void evict_duringInFlightExchange_noStaleToken() throws Exception {
+			// given - first request acquires the token normally
+			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.respond(200,
+					"{\"access_token\":\"tok-1\",\"expires_in\":3600}");
+			OAuth2ClientCredentialsTokenManagerTests.this.manager.acquire("pid-1", ccProfile("secret-1"));
+			assertThat(OAuth2ClientCredentialsTokenManagerTests.this.manager.cacheSize()).isEqualTo(1);
+
+			// given - block the next token request so it hangs in-flight
+			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.blockNextRequest();
+			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.respond(200,
+					"{\"access_token\":\"tok-2\",\"expires_in\":3600}");
+
+			// start the refresh in a background thread
+			final ExecutorService executor = Executors.newSingleThreadExecutor();
+			try {
+				final Future<?> refresh = executor.submit(() -> {
+					try {
+						OAuth2ClientCredentialsTokenManagerTests.this.manager.getAccessToken("pid-1", true);
+					}
+					catch (final IllegalStateException ignored) {
+						// expected after evict removes credentials
+					}
+					catch (final ProxyUpstreamException ignored) {
+						// exchange itself may time out after evict releases the latch;
+						// the contract under test is the absence of a stale cache entry
+					}
+				});
+				OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.awaitRequestEntered();
+
+				// when - evict while the exchange is in flight
+				OAuth2ClientCredentialsTokenManagerTests.this.manager.evict("pid-1");
+				OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.releaseBlockedRequest();
+				refresh.get(10, TimeUnit.SECONDS);
+
+				// then - no stale token remains in cache
+				assertThat(OAuth2ClientCredentialsTokenManagerTests.this.manager.cacheSize()).isZero();
+				assertThat(OAuth2ClientCredentialsTokenManagerTests.this.manager.credentialCount()).isZero();
+			}
+			finally {
+				executor.shutdownNow();
+			}
+		}
+
+		@Test
 		@Story("Update")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("update() replaces the stored credentials and evicts the cached token; the next refresh uses the NEW secret")

@@ -562,7 +562,7 @@ spring:
 
 ### Profile limit per owner
 
-Every owner is capped at **50 profiles** (constant `MAX_PROFILES_PER_OWNER`). When the
+Every owner is capped at **50 profiles** (constant `AuthProfileStore.DEFAULT_MAX_PROFILES_PER_OWNER`). When the
 limit is reached, `POST /auth-profile` answers `400` with:
 
 ```json
