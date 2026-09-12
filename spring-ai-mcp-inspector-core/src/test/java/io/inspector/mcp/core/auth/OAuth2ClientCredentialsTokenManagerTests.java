@@ -73,7 +73,7 @@ class OAuth2ClientCredentialsTokenManagerTests {
 		this.tokenServer = new StubTokenServer();
 		OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.start();
 		this.manager = new OAuth2ClientCredentialsTokenManager(
-				OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.httpClient(), null);
+				OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.httpClient(), null, Duration.ofSeconds(30));
 	}
 
 	@AfterEach
@@ -579,7 +579,7 @@ class OAuth2ClientCredentialsTokenManagerTests {
 		@Test
 		@Story("Eviction")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("evict() during an in-flight exchange leaves no stale token in cache (regression)")
+		@Description("evict() landing after a successful in-flight exchange but before the cache write leaves no stale token; the next access fails closed (regression)")
 		void evict_duringInFlightExchange_noStaleToken() throws Exception {
 			// given - first request acquires the token normally
 			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.respond(200,
@@ -587,38 +587,52 @@ class OAuth2ClientCredentialsTokenManagerTests {
 			OAuth2ClientCredentialsTokenManagerTests.this.manager.acquire("pid-1", ccProfile("secret-1"));
 			assertThat(OAuth2ClientCredentialsTokenManagerTests.this.manager.cacheSize()).isEqualTo(1);
 
-			// given - block the next token request so it hangs in-flight
-			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.blockNextRequest();
+			// given - the next refresh pauses inside the profile lock right after its
+			// successful exchange, deterministically opening the eviction race window
 			OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.respond(200,
 					"{\"access_token\":\"tok-2\",\"expires_in\":3600}");
+			final CountDownLatch exchangeDone = new CountDownLatch(1);
+			final CountDownLatch proceedWithCacheWrite = new CountDownLatch(1);
+			OAuth2ClientCredentialsTokenManagerTests.this.manager.setAfterExchangeHook(() -> {
+				exchangeDone.countDown();
+				try {
+					proceedWithCacheWrite.await(30, TimeUnit.SECONDS);
+				}
+				catch (final InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+			});
 
-			// start the refresh in a background thread
-			final ExecutorService executor = Executors.newSingleThreadExecutor();
+			final ExecutorService executor = Executors.newFixedThreadPool(2);
 			try {
-				final Future<?> refresh = executor.submit(() -> {
-					try {
-						OAuth2ClientCredentialsTokenManagerTests.this.manager.getAccessToken("pid-1", true);
-					}
-					catch (final IllegalStateException ignored) {
-						// expected after evict removes credentials
-					}
-					catch (final ProxyUpstreamException ignored) {
-						// exchange itself may time out after evict releases the latch;
-						// the contract under test is the absence of a stale cache entry
-					}
-				});
-				OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.awaitRequestEntered();
+				final Future<OAuth2ClientCredentialsTokenManager.TokenHandle> refresh = executor
+					.submit(() -> OAuth2ClientCredentialsTokenManagerTests.this.manager.getAccessToken("pid-1", true));
 
-				// when - evict while the exchange is in flight
-				OAuth2ClientCredentialsTokenManagerTests.this.manager.evict("pid-1");
-				OAuth2ClientCredentialsTokenManagerTests.this.tokenServer.releaseBlockedRequest();
-				refresh.get(10, TimeUnit.SECONDS);
+				// when - the exchange has finished and the refresh still holds the lock;
+				// evict() blocks on the same lock while the endpoint responds normally
+				assertThat(exchangeDone.await(30, TimeUnit.SECONDS)).isTrue();
+				final Future<?> eviction = executor
+					.submit(() -> OAuth2ClientCredentialsTokenManagerTests.this.manager.evict("pid-1"));
+				Thread.sleep(500);
+				proceedWithCacheWrite.countDown();
 
-				// then - no stale token remains in cache
+				final OAuth2ClientCredentialsTokenManager.TokenHandle handle = refresh.get(30, TimeUnit.SECONDS);
+				eviction.get(30, TimeUnit.SECONDS);
+
+				// then - the in-flight exchange returned its token to the caller, but the
+				// cache was NOT repopulated after the eviction
+				assertThat(handle.accessToken()).isEqualTo("tok-2");
 				assertThat(OAuth2ClientCredentialsTokenManagerTests.this.manager.cacheSize()).isZero();
 				assertThat(OAuth2ClientCredentialsTokenManagerTests.this.manager.credentialCount()).isZero();
+				assertThat(OAuth2ClientCredentialsTokenManagerTests.this.manager.profileLockCount()).isZero();
+
+				// and - the profile now fails closed
+				assertThatThrownBy(
+						() -> OAuth2ClientCredentialsTokenManagerTests.this.manager.getAccessToken("pid-1", false))
+					.isInstanceOf(IllegalStateException.class);
 			}
 			finally {
+				OAuth2ClientCredentialsTokenManagerTests.this.manager.setAfterExchangeHook(null);
 				executor.shutdownNow();
 			}
 		}

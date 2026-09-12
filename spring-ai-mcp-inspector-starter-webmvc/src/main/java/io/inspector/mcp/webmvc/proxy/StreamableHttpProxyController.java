@@ -56,6 +56,7 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
 import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
@@ -304,8 +305,7 @@ public class StreamableHttpProxyController {
 	private boolean isOwnerOf(final ProxySession session) {
 		final String sessionOwner = session.ownerId();
 		if (sessionOwner == null) {
-			LOG.warn("proxy[{}] legacy session without owner binding accessed (sessionId={})", session.sessionId(),
-					session.sessionId());
+			LegacySessionAccessWarner.warnOnce(session);
 			return true;
 		}
 		final String callerOwner = resolveOwner();

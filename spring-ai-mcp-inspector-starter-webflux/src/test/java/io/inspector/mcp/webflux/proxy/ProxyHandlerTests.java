@@ -749,6 +749,48 @@ class ProxyHandlerTests {
 	}
 
 	@Nested
+	@DisplayName("D8 legacy-session WARN")
+	class LegacySessionWarn {
+
+		@Test
+		@Story("Legacy session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("repeat access to the same owner-less session logs the legacy WARN exactly once")
+		void legacySession_repeatAccess_logsWarnOnce() {
+			// given - an unbound (legacy) session
+			final ProxySession session = newSession("s-legacy");
+			given(ProxyHandlerTests.this.registry.get("s-legacy")).willReturn(session);
+			final ch.qos.logback.classic.Logger warnerLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
+				.getLogger(io.inspector.mcp.core.proxy.LegacySessionAccessWarner.class);
+			final ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender = new ch.qos.logback.core.read.ListAppender<>();
+			appender.start();
+			warnerLogger.addAppender(appender);
+			try {
+				final ServerRequest request = toServerRequest(
+						MockServerHttpRequest.post("/mcp-inspector-api/message?sessionId=s-legacy")
+							.contentType(MediaType.APPLICATION_JSON)
+							.body("{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}"));
+
+				// when - the same legacy session is touched repeatedly
+				ProxyHandlerTests.this.handler.postMessage(request).block();
+				ProxyHandlerTests.this.handler.postMessage(request).block();
+				ProxyHandlerTests.this.handler.postMessage(request).block();
+
+				// then - exactly one WARN was emitted for the session
+				final long warns = appender.list.stream()
+					.filter((e) -> e.getFormattedMessage() != null
+							&& e.getFormattedMessage().contains("legacy session without owner binding"))
+					.count();
+				assertThat(warns).isEqualTo(1);
+			}
+			finally {
+				warnerLogger.detachAppender(appender);
+			}
+		}
+
+	}
+
+	@Nested
 	@DisplayName("postMcp() — Streamable-HTTP")
 	class PostMcp {
 

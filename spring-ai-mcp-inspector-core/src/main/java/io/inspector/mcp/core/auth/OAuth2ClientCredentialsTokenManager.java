@@ -88,6 +88,26 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 	/** JSON mapper for token responses. */
 	private final JsonMapper objectMapper;
 
+	/** Per-request timeout for the token exchange. */
+	private final Duration requestTimeout;
+
+	/**
+	 * Test-only hook invoked inside the per-profile lock right after a successful
+	 * exchange and before the cache write. Lets regression tests interleave a concurrent
+	 * evict deterministically. Never set in production.
+	 */
+	private volatile Runnable afterExchangeHook = () -> {
+	};
+
+	/**
+	 * Replaces the post-exchange hook. Visible for tests only.
+	 * @param hook the hook to run after each successful exchange (never {@code null})
+	 */
+	void setAfterExchangeHook(final Runnable hook) {
+		this.afterExchangeHook = (hook != null) ? hook : () -> {
+		};
+	}
+
 	/** Token cache keyed by profile id. */
 	private final ConcurrentMap<String, TokenEntry> tokenCache = new ConcurrentHashMap<>();
 
@@ -105,8 +125,22 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 	}
 
 	public OAuth2ClientCredentialsTokenManager(final HttpClient httpClient, final JsonMapper objectMapper) {
+		this(httpClient, objectMapper, REQUEST_TIMEOUT);
+	}
+
+	/**
+	 * Full constructor with an explicit per-request timeout. Intended for tests that
+	 * coordinate an in-flight exchange against a blocked token endpoint and need a longer
+	 * budget than the production 10s default.
+	 * @param httpClient the outbound HTTP client (nullable: JDK default)
+	 * @param objectMapper the JSON mapper (nullable: default)
+	 * @param requestTimeout per-request timeout for the token exchange
+	 */
+	public OAuth2ClientCredentialsTokenManager(final HttpClient httpClient, final JsonMapper objectMapper,
+			final Duration requestTimeout) {
 		this.httpClient = (httpClient != null) ? httpClient : HttpClient.newHttpClient();
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
+		this.requestTimeout = (requestTimeout != null) ? requestTimeout : REQUEST_TIMEOUT;
 	}
 
 	/**
@@ -164,6 +198,14 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 			}
 			final TokenHandle fresh = exchange(stored.tokenUrl(), stored.clientId(), stored.clientSecret(),
 					stored.scopes());
+			this.afterExchangeHook.run();
+			if (this.credentials.get(profileId) != stored) {
+				// A concurrent evict()/update() ran during the exchange: the fresh token
+				// belongs to credentials that are no longer current. Discarding it keeps
+				// the fail-closed contract (v14 D9A).
+				LOG.debug("oauth2-cc[{}] discarding token exchanged against superseded credentials", profileId);
+				return fresh;
+			}
 			this.tokenCache.put(profileId, new TokenEntry(fresh.accessToken(), fresh.expiresAt()));
 			LOG.debug("oauth2-cc[{}] refreshed token expiring {}", profileId, fresh.expiresAt());
 			return fresh;
@@ -200,13 +242,17 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 		if (profileId == null) {
 			return;
 		}
-		this.tokenCache.remove(profileId);
-		this.credentials.remove(profileId);
 		final Object lock = this.profileLocks.get(profileId);
 		if (lock != null) {
 			synchronized (lock) {
+				this.tokenCache.remove(profileId);
+				this.credentials.remove(profileId);
 				this.profileLocks.remove(profileId);
 			}
+		}
+		else {
+			this.tokenCache.remove(profileId);
+			this.credentials.remove(profileId);
 		}
 		LOG.debug("oauth2-cc[{}] evicted token and stored credentials", profileId);
 	}
@@ -285,7 +331,7 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 		}
 		try {
 			final HttpRequest request = HttpRequest.newBuilder(URI.create(tokenUrl))
-				.timeout(REQUEST_TIMEOUT)
+				.timeout(this.requestTimeout)
 				.header("Content-Type", "application/x-www-form-urlencoded")
 				.POST(HttpRequest.BodyPublishers.ofString(encodeForm(form)))
 				.build();

@@ -141,6 +141,21 @@ public final class ProxySession {
 	private final AtomicReference<String> authorizationRef;
 
 	/**
+	 * Set once the legacy-session WARN has been logged for this session; guards against
+	 * log flooding when the same unbound session is accessed repeatedly.
+	 */
+	private final AtomicBoolean legacyAccessWarned = new AtomicBoolean();
+
+	/**
+	 * Atomically marks the legacy-session WARN as logged for this session.
+	 * @return {@code true} on the first call (caller should log), {@code false} on
+	 * repeats
+	 */
+	public boolean markLegacyAccessWarned() {
+		return this.legacyAccessWarned.compareAndSet(false, true);
+	}
+
+	/**
 	 * Binds the session to an owner-scoped auth profile (D8). Called by the proxy
 	 * controllers before the proxy pumps start; the registry uses the binding to clear
 	 * the profile when the session closes.
