@@ -1679,6 +1679,7 @@ const App = () => {
                         listTasks={() => {}}
                         clearTasks={() => {}}
                         cancelTask={cancelTask}
+                        cancelSupported={false}
                         selectedTask={selectedTask}
                         setSelectedTask={setSelectedTask}
                         error={errors.tasks}
@@ -1842,6 +1843,7 @@ const App = () => {
                         setNextTaskCursor(undefined);
                       }}
                       cancelTask={cancelTask}
+                      cancelSupported={!!serverCapabilities?.tasks?.cancel}
                       selectedTask={selectedTask}
                       setSelectedTask={(task) => {
                         clearError("tasks");

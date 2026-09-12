@@ -499,6 +499,52 @@ describe("App - tasks capability gating", () => {
   );
 
   it(
+    "Branch A - tasks.list present but tasks.cancel absent: Cancel button is disabled with tooltip",
+    async () => {
+      const listTasksMock = jest
+        .fn()
+        .mockResolvedValue({ tasks: SAMPLE_TASKS, nextCursor: undefined });
+      // Server has tasks.list but NO tasks.cancel sub-capability.
+      mockUseConnection.mockReturnValue(
+        connectedState(
+          {
+            tasks: { listChanged: true, list: {} },
+            tools: { listChanged: true },
+          },
+          listTasksMock,
+        ),
+      );
+
+      window.location.hash = "#tasks";
+      render(<App />);
+
+      // Wait for tasks to render in the list.
+      await waitFor(() => {
+        expect(screen.getByText("task-1")).toBeInTheDocument();
+        expect(screen.getByText("task-2")).toBeInTheDocument();
+      });
+
+      // task-2 has status "working" -- click it to show the detail panel
+      // which renders the Cancel button.
+      await act(async () => {
+        screen.getByText("task-2").click();
+      });
+
+      // The Cancel button must be visible but disabled because tasks.cancel
+      // is not advertised.
+      await waitFor(() => {
+        const cancelBtn = screen.getByRole("button", { name: /cancel task/i });
+        expect(cancelBtn).toBeInTheDocument();
+        expect(cancelBtn).toBeDisabled();
+        expect(cancelBtn).toHaveAttribute(
+          "title",
+          "Server does not advertise the tasks/cancel capability.",
+        );
+      });
+    },
+  );
+
+  it(
     "Regression - notifications/tasks/list_changed AFTER connect completes " +
       "triggers listTasks (first-connect scenario)",
     async () => {

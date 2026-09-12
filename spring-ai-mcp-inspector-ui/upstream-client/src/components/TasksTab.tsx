@@ -44,6 +44,7 @@ const TasksTab = ({
   listTasks,
   clearTasks,
   cancelTask,
+  cancelSupported,
   selectedTask,
   setSelectedTask,
   error,
@@ -54,6 +55,7 @@ const TasksTab = ({
   listTasks: () => void;
   clearTasks: () => void;
   cancelTask: (taskId: string) => Promise<void>;
+  cancelSupported?: boolean;
   selectedTask: Task | null;
   setSelectedTask: (task: Task | null) => void;
   error: string | null;
@@ -139,9 +141,21 @@ const TasksTab = ({
                   <Button
                     variant="destructive"
                     size="sm"
-                    aria-label={`Cancel task ${displayedTask.taskId}`}
+                    aria-label={
+                      cancelSupported === false
+                        ? `Cancel task ${displayedTask.taskId} - server does not advertise tasks/cancel capability`
+                        : `Cancel task ${displayedTask.taskId}`
+                    }
                     onClick={() => handleCancel(displayedTask.taskId)}
-                    disabled={isCancelling === displayedTask.taskId}
+                    disabled={
+                      cancelSupported === false ||
+                      isCancelling === displayedTask.taskId
+                    }
+                    title={
+                      cancelSupported === false
+                        ? "Server does not advertise the tasks/cancel capability."
+                        : undefined
+                    }
                   >
                     {isCancelling === displayedTask.taskId ? (
                       <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
