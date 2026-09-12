@@ -1,0 +1,15 @@
+persistentHistory.ts : History persistence layer for request/response entries
+in localStorage, keyed by connection id. On every successful (and failed) tool
+call, appends the entry to localStorage under key "mcp-inspector.history.v1".
+On page load (connectionId change), restores entries from localStorage back
+into React state. Per-connection FIFO eviction at 100 entries; global 500 KB
+store limit. No upstream equivalent exists; this is a Spring AI MCP Inspector
+custom extension.
+
+Changed files:
+- src/lib/persistentHistory.ts (new)
+- src/lib/types/historyEntry.ts (new)
+- src/lib/hooks/useConnection.ts (imports + loadHistory on mount + appendHistory
+  in pushHistory + clearHistory in clearRequestHistory)
+
+Covered by: persistentHistory.test.ts (from hermes/one-click-reconnect branch).
