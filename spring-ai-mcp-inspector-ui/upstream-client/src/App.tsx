@@ -30,7 +30,9 @@ import {
   hasValidMetaPrefix,
   isReservedMetaKey,
 } from "@/utils/metaUtils";
-import { getToolUiResourceUri } from "@modelcontextprotocol/ext-apps/app-bridge";
+// [spring-ai-mcp-inspector PATCH] ui-app-detection: shared non-throwing
+// guard for _meta.ui.resourceUri (issue #183).
+import { hasUIMetadata } from "@/utils/uiMetadataGuard";
 import { AuthDebuggerState, EMPTY_DEBUGGER_STATE } from "./lib/auth-types";
 import { OAuthStateMachine } from "./lib/oauth-state-machine";
 import { createProxyFetch } from "./lib/proxyFetch";
@@ -127,11 +129,9 @@ type PrefilledAppsToolCall = {
   id: number;
   toolName: string;
   params: Record<string, unknown>;
-  result: CompatibilityCallToolResult;
-};
-
-const hasAppResourceUri = (tool: Tool): boolean => {
-  return Boolean(getToolUiResourceUri(tool));
+  // [spring-ai-mcp-inspector PATCH] ui-app-detection: optional for
+  // preselect-without-run (ToolsTab "Open as App" button).
+  result?: CompatibilityCallToolResult;
 };
 
 const cloneToolParams = (
@@ -1713,7 +1713,7 @@ const App = () => {
                         const calledTool = tools.find(
                           (tool) => tool.name === name,
                         );
-                        if (calledTool && hasAppResourceUri(calledTool)) {
+                        if (calledTool && hasUIMetadata(calledTool)) {
                           setPrefilledAppsToolCall({
                             id: ++prefilledAppsToolCallIdRef.current,
                             toolName: name,
@@ -1739,6 +1739,17 @@ const App = () => {
                       onReadResource={(uri: string) => {
                         clearError("resources");
                         readResource(uri);
+                      }}
+                      // [spring-ai-mcp-inspector PATCH] ui-app-detection:
+                      // "Open as App" navigates to Apps tab and preselects
+                      // the tool (no auto-run; result is absent).
+                      onOpenAsApp={(tool: Tool) => {
+                        setPrefilledAppsToolCall({
+                          id: ++prefilledAppsToolCallIdRef.current,
+                          toolName: tool.name,
+                          params: {},
+                        });
+                        setActiveTab("apps");
                       }}
                     />
                     <TasksTab

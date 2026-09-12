@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] AppsTab test: malformed _meta.ui.resourceUri and ingress tests (#183, #199)
 import {
   render,
   screen,
@@ -6,12 +7,15 @@ import {
   act,
 } from "@testing-library/react";
 import "@testing-library/jest-dom";
+// [spring-ai-mcp-inspector PATCH] AppsTab test: malformed _meta.ui.resourceUri and ingress tests (#183, #199)
 import { describe, it, jest, beforeEach } from "@jest/globals";
 import AppsTab from "../AppsTab";
+// [spring-ai-mcp-inspector PATCH] AppsTab test: malformed _meta.ui.resourceUri and ingress tests (#183, #199)
 import {
   Tool,
   CompatibilityCallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
+// [spring-ai-mcp-inspector PATCH] AppsTab test: malformed _meta.ui.resourceUri and ingress tests (#183, #199)
 import { Tabs } from "../ui/tabs";
 
 // Mock AppRenderer component
@@ -237,6 +241,42 @@ describe("AppsTab", () => {
     });
 
     expect(screen.getByText("noDescriptionApp")).toBeInTheDocument();
+  });
+
+  it("should not crash when a tool has malformed _meta.ui.resourceUri", () => {
+    const consoleError = jest
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const malformedTool = {
+      name: "malformedApp",
+      description: "Tool with malformed UI metadata",
+      inputSchema: {
+        type: "object" as const,
+        properties: {},
+      },
+      _meta: {
+        ui: {
+          resourceUri: "https://evil.example.com",
+        },
+      },
+    } as unknown as Tool;
+
+    try {
+      renderAppsTab({
+        tools: [malformedTool, mockAppTool],
+      });
+
+      // Malformed tool must be filtered out; valid app tool still renders.
+      expect(screen.queryByText("malformedApp")).not.toBeInTheDocument();
+      expect(screen.getByText("weatherApp")).toBeInTheDocument();
+      // No render-phase React error propagated to console.
+      expect(consoleError).not.toHaveBeenCalledWith(
+        expect.stringContaining("Invalid UI resource URI"),
+        expect.anything(),
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("should reset selected tool when tools list changes and selected tool is removed", async () => {
@@ -506,10 +546,12 @@ describe("AppsTab", () => {
     });
     expect(screen.getByText("Tool: noFieldsApp")).toBeInTheDocument();
 
-    // Should NOT see the back button
+    // [spring-ai-mcp-inspector PATCH] ui-app-detection: Back to Input is
+    // always shown so the user can dismiss a broken renderer even when
+    // the tool has no input fields.
     expect(
-      screen.queryByRole("button", { name: /back to input/i }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: /back to input/i }),
+    ).toBeInTheDocument();
   });
 
   it("should allow going back to input form from app renderer if fields exist", async () => {
@@ -585,6 +627,104 @@ describe("AppsTab", () => {
       "weather result",
     );
     expect(onPrefilledToolCallConsumed).toHaveBeenCalledWith(42);
+  });
+
+  // [spring-ai-mcp-inspector PATCH] ui-app-detection: preselect without
+  // run (ToolsTab "Open as App") must NOT auto-open the renderer. The
+  // user reviews parameters and clicks "Open App" explicitly.
+  it("should preselect tool without auto-opening app when prefilled call has no result", async () => {
+    const toolWithFields: Tool = {
+      name: "preselectApp",
+      inputSchema: {
+        type: "object",
+        properties: {
+          city: { type: "string" },
+        },
+      },
+      _meta: { ui: { resourceUri: "ui://preselect" } },
+    } as Tool & { _meta?: { ui?: { resourceUri?: string } } };
+    const onPrefilledToolCallConsumed = jest.fn();
+
+    renderAppsTab({
+      tools: [toolWithFields],
+      prefilledToolCall: {
+        id: 43,
+        toolName: "preselectApp",
+        params: { city: "Berlin" },
+        // No result: preselect only.
+      },
+      onPrefilledToolCallConsumed,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("App Input")).toBeInTheDocument();
+    });
+
+    // The renderer must NOT be mounted yet.
+    expect(screen.queryByTestId("app-renderer")).not.toBeInTheDocument();
+    // The "Open App" button is the manual trigger.
+    expect(
+      screen.getByRole("button", { name: /open app/i }),
+    ).toBeInTheDocument();
+    expect(onPrefilledToolCallConsumed).toHaveBeenCalledWith(43);
+  });
+
+  // [spring-ai-mcp-inspector PATCH] ui-app-detection: regression test for
+  // closing the renderer when a result-less preselection arrives while an
+  // app is already open (issue #183, PR #198 review).
+  it("should close the open renderer when a result-less preselection arrives", async () => {
+    const toolWithFields: Tool = {
+      name: "preselectApp",
+      inputSchema: {
+        type: "object",
+        properties: {
+          city: { type: "string" },
+        },
+      },
+      _meta: { ui: { resourceUri: "ui://preselect" } },
+    } as Tool & { _meta?: { ui?: { resourceUri?: string } } };
+    const onPrefilledToolCallConsumed = jest.fn();
+    const prefilledResult: CompatibilityCallToolResult = {
+      content: [{ type: "text", text: "weather result" }],
+    };
+
+    const { rerender } = renderAppsTab({
+      tools: [toolWithFields],
+      prefilledToolCall: {
+        id: 44,
+        toolName: "preselectApp",
+        params: { city: "Lisbon" },
+        result: prefilledResult,
+      },
+      onPrefilledToolCallConsumed,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("app-renderer")).toBeInTheDocument();
+    });
+
+    // Now send a preselection WITHOUT result: the renderer must close and
+    // the input form must become visible.
+    rerender(
+      <Tabs defaultValue="apps">
+        <AppsTab
+          {...defaultProps}
+          tools={[toolWithFields]}
+          prefilledToolCall={{
+            id: 45,
+            toolName: "preselectApp",
+            params: { city: "Berlin" },
+          }}
+          onPrefilledToolCallConsumed={onPrefilledToolCallConsumed}
+        />
+      </Tabs>,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("app-renderer")).not.toBeInTheDocument();
+      expect(screen.getByText("App Input")).toBeInTheDocument();
+    });
+    expect(onPrefilledToolCallConsumed).toHaveBeenCalledWith(45);
   });
 
   it("should not auto-render app when no prefilled tool call is provided", () => {

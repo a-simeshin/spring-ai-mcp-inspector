@@ -17,7 +17,9 @@ import {
   CompatibilityCallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { getToolUiResourceUri } from "@modelcontextprotocol/ext-apps/app-bridge";
+// [spring-ai-mcp-inspector PATCH] ui-app-detection: shared non-throwing
+// guard for _meta.ui.resourceUri (issue #183).
+import { hasUIMetadata } from "@/utils/uiMetadataGuard";
 import AppRenderer from "./AppRenderer";
 import ListPane from "./ListPane";
 import IconDisplay, { WithIcons } from "./IconDisplay";
@@ -55,7 +57,7 @@ interface AppsTabProps {
     id: number;
     toolName: string;
     params: Record<string, unknown>;
-    result: CompatibilityCallToolResult;
+    result?: CompatibilityCallToolResult;
   } | null;
   onPrefilledToolCallConsumed?: (callId: number) => void;
   error: string | null;
@@ -63,10 +65,10 @@ interface AppsTabProps {
   onNotification?: (notification: ServerNotification) => void;
 }
 
-// Type guard to check if a tool has UI metadata
-const hasUIMetadata = (tool: Tool): boolean => {
-  return !!getToolUiResourceUri(tool);
-};
+// [spring-ai-mcp-inspector PATCH] ui-app-detection: re-exported for
+// ToolsTab "Open as App" button (issue #183). Implementation lives in
+// src/utils/uiMetadataGuard.ts.
+export { hasUIMetadata };
 
 const cloneToolParams = (
   source: Record<string, unknown>,
@@ -196,8 +198,20 @@ const AppsTab = ({
     prefillingParamsRef.current = hydratedParams;
     setSelectedTool(matchingTool);
     setSubmittedParams(hydratedParams);
-    setSubmittedToolResult(prefilledToolCall.result);
-    setIsAppOpen(true);
+    // [spring-ai-mcp-inspector PATCH] ui-app-detection: result is optional
+    // (undefined = preselect without run, from ToolsTab "Open as App").
+    setSubmittedToolResult(prefilledToolCall.result ?? null);
+    // Only auto-open the app when the prefilled call already carries a
+    // tool result (i.e. it was run from the Tools tab). A preselect
+    // without result (ToolsTab "Open as App") must leave the input form
+    // visible so the user reviews parameters and clicks "Open App".
+    // [spring-ai-mcp-inspector PATCH] ui-app-detection: close the renderer
+    // when a preselect arrives without result while one is already open.
+    if (prefilledToolCall.result !== undefined) {
+      setIsAppOpen(true);
+    } else {
+      setIsAppOpen(false);
+    }
     setIsMaximized(false);
     consumedPrefilledCallIdRef.current = prefilledToolCall.id;
     onPrefilledToolCallConsumed?.(prefilledToolCall.id);
@@ -379,16 +393,10 @@ const AppsTab = ({
             )}
 
             {selectedTool ? (
-              (() => {
-                const hasFields =
-                  selectedTool.inputSchema.properties &&
-                  Object.keys(selectedTool.inputSchema.properties).length > 0;
-
-                return (
+              <div className="space-y-4">
+                {!isAppOpen ? (
                   <div className="space-y-4">
-                    {!isAppOpen ? (
-                      <div className="space-y-4">
-                        {selectedTool.description && (
+                    {selectedTool.description && (
                           <p className="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap">
                             {selectedTool.description}
                           </p>
@@ -627,17 +635,18 @@ const AppsTab = ({
                       </div>
                     ) : (
                       <div className="space-y-4">
-                        {hasFields && (
-                          <div className="flex justify-end">
-                            <Button
-                              onClick={handleCloseApp}
-                              variant="outline"
-                              size="sm"
-                            >
-                              Back to Input
-                            </Button>
-                          </div>
-                        )}
+                        {/* [spring-ai-mcp-inspector PATCH] ui-app-detection:
+                            always offer a way back, even for tools with
+                            empty inputSchema.properties. */}
+                        <div className="flex justify-end">
+                          <Button
+                            onClick={handleCloseApp}
+                            variant="outline"
+                            size="sm"
+                          >
+                            Back to Input
+                          </Button>
+                        </div>
                         <div className="h-[600px]">
                           <AppRenderer
                             sandboxPath={sandboxPath}
@@ -651,8 +660,6 @@ const AppsTab = ({
                       </div>
                     )}
                   </div>
-                );
-              })()
             ) : (
               <div className="flex flex-col items-center justify-center py-12 text-muted-foreground space-y-4">
                 <AlertCircle className="w-12 h-12 opacity-20" />
