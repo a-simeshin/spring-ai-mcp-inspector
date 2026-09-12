@@ -436,6 +436,8 @@ const App = () => {
     oauthScope,
     config,
     connectionType,
+    // [spring-ai-mcp-inspector PATCH] Persistent history (#121).
+    connectionId: sseUrl || "ephemeral",
     onNotification: (notification) => {
       setNotifications((prev) => [...prev, notification as ServerNotification]);
 

@@ -1642,6 +1642,95 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
+	// H2. History persistence across reload (regression for #121)
+	// =====================================================================
+
+	@Nested
+	@DisplayName("History persistence across reload")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class HistoryPersistence {
+
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@Test
+		@Story("History persistence")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("History entries survive page reload for the same connection: connect, call echo, reload, assert history still shows the entry.")
+		@DisplayName("historyPersistsAcrossReload - echo call entry survives F5")
+		void history_afterReload_stillShowsEchoEntry() {
+			// given: connect and call echo
+			openAndConnect();
+			clickTab("tools");
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$(".cursor-pointer").shouldHave(CollectionCondition.sizeGreaterThan(0));
+			selectRow("echo");
+			$("#text").shouldBe(visible).setValue("hello world");
+			activePanel().$(byText("Run Tool")).click();
+			activePanel().shouldHave(text("hello world"), Duration.ofSeconds(15));
+
+			// assert: history entry appears in panel AND in localStorage
+			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
+			Object store = Selenide.executeJavaScript("return localStorage.getItem('mcp-inspector.history.v1');");
+			Assertions.assertNotNull(store, "localStorage must contain mcp-inspector.history.v1 after tool call");
+			Assertions.assertTrue(store.toString().contains("tools/call"),
+					"localStorage history must contain a tools/call entry");
+
+			// when: reload the page and reconnect (URL restored from lastSseUrl)
+			Selenide.refresh();
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+			connectButton().click();
+
+			// then: history panel still shows the entry, not 'No history yet'
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			historyColumn().shouldNotHave(text("No history yet"), Duration.ofSeconds(10));
+			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
+		}
+
+		@Test
+		@Story("History persistence")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("History is scoped per connection: a different server URL must not show the previous connection's history.")
+		@DisplayName("historyPerConnection - different URL shows no previous history")
+		void history_differentConnection_showsNoPreviousHistory() {
+			// given: connect and call echo to create history
+			openAndConnect();
+			clickTab("tools");
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$(".cursor-pointer").shouldHave(CollectionCondition.sizeGreaterThan(0));
+			selectRow("echo");
+			$("#text").shouldBe(visible).setValue("hello world");
+			activePanel().$(byText("Run Tool")).click();
+			activePanel().shouldHave(text("hello world"), Duration.ofSeconds(15));
+			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
+
+			// when: disconnect and change URL (no reconnect: history must clear on
+			// connectionId change)
+			sidebar().$(byText("Disconnect")).shouldBe(visible).click();
+			connectButton().shouldBe(visible);
+			int port = ((WebServerApplicationContext) app).getWebServer().getPort();
+			setReactInputValue("#sse-url-input", "http://localhost:" + port + "/other");
+
+			// then: history panel shows 'No history yet' for the new connection
+			historyColumn().shouldHave(text("No history yet"), Duration.ofSeconds(10));
+		}
+
+	}
+
+	// =====================================================================
 	// I. Sidebar — collapsibles, custom headers, theme switch.
 	// =====================================================================
 
