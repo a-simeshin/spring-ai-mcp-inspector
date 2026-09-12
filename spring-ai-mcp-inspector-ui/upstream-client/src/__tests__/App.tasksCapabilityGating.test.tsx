@@ -1,7 +1,7 @@
 // Must run before react-dom loads (jsdom lacks PointerEvent; React only
 // attaches pointermove listeners when the constructor exists).
 import "../testUtils/pointerEventsPolyfill";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 // [spring-ai-mcp-inspector PATCH] Regression tests for tasks capability gating
 // (issue #212, PR #214). Covers capability-absent (no wire request), empty tasks
 // object, missing sub-capability, capability-present (positive), and genuine
@@ -39,7 +39,14 @@ jest.mock("../utils/configUtils", () => ({
   getInitialSseUrl: jest.fn(() => "http://localhost:3001/sse"),
   getInitialCommand: jest.fn(() => "mcp-server-everything"),
   getInitialArgs: jest.fn(() => ""),
-  initializeInspectorConfig: jest.fn(() => ({})),
+  initializeInspectorConfig: jest.fn(() => ({
+    MCP_TASK_TTL: {
+      label: "Task TTL",
+      description: "ttl",
+      value: 60000,
+      is_session_item: false,
+    },
+  })),
   saveInspectorConfig: jest.fn(),
 }));
 
@@ -100,9 +107,33 @@ jest.mock("../components/HistoryAndNotifications", () => ({
   __esModule: true,
   default: () => <div>HistoryAndNotifications</div>,
 }));
+// ToolsTab is NOT mocked: the stale-polling regression test needs the real
+// callTool prop to reach App.callTool (App.tsx:1083) and its polling loop.
+// The mock captures the prop so the test can drive it directly without
+// rendering the full tab tree.
+let capturedCallTool:
+  | ((
+      name: string,
+      params: Record<string, unknown>,
+      metadata?: Record<string, unknown>,
+      runAsTask?: boolean,
+    ) => Promise<unknown>)
+  | null = null;
 jest.mock("../components/ToolsTab", () => ({
   __esModule: true,
-  default: () => <div>ToolsTab</div>,
+  default: ({
+    callTool,
+  }: {
+    callTool: (
+      name: string,
+      params: Record<string, unknown>,
+      metadata?: Record<string, unknown>,
+      runAsTask?: boolean,
+    ) => Promise<unknown>;
+  }) => {
+    capturedCallTool = callTool;
+    return <div data-testid="tools-tab">ToolsTab</div>;
+  },
 }));
 jest.mock("../components/AppsTab", () => ({
   __esModule: true,
@@ -139,16 +170,19 @@ let capturedOnNotification: ((notification: unknown) => void) | null = null;
 function connectedState(
   serverCapabilities: Record<string, unknown>,
   listTasksMock: jest.Mock,
+  makeRequestOverride?: jest.Mock,
 ) {
   // makeRequest is used internally for tools/list etc. Return empty arrays
   // to avoid runtime errors when App effects fire on mount.
-  const makeRequestMock = jest.fn().mockResolvedValue({
-    tools: [],
-    resources: [],
-    prompts: [],
-    resourceTemplates: [],
-    nextCursor: undefined,
-  });
+  const makeRequestMock =
+    makeRequestOverride ??
+    jest.fn().mockResolvedValue({
+      tools: [],
+      resources: [],
+      prompts: [],
+      resourceTemplates: [],
+      nextCursor: undefined,
+    });
 
   return {
     connectionStatus: "connected" as const,
@@ -195,6 +229,7 @@ describe("App - tasks capability gating", () => {
     jest.clearAllMocks();
     window.location.hash = "";
     capturedOnNotification = null;
+    capturedCallTool = null;
   });
 
   it(
@@ -522,24 +557,46 @@ describe("App - tasks capability gating", () => {
   );
 
   it(
-    "Regression - stale polling after disconnect: no tasks/get or tasks/result sent after capability loss",
+    "Regression - stale polling after capability loss: no tasks/get or tasks/result " +
+      "sent once the tasks capability disappears mid-poll",
     async () => {
-      // Before the fix, the polling loop checked serverCapabilitiesRef only
-      // once before the await. During the 1s pollInterval wait, disconnect()
-      // sets serverCapabilitiesRef.current to null, but the loop would
-      // continue and send tasks/get (and possibly tasks/result) to the
-      // now-capability-less server.
+      // Before the fix (base 156c7e0), the polling loop in callTool awaited
+      // `setTimeout(pollInterval)` and then immediately issued tasks/get
+      // without re-checking the capability. Disconnect/reconnect during the
+      // wait left serverCapabilitiesRef.current?.tasks falsy, but the loop
+      // still sent tasks/get (and possibly tasks/result) to a
+      // capability-less server.
       //
-      // The fix adds capability re-checks AFTER the await (App.tsx:1193-1208)
-      // and BEFORE tasks/result (App.tsx:1230-1245). This test simulates the
-      // disconnect scenario by re-rendering with capabilities = null after
-      // the initial render.
+      // The fix adds a capability re-check AFTER the await (App.tsx:1196)
+      // and BEFORE tasks/result (App.tsx:1233). This test exercises the real
+      // polling loop: callTool(runAsTask=true) enters the loop, we drop the
+      // tasks capability while the loop is sleeping on pollInterval, and
+      // assert no tasks/get or tasks/result wire request was issued.
+      jest.useRealTimers();
 
       const listTasksMock = jest
         .fn()
         .mockResolvedValue({ tasks: SAMPLE_TASKS, nextCursor: undefined });
 
-      // Start with tasks capability present.
+      // Route wire requests: tools/call returns a task handle (starting the
+      // polling loop); tasks/get and tasks/result must never be reached
+      // after the capability disappears.
+      const makeRequestMock = jest.fn((request: { method: string }) => {
+        if (request.method === "tools/call") {
+          return Promise.resolve({
+            task: { taskId: "task-poll-1", status: "working", pollInterval: 50 },
+          });
+        }
+        // Default: empty lists for the mount effects (tools/list etc).
+        return Promise.resolve({
+          tools: [],
+          resources: [],
+          prompts: [],
+          resourceTemplates: [],
+          nextCursor: undefined,
+        });
+      });
+
       mockUseConnection.mockReturnValue(
         connectedState(
           {
@@ -547,36 +604,70 @@ describe("App - tasks capability gating", () => {
             tools: { listChanged: true },
           },
           listTasksMock,
+          makeRequestMock,
         ),
       );
 
       window.location.hash = "#tasks";
       const { rerender } = render(<App />);
 
-      // Wait for initial tasks/list.
+      // The ToolsTab mock captured the callTool prop App rendered with.
       await waitFor(() => {
-        expect(listTasksMock).toHaveBeenCalledTimes(1);
+        expect(capturedCallTool).not.toBeNull();
       });
 
-      // Simulate disconnect: re-render with serverCapabilities = null.
-      // This exercises the polling loop's capability re-check: after the
-      // await, the loop must see serverCapabilitiesRef.current?.tasks is
-      // falsy and break without sending tasks/get or tasks/result.
+      // Enter the polling loop: the awaited callTool promise resolves only
+      // when polling ends. Fire it inside act so the initial state updates
+      // (isPollingTask, toolResult) flush synchronously; the loop promise
+      // itself settles after the capability drop.
+      let callToolPromise!: Promise<unknown>;
+      act(() => {
+        callToolPromise = capturedCallTool!("slowTool", {}, undefined, true);
+      });
+
+      // Wait for the loop to enter: tools/call must have been issued and the
+      // polling state set. Give the loop a beat to reach its first await.
+      await waitFor(() => {
+        expect(
+          makeRequestMock.mock.calls.some(
+            ([req]) => (req as { method: string }).method === "tools/call",
+          ),
+        ).toBe(true);
+      });
+
+      // Drop the tasks capability while the loop is sleeping on pollInterval.
+      // serverCapabilitiesRef.current flips to the new value via the effect
+      // at App.tsx:525-527 after this rerender commits.
       mockUseConnection.mockReturnValue(
         connectedState(
-          { tools: { listChanged: true } }, // No tasks capability
+          { tools: { listChanged: true } }, // tasks capability gone
           listTasksMock,
+          makeRequestMock,
         ),
       );
       rerender(<App />);
 
-      // Give the polling loop time to iterate. The capability re-check at
-      // App.tsx:1196 must fire and prevent any tasks/get call.
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Let the polling loop run several poll cycles with the capability
+      // gone. The post-await guard (App.tsx:1196) must break the loop before
+      // any tasks/get is issued.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      });
 
-      // Verify the tab trigger is now disabled (capability absent).
-      const tasksTab = screen.getByRole("tab", { name: /tasks/i });
-      expect(tasksTab).toBeDisabled();
+      // The loop must have exited (callTool resolved).
+      await callToolPromise;
+
+      // The loop must have terminated cleanly (callTool promise resolved).
+      await callToolPromise;
+
+      // The wire log is the regression signal: before the fix, the loop
+      // sent tasks/get on the capability-less server; with the fix, no
+      // tasks/get or tasks/result leaves the client after the capability
+      // drop. The first tools/call is expected (it created the task).
+      const wireMethods = makeRequestMock.mock.calls.map(
+        ([req]) => (req as { method: string }).method,
+      );
+      expect(wireMethods).toEqual(["tools/call"]);
     },
   );
 });
