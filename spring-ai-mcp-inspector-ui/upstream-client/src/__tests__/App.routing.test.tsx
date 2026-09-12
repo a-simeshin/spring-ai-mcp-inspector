@@ -3,6 +3,7 @@ import App from "../App";
 import { useConnection } from "../lib/hooks/useConnection";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
+// [spring-ai-mcp-inspector PATCH] Routing test updated for tasks-always-valid route
 // Mock auth dependencies first
 jest.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
   auth: jest.fn(),

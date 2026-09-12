@@ -33,4 +33,10 @@ Changes:
 
 Covered by:
 - src/__tests__/App.tasksCapabilityGating.test.tsx (App-level integration)
+- src/__tests__/App.routing.test.tsx (default-tab routing with tasks-always-valid)
 - src/lib/hooks/__tests__/useConnection.test.tsx (hook-level unit tests)
+  including delayed-close regression (disconnect window without synchronous
+  invalidation leaks tasks/list)
+- spring-ai-mcp-inspector-demo-webmvc/src/test/java/.../InspectorUiIT.java
+  (E2E tasks-tab probe now checks #run-as-task presence instead of the
+  removed disabled-attribute signal)

@@ -2049,6 +2049,88 @@ describe("useConnection", () => {
       expect(listResult).toBeUndefined();
       expect(mockRequest).not.toHaveBeenCalled();
     });
+
+    // [spring-ai-mcp-inspector PATCH] Regression: delayed-close must not leak
+    // tasks/list, tasks/get or tasks/result during the disconnect window.
+    // The fix synchronously nulls serverCapabilitiesRef BEFORE awaiting close()
+    // (useConnection.ts:1283-1285), so any work that reads capabilities during
+    // the pending window must see null. The mutation that reverts lines
+    // 1283-1285 makes this test go red.
+    test("delayed close: no tasks/* requests during disconnect window", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {} },
+        tools: { listChanged: true },
+      });
+
+      // Hold close() open: disconnect will await this deferred promise.
+      let resolveClose!: () => void;
+      const closePromise = new Promise<void>((resolve) => {
+        resolveClose = resolve;
+      });
+      mockClient.close.mockReturnValue(closePromise);
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      // Baseline: listTasks works when capabilities are present.
+      mockRequest.mockClear();
+      await act(async () => {
+        await result.current.listTasks();
+      });
+      expect(mockRequest).toHaveBeenCalledWith(
+        { method: "tasks/list", params: { cursor: undefined } },
+        ListTasksResultSchema,
+        expect.any(Object),
+      );
+
+      // Clear wire log so we only observe the disconnect window.
+      mockRequest.mockClear();
+
+      // Disconnect WITHOUT awaiting: close() is deferred, so disconnect stays
+      // in its pending state while we check for leaked task requests.
+      let disconnectPromise: Promise<void>;
+      await act(async () => {
+        disconnectPromise = result.current.disconnect();
+      });
+
+      // At this point disconnect() is in-flight: the synchronous
+      // invalidation of serverCapabilitiesRef has run, but
+      // mcpClient.close() is still pending. Any stale work must see
+      // capabilities as null.
+      //
+      // Give React a tick to flush the state updates.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+
+      // Attempt to list tasks during the disconnect window.
+      const duringResult = await result.current.listTasks();
+      expect(duringResult).toBeUndefined();
+
+      // Cancel task during the disconnect window.
+      const cancelResult = await result.current.cancelTask("task-1");
+      expect(cancelResult).toBeUndefined();
+
+      // No tasks/* requests should have reached the wire.
+      const taskRequests = mockRequest.mock.calls
+        .map(([req]) => (req as { method: string }).method)
+        .filter(
+          (m) =>
+            m === "tasks/list" ||
+            m === "tasks/get" ||
+            m === "tasks/result",
+        );
+      expect(taskRequests).toEqual([]);
+
+      // Release the deferred close so the test doesn't leak.
+      resolveClose();
+      await act(async () => {
+        await disconnectPromise;
+      });
+    });
   });
 
     test("listTasks genuine failure shows toast notification", async () => {
