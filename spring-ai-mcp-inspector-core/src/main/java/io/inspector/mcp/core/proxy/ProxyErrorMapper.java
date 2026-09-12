@@ -56,7 +56,7 @@ import io.modelcontextprotocol.client.transport.McpHttpClientTransportAuthorizat
  * <tr>
  * <td>3xx</td>
  * <td>{@code redirect}</td>
- * <td>SSE + STREAMABLE</td>
+ * <td>SSE ONLY</td>
  * </tr>
  * </table>
  *
@@ -142,8 +142,9 @@ public final class ProxyErrorMapper {
 		}
 		final int code = status.get();
 		if (code >= 300 && code < 400) {
-			// D3: redirect surfaces as the structured DTO on both SSE and streamable.
-			return new ProxyErrorDto(code, CODE_REDIRECT, REASON_REDIRECT, GUIDANCE_REDIRECT, null);
+			// Redirect is SSE-ONLY; streamable 3xx → null → legacy 502/504.
+			return (kind == TransportKind.SSE)
+					? new ProxyErrorDto(code, CODE_REDIRECT, REASON_REDIRECT, GUIDANCE_REDIRECT, null) : null;
 		}
 		return switch (code) {
 			case 400 -> (kind == TransportKind.SSE)

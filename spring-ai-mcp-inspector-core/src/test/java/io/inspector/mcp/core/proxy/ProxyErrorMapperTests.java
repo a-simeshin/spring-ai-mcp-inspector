@@ -209,19 +209,15 @@ class ProxyErrorMapperTests {
 		@Test
 		@Story("TransportKind gate")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("STREAMABLE 3xx maps to the redirect DTO (D3: redirects surface on both transports)")
-		void streamable_3xx_mapsToRedirectDto() {
+		@Description("STREAMABLE 3xx NEVER yields a DTO — legacy 502/504 path (null)")
+		void streamable_3xx_returnsNull() {
 			// when
 			final ProxyErrorDto dto = ProxyErrorMapper.map(
 					new RuntimeException("Sending message failed with a non-OK HTTP code: 302"),
 					TransportKind.STREAMABLE);
 
 			// then
-			assertThat(dto).isNotNull();
-			assertThat(dto.status()).isEqualTo(302);
-			assertThat(dto.code()).isEqualTo("redirect");
-			assertThat(dto.reason()).isEqualTo(REASON_3XX);
-			assertThat(dto.guidance()).isEqualTo(GUIDANCE_3XX);
+			assertThat(dto).isNull();
 		}
 
 		@Test
@@ -346,8 +342,8 @@ class ProxyErrorMapperTests {
 		@Test
 		@Story("Handshake")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("handshake 3xx on streamable maps to the redirect DTO (D3)")
-		void streamable_handshake302_mapsToRedirectDto() {
+		@Description("handshake 3xx on streamable NEVER yields a DTO (null → legacy 504)")
+		void streamable_handshake302_returnsNull() {
 			// given
 			final Throwable error = new RuntimeException("Failed to send message: [302 Found] GET https://target/mcp");
 
@@ -355,11 +351,7 @@ class ProxyErrorMapperTests {
 			final ProxyErrorDto dto = ProxyErrorMapper.map(error, TransportKind.STREAMABLE);
 
 			// then
-			assertThat(dto).isNotNull();
-			assertThat(dto.status()).isEqualTo(302);
-			assertThat(dto.code()).isEqualTo("redirect");
-			assertThat(dto.reason()).isEqualTo(REASON_3XX);
-			assertThat(dto.guidance()).isEqualTo(GUIDANCE_3XX);
+			assertThat(dto).isNull();
 		}
 
 		@Test
