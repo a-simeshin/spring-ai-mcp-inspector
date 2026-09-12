@@ -1,10 +1,11 @@
+// [spring-ai-mcp-inspector PATCH] owner-session isolation and auth-profile tests
 // jsdom lacks MediaQueryList; useTheme calls window.matchMedia on mount.
 import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import Sidebar from "../Sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DEFAULT_INSPECTOR_CONFIG } from "@/lib/constants";
-import type { ConnectFailure } from "@/lib/connectErrors";
+import type { ConnectFailure, ProxyErrorDto } from "@/lib/connectionErrors";
 import { LoggingLevel } from "@modelcontextprotocol/sdk/types.js";
 
 jest.mock("@/lib/hooks/useToast", () => ({
@@ -29,6 +30,7 @@ beforeAll(() => {
 const baseProps = {
   connectionStatus: "disconnected" as const,
   connectionError: null,
+  authError: null,
   transportType: "streamable-http" as const,
   setTransportType: jest.fn(),
   command: "",
@@ -60,9 +62,8 @@ const baseProps = {
 };
 
 describe("Sidebar connect-failure alert", () => {
-  type SidebarTestProps = Partial<Omit<typeof baseProps, "connectionError" | "connectionStatus">> & {
+  type SidebarTestProps = Partial<Omit<typeof baseProps, "connectionError">> & {
     connectionError?: ConnectFailure | null;
-    connectionStatus?: string;
   };
   const renderSidebar = (props: SidebarTestProps = {}) =>
     render(
@@ -142,7 +143,95 @@ describe("Sidebar connect-failure alert", () => {
     // Still has a Retry button
     expect(screen.getByTestId("retry-connect-button")).toBeInTheDocument();
   });
+});
 
+// [spring-ai-mcp-inspector PATCH] D3 structured error banner tests (issue #54):
+// regression tests for the authError state rendering in the Sidebar.
+describe("Sidebar D3 auth error banner", () => {
+  const mockDto: ProxyErrorDto = {
+    status: 401,
+    code: "unauthorized",
+    reason: "The MCP server rejected the request as unauthenticated.",
+    guidance: "Verify the token/API key.",
+    url: "https://server:8443/mcp",
+  };
+
+  type SidebarTestProps = Partial<
+    Omit<typeof baseProps, "connectionError" | "authError">
+  > & {
+    connectionError?: ConnectFailure | null;
+    authError?: ProxyErrorDto | null;
+  };
+
+  const renderSidebar = (props: SidebarTestProps = {}) =>
+    render(
+      <TooltipProvider>
+        <Sidebar {...baseProps} {...props} />
+      </TooltipProvider>,
+    );
+
+  it("renders the D3 banner when authError is provided", () => {
+    renderSidebar({ authError: mockDto });
+
+    const banner = screen.getByTestId("connection-error-dto");
+    expect(banner).toBeInTheDocument();
+    expect(banner).toHaveTextContent("401 unauthorized");
+    expect(banner).toHaveTextContent(
+      "The MCP server rejected the request as unauthenticated.",
+    );
+    expect(banner).toHaveTextContent("Verify the token/API key.");
+    expect(banner).toHaveTextContent("https://server:8443/mcp");
+  });
+
+  it("does not render the D3 banner when authError is null", () => {
+    renderSidebar({ authError: null });
+
+    expect(
+      screen.queryByTestId("connection-error-dto"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not render the D3 banner when authError is undefined", () => {
+    renderSidebar();
+
+    expect(
+      screen.queryByTestId("connection-error-dto"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders a D3 banner without url when the DTO has no url", () => {
+    const dtoWithoutUrl: ProxyErrorDto = {
+      status: 403,
+      code: "forbidden",
+      reason: "Access denied",
+      guidance: "Check your permissions.",
+    };
+
+    renderSidebar({ authError: dtoWithoutUrl });
+
+    const banner = screen.getByTestId("connection-error-dto");
+    expect(banner).toHaveTextContent("403 forbidden");
+    expect(banner).toHaveTextContent("Access denied");
+    expect(banner).toHaveTextContent("Check your permissions.");
+    expect(banner).not.toHaveTextContent("URL:");
+  });
+
+  it("renders the D3 banner alongside the connection error amber banner when both are present", () => {
+    renderSidebar({
+      authError: mockDto,
+      connectionError: {
+        code: "MCP_CONNECT_FAILED",
+        reason: "unauthorized",
+        message: "Fork server 401",
+        retryable: true,
+      },
+    });
+
+    expect(screen.getByTestId("connection-error-dto")).toBeInTheDocument();
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts.length).toBe(2);
+    expect(alerts[0]).toHaveTextContent("Authentication Required");
+  });
   describe("sidebar status text (connectionStatus === error)", () => {
     const statusTextProps = { connectionStatus: "error" as const };
 

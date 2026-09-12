@@ -51,14 +51,19 @@ import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyErrorDto;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.core.transport.TransportType;
+import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -744,6 +749,48 @@ class ProxyHandlerTests {
 	}
 
 	@Nested
+	@DisplayName("D8 legacy-session WARN")
+	class LegacySessionWarn {
+
+		@Test
+		@Story("Legacy session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("repeat access to the same owner-less session logs the legacy WARN exactly once")
+		void legacySession_repeatAccess_logsWarnOnce() {
+			// given - an unbound (legacy) session
+			final ProxySession session = newSession("s-legacy");
+			given(ProxyHandlerTests.this.registry.get("s-legacy")).willReturn(session);
+			final ch.qos.logback.classic.Logger warnerLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
+				.getLogger(io.inspector.mcp.core.proxy.LegacySessionAccessWarner.class);
+			final ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender = new ch.qos.logback.core.read.ListAppender<>();
+			appender.start();
+			warnerLogger.addAppender(appender);
+			try {
+				final ServerRequest request = toServerRequest(
+						MockServerHttpRequest.post("/mcp-inspector-api/message?sessionId=s-legacy")
+							.contentType(MediaType.APPLICATION_JSON)
+							.body("{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}"));
+
+				// when - the same legacy session is touched repeatedly
+				ProxyHandlerTests.this.handler.postMessage(request).block();
+				ProxyHandlerTests.this.handler.postMessage(request).block();
+				ProxyHandlerTests.this.handler.postMessage(request).block();
+
+				// then - exactly one WARN was emitted for the session
+				final long warns = appender.list.stream()
+					.filter((e) -> e.getFormattedMessage() != null
+							&& e.getFormattedMessage().contains("legacy session without owner binding"))
+					.count();
+				assertThat(warns).isEqualTo(1);
+			}
+			finally {
+				warnerLogger.detachAppender(appender);
+			}
+		}
+
+	}
+
+	@Nested
 	@DisplayName("postMcp() — Streamable-HTTP")
 	class PostMcp {
 
@@ -1015,6 +1062,8 @@ class ProxyHandlerTests {
 		@Description("deleteMcp() removing a known session returns 200 ok")
 		void deleteMcp_whenSessionRemoved_returnsOk() {
 			// given
+			final ProxySession session = newSession("s4");
+			given(ProxyHandlerTests.this.registry.get("s4")).willReturn(session);
 			given(ProxyHandlerTests.this.registry.removeAndClose("s4")).willReturn(true);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.delete("/mcp-inspector-api/mcp")
 				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s4")
@@ -1040,6 +1089,118 @@ class ProxyHandlerTests {
 
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.deleteMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("D8 owner-check on existing session")
+	class OwnerCheck {
+
+		private ProxyHandler wiredHandler(final ReactiveSessionOwnerResolver resolver) {
+			return new ProxyHandler(ProxyHandlerTests.this.registry, ProxyHandlerTests.this.transportFactory,
+					ProxyHandlerTests.this.mcpProxy, ProxyHandlerTests.this.transportDetector,
+					ProxyHandlerTests.this.objectMapper, ProxyHandlerTests.this.properties, resolver,
+					mock(AuthProfileStore.class), mock(OAuth2ClientCredentialsTokenManager.class),
+					mock(OAuth2AuthCodeTokenExchanger.class));
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMessage() returns 404 when the session owner differs from the caller")
+		void postMessage_foreignOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s1");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn("owner-B");
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/message")
+				.queryParam("sessionId", "s1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+
+			// when
+			final ServerResponse response = wired.postMessage(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMessage() returns 404 when the caller owner cannot be resolved")
+		void postMessage_nullCallerOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s1");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn(null);
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/message")
+				.queryParam("sessionId", "s1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+
+			// when
+			final ServerResponse response = wired.postMessage(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("deleteMcp() returns 404 when the session owner differs from the caller")
+		void deleteMcp_foreignOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s4");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s4")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn("owner-B");
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.delete("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s4")
+				.build());
+
+			// when
+			final ServerResponse response = wired.deleteMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("deleteMcp() returns 404 when the caller owner cannot be resolved")
+		void deleteMcp_nullCallerOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s4");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s4")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn(null);
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.delete("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s4")
+				.build());
+
+			// when
+			final ServerResponse response = wired.deleteMcp(request).block();
 
 			// then
 			assertThat(response).isNotNull();
@@ -1574,6 +1735,45 @@ class ProxyHandlerTests {
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
 			assertThat(entityBody(response).get("error").toString()).contains("MCP_CONNECT_FAILED");
 			assertThat(entityBody(response).get("error").toString()).contains("timeout");
+			verify(ProxyHandlerTests.this.registry).removeAndClose(captured[0].sessionId());
+		}
+
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() new-session handshake failing with 401 returns the structured DTO with a redacted url and tears down the orphaned session")
+		void postMcp_newSessionAuthFailure_returnsRedacted401AndRemovesSession() {
+			// given — a new session whose upstream immediately fails the handshake with
+			// 401 (includeSessionHeader == true, so the session is registered/bound and
+			// must be removed on the failed initial handshake)
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitError(new RuntimeException("401 Unauthorized"));
+				return Mono.empty();
+			});
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp?api_key=SECRET")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then — structured 401 DTO with the D5-redacted url (scheme/host/path only,
+			// the api_key secret stripped from the query) and the never-returned session
+			// is removed (D3 cleanup).
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+			final ProxyErrorDto dto = (ProxyErrorDto) ((EntityResponse<Object>) response).entity();
+			assertThat(dto.code()).isEqualTo("unauthorized");
+			assertThat(dto.url()).isEqualTo("http://target/mcp");
 			verify(ProxyHandlerTests.this.registry).removeAndClose(captured[0].sessionId());
 		}
 

@@ -252,6 +252,8 @@ All settings live under the `spring.ai.mcp.inspector` namespace:
 | `spring.ai.mcp.inspector.auth-enabled` | `true` | When `true`, requests to the proxy endpoint require the bearer token below. |
 | `spring.ai.mcp.inspector.auth-token` | _(generated)_ | Bearer token. If unset, a random token is generated at boot and injected into the SPA bootstrap automatically. |
 | `spring.ai.mcp.inspector.allowed-origins` | _(empty)_ | Origins allowed to call the inspector API and proxy cross-origin. Empty means no CORS mapping is registered at all, so only same-origin browser calls work — set it only when the UI is served from a different host than the app. Accepts a YAML list. |
+| `spring.ai.mcp.inspector.auth-profiles.profiles[0].name` |   | Pre-defined auth profile name (see examples below). |
+| `spring.ai.mcp.inspector.auth-profiles.profiles[0].type` |   | Profile type: `BEARER`, `API_KEY`, `OAUTH2` or `CUSTOM_HEADERS`. |
 
 Custom path example:
 
@@ -274,6 +276,7 @@ fast). All values use Spring's relaxed `Duration` syntax — e.g. `30s`, `2m`, `
 | Property | Default | Description |
 |----------|---------|-------------|
 | `spring.ai.mcp.inspector.timeouts.sse-session` | `30m` | Inactivity budget for a proxied SSE / streamable-HTTP browser session (servlet stack only). |
+| `spring.ai.mcp.inspector.timeouts.sse-request` | `30s` | Per-request SSE backchannel timeout before returning `504`. |
 | `spring.ai.mcp.inspector.timeouts.streamable-request` | `30s` | Per-request wait for a streamable-HTTP JSON-RPC response before returning `504`. |
 | `spring.ai.mcp.inspector.timeouts.fetch-connect` | `10s` | Connect timeout for the outbound `/fetch` HTTP client. |
 | `spring.ai.mcp.inspector.timeouts.fetch-request` | `30s` | Per-request timeout for outbound `/fetch` calls. |
@@ -467,6 +470,232 @@ The demo is split in three so that each web stack gets a classpath of its own:
 with both starters visible, Spring Boot silently runs the "reactive" setup on
 Tomcat-reactive. `-demo-app` holds the application and the stack-agnostic tests;
 the two stack modules add exactly one starter each.
+
+## Auth profiles
+
+The inspector supports named, owner-scoped auth profiles. Each profile belongs to one
+owner, identified by the signed `MCP_INSPECTOR_SESSION` cookie. The cookie is minted
+by the proxy filter on the first authenticated request and is transparent to the UI:
+the browser sends it automatically on every subsequent call.
+
+### Auth-profile REST API (six endpoints)
+
+All endpoints live under `{spring.ai.mcp.inspector.path}/auth-profile` (default:
+`/mcp-inspector-api/auth-profile`). Every endpoint is owner-scoped: the owner is
+resolved from the `MCP_INSPECTOR_SESSION` cookie.
+
+| Method | Path | Description |
+| -------| -----| ------------|
+| `GET` | `/auth-profile` | List all profiles for the current owner. |
+| `POST` | `/auth-profile` | Register a new profile. For `AUTHORIZATION_CODE` profiles returns a pending state with one-time CSRF state and `authorizationUrl`. |
+| `GET` | `/auth-profile/{profileId}` | Get a single profile summary (secrets never listed). |
+| `PUT` | `/auth-profile/{profileId}` | Update an existing profile. |
+| `DELETE` | `/auth-profile/{profileId}` | Delete a profile and evict its cached tokens. |
+| `POST` | `/auth-profile/{profileId}/exchange` | Complete an authorization-code flow (exchange the one-time code for tokens). |
+
+### Owner model
+
+Every session is bound to the owner who created it. The owner is a string derived from
+the `MCP_INSPECTOR_SESSION` cookie. Sessions without a bound profile (no owner) remain
+accessible to all callers, matching the pre-auth-profile behaviour.
+
+### Owner cookie `Secure` attribute
+
+The `MCP_INSPECTOR_SESSION` cookie is minted with the `Secure` attribute **only when the
+incoming request is effectively HTTPS**. The attribute is derived at mint time from the
+request's scheme; there is no configuration property to toggle it.
+
+| Deployment | Effective request scheme | Cookie minted with `Secure`? | Browser sends cookie back? |
+|---|---|---|---|
+| Production HTTPS (direct TLS, or TLS-terminated proxy with forwarded headers) | `https` | Yes | Yes, over HTTPS only |
+| Local HTTP demo (`127.0.0.1:8080`) | `http` | No | Yes (no `Secure` requirement) |
+
+The local HTTP demo keeps working with zero configuration: the demo stand runs plain
+HTTP, so the minted cookie carries no `Secure`. This is a deliberate exception: forcing
+`Secure` unconditionally would break the demo and local development, and there is no
+threat to mitigate on a loopback-only dev tool.
+
+For production deployments behind a TLS-terminated reverse proxy, the container must
+honour forwarded headers (`server.forward-headers-strategy=framework` or `native`).
+Without it, `request.isSecure()` reports `false` at the inner HTTP connector and the
+cookie is minted without `Secure`. This is standard Spring Boot behaviour for every
+request-time scheme check, not a new requirement of this feature.
+
+### Predefined profiles (Spring configuration)
+
+You can pre-populate auth profiles from `application.yml` under the
+`spring.ai.mcp.inspector.auth-profiles` namespace. The YAML example below shows
+all four supported types:
+
+```yaml
+spring:
+  ai:
+    mcp:
+      inspector:
+        auth-profiles:
+          profiles:
+            - name: prod-bearer
+              type: BEARER
+              bearer:
+                token: ${PROD_BEARER_TOKEN}
+            - name: prod-api
+              type: API_KEY
+              api-key:
+                *** X-API-Key
+                value: ${PROD_API_KEY}
+                placement: HEADER
+            - name: prod-oauth
+              type: OAUTH2
+              oauth2:
+                grant-mode: CLIENT_CREDENTIALS
+                token-url: https://auth.example.com/token
+                client-id: inspector
+                client-secret: ${PROD_CLIENT_SECRET}
+                scopes: mcp.read
+            - name: extra-headers
+              type: CUSTOM_HEADERS
+              custom-headers:
+                headers:
+                  - name: X-Tenant
+                    value: acme
+```
+
+### Profile limit per owner
+
+Every owner is capped at **50 profiles** (constant `AuthProfileStore.DEFAULT_MAX_PROFILES_PER_OWNER`). When the
+limit is reached, `POST /auth-profile` answers `400` with:
+
+```json
+{
+  "error": "profile limit reached for this session (50)"
+}
+```
+
+The error is an `IllegalArgumentException` mapped to `400` by the controller's exception
+handler. The limit is a hard ceiling enforced before any profile registration; the
+caller must delete an existing profile before registering a new one.
+
+The counter `profileLimitRejections` (AtomicLong) increments on every rejected
+registration and is exposed via the accessor `AuthProfileStore#profileLimitRejections()`.
+
+### Profile lifecycle states
+
+Every profile moves through a state machine:
+
+| State | Description |
+|-------|-------------|
+| `PENDING` | Authorization-code profile awaiting the browser `/exchange` callback. |
+| `REGISTERED` | Profile registered, not yet bound to a proxy session. |
+| `ACTIVE` | Authorization-code profile whose code was exchanged; tokens held backend-side. |
+| `BOUND` | Profile bound to a proxy session (one-time transition; immutable while bound). |
+
+- **Registering** a non-OAuth2 profile enters `REGISTERED` directly.
+- **Registering** an `AUTHORIZATION_CODE` OAuth2 profile enters `PENDING` and returns
+  a server-issued one-time state plus the IdP `authorizationUrl` in the response.
+- **Completing** the `/exchange` flow transitions `PENDING` to `ACTIVE`.
+- **Connecting** a proxy session with the profile bound transitions `REGISTERED` or
+  `ACTIVE` to `BOUND`. A `BOUND` profile is immutable (updates rejected) and cannot be
+  bound again.
+
+**Guarantee for active / bound profiles.** The eviction sweep (`removeExpired`) removes
+*every* entry whose TTL has passed, with no state-based exemption. The TTL is reset on
+every profile update (which resets `expiresAt` to `now + TTL`). Active or bound profiles
+that are still in use should be implicitly kept alive by the absence of a long enough
+idle gap: the TTL default is 24h, and a profile that is actively used is refreshed
+before that window expires. If a profile must be kept alive indefinitely, re-register it
+before the TTL elapses.
+
+### TTL and eviction
+
+**Profile TTL.** Every stored profile carries a bounded lifetime (`expiresAt` field).
+The default is **24 hours** (`DEFAULT_PROFILE_TTL`) and can be changed via
+`AuthProfileStore#setProfileTtl(Duration)`. Non-positive values fall back to the
+default. The lifetime is set at registration time and is not extended by read or bind
+operations; only an explicit `PUT /auth-profile/{id}` update resets the clock.
+
+**Auth-code state TTL.** A server-issued one-time CSRF state for the authorization-code
+flow lives for **10 minutes** (`STATE_TTL` in `OAuth2AuthCodeTokenExchanger`). After
+that period:
+
+- `POST /auth-profile/{id}/exchange` answers `400` with `"state mismatch, expired or
+  already consumed"`.
+- The state is consumed (removed) on first use; replay is rejected.
+- The backend never tells the client whether the state was expired or mismatched, to
+  avoid leaking replay-attack information.
+
+**The reaper.** A scheduled sweep (`ProxySessionRegistry#reap()`, 1-minute interval by
+default, configurable via `spring.ai.mcp.inspector.timeouts.reaper-interval`) runs
+three cleanup tasks:
+
+1. `AuthProfileStore#removeExpired(now)`: removes every profile whose TTL has passed
+   and evicts the profile's cached tokens.
+2. `OAuth2AuthCodeTokenExchanger#removeExpiredStates(now)`: removes every expired
+   pending state AND any orphaned expired tokens whose expiry has passed (so the token
+   map does not grow unboundedly between explicit `evict()` calls).
+3. Session idle eviction: closes every proxy session that is already closed or has been
+   idle longer than the configured inactivity budget (default 30m, matching the
+   `sse-session` timeout).
+
+### Expired state: what the client sees
+
+When a client uses an expired auth-code CSRF state:
+
+- The `POST /auth-profile/{id}/exchange` endpoint returns `400` with
+  `{"error": "state mismatch, expired or already consumed"}`.
+- The error is indistinguishable from a wrong state or a replay attack (the state is
+  consumed on first use, so a second attempt with the same cookie also returns `400`).
+- The client must re-register the profile (a new `POST /auth-profile` returns a fresh
+  state and `authorizationUrl`).
+
+When a client uses an expired profile (profile removed by TTL sweep):
+
+- `GET /auth-profile/{id}` returns `404`.
+- `PUT /auth-profile/{id}` returns `404`.
+- `DELETE /auth-profile/{id}` returns `404`.
+- The profile no longer exists in the store, so the client must register it again.
+
+### Observability probes
+
+The auth-profile subsystem exposes internal counters and accessors for monitoring
+and diagnostics. These are **not** Micrometer metrics: they are plain `AtomicLong`
+counters and `ConcurrentHashMap#size()` accessors on the component beans. Wire them
+into your own monitoring infrastructure, or read them from a test / actuator endpoint.
+
+| Name | Type | Source | Meaning |
+|------|------|--------|---------|
+| `AuthProfileStore#sizeForOwner(id)` | `int` | `AuthProfileStore` | Current profile count for a given owner. |
+| `AuthProfileStore#size()` | `int` | `AuthProfileStore` | Total profiles across all owners. |
+| `AuthProfileStore#profileLimitRejections()` | `long` | `AuthProfileStore` | Cumulative rejections by the per-owner cap. |
+| `OAuth2ClientCredentialsTokenManager#profileLockCount()` | `int` | `TokenManager` | Current size of the per-profile lock map. |
+| `OAuth2ClientCredentialsTokenManager#orphanLockCleanups()` | `long` | `TokenManager` | Cumulative orphan-lock sweep cleanups. |
+| `OAuth2ClientCredentialsTokenManager#credentialCount()` | `int` | `TokenManager` | Number of stored credential entries. |
+| `OAuth2ClientCredentialsTokenManager#cacheSize()` | `int` | `TokenManager` | Number of cached token entries. |
+| `OAuth2AuthCodeTokenExchanger#expiredStatesRemoved()` | `long` | `Exchanger` | Cumulative expired states removed by the sweeper. |
+| `OAuth2AuthCodeTokenExchanger#stateCount()` | `int` | `Exchanger` | Current number of pending state entries. |
+| `OAuth2AuthCodeTokenExchanger#tokenCount()` | `int` | `Exchanger` | Current number of stored token entries. |
+| `ProxySessionRegistry#size()` | `int` | `SessionRegistry` | Current number of active proxy sessions. |
+
+### Migration notes (from pre-auth-profile versions)
+
+The auth-profile feature (issue #54) is additive relative to versions before it. No
+existing API contract changed. Notable new behaviours:
+
+- **New endpoints.** Six new auth-profile endpoints (see table above) under
+  `/mcp-inspector-api/auth-profile`. These are behind the proxy auth filter, so they
+  require the same `X-MCP-Inspector-Auth` token as the proxy backend.
+- **New error kinds.** `POST /auth-profile` now returns `400` for duplicate profile
+  names and `400` when the per-owner cap is reached. `POST /auth-profile/{id}/exchange`
+  returns `400` for expired / consumed / mismatched CSRF states.
+- **Owner cookie.** The `MCP_INSPECTOR_SESSION` cookie is now required for the
+  auth-profile endpoints. Sessions without a bound profile remain accessible to all
+  callers, matching the pre-auth-profile behaviour.
+- **Profile TTL.** Profiles not touched for 24 hours are automatically removed. The
+  default TTL is deliberately generous for development; production deployments with a
+  large number of owners should consider reducing it via `AuthProfileStore#setProfileTtl()`.
+- **Token eviction hook.** Deleting or updating a profile now evicts the profile's cached
+  OAuth2 tokens and stored credentials. After eviction, a subsequent token lookup fails
+  closed with `IllegalStateException` (mapped to `400`), never falling back to a stale
+  secret.
 
 ## Running the demo
 

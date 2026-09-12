@@ -29,11 +29,21 @@ import reactor.core.publisher.Mono;
 
 import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.webflux.auth.InspectorSessionAttributes;
+import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
 
 /**
  * Reactive auth filter for the inspector REST endpoints. Validates the
  * {@code X-MCP-Inspector-Auth} header (or {@code ?auth=} query parameter) against the
  * token resolved by {@link InspectorAuthTokenProvider} using a constant-time compare.
+ *
+ * <p>
+ * After the guard passes, the filter resolves the signed session-owner cookie
+ * ({@code MCP_INSPECTOR_SESSION}) via {@link ReactiveSessionOwnerResolver} — minting a
+ * fresh signed token when absent/forged/expired — and stashes the validated
+ * {@code ownerId} as the {@code OWNER_ID} exchange attribute (D8). A request that FAILS
+ * the {@code X-MCP-Inspector-Auth} guard is rejected with 401/403 BEFORE any cookie is
+ * minted.
  *
  * <p>
  * Only requests starting with {@code /mcp-inspector/api/} are guarded — the UI
@@ -54,19 +64,28 @@ public class InspectorAuthWebFilter implements WebFilter, Ordered {
 
 	private final InspectorAuthTokenProvider tokenProvider;
 
+	private final ReactiveSessionOwnerResolver sessionOwnerResolver;
+
 	private final int order;
 
 	private final String apiPrefix;
 
 	public InspectorAuthWebFilter(final McpInspectorProperties properties,
 			final InspectorAuthTokenProvider tokenProvider) {
-		this(properties, tokenProvider, Ordered.HIGHEST_PRECEDENCE + 100);
+		this(properties, tokenProvider, Ordered.HIGHEST_PRECEDENCE + 100, null);
 	}
 
 	public InspectorAuthWebFilter(final McpInspectorProperties properties,
 			final InspectorAuthTokenProvider tokenProvider, final int order) {
+		this(properties, tokenProvider, order, null);
+	}
+
+	public InspectorAuthWebFilter(final McpInspectorProperties properties,
+			final InspectorAuthTokenProvider tokenProvider, final int order,
+			final ReactiveSessionOwnerResolver sessionOwnerResolver) {
 		this.properties = properties;
 		this.tokenProvider = tokenProvider;
+		this.sessionOwnerResolver = sessionOwnerResolver;
 		this.order = order;
 		// Derive the API URL prefix once at construction time from the configured
 		// inspector path. The {@code McpInspectorProperties} bean must be present
@@ -107,6 +126,12 @@ public class InspectorAuthWebFilter implements WebFilter, Ordered {
 		if (provided == null || !constantTimeEquals(provided, expected)) {
 			exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
 			return exchange.getResponse().setComplete();
+		}
+		// D8: after the inspector guard passes the session owner is ALWAYS established
+		// (mint/parse the signed cookie); there is no "missing owner → 401".
+		if (this.sessionOwnerResolver != null) {
+			exchange.getAttributes()
+				.put(InspectorSessionAttributes.OWNER_ID, this.sessionOwnerResolver.resolve(exchange));
 		}
 		return chain.filter(exchange);
 	}
