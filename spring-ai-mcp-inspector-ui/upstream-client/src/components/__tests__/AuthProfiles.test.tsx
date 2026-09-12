@@ -337,6 +337,11 @@ describe("AuthProfiles authorization-code flow (AC8 / D9B)", () => {
     });
   });
 
+  // jsdom lacks scrollIntoView; Radix Select calls it on open
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = jest.fn();
+  });
+
   it("creates the PENDING profile, saves the flow record and redirects with the server-issued state", async () => {
     const fetchMock = global.fetch as jest.Mock;
     fetchMock.mockImplementation(async (url: string) => {
@@ -356,16 +361,24 @@ describe("AuthProfiles authorization-code flow (AC8 / D9B)", () => {
     renderPanel();
 
     await screen.findByTestId("auth-profile-save");
+    await screen.findByTestId("auth-profile-type");
     await act(async () => {
-      fireEvent.change(screen.getByTestId("auth-profile-type"), {
-        target: { value: "OAUTH2" },
-      });
+      const typeSelect = screen.getByTestId("auth-profile-type");
+      fireEvent.mouseDown(typeSelect);
+      fireEvent.mouseUp(typeSelect);
+      fireEvent.click(typeSelect);
     });
+    const oauthOption = await screen.findByText("OAuth2");
+    fireEvent.click(oauthOption);
+    await screen.findByTestId("auth-profile-grant-mode");
     await act(async () => {
-      fireEvent.change(screen.getByTestId("auth-profile-grant-mode"), {
-        target: { value: "AUTHORIZATION_CODE" },
-      });
+      const grantSelect = screen.getByTestId("auth-profile-grant-mode");
+      fireEvent.mouseDown(grantSelect);
+      fireEvent.mouseUp(grantSelect);
+      fireEvent.click(grantSelect);
     });
+    const authCodeOption = await screen.findByText("Authorization code (PKCE)");
+    fireEvent.click(authCodeOption);
     fireEvent.change(screen.getByTestId("auth-profile-name"), {
       target: { value: "Browser" },
     });

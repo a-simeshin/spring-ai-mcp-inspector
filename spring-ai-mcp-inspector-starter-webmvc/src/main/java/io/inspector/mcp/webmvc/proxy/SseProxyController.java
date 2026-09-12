@@ -464,6 +464,8 @@ public class SseProxyController {
 	private boolean isOwnerOf(final ProxySession session) {
 		final String sessionOwner = session.ownerId();
 		if (sessionOwner == null) {
+			LOG.warn("proxy[{}] legacy session without owner binding accessed (sessionId={})", session.sessionId(),
+					session.sessionId());
 			return true;
 		}
 		final String callerOwner = resolveOwner();
