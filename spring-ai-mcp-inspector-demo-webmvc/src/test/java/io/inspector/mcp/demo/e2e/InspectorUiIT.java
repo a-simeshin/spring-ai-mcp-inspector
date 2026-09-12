@@ -3621,8 +3621,10 @@ class InspectorUiIT {
 
 			// Create the CLIENT_CREDENTIALS profile (registration performs the
 			// initial token exchange server-side; the profile auto-selects on save).
-			$("[data-testid=auth-profile-type]").shouldBe(visible).selectOptionByValue("OAUTH2");
-			$("[data-testid=auth-profile-grant-mode]").shouldBe(visible).selectOptionByValue("CLIENT_CREDENTIALS");
+			$("[data-testid=auth-profile-type]").shouldBe(visible).click();
+			$$("[role=option]").findBy(text("OAuth2")).shouldBe(visible).click();
+			$("[data-testid=auth-profile-grant-mode]").shouldBe(visible).click();
+			$$("[role=option]").findBy(text("Client credentials")).shouldBe(visible).click();
 			setReactInputValue("[data-testid=auth-profile-name]", "e2e-cc");
 			setReactInputValue("[data-testid=auth-profile-token-url]", tokenServer.tokenUrl());
 			setReactInputValue("[data-testid=auth-profile-client-id]", "e2e-cid");
