@@ -27,6 +27,7 @@ import {
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import { discoverScopes } from "../../auth";
 import { CustomHeaders } from "../../types/customHeaders";
+import { loadHistory } from "../../persistentHistory";
 
 // Mock fetch
 global.fetch = jest.fn().mockResolvedValue({
@@ -1866,5 +1867,226 @@ describe("useConnection", () => {
         }),
       );
     });
+  }); // MCP_PROXY_FULL_ADDRESS Configuration
+
+  describe("history transport scoping via useConnection", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      localStorage.clear();
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+      localStorage.clear();
+    });
+
+    test("keeps separate requestHistory when transport changes with same URL", async () => {
+      const baseUrl = "http://localhost:8080/mcp";
+      const sseConnId = "sse:" + baseUrl;
+      const streamableConnId = "streamable-http:" + baseUrl;
+
+      // Hook 1: SSE transport - connectionId matches App.tsx convention
+      const { result: sseResult } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          sseUrl: baseUrl,
+          connectionId: sseConnId,
+        }),
+      );
+
+      await act(async () => {
+        await sseResult.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      // After connect, requestHistory has 1 entry (initialize handshake)
+      expect(sseResult.current.requestHistory).toHaveLength(1);
+
+      // Make a request via SSE hook - pushHistory appends to both
+      // in-memory state and localStorage.
+      const mockSchema: AnySchema = z
+        .object({ test: z.string() })
+        .passthrough() as unknown as AnySchema;
+      await act(async () => {
+        await sseResult.current.makeRequest(
+          { method: "ping", params: {} },
+          mockSchema,
+        );
+      });
+
+      // After connect(1) + makeRequest(1)
+      expect(sseResult.current.requestHistory).toHaveLength(2);
+
+      // Hook 2: Streamable HTTP transport - same URL, different transport prefix
+      const { result: streamableResult } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          sseUrl: baseUrl,
+          connectionId: streamableConnId,
+        }),
+      );
+
+      // Streamable HTTP starts with empty requestHistory - isolated from SSE
+      expect(streamableResult.current.requestHistory).toHaveLength(0);
+
+      // localStorage confirms transport-scoped isolation.
+      // SSE bucket has both initialize + ping (2 entries) stored under sseConnId.
+      expect(loadHistory(sseConnId)).toHaveLength(2);
+      expect(loadHistory(streamableConnId)).toHaveLength(0);
+
+      // RED on mutation: bare URL or "ephemeral" finds nothing under
+      // transport-scoped keys (the old `connectionId: sseUrl || "ephemeral"`
+      // mapping would produce these keys).
+      expect(loadHistory(baseUrl)).toHaveLength(0);
+      expect(loadHistory("ephemeral")).toHaveLength(0);
+    });
+
+    test("STDIO transport keeps separate history from SSE with same URL", async () => {
+      const baseUrl = "http://localhost:8080/mcp";
+      const sseConnId = "sse:" + baseUrl;
+      const stdioConnId = "stdio:my-server --port 8080";
+
+      // Hook 1: SSE
+      const { result: sseResult } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          sseUrl: baseUrl,
+          connectionId: sseConnId,
+        }),
+      );
+
+      await act(async () => {
+        await sseResult.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      const mockSchema: AnySchema = z
+        .object({ test: z.string() })
+        .passthrough() as unknown as AnySchema;
+      await act(async () => {
+        await sseResult.current.makeRequest(
+          { method: "ping", params: {} },
+          mockSchema,
+        );
+      });
+
+      // After connect(1) + makeRequest(1)
+      expect(sseResult.current.requestHistory).toHaveLength(2);
+
+      // Hook 2: STDIO - same port, different transport
+      const { result: stdioResult } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          transportType: "stdio",
+          sseUrl: baseUrl,
+          connectionId: stdioConnId,
+        }),
+      );
+
+      // STDIO history is empty - isolated from SSE
+      expect(stdioResult.current.requestHistory).toHaveLength(0);
+
+      // SSE localStorage bucket has 2 entries (initialize + ping)
+      expect(loadHistory(sseConnId)).toHaveLength(2);
+      expect(loadHistory(stdioConnId)).toHaveLength(0);
+    });
   });
-});
+
+  describe("history storage denial resilience through useConnection", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      localStorage.clear();
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+      localStorage.clear();
+    });
+
+    test("requestHistory accumulates entries even when localStorage writes are denied", async () => {
+      // Deny setItem via Storage.prototype: readStore still works but writes
+      // are silently dropped. The in-memory requestHistory must survive.
+      jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+        throw new DOMException("blocked in private mode", "SecurityError");
+      });
+
+      const testConnId = "denial-test-conn";
+      const { result } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          connectionId: testConnId,
+        }),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      const mockSchema: AnySchema = z
+        .object({ test: z.string() })
+        .passthrough() as unknown as AnySchema;
+      await act(async () => {
+        await result.current.makeRequest(
+          { method: "ping", params: {} },
+          mockSchema,
+        );
+      });
+
+      // requestHistory remains usable despite localStorage denial.
+      // After connect(1) + makeRequest(1) = 2 entries.
+      expect(result.current.requestHistory).toHaveLength(2);
+    });
+
+    test("clearRequestHistory does not throw under localStorage denial", async () => {
+      const testConnId = "denial-test-conn";
+
+      // First, add some history normally
+      const { result } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          connectionId: testConnId,
+        }),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      const mockSchema: AnySchema = z
+        .object({ test: z.string() })
+        .passthrough() as unknown as AnySchema;
+      await act(async () => {
+        await result.current.makeRequest(
+          { method: "ping", params: {} },
+          mockSchema,
+        );
+      });
+
+      // After connect(1) + makeRequest(1) = 2 entries
+      expect(result.current.requestHistory).toHaveLength(2);
+
+      // Deny setItem (used by clearHistory -> writeStore)
+      jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+        throw new DOMException("blocked in private mode", "SecurityError");
+      });
+
+      // clearRequestHistory must not throw
+      await act(async () => {
+        result.current.clearRequestHistory();
+      });
+
+      // In-memory history cleared
+      expect(result.current.requestHistory).toHaveLength(0);
+    });
+  });
+}); // useConnection
