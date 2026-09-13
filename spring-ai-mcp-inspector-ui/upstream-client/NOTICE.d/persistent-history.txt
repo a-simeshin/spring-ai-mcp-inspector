@@ -12,4 +12,4 @@ Changed files:
 - src/lib/hooks/useConnection.ts (imports + loadHistory on mount + appendHistory
   in pushHistory + clearHistory in clearRequestHistory)
 
-Covered by: persistentHistory.test.ts (from hermes/one-click-reconnect branch).
+Covered by: src/lib/__tests__/persistentHistory.test.ts
