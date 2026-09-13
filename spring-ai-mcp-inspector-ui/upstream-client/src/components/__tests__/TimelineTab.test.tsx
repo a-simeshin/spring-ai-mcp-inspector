@@ -425,4 +425,185 @@ describe("TimelineTab", () => {
       args: {},
     });
   });
+
+  // [spring-ai-mcp-inspector PATCH] Copy as JSON-RPC / Copy as curl tests.
+
+  it("shows Copy JSON-RPC and Copy curl buttons on request rows", async () => {
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("tools/call")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Copy JSON-RPC")).toBeInTheDocument();
+    expect(screen.getByText("Copy curl")).toBeInTheDocument();
+  });
+
+  it("shows Copy JSON-RPC and Copy curl on non-tools/call request rows too", async () => {
+    mockFetch([REQUEST_EVENT]); // tools/list
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("tools/list")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Copy JSON-RPC")).toBeInTheDocument();
+    expect(screen.getByText("Copy curl")).toBeInTheDocument();
+  });
+
+  it("does not show copy buttons on response rows", async () => {
+    mockFetch([DOWNGRADE_RESPONSE_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText(/protocol: 2025-11-25/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Copy JSON-RPC")).not.toBeInTheDocument();
+    expect(screen.queryByText("Copy curl")).not.toBeInTheDocument();
+  });
+
+  it("copies pretty-printed JSON-RPC envelope with stable id=1", async () => {
+    const mockWriteText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+    });
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy JSON-RPC")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy JSON-RPC"));
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledTimes(1));
+    const copiedText = mockWriteText.mock.calls[0][0] as string;
+    const parsed = JSON.parse(copiedText);
+    expect(parsed.jsonrpc).toBe("2.0");
+    expect(parsed.id).toBe(1);
+    expect(parsed.method).toBe("tools/call");
+    expect(parsed.params.name).toBe("echo");
+    expect(parsed.params.arguments).toEqual({
+      message: "hello world",
+      count: 42,
+    });
+    // Pretty-printed: contains newlines
+    expect(copiedText).toContain("\n");
+  });
+
+  it("copies curl command with single-quote escaped body and auth placeholder", async () => {
+    const mockWriteText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+    });
+
+    // Seed localStorage/sessionStorage with a proxy address and auth token
+    localStorage.setItem(
+      "inspectorConfig_v1",
+      JSON.stringify({
+        MCP_PROXY_FULL_ADDRESS: {
+          label: "Inspector Proxy Address",
+          description: "Proxy address",
+          value: "http://localhost:9999",
+          is_session_item: false,
+        },
+      }),
+    );
+    sessionStorage.setItem(
+      "inspectorConfig_v1_ephemeral",
+      JSON.stringify({
+        MCP_PROXY_AUTH_TOKEN: {
+          label: "Proxy Session Token",
+          description: "Auth token",
+          value: "secret-token-123",
+          is_session_item: true,
+        },
+      }),
+    );
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy curl")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy curl"));
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledTimes(1));
+    const copiedText = mockWriteText.mock.calls[0][0] as string;
+    expect(copiedText).toContain("curl -X POST 'http://localhost:9999'");
+    expect(copiedText).toContain("Content-Type: application/json");
+    expect(copiedText).toContain("Authorization: Bearer <TOKEN>");
+    expect(copiedText).toContain('"method": "tools/call"');
+    // JSON body with "hello world" containing a space (not single quotes,
+    // which would test the shell escaping).
+    expect(copiedText).toContain('"hello world"');
+
+    // Clean up seeded config
+    localStorage.removeItem("inspectorConfig_v1");
+    sessionStorage.removeItem("inspectorConfig_v1_ephemeral");
+  });
+
+  it("omits auth header when no token is configured", async () => {
+    // Clear any leftover ephemeral config that may leak from the previous test.
+    sessionStorage.clear();
+    localStorage.removeItem("inspectorConfig_v1");
+
+    const mockWriteText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+    });
+
+    localStorage.setItem(
+      "inspectorConfig_v1",
+      JSON.stringify({
+        MCP_PROXY_FULL_ADDRESS: {
+          label: "Inspector Proxy Address",
+          description: "Proxy address",
+          value: "http://localhost:7777",
+          is_session_item: false,
+        },
+      }),
+    );
+    // No sessionStorage token
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy curl")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy curl"));
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledTimes(1));
+    const copiedText = mockWriteText.mock.calls[0][0] as string;
+    expect(copiedText).toContain("curl -X POST 'http://localhost:7777'");
+    expect(copiedText).not.toContain("Authorization");
+    expect(copiedText).toContain('"method": "tools/call"');
+
+    localStorage.removeItem("inspectorConfig_v1");
+  });
+
+  it("shows 'Copied' confirmation after successful copy", async () => {
+    const mockWriteText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+    });
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy JSON-RPC")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy JSON-RPC"));
+
+    // The button text changes to "Copied" after a successful write
+    await waitFor(() =>
+      expect(screen.getByText("Copied")).toBeInTheDocument(),
+    );
+  });
 });
