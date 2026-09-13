@@ -1,5 +1,6 @@
 import { renderHook, act } from "@testing-library/react";
 import { useConnection } from "../useConnection";
+// [spring-ai-mcp-inspector PATCH] History persistence regression tests (#218).
 import { z } from "zod/v3";
 import {
   ClientRequest,
