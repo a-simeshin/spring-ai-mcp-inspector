@@ -7,7 +7,7 @@ Reads _protocolNegotiation enrichment from McpTrafficRecorder and renders a
 severity-colored badge plus an expanded detail block with summary, affectedMethods,
 and a footer link to issue #129. OK severity is silent-positive (badge only, no
 expanded block). Badge text and colors follow the decision record (t_9315a78c).
-Updated: Replay button for tools/call request rows (#N). Clicking Replay emits
+Updated: Replay button for tools/call request rows (PR #223). Clicking Replay emits
 onReplay(toolName, args) which switches to the Tools tab, selects the tool (if
 still available), and deep-copies the recorded request params into the arguments
 form. Missing-tool case degrades gracefully with a visible warning in the Tools tab.
