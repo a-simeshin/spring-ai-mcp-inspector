@@ -14,10 +14,16 @@ const TRUNCATION_MARKER = "...[truncated]";
 
 /**
  * Read the full history store from localStorage.
- * Returns empty store on corrupt data.
+ * Returns empty store on corrupt or denied storage.
  */
 export function readStore(): HistoryStoreV1 {
-  const raw = localStorage.getItem(HISTORY_KEY);
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(HISTORY_KEY);
+  } catch {
+    console.warn("[persistentHistory] Failed to read localStorage, returning empty store");
+    return { schemaVersion: 1, byConnection: {} };
+  }
   if (!raw) {
     return { schemaVersion: 1, byConnection: {} };
   }
@@ -57,22 +63,15 @@ export function readStore(): HistoryStoreV1 {
 
 /**
  * Write the full store to localStorage.
- * On QuotaExceededError, logs a warning and does not persist.
+ * On any storage error, logs a warning and does not persist.
  */
 function writeStore(store: HistoryStoreV1): void {
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(store));
   } catch (error) {
-    if (
-      error instanceof DOMException &&
-      error.name === "QuotaExceededError"
-    ) {
-      console.warn(
-        "[persistentHistory] localStorage quota exceeded, history not persisted",
-      );
-    } else {
-      throw error;
-    }
+    console.warn(
+      `[persistentHistory] Failed to write history to localStorage: ${error instanceof DOMException ? error.name : error}`,
+    );
   }
 }
 
@@ -276,5 +275,9 @@ export function clearHistory(connectionId: string): void {
  * Clear all history across all connections.
  */
 export function clearAllHistory(): void {
-  localStorage.removeItem(HISTORY_KEY);
+  try {
+    localStorage.removeItem(HISTORY_KEY);
+  } catch {
+    console.warn("[persistentHistory] Failed to clear history from localStorage");
+  }
 }
