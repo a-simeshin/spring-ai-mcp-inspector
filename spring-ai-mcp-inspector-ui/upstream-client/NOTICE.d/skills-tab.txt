@@ -1,0 +1,11 @@
+src/components/SkillsTab.tsx : new SkillsTab component for SEP-2640 skills extension.
+Displays a list of skills fetched via skills/list, a detail pane with collapsible
+sections (SKILL.md frontmatter with cross-check, supporting files from
+resources/directory/read, digest verification), and an internal scrolling file
+viewer. Digest verification computes SHA-256 client-side via crypto.subtle and
+shows a match/mismatch indicator. The tab is gated on
+serverCapabilities.extensions["io.modelcontextprotocol/skills"] in App.tsx.
+Four MCP request helpers (listSkills, getSkill, readSkillDirectory,
+readSkillResource) are added to App.tsx, routed through makeRequest with a
+cast (custom methods not in SDK's ClientRequest union). Tested by
+src/components/__tests__/SkillsTab.test.tsx.

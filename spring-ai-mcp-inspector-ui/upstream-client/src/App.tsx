@@ -63,6 +63,7 @@ import { Button } from "@/components/ui/button";
 import {
   AppWindow,
   Bell,
+  BookOpen,
   Files,
   FolderTree,
   Hammer,
@@ -89,6 +90,8 @@ import TasksTab from "./components/TasksTab";
 import AppsTab from "./components/AppsTab";
 // [spring-ai-mcp-inspector PATCH] TimelineTab — MCP event timeline (#112).
 import TimelineTab from "./components/TimelineTab";
+// [spring-ai-mcp-inspector PATCH] SkillsTab : SEP-2640 skills extension.
+import SkillsTab from "./components/SkillsTab";
 import { InspectorConfig } from "./lib/configurationTypes";
 import {
   getMCPProxyAddress,
@@ -187,6 +190,7 @@ const App = () => {
     prompts: null,
     tools: null,
     tasks: null,
+    skills: null,
   });
   const [command, setCommand] = useState<string>(getInitialCommand);
   const [args, setArgs] = useState<string>(getInitialArgs);
@@ -367,17 +371,21 @@ const App = () => {
     if (!originatingTab) return;
 
     const validTabs = [
-      ...(serverCapabilities?.resources ? ["resources"] : []),
-      ...(serverCapabilities?.prompts ? ["prompts"] : []),
-      ...(serverCapabilities?.tools ? ["tools"] : []),
-      ...(serverCapabilities?.tasks ? ["tasks"] : []),
-      "apps",
-      "ping",
-      "sampling",
-      "elicitations",
-      "roots",
-      "auth",
-      "metadata",
+        ...(serverCapabilities?.resources ? ["resources"] : []),
+        ...(serverCapabilities?.prompts ? ["prompts"] : []),
+        ...(serverCapabilities?.tools ? ["tools"] : []),
+        ...(serverCapabilities?.tasks ? ["tasks"] : []),
+        "apps",
+        "ping",
+        "sampling",
+        "elicitations",
+        "roots",
+        "auth",
+        "metadata",
+        ...(serverCapabilities?.extensions?.["io.modelcontextprotocol/skills"]
+          ? ["skills"]
+          : []),
+        // [spring-ai-mcp-inspector PATCH] Skills tab (#SEP-2640).
     ];
 
     if (!validTabs.includes(originatingTab)) return;
@@ -1307,6 +1315,56 @@ const App = () => {
     }
   };
 
+  // [spring-ai-mcp-inspector PATCH] Skills tab methods (SEP-2640).
+  const listSkills = useCallback(async (): Promise<{ uri: string; frontmatter: Record<string, unknown>; resources: { uri: string; digest: string; size: number }[] }[]> => {
+    clearError("skills");
+    try {
+      const response = await makeRequest(
+        { method: "skills/list" as const, params: {} } as unknown as ClientRequest,
+        z.object({}),
+      );
+      return (response as { skills: unknown[] }).skills as { uri: string; frontmatter: Record<string, unknown>; resources: { uri: string; digest: string; size: number }[] }[];
+    } catch (e) {
+      setErrors((prev) => ({ ...prev, skills: (e as Error).message ?? String(e) }));
+      throw e;
+    }
+  }, [makeRequest, clearError]);
+
+  const getSkill = useCallback(async (uri: string): Promise<{ uri: string; frontmatter: Record<string, unknown>; resources: { uri: string; digest: string; size: number }[] }> => {
+    clearError("skills");
+    try {
+      const response = await makeRequest(
+        { method: "skills/get" as const, params: { uri } } as unknown as ClientRequest,
+        z.object({}),
+      );
+      return (response as { skill: unknown }).skill as { uri: string; frontmatter: Record<string, unknown>; resources: { uri: string; digest: string; size: number }[] };
+    } catch (e) {
+      setErrors((prev) => ({ ...prev, skills: (e as Error).message ?? String(e) }));
+      throw e;
+    }
+  }, [makeRequest, clearError]);
+
+  const readSkillDirectory = useCallback(async (uri: string): Promise<{ uri: string; name: string; mimeType: string }[]> => {
+    const response = await makeRequest(
+      { method: "resources/directory/read" as const, params: { uri } } as unknown as ClientRequest,
+      z.object({}),
+    );
+    return (response as { resources: unknown[] }).resources as { uri: string; name: string; mimeType: string }[];
+  }, [makeRequest]);
+
+  const readSkillResource = useCallback(async (uri: string): Promise<{ uri: string; mimeType: string; text: string }> => {
+    const response = await makeRequest(
+      { method: "resources/read" as const, params: { uri } } as unknown as ClientRequest,
+      z.object({}),
+    );
+    const contents = (response as { contents: unknown[] }).contents as { uri: string; mimeType: string; text: string }[];
+    if (contents.length > 0) {
+      return contents[0];
+    }
+    throw new Error("Empty content for resource: " + uri);
+  }, [makeRequest]);
+
+
   const handleRootsChange = async () => {
     await sendNotification({ method: "notifications/roots/list_changed" });
   };
@@ -1540,6 +1598,13 @@ const App = () => {
                     </Tooltip>
                   </TooltipProvider>
                 )}
+                {/* [spring-ai-mcp-inspector PATCH] Skills tab trigger (SEP-2640): gated on extensions.io.modelcontextprotocol/skills. */}
+                {serverCapabilities?.extensions?.["io.modelcontextprotocol/skills"] && (
+                  <TabsTrigger value="skills">
+                    <BookOpen className="w-4 h-4 mr-2" />
+                    Skills
+                  </TabsTrigger>
+                )}
                 <TabsTrigger value="apps">
                   <AppWindow className="w-4 h-4 mr-2" />
                   Apps
@@ -1760,6 +1825,17 @@ const App = () => {
                       error={errors.tasks}
                       nextCursor={nextTaskCursor}
                     />
+                    {/* [spring-ai-mcp-inspector PATCH] Skills tab content (SEP-2640). */}
+                    {serverCapabilities?.extensions?.["io.modelcontextprotocol/skills"] && (
+                      <SkillsTab
+                        listSkills={listSkills}
+                        getSkill={getSkill}
+                        readDirectory={readSkillDirectory}
+                        readResource={readSkillResource}
+                        error={errors.skills}
+                        clearError={() => clearError("skills")}
+                      />
+                    )}
                     <AppsTab
                       sandboxPath={`${getMCPProxyAddress(config)}/sandbox`}
                       tools={tools}
