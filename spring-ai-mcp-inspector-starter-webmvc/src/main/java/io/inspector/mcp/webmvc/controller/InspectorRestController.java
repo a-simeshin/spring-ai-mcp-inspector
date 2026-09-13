@@ -66,6 +66,7 @@ import io.inspector.mcp.core.dto.ConnectRequest;
 import io.inspector.mcp.core.dto.JsonRpcRelay;
 import io.inspector.mcp.core.dto.RootDto;
 import io.inspector.mcp.core.dto.RootsDto;
+import io.inspector.mcp.core.dto.SkillsExtensionSupport;
 import io.inspector.mcp.core.introspect.McpBeanIntrospector;
 import io.inspector.mcp.core.introspect.check.JsonSchemaCompatibilityChecker;
 import io.inspector.mcp.core.introspect.model.IntrospectionReport;
@@ -256,6 +257,15 @@ public class InspectorRestController implements ApplicationContextAware {
 		}
 
 		final SessionState state = new SessionState(client);
+		// SEP-2640: detect the skills extension from the initialize result so the
+		// session model (and the UI's Skills tab gate) can see it. Parsing tolerates
+		// absent or malformed declarations and never fails the connection.
+		try {
+			state.skillsExtension(SkillsExtensionSupport.from(client.getCurrentInitializationResult()));
+		}
+		catch (final Exception ex) {
+			LOG.debug("skills extension detection failed: {}", ex.toString());
+		}
 		holder.state = state;
 		this.sessions.put(sessionId, state);
 		if (this.closed) {
@@ -270,7 +280,11 @@ public class InspectorRestController implements ApplicationContextAware {
 			return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
 				.body(Map.of("error", "inspector is shutting down"));
 		}
-		return ResponseEntity.ok(Map.of("sessionId", sessionId));
+		final Map<String, Object> body = new LinkedHashMap<>();
+		body.put("sessionId", sessionId);
+		final SkillsExtensionSupport skills = state.skillsExtension();
+		body.put("skillsExtension", Map.of("supported", skills.supported(), "directoryRead", skills.directoryRead()));
+		return ResponseEntity.ok(body);
 	}
 
 	@PostMapping(path = "/jsonrpc", produces = MediaType.APPLICATION_JSON_VALUE)
