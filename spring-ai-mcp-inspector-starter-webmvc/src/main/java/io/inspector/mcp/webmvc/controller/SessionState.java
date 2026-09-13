@@ -24,6 +24,7 @@ import io.modelcontextprotocol.client.McpSyncClient;
 
 import io.inspector.mcp.core.client.PendingServerRequests;
 import io.inspector.mcp.core.dto.RootDto;
+import io.inspector.mcp.core.dto.SkillsExtensionSupport;
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
 
 /**
@@ -40,6 +41,12 @@ final class SessionState {
 	private final List<RootDto> roots = new CopyOnWriteArrayList<>();
 
 	private final PendingServerRequests pendingServerRequests = new PendingServerRequests();
+
+	/**
+	 * SEP-2640 skills-extension detection from the session's initialize result. Set once
+	 * after {@code connect()} and read by the UI session model.
+	 */
+	private volatile SkillsExtensionSupport skillsExtension = SkillsExtensionSupport.ABSENT;
 
 	private volatile String oauthState;
 
@@ -65,6 +72,14 @@ final class SessionState {
 
 	PendingServerRequests pendingServerRequests() {
 		return this.pendingServerRequests;
+	}
+
+	SkillsExtensionSupport skillsExtension() {
+		return this.skillsExtension;
+	}
+
+	void skillsExtension(final SkillsExtensionSupport value) {
+		this.skillsExtension = (value != null) ? value : SkillsExtensionSupport.ABSENT;
 	}
 
 	void replaceRoots(final List<RootDto> next) {

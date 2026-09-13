@@ -72,6 +72,7 @@ import io.inspector.mcp.core.dto.ConnectRequest;
 import io.inspector.mcp.core.dto.JsonRpcRelay;
 import io.inspector.mcp.core.dto.RootDto;
 import io.inspector.mcp.core.dto.RootsDto;
+import io.inspector.mcp.core.dto.SkillsExtensionSupport;
 import io.inspector.mcp.core.introspect.McpBeanIntrospector;
 import io.inspector.mcp.core.introspect.check.JsonSchemaCompatibilityChecker;
 import io.inspector.mcp.core.introspect.model.IntrospectionReport;
@@ -610,6 +611,15 @@ public class InspectorHandler implements ApplicationContextAware {
 
 		final Sinks.Many<ServerSentEvent<String>> sink = Sinks.many().multicast().onBackpressureBuffer(256, false);
 		final SessionContext ctx = new SessionContext(client, sink);
+		// SEP-2640: detect the skills extension from the initialize result so the
+		// session model (and the UI's Skills tab gate) can see it. Parsing tolerates
+		// absent or malformed declarations and never fails the connection.
+		try {
+			ctx.skillsExtension(SkillsExtensionSupport.from(client.getCurrentInitializationResult()));
+		}
+		catch (final Exception ex) {
+			LOG.debug("skills extension detection failed: {}", ex.toString());
+		}
 		holder.ctx = ctx;
 		this.sessions.put(sessionId, ctx);
 		if (this.closed) {
@@ -629,6 +639,8 @@ public class InspectorHandler implements ApplicationContextAware {
 		result.put("sessionId", sessionId);
 		result.put("serverName", (info != null) ? info.name() : null);
 		result.put("serverVersion", (info != null) ? info.version() : null);
+		final SkillsExtensionSupport skills = ctx.skillsExtension();
+		result.put("skillsExtension", Map.of("supported", skills.supported(), "directoryRead", skills.directoryRead()));
 		return result;
 	}
 
