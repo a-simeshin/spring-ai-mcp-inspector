@@ -1,0 +1,12 @@
+diff --git a/spring-ai-mcp-inspector-demo-app/pom.xml b/spring-ai-mcp-inspector-demo-app/pom.xml
+index 10d267c..6657458 100644
+--- a/spring-ai-mcp-inspector-demo-app/pom.xml
++++ b/spring-ai-mcp-inspector-demo-app/pom.xml
+@@ -81,7 +81,6 @@
+             <groupId>io.github.a-simeshin</groupId>
+             <artifactId>spring-ai-mcp-inspector-core</artifactId>
+             <version>${project.version}</version>
+-            <scope>test</scope>
+         </dependency>
+         <!--
+             ProxyAppHarness reads the random port off WebServerApplicationContext. Boot 4
