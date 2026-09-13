@@ -182,6 +182,10 @@ const App = () => {
     useState<CompatibilityCallToolResult | null>(null);
   const [prefilledAppsToolCall, setPrefilledAppsToolCall] =
     useState<PrefilledAppsToolCall | null>(null);
+  const [replayPrefill, setReplayPrefill] = useState<{
+    toolName: string;
+    args: Record<string, unknown>;
+  } | null>(null);
   const [errors, setErrors] = useState<Record<string, string | null>>({
     resources: null,
     prompts: null,
@@ -1315,6 +1319,20 @@ const App = () => {
     setNotifications([]);
   };
 
+  // [spring-ai-mcp-inspector PATCH] Replay tools/call from Timeline: switch to
+  // Tools tab, select the tool, and pre-fill the arguments form.
+  const handleReplayToolCall = useCallback(
+    (info: { toolName: string; args: Record<string, unknown> }) => {
+      setReplayPrefill(info);
+      setActiveTab("tools");
+      window.location.hash = "tools";
+      // Find the tool and select it if it exists.
+      const tool = tools.find((t) => t.name === info.toolName);
+      setSelectedTool(tool ?? null);
+    },
+    [tools],
+  );
+
   const sendLogLevelRequest = async (level: LoggingLevel) => {
     await sendMCPRequest(
       {
@@ -1730,6 +1748,7 @@ const App = () => {
                         clearError("tools");
                         setSelectedTool(tool);
                         setToolResult(null);
+                        setReplayPrefill(null);
                       }}
                       toolResult={toolResult}
                       isPollingTask={isPollingTask}
@@ -1740,6 +1759,7 @@ const App = () => {
                         clearError("resources");
                         readResource(uri);
                       }}
+                      replayPrefill={replayPrefill}
                     />
                     <TasksTab
                       tasks={tasks}
@@ -1820,7 +1840,7 @@ const App = () => {
                       onMetadataChange={handleMetadataChange}
                     />
                     {/* [spring-ai-mcp-inspector PATCH] Timeline tab (#112). */}
-                    <TimelineTab />
+                    <TimelineTab onReplay={handleReplayToolCall} />
                   </>
                 )}
               </div>
