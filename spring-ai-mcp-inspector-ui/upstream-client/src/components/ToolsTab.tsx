@@ -209,6 +209,7 @@ const ToolsTab = ({
   resourceContent,
   onReadResource,
   serverSupportsTaskRequests,
+  replayPrefill,
 }: {
   tools: Tool[];
   listTools: () => void;
@@ -228,6 +229,7 @@ const ToolsTab = ({
   resourceContent: Record<string, unknown>;
   onReadResource?: (uri: string) => void;
   serverSupportsTaskRequests: boolean;
+  replayPrefill?: { toolName: string; args: Record<string, unknown> } | null;
 }) => {
   const [params, setParams] = useState<Record<string, unknown>>({});
   const [runAsTask, setRunAsTask] = useState(false);
@@ -238,6 +240,8 @@ const ToolsTab = ({
     { id: string; key: string; value: string }[]
   >([]);
   const [hasValidationErrors, setHasValidationErrors] = useState(false);
+  const [toolWarning, setToolWarning] = useState<string | null>(null);
+  const consumedPrefillRef = useRef<string | null>(null);
   const formRefs = useRef<Record<string, DynamicJsonFormRef | null>>({});
   const { toast } = useToast();
   const { copied, setCopied } = useCopy();
@@ -252,6 +256,31 @@ const ToolsTab = ({
     setHasValidationErrors(errors);
     return errors;
   };
+
+  // Replay prefill: when replayPrefill changes and is a new value, override
+  // form params and warn if the tool is no longer known.
+  // [spring-ai-mcp-inspector PATCH] Replay prefill: deep-copy recorded args
+  // from Timeline into the tools/call arguments form.
+  useEffect(() => {
+    if (!replayPrefill) return;
+    if (consumedPrefillRef.current === replayPrefill.toolName) return;
+    consumedPrefillRef.current = replayPrefill.toolName;
+
+    // Deep-copy args so later edits don't mutate history.
+    try {
+      setParams(structuredClone(replayPrefill.args));
+    } catch {
+      setParams({ ...replayPrefill.args });
+    }
+
+    // Check whether the replayed tool still exists.
+    const toolExists = tools.some((t) => t.name === replayPrefill.toolName);
+    setToolWarning(
+      toolExists
+        ? null
+        : `Tool "${replayPrefill.toolName}" is no longer available in the current tools list. Arguments have been pre-filled, but calling the tool may fail.`,
+    );
+  }, [replayPrefill, tools]);
 
   useEffect(() => {
     const params = Object.entries(
@@ -381,6 +410,15 @@ const ToolsTab = ({
                     <AlertTitle>Error</AlertTitle>
                     <AlertDescription className="break-all">
                       {error}
+                    </AlertDescription>
+                  </Alert>
+                )}
+                {toolWarning && (
+                  <Alert variant="default">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>Warning</AlertTitle>
+                    <AlertDescription className="break-all">
+                      {toolWarning}
                     </AlertDescription>
                   </Alert>
                 )}
