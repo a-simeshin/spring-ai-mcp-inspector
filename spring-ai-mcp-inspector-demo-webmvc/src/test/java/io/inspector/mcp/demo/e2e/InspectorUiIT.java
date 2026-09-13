@@ -1691,10 +1691,12 @@ class InspectorUiIT {
 			connectButton().shouldBe(visible, Duration.ofSeconds(15));
 			connectButton().click();
 
-			// then: history panel still shows the entry, not 'No history yet'
+			// then: history panel still shows the echo entry (tools/call), not just a
+			// count
 			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
 			historyColumn().shouldNotHave(text("No history yet"), Duration.ofSeconds(10));
 			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
+			historyColumn().$$("li").find(Condition.text("tools/call")).shouldBe(visible, Duration.ofSeconds(5));
 		}
 
 		@Test
