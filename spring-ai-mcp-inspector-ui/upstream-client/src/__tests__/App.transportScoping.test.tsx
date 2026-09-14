@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] Transport scoping regression tests (#218).
 import { render, waitFor, act } from "@testing-library/react";
 import App from "../App";
 import { useConnection } from "../lib/hooks/useConnection";
