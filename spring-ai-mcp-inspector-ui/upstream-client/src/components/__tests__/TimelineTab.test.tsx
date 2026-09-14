@@ -606,4 +606,128 @@ describe("TimelineTab", () => {
       expect(screen.getByText("Copied")).toBeInTheDocument(),
     );
   });
+
+  // [spring-ai-mcp-inspector PATCH] Replay & diff tests.
+
+  it("shows Replay & diff button only when a matching failed response exists", async () => {
+    const failedResponseEvent: WireEvent = {
+      id: "evt-fail-resp",
+      correlationId: "corr-replay-1",
+      sessionId: "s-1",
+      type: "MCP_JSONRPC_RESPONSE",
+      timestamp: "2026-09-13T10:00:00.500Z",
+      payload: {
+        jsonrpc: "2.0",
+        id: 100,
+        result: {
+          content: [{ type: "text", text: "something broke" }],
+          isError: true,
+        },
+      },
+    };
+    mockFetch([TOOL_CALL_REQUEST_EVENT, failedResponseEvent]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Replay & diff")).toBeInTheDocument(),
+    );
+  });
+
+  it("does not show Replay & diff button when the matching response is not an error", async () => {
+    const okResponseEvent: WireEvent = {
+      id: "evt-ok-resp",
+      correlationId: "corr-replay-1",
+      sessionId: "s-1",
+      type: "MCP_JSONRPC_RESPONSE",
+      timestamp: "2026-09-13T10:00:00.500Z",
+      payload: {
+        jsonrpc: "2.0",
+        id: 100,
+        result: {
+          content: [{ type: "text", text: "all good" }],
+          isError: false,
+        },
+      },
+    };
+    mockFetch([TOOL_CALL_REQUEST_EVENT, okResponseEvent]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Replay")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Replay & diff")).not.toBeInTheDocument();
+  });
+
+  it("does not show Replay & diff button when there is no matching response", async () => {
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Replay")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Replay & diff")).not.toBeInTheDocument();
+  });
+
+  it("does not show Replay & diff on response rows even when isError=true", async () => {
+    const failedResponseEvent: WireEvent = {
+      id: "evt-fail-resp",
+      correlationId: "corr-replay-1",
+      sessionId: "s-1",
+      type: "MCP_JSONRPC_RESPONSE",
+      timestamp: "2026-09-13T10:00:00.500Z",
+      payload: {
+        jsonrpc: "2.0",
+        id: 100,
+        result: {
+          content: [{ type: "text", text: "something broke" }],
+          isError: true,
+        },
+      },
+    };
+    mockFetch([failedResponseEvent]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getAllByText("JSONRPC RESPONSE").length).toBeGreaterThan(0),
+    );
+    expect(screen.queryByText("Replay & diff")).not.toBeInTheDocument();
+  });
+
+  it("calls onReplayAndDiff with full info when Replay & diff is clicked", async () => {
+    const onReplayAndDiff = jest.fn();
+    const failedResponseEvent: WireEvent = {
+      id: "evt-fail-resp",
+      correlationId: "corr-replay-1",
+      sessionId: "s-1",
+      type: "MCP_JSONRPC_RESPONSE",
+      timestamp: "2026-09-13T10:00:00.500Z",
+      payload: {
+        jsonrpc: "2.0",
+        id: 100,
+        result: {
+          content: [{ type: "text", text: "something broke" }],
+          isError: true,
+        },
+      },
+    };
+    mockFetch([TOOL_CALL_REQUEST_EVENT, failedResponseEvent]);
+    render(
+      <Tabs defaultValue="timeline">
+        <TimelineTab onReplayAndDiff={onReplayAndDiff} />
+      </Tabs>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Replay & diff")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Replay & diff"));
+
+    expect(onReplayAndDiff).toHaveBeenCalledWith({
+      toolName: "echo",
+      args: { message: "hello world", count: 42 },
+      originalResponse: failedResponseEvent.payload,
+      originalTimestamp: "2026-09-13T10:00:00.500Z",
+      correlationId: "corr-replay-1",
+    });
+  });
 });

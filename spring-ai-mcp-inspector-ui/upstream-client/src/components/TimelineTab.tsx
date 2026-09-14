@@ -16,6 +16,10 @@ import {
 // [spring-ai-mcp-inspector PATCH] Copy as JSON-RPC / Copy as curl row actions:
 // clipboard helpers for recording request payloads as re-usable JSON-RPC
 // envelopes and curl commands targeting the current proxy endpoint.
+// [spring-ai-mcp-inspector PATCH] Replay & diff for failed tools/call rows:
+// when a tools/call request has a matching response with isError=true, an
+// additional "Replay & diff" button re-sends the call immediately and shows a
+// side-by-side structural diff between the recorded and the new response.
 
 type TimelineEventType =
   | "MCP_JSONRPC_REQUEST"
@@ -145,6 +149,12 @@ export interface ReplayInfo {
   args: Record<string, unknown>;
 }
 
+export interface ReplayDiffInfo extends ReplayInfo {
+  originalResponse: Record<string, unknown>;
+  originalTimestamp: string;
+  correlationId: string;
+}
+
 // Checks whether an event payload represents a tools/call request.
 function isToolCallPayload(payload: Record<string, unknown>): ReplayInfo | null {
   if (payload.method !== "tools/call") return null;
@@ -159,6 +169,31 @@ function isToolCallPayload(payload: Record<string, unknown>): ReplayInfo | null 
       ? structuredClone(args as Record<string, unknown>)
       : {},
   };
+}
+
+// [spring-ai-mcp-inspector PATCH] Checks whether a response payload represents
+// a failed tool call (isError=true in the result).
+function isErrorResponse(payload: Record<string, unknown>): boolean {
+  const result = payload.result;
+  if (!result || typeof result !== "object") return false;
+  return (result as Record<string, unknown>).isError === true;
+}
+
+// [spring-ai-mcp-inspector PATCH] Finds the matching response for a request
+// by correlationId and checks whether it represents a failed tool call.
+function findFailedResponse(
+  requestEvent: TimelineEvent,
+  allEvents: TimelineEvent[],
+): TimelineEvent | null {
+  if (!requestEvent.correlationId) return null;
+  const response = allEvents.find(
+    (e) =>
+      e.type === "MCP_JSONRPC_RESPONSE" &&
+      e.correlationId === requestEvent.correlationId &&
+      e.payload !== null &&
+      isErrorResponse(e.payload),
+  );
+  return response ?? null;
 }
 
 // Build a pretty-printed JSON-RPC 2.0 envelope from a request payload.
@@ -189,7 +224,7 @@ function buildCurlCommand(payload: Record<string, unknown>): string {
   return cmd;
 }
 
-function TimelineEventRow({ event, onReplay }: { event: TimelineEvent; onReplay?: (info: ReplayInfo) => void }) {
+function TimelineEventRow({ event, allEvents, onReplay, onReplayAndDiff }: { event: TimelineEvent; allEvents: TimelineEvent[]; onReplay?: (info: ReplayInfo) => void; onReplayAndDiff?: (info: ReplayDiffInfo) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [copiedLabel, setCopiedLabel] = useState<string | null>(null);
   const { toast } = useToast();
@@ -206,6 +241,17 @@ function TimelineEventRow({ event, onReplay }: { event: TimelineEvent; onReplay?
     typeLabel;
 
   const replay = type === "MCP_JSONRPC_REQUEST" ? isToolCallPayload(payload) : null;
+
+  // [spring-ai-mcp-inspector PATCH] Replay & diff: only for failed tool calls.
+  const failedResponse = type === "MCP_JSONRPC_REQUEST" ? findFailedResponse(event, allEvents) : null;
+  const replayDiffInfo: ReplayDiffInfo | null = replay && failedResponse
+    ? {
+        ...replay,
+        originalResponse: failedResponse.payload!,
+        originalTimestamp: failedResponse.timestamp,
+        correlationId: event.correlationId!,
+      }
+    : null;
 
   // [spring-ai-mcp-inspector PATCH] Protocol negotiation badge on initialize response rows.
   const negotiation = type === "MCP_JSONRPC_RESPONSE" ? protocolNegotiationOf(payload) : null;
@@ -292,6 +338,17 @@ function TimelineEventRow({ event, onReplay }: { event: TimelineEvent; onReplay?
             Replay
           </button>
         )}
+        {replayDiffInfo && (
+          <button
+            className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-amber-700 hover:bg-amber-600 text-amber-100"
+            onClick={(e) => {
+              e.stopPropagation();
+              onReplayAndDiff?.(replayDiffInfo);
+            }}
+          >
+            Replay &amp; diff
+          </button>
+        )}
       </div>
       {expanded ? (
         <div className="mt-1 text-[11px] font-mono opacity-80 overflow-x-auto whitespace-pre-wrap max-h-40 overflow-y-auto">
@@ -308,7 +365,7 @@ function TimelineEventRow({ event, onReplay }: { event: TimelineEvent; onReplay?
 }
 
 // [spring-ai-mcp-inspector PATCH] TimelineTab — scrollable timeline of MCP events.
-const TimelineTab = ({ onReplay }: { onReplay?: (info: ReplayInfo) => void }) => {
+const TimelineTab = ({ onReplay, onReplayAndDiff }: { onReplay?: (info: ReplayInfo) => void; onReplayAndDiff?: (info: ReplayDiffInfo) => void }) => {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -376,7 +433,7 @@ const TimelineTab = ({ onReplay }: { onReplay?: (info: ReplayInfo) => void }) =>
           {events.length === 0 ? (
             <div className="opacity-50 text-center mt-8">No timeline events yet</div>
           ) : (
-            events.map((event) => <TimelineEventRow key={event.id} event={event} onReplay={onReplay} />)
+            events.map((event) => <TimelineEventRow key={event.id} event={event} allEvents={events} onReplay={onReplay} onReplayAndDiff={onReplayAndDiff} />)
           )}
         </div>
       </div>

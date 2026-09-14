@@ -11,3 +11,10 @@ Updated: Replay button for tools/call request rows (PR #223). Clicking Replay em
 onReplay(toolName, args) which switches to the Tools tab, selects the tool (if
 still available), and deep-copies the recorded request params into the arguments
 form. Missing-tool case degrades gracefully with a visible warning in the Tools tab.
+Updated: Replay & diff for failed tools/call rows (t_ec8a5d01). When a tools/call
+request has a matching response with isError=true, an additional "Replay & diff"
+button re-sends the call immediately via callTool and opens a modal with a
+side-by-side structural JSON diff (jsonDiff.ts) between the recorded response and
+the new response. Identical errors are detected and reported explicitly instead of
+showing an empty diff. New files: ReplayDiffModal.tsx, utils/jsonDiff.ts,
+__tests__/ReplayDiffModal.test.tsx, __tests__/jsonDiff.test.ts.
