@@ -175,18 +175,52 @@ function buildCurlCommand(payload: Record<string, unknown>): string {
   const CONFIG_KEY = "inspectorConfig_v1";
   const config = initializeInspectorConfig(CONFIG_KEY);
   const proxyAddress = getMCPProxyAddress(config);
-  const { token } = getMCPProxyAuthToken(config);
+  const { token, header } = getMCPProxyAuthToken(config);
+
+  // The active MCP JSON-RPC endpoint is at <proxy>/mcp, matching
+  // useConnection.ts:733 and StreamableHttpProxyController.
+  const mcpEndpoint = `${proxyAddress}/mcp`;
 
   const body = buildJsonRpcEnvelope(payload);
   // Single-quote escape: "'" becomes "'\''" (close-quote, literal quote, open-quote).
   const escapedBody = body.replace(/'/g, "'\\''");
 
-  let cmd = `curl -X POST '${proxyAddress}' \\\n  -H 'Content-Type: application/json'`;
+  let cmd = `curl -X POST '${mcpEndpoint}' \\\n  -H 'Content-Type: application/json'`;
   if (token) {
-    cmd += ` \\\n  -H 'Authorization: Bearer <TOKEN>'`;
+    cmd += ` \\\n  -H '${header}: Bearer <TOKEN>'`;
   }
   cmd += ` \\\n  -d '${escapedBody}'`;
   return cmd;
+}
+
+// Attempt clipboard write via the modern async Clipboard API.  Falls back to
+// the legacy textarea+execCommand approach when the API is unavailable (e.g.
+// non-secure HTTP context).  Returns true on success, false on failure.
+async function copyToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator.clipboard?.writeText === "function") {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Async API rejected; fall through to the legacy fallback.
+    }
+  }
+
+  // Fallback for non-secure contexts: create a hidden textarea, select, execCommand.
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 function TimelineEventRow({ event, onReplay }: { event: TimelineEvent; onReplay?: (info: ReplayInfo) => void }) {
@@ -213,17 +247,16 @@ function TimelineEventRow({ event, onReplay }: { event: TimelineEvent; onReplay?
   const isRequest = type === "MCP_JSONRPC_REQUEST";
 
   const doCopyJsonRpc = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
+    async () => {
       const text = buildJsonRpcEnvelope(payload);
-      try {
-        void navigator.clipboard.writeText(text);
+      const ok = await copyToClipboard(text);
+      if (ok) {
         setCopiedLabel("jsonrpc");
         setTimeout(() => setCopiedLabel(null), 1500);
-      } catch (err) {
+      } else {
         toast({
           title: "Copy failed",
-          description: `Could not copy JSON-RPC: ${err instanceof Error ? err.message : String(err)}`,
+          description: "Could not copy JSON-RPC. Clipboard access denied or unavailable.",
           variant: "destructive",
         });
       }
@@ -232,17 +265,16 @@ function TimelineEventRow({ event, onReplay }: { event: TimelineEvent; onReplay?
   );
 
   const doCopyCurl = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
-      try {
-        const text = buildCurlCommand(payload);
-        void navigator.clipboard.writeText(text);
+    async () => {
+      const text = buildCurlCommand(payload);
+      const ok = await copyToClipboard(text);
+      if (ok) {
         setCopiedLabel("curl");
         setTimeout(() => setCopiedLabel(null), 1500);
-      } catch (err) {
+      } else {
         toast({
           title: "Copy failed",
-          description: `Could not copy curl: ${err instanceof Error ? err.message : String(err)}`,
+          description: "Could not copy curl command. Clipboard access denied or unavailable.",
           variant: "destructive",
         });
       }
@@ -269,13 +301,19 @@ function TimelineEventRow({ event, onReplay }: { event: TimelineEvent; onReplay?
           <>
             <button
               className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-gray-700 hover:bg-gray-600 text-gray-200"
-              onClick={doCopyJsonRpc}
+              onClick={(e) => {
+                e.stopPropagation();
+                doCopyJsonRpc();
+              }}
             >
               {copiedLabel === "jsonrpc" ? "Copied" : "Copy JSON-RPC"}
             </button>
             <button
               className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-gray-700 hover:bg-gray-600 text-gray-200"
-              onClick={doCopyCurl}
+              onClick={(e) => {
+                e.stopPropagation();
+                doCopyCurl();
+              }}
             >
               {copiedLabel === "curl" ? "Copied" : "Copy curl"}
             </button>

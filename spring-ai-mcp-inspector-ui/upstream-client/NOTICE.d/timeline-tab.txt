@@ -11,3 +11,10 @@ Updated: Replay button for tools/call request rows (PR #223). Clicking Replay em
 onReplay(toolName, args) which switches to the Tools tab, selects the tool (if
 still available), and deep-copies the recorded request params into the arguments
 form. Missing-tool case degrades gracefully with a visible warning in the Tools tab.
+Updated: Copy as JSON-RPC / Copy as curl row actions (PR #224). Every
+MCP_JSONRPC_REQUEST row gains two clipboard buttons: (a) copies the raw request
+envelope as pretty-printed JSON with a stable id=1 placeholder, (b) copies a
+ready-to-run curl targeting the active proxy endpoint <proxy>/mcp with the
+X-MCP-Proxy-Auth header and a <TOKEN> placeholder. Clipboard writes use
+navigator.clipboard with a textarea+execCommand fallback for non-secure
+contexts; failures surface as an error toast, not silently.

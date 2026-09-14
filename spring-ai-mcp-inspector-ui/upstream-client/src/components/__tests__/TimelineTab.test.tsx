@@ -466,6 +466,7 @@ describe("TimelineTab", () => {
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText: mockWriteText },
       writable: true,
+      configurable: true,
     });
 
     mockFetch([TOOL_CALL_REQUEST_EVENT]);
@@ -496,6 +497,7 @@ describe("TimelineTab", () => {
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText: mockWriteText },
       writable: true,
+      configurable: true,
     });
 
     // Seed localStorage/sessionStorage with a proxy address and auth token
@@ -532,9 +534,9 @@ describe("TimelineTab", () => {
 
     await waitFor(() => expect(mockWriteText).toHaveBeenCalledTimes(1));
     const copiedText = mockWriteText.mock.calls[0][0] as string;
-    expect(copiedText).toContain("curl -X POST 'http://localhost:9999'");
+    expect(copiedText).toContain("curl -X POST 'http://localhost:9999/mcp'");
     expect(copiedText).toContain("Content-Type: application/json");
-    expect(copiedText).toContain("Authorization: Bearer <TOKEN>");
+    expect(copiedText).toContain("X-MCP-Proxy-Auth: Bearer <TOKEN>");
     expect(copiedText).toContain('"method": "tools/call"');
     // JSON body with "hello world" containing a space (not single quotes,
     // which would test the shell escaping).
@@ -554,6 +556,7 @@ describe("TimelineTab", () => {
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText: mockWriteText },
       writable: true,
+      configurable: true,
     });
 
     localStorage.setItem(
@@ -579,7 +582,7 @@ describe("TimelineTab", () => {
 
     await waitFor(() => expect(mockWriteText).toHaveBeenCalledTimes(1));
     const copiedText = mockWriteText.mock.calls[0][0] as string;
-    expect(copiedText).toContain("curl -X POST 'http://localhost:7777'");
+    expect(copiedText).toContain("curl -X POST 'http://localhost:7777/mcp'");
     expect(copiedText).not.toContain("Authorization");
     expect(copiedText).toContain('"method": "tools/call"');
 
@@ -591,6 +594,7 @@ describe("TimelineTab", () => {
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText: mockWriteText },
       writable: true,
+      configurable: true,
     });
 
     mockFetch([TOOL_CALL_REQUEST_EVENT]);
@@ -605,5 +609,93 @@ describe("TimelineTab", () => {
     await waitFor(() =>
       expect(screen.getByText("Copied")).toBeInTheDocument(),
     );
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Regression tests for clipboard rejection
+  // and non-secure-context fallback.
+
+  it("does not show 'Copied' when clipboard writeText rejects", async () => {
+    const mockWriteText = jest.fn().mockRejectedValue(
+      new Error("clipboard denied"),
+    );
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+      configurable: true,
+    });
+    // Ensure the execCommand fallback also fails so we hit the error path.
+    const execCommandOrig = document.execCommand;
+    document.execCommand = jest.fn().mockReturnValue(false) as unknown as typeof document.execCommand;
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy JSON-RPC")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy JSON-RPC"));
+
+    // Wait for the async handler to settle
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Copied label must NOT appear when the write failed
+    expect(screen.queryByText("Copied")).not.toBeInTheDocument();
+    // The button text should not have changed
+    expect(screen.getByText("Copy JSON-RPC")).toBeInTheDocument();
+
+    document.execCommand = execCommandOrig;
+  });
+
+  it("falls back to textarea+execCommand when clipboard API is unavailable", async () => {
+    // Simulate non-secure context: set clipboard to undefined.
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+
+    const execCommandOrig = document.execCommand;
+    document.execCommand = jest.fn().mockReturnValue(true) as unknown as typeof document.execCommand;
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy curl")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy curl"));
+
+    // Fallback should succeed and show "Copied"
+    await waitFor(() =>
+      expect(screen.getByText("Copied")).toBeInTheDocument(),
+    );
+
+    document.execCommand = execCommandOrig;
+  });
+
+  it("shows error toast when both clipboard API and fallback fail", async () => {
+    // Clipboard API absent
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+
+    const execCommandOrig = document.execCommand;
+    document.execCommand = jest.fn().mockReturnValue(false) as unknown as typeof document.execCommand;
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy JSON-RPC")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy JSON-RPC"));
+
+    // Wait for the async handler to settle
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Copied label must NOT appear
+    expect(screen.queryByText("Copied")).not.toBeInTheDocument();
+
+    document.execCommand = execCommandOrig;
   });
 });
