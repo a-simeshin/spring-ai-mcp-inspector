@@ -88,7 +88,8 @@ import ToolsTab from "./components/ToolsTab";
 import TasksTab from "./components/TasksTab";
 import AppsTab from "./components/AppsTab";
 // [spring-ai-mcp-inspector PATCH] TimelineTab — MCP event timeline (#112).
-import TimelineTab from "./components/TimelineTab";
+import TimelineTab, { ReplayDiffInfo } from "./components/TimelineTab";
+import ReplayDiffModal from "./components/ReplayDiffModal";
 import { InspectorConfig } from "./lib/configurationTypes";
 import {
   getMCPProxyAddress,
@@ -182,6 +183,17 @@ const App = () => {
     useState<CompatibilityCallToolResult | null>(null);
   const [prefilledAppsToolCall, setPrefilledAppsToolCall] =
     useState<PrefilledAppsToolCall | null>(null);
+  const [replayPrefill, setReplayPrefill] = useState<{
+    toolName: string;
+    args: Record<string, unknown>;
+  } | null>(null);
+  // [spring-ai-mcp-inspector PATCH] Replay & diff state: holds the recorded
+  // failure while the replayed call is in flight, then the modal opens.
+  const [replayDiffInfo, setReplayDiffInfo] = useState<ReplayDiffInfo | null>(null);
+  const [replayDiffNewResponse, setReplayDiffNewResponse] = useState<Record<string, unknown> | null>(null);
+  const [replayDiffNewTimestamp, setReplayDiffNewTimestamp] = useState<string | null>(null);
+  const [replayDiffLoading, setReplayDiffLoading] = useState(false);
+  const [replayDiffOpen, setReplayDiffOpen] = useState(false);
   const [errors, setErrors] = useState<Record<string, string | null>>({
     resources: null,
     prompts: null,
@@ -1315,6 +1327,64 @@ const App = () => {
     setNotifications([]);
   };
 
+  // [spring-ai-mcp-inspector PATCH] Replay tools/call from Timeline: switch to
+  // Tools tab, select the tool, and pre-fill the arguments form.
+  const handleReplayToolCall = useCallback(
+    (info: { toolName: string; args: Record<string, unknown> }) => {
+      setReplayPrefill(info);
+      setActiveTab("tools");
+      window.location.hash = "tools";
+      // Find the tool and select it if it exists.
+      const tool = tools.find((t) => t.name === info.toolName);
+      setSelectedTool(tool ?? null);
+    },
+    [tools],
+  );
+
+  // [spring-ai-mcp-inspector PATCH] Replay & diff: immediately re-send the
+  // failed call, then open a modal with a structural diff of old vs new.
+  const handleReplayAndDiff = useCallback(
+    async (info: ReplayDiffInfo) => {
+      setReplayDiffInfo(info);
+      setReplayDiffNewResponse(null);
+      setReplayDiffNewTimestamp(null);
+      setReplayDiffLoading(true);
+      setReplayDiffOpen(true);
+
+      try {
+        const result = await callTool(info.toolName, info.args);
+        // callTool returns a CompatibilityCallToolResult; wrap it in a
+        // JSON-RPC response envelope so the diff compares like with like.
+        const wrapped = {
+          jsonrpc: "2.0",
+          id: 0,
+          result,
+        };
+        setReplayDiffNewResponse(wrapped as unknown as Record<string, unknown>);
+        setReplayDiffNewTimestamp(new Date().toISOString());
+      } catch (e) {
+        const wrapped = {
+          jsonrpc: "2.0",
+          id: 0,
+          result: {
+            content: [
+              {
+                type: "text",
+                text: (e as Error).message ?? String(e),
+              },
+            ],
+            isError: true,
+          },
+        };
+        setReplayDiffNewResponse(wrapped as unknown as Record<string, unknown>);
+        setReplayDiffNewTimestamp(new Date().toISOString());
+      } finally {
+        setReplayDiffLoading(false);
+      }
+    },
+    [callTool],
+  );
+
   const sendLogLevelRequest = async (level: LoggingLevel) => {
     await sendMCPRequest(
       {
@@ -1730,6 +1800,7 @@ const App = () => {
                         clearError("tools");
                         setSelectedTool(tool);
                         setToolResult(null);
+                        setReplayPrefill(null);
                       }}
                       toolResult={toolResult}
                       isPollingTask={isPollingTask}
@@ -1740,6 +1811,7 @@ const App = () => {
                         clearError("resources");
                         readResource(uri);
                       }}
+                      replayPrefill={replayPrefill}
                     />
                     <TasksTab
                       tasks={tasks}
@@ -1820,7 +1892,10 @@ const App = () => {
                       onMetadataChange={handleMetadataChange}
                     />
                     {/* [spring-ai-mcp-inspector PATCH] Timeline tab (#112). */}
-                    <TimelineTab />
+                    <TimelineTab
+                      onReplay={handleReplayToolCall}
+                      onReplayAndDiff={handleReplayAndDiff}
+                    />
                   </>
                 )}
               </div>
@@ -1890,6 +1965,14 @@ const App = () => {
           </div>
         </div>
       </div>
+      <ReplayDiffModal
+        open={replayDiffOpen}
+        onOpenChange={setReplayDiffOpen}
+        diffInfo={replayDiffInfo}
+        newResponse={replayDiffNewResponse}
+        newTimestamp={replayDiffNewTimestamp}
+        loading={replayDiffLoading}
+      />
     </div>
   );
 };
