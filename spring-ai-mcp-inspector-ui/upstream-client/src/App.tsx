@@ -436,6 +436,11 @@ const App = () => {
     oauthScope,
     config,
     connectionType,
+    // [spring-ai-mcp-inspector PATCH] Persistent history (#121). Extended scoping (#218).
+    connectionId:
+      transportType === "stdio"
+        ? `stdio:${command} ${args}`
+        : `${transportType}:${sseUrl || "ephemeral"}`,
     onNotification: (notification) => {
       setNotifications((prev) => [...prev, notification as ServerNotification]);
 
