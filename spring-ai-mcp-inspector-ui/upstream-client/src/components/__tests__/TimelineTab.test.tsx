@@ -698,4 +698,86 @@ describe("TimelineTab", () => {
 
     document.execCommand = execCommandOrig;
   });
+
+  // [spring-ai-mcp-inspector PATCH] Regression test: curl preserves non-default
+  // upstream target via ?url= query param (reviewer blocker on PR #224).
+  it("includes ?url= with encoded upstream target when lastSseUrl is non-default", async () => {
+    const mockWriteText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+      configurable: true,
+    });
+
+    localStorage.setItem(
+      "inspectorConfig_v1",
+      JSON.stringify({
+        MCP_PROXY_FULL_ADDRESS: {
+          label: "Inspector Proxy Address",
+          description: "Proxy address",
+          value: "http://localhost:9999",
+          is_session_item: false,
+        },
+      }),
+    );
+    localStorage.setItem("lastSseUrl", "https://upstream.example/custom-mcp");
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy curl")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy curl"));
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledTimes(1));
+    const copiedText = mockWriteText.mock.calls[0][0] as string;
+    // The endpoint must include the encoded upstream URL
+    expect(copiedText).toContain(
+      "curl -X POST 'http://localhost:9999/mcp?url=https%3A%2F%2Fupstream.example%2Fcustom-mcp'",
+    );
+    expect(copiedText).toContain('"method": "tools/call"');
+
+    localStorage.removeItem("inspectorConfig_v1");
+    localStorage.removeItem("lastSseUrl");
+  });
+
+  it("omits ?url= when lastSseUrl is the default /mcp", async () => {
+    const mockWriteText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+      configurable: true,
+    });
+
+    localStorage.setItem(
+      "inspectorConfig_v1",
+      JSON.stringify({
+        MCP_PROXY_FULL_ADDRESS: {
+          label: "Inspector Proxy Address",
+          description: "Proxy address",
+          value: "http://localhost:9999",
+          is_session_item: false,
+        },
+      }),
+    );
+    // Explicitly set the default value
+    localStorage.setItem("lastSseUrl", "/mcp");
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy curl")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy curl"));
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledTimes(1));
+    const copiedText = mockWriteText.mock.calls[0][0] as string;
+    expect(copiedText).toContain("curl -X POST 'http://localhost:9999/mcp'");
+    expect(copiedText).not.toContain("?url=");
+
+    localStorage.removeItem("inspectorConfig_v1");
+    localStorage.removeItem("lastSseUrl");
+  });
 });

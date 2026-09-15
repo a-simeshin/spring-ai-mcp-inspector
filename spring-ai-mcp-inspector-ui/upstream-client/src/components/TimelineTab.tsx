@@ -171,6 +171,9 @@ function buildJsonRpcEnvelope(payload: Record<string, unknown>): string {
 // Build a curl command targeting the current proxy endpoint.  Reads config
 // from localStorage/sessionStorage so the command is ready to run against the
 // live proxy once the user fills in <TOKEN> (if auth is enabled).
+// [spring-ai-mcp-inspector PATCH] Preserve the active upstream target: when the
+// connection uses streamable-http with a non-default upstream URL, the proxy
+// route is <proxy>/mcp?url=<encoded-sse-url> (matching useConnection.ts:733).
 function buildCurlCommand(payload: Record<string, unknown>): string {
   const CONFIG_KEY = "inspectorConfig_v1";
   const config = initializeInspectorConfig(CONFIG_KEY);
@@ -179,7 +182,15 @@ function buildCurlCommand(payload: Record<string, unknown>): string {
 
   // The active MCP JSON-RPC endpoint is at <proxy>/mcp, matching
   // useConnection.ts:733 and StreamableHttpProxyController.
-  const mcpEndpoint = `${proxyAddress}/mcp`;
+  let mcpEndpoint = `${proxyAddress}/mcp`;
+
+  // [spring-ai-mcp-inspector PATCH] Append the active upstream target when it
+  // differs from the default "/mcp".  The proxy resolves the upstream via the
+  // "url" query param (useConnection.ts:734, ProxyTargetResolver.java:85-104).
+  const lastSseUrl = localStorage.getItem("lastSseUrl");
+  if (lastSseUrl && lastSseUrl !== "/mcp") {
+    mcpEndpoint += `?url=${encodeURIComponent(lastSseUrl)}`;
+  }
 
   const body = buildJsonRpcEnvelope(payload);
   // Single-quote escape: "'" becomes "'\''" (close-quote, literal quote, open-quote).
