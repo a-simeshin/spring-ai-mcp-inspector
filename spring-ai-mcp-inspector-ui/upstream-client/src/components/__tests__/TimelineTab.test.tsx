@@ -141,6 +141,54 @@ const INCOMPATIBLE_RESPONSE_EVENT: WireEvent = {
   },
 };
 
+// [spring-ai-mcp-inspector PATCH] Replay button test fixtures.
+const TOOL_CALL_REQUEST_EVENT: WireEvent = {
+  id: "evt-replay-1",
+  correlationId: "corr-replay-1",
+  sessionId: "s-1",
+  type: "MCP_JSONRPC_REQUEST",
+  timestamp: "2026-09-13T10:00:00.000Z",
+  payload: {
+    jsonrpc: "2.0",
+    id: 100,
+    method: "tools/call",
+    params: {
+      name: "echo",
+      arguments: { message: "hello world", count: 42 },
+    },
+  },
+};
+
+const TOOL_CALL_REQUEST_EVENT_NO_ARGS: WireEvent = {
+  id: "evt-replay-2",
+  correlationId: "corr-replay-2",
+  sessionId: "s-1",
+  type: "MCP_JSONRPC_REQUEST",
+  timestamp: "2026-09-13T10:00:01.000Z",
+  payload: {
+    jsonrpc: "2.0",
+    id: 101,
+    method: "tools/call",
+    params: {
+      name: "echo",
+    },
+  },
+};
+
+const PROMT_LIST_REQUEST_EVENT: WireEvent = {
+  id: "evt-replay-3",
+  correlationId: "corr-replay-3",
+  sessionId: "s-1",
+  type: "MCP_JSONRPC_REQUEST",
+  timestamp: "2026-09-13T10:00:02.000Z",
+  payload: {
+    jsonrpc: "2.0",
+    id: 102,
+    method: "prompts/list",
+    params: {},
+  },
+};
+
 function mockFetch(events: WireEvent[]) {
   const fetchMock = jest.fn().mockResolvedValue({
     ok: true,
@@ -294,5 +342,442 @@ describe("TimelineTab", () => {
     expect(screen.getByText(/severity: INCOMPATIBLE/)).toBeInTheDocument();
     // Affected methods appear in the expanded block.
     expect(screen.getByText(/affected: initialize/)).toBeInTheDocument();
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Replay button tests.
+
+  it("shows Replay button on tools/call request rows", async () => {
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("tools/call")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Replay")).toBeInTheDocument();
+  });
+
+  it("does not show Replay button on non-tools/call request rows", async () => {
+    mockFetch([REQUEST_EVENT]); // tools/list, not tools/call
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("tools/list")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Replay")).not.toBeInTheDocument();
+  });
+
+  it("does not show Replay button on prompts/list request rows", async () => {
+    mockFetch([PROMT_LIST_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("prompts/list")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Replay")).not.toBeInTheDocument();
+  });
+
+  it("does not show Replay button on response rows", async () => {
+    mockFetch([DOWNGRADE_RESPONSE_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText(/protocol: 2025-11-25/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Replay")).not.toBeInTheDocument();
+  });
+
+  it("calls onReplay with tool name and args when Replay is clicked", async () => {
+    const onReplay = jest.fn();
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    render(
+      <Tabs defaultValue="timeline">
+        <TimelineTab onReplay={onReplay} />
+      </Tabs>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Replay")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Replay"));
+
+    expect(onReplay).toHaveBeenCalledWith({
+      toolName: "echo",
+      args: { message: "hello world", count: 42 },
+    });
+  });
+
+  it("calls onReplay with empty args when tools/call has no arguments field", async () => {
+    const onReplay = jest.fn();
+    mockFetch([TOOL_CALL_REQUEST_EVENT_NO_ARGS]);
+    render(
+      <Tabs defaultValue="timeline">
+        <TimelineTab onReplay={onReplay} />
+      </Tabs>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Replay")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Replay"));
+
+    expect(onReplay).toHaveBeenCalledWith({
+      toolName: "echo",
+      args: {},
+    });
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Copy as JSON-RPC / Copy as curl tests.
+
+  it("shows Copy JSON-RPC and Copy curl buttons on request rows", async () => {
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("tools/call")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Copy JSON-RPC")).toBeInTheDocument();
+    expect(screen.getByText("Copy curl")).toBeInTheDocument();
+  });
+
+  it("shows Copy JSON-RPC and Copy curl on non-tools/call request rows too", async () => {
+    mockFetch([REQUEST_EVENT]); // tools/list
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("tools/list")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Copy JSON-RPC")).toBeInTheDocument();
+    expect(screen.getByText("Copy curl")).toBeInTheDocument();
+  });
+
+  it("does not show copy buttons on response rows", async () => {
+    mockFetch([DOWNGRADE_RESPONSE_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText(/protocol: 2025-11-25/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Copy JSON-RPC")).not.toBeInTheDocument();
+    expect(screen.queryByText("Copy curl")).not.toBeInTheDocument();
+  });
+
+  it("copies pretty-printed JSON-RPC envelope with stable id=1", async () => {
+    const mockWriteText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+      configurable: true,
+    });
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy JSON-RPC")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy JSON-RPC"));
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledTimes(1));
+    const copiedText = mockWriteText.mock.calls[0][0] as string;
+    const parsed = JSON.parse(copiedText);
+    expect(parsed.jsonrpc).toBe("2.0");
+    expect(parsed.id).toBe(1);
+    expect(parsed.method).toBe("tools/call");
+    expect(parsed.params.name).toBe("echo");
+    expect(parsed.params.arguments).toEqual({
+      message: "hello world",
+      count: 42,
+    });
+    // Pretty-printed: contains newlines
+    expect(copiedText).toContain("\n");
+  });
+
+  it("copies curl command with single-quote escaped body and auth placeholder", async () => {
+    const mockWriteText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+      configurable: true,
+    });
+
+    // Seed localStorage/sessionStorage with a proxy address and auth token
+    localStorage.setItem(
+      "inspectorConfig_v1",
+      JSON.stringify({
+        MCP_PROXY_FULL_ADDRESS: {
+          label: "Inspector Proxy Address",
+          description: "Proxy address",
+          value: "http://localhost:9999",
+          is_session_item: false,
+        },
+      }),
+    );
+    sessionStorage.setItem(
+      "inspectorConfig_v1_ephemeral",
+      JSON.stringify({
+        MCP_PROXY_AUTH_TOKEN: {
+          label: "Proxy Session Token",
+          description: "Auth token",
+          value: "secret-token-123",
+          is_session_item: true,
+        },
+      }),
+    );
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy curl")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy curl"));
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledTimes(1));
+    const copiedText = mockWriteText.mock.calls[0][0] as string;
+    expect(copiedText).toContain("curl -X POST 'http://localhost:9999/mcp'");
+    expect(copiedText).toContain("Content-Type: application/json");
+    expect(copiedText).toContain("X-MCP-Proxy-Auth: Bearer <TOKEN>");
+    expect(copiedText).toContain('"method": "tools/call"');
+    // JSON body with "hello world" containing a space (not single quotes,
+    // which would test the shell escaping).
+    expect(copiedText).toContain('"hello world"');
+
+    // Clean up seeded config
+    localStorage.removeItem("inspectorConfig_v1");
+    sessionStorage.removeItem("inspectorConfig_v1_ephemeral");
+  });
+
+  it("omits auth header when no token is configured", async () => {
+    // Clear any leftover ephemeral config that may leak from the previous test.
+    sessionStorage.clear();
+    localStorage.removeItem("inspectorConfig_v1");
+
+    const mockWriteText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+      configurable: true,
+    });
+
+    localStorage.setItem(
+      "inspectorConfig_v1",
+      JSON.stringify({
+        MCP_PROXY_FULL_ADDRESS: {
+          label: "Inspector Proxy Address",
+          description: "Proxy address",
+          value: "http://localhost:7777",
+          is_session_item: false,
+        },
+      }),
+    );
+    // No sessionStorage token
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy curl")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy curl"));
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledTimes(1));
+    const copiedText = mockWriteText.mock.calls[0][0] as string;
+    expect(copiedText).toContain("curl -X POST 'http://localhost:7777/mcp'");
+    expect(copiedText).not.toContain("Authorization");
+    expect(copiedText).toContain('"method": "tools/call"');
+
+    localStorage.removeItem("inspectorConfig_v1");
+  });
+
+  it("shows 'Copied' confirmation after successful copy", async () => {
+    const mockWriteText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+      configurable: true,
+    });
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy JSON-RPC")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy JSON-RPC"));
+
+    // The button text changes to "Copied" after a successful write
+    await waitFor(() =>
+      expect(screen.getByText("Copied")).toBeInTheDocument(),
+    );
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Regression tests for clipboard rejection
+  // and non-secure-context fallback.
+
+  it("does not show 'Copied' when clipboard writeText rejects", async () => {
+    const mockWriteText = jest.fn().mockRejectedValue(
+      new Error("clipboard denied"),
+    );
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+      configurable: true,
+    });
+    // Ensure the execCommand fallback also fails so we hit the error path.
+    const execCommandOrig = document.execCommand;
+    document.execCommand = jest.fn().mockReturnValue(false) as unknown as typeof document.execCommand;
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy JSON-RPC")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy JSON-RPC"));
+
+    // Wait for the async handler to settle
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Copied label must NOT appear when the write failed
+    expect(screen.queryByText("Copied")).not.toBeInTheDocument();
+    // The button text should not have changed
+    expect(screen.getByText("Copy JSON-RPC")).toBeInTheDocument();
+
+    document.execCommand = execCommandOrig;
+  });
+
+  it("falls back to textarea+execCommand when clipboard API is unavailable", async () => {
+    // Simulate non-secure context: set clipboard to undefined.
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+
+    const execCommandOrig = document.execCommand;
+    document.execCommand = jest.fn().mockReturnValue(true) as unknown as typeof document.execCommand;
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy curl")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy curl"));
+
+    // Fallback should succeed and show "Copied"
+    await waitFor(() =>
+      expect(screen.getByText("Copied")).toBeInTheDocument(),
+    );
+
+    document.execCommand = execCommandOrig;
+  });
+
+  it("shows error toast when both clipboard API and fallback fail", async () => {
+    // Clipboard API absent
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+
+    const execCommandOrig = document.execCommand;
+    document.execCommand = jest.fn().mockReturnValue(false) as unknown as typeof document.execCommand;
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy JSON-RPC")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy JSON-RPC"));
+
+    // Wait for the async handler to settle
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Copied label must NOT appear
+    expect(screen.queryByText("Copied")).not.toBeInTheDocument();
+
+    document.execCommand = execCommandOrig;
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Regression test: curl preserves non-default
+  // upstream target via ?url= query param (reviewer blocker on PR #224).
+  it("includes ?url= with encoded upstream target when lastSseUrl is non-default", async () => {
+    const mockWriteText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+      configurable: true,
+    });
+
+    localStorage.setItem(
+      "inspectorConfig_v1",
+      JSON.stringify({
+        MCP_PROXY_FULL_ADDRESS: {
+          label: "Inspector Proxy Address",
+          description: "Proxy address",
+          value: "http://localhost:9999",
+          is_session_item: false,
+        },
+      }),
+    );
+    localStorage.setItem("lastSseUrl", "https://upstream.example/custom-mcp");
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy curl")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy curl"));
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledTimes(1));
+    const copiedText = mockWriteText.mock.calls[0][0] as string;
+    // The endpoint must include the encoded upstream URL
+    expect(copiedText).toContain(
+      "curl -X POST 'http://localhost:9999/mcp?url=https%3A%2F%2Fupstream.example%2Fcustom-mcp'",
+    );
+    expect(copiedText).toContain('"method": "tools/call"');
+
+    localStorage.removeItem("inspectorConfig_v1");
+    localStorage.removeItem("lastSseUrl");
+  });
+
+  it("omits ?url= when lastSseUrl is the default /mcp", async () => {
+    const mockWriteText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+      configurable: true,
+    });
+
+    localStorage.setItem(
+      "inspectorConfig_v1",
+      JSON.stringify({
+        MCP_PROXY_FULL_ADDRESS: {
+          label: "Inspector Proxy Address",
+          description: "Proxy address",
+          value: "http://localhost:9999",
+          is_session_item: false,
+        },
+      }),
+    );
+    // Explicitly set the default value
+    localStorage.setItem("lastSseUrl", "/mcp");
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy curl")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy curl"));
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledTimes(1));
+    const copiedText = mockWriteText.mock.calls[0][0] as string;
+    expect(copiedText).toContain("curl -X POST 'http://localhost:9999/mcp'");
+    expect(copiedText).not.toContain("?url=");
+
+    localStorage.removeItem("inspectorConfig_v1");
+    localStorage.removeItem("lastSseUrl");
   });
 });
