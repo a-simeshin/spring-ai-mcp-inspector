@@ -1,0 +1,23 @@
+src/App.tsx: tab router falls back to a default tab on unknown/invalid hash.
+Upstream trusts location.hash blindly in three places: the activeTab
+initial state (hash || "resources"), the hashchange listener (any
+non-empty hash becomes the active tab), and the serverCapabilities
+validation effect (inline validTabs list). A stale/bookmarked/mistyped
+hash such as "#elicitation" (missing trailing "s") matches no tab, so no
+[role=tab] gets aria-selected=true and no [role=tabpanel] renders: the
+main pane stays blank with no hint why. Local fix: shared helpers
+(ALL_TABS, getDefaultTab, buildValidTabs, normalizeHash, resolveTab)
+validate every hash. Unknown hashes fall back to the default tab
+(Resources when the server offers resources, else the first capability
+tab, else Ping). Near-miss hashes are normalized: case-insensitive match
+and singular/plural tolerance ("#elicitation" -> "#elicitations",
+"#Resource" -> "#resources"). The canonical tab is written back to the
+URL so the address bar reflects what is rendered. The same shared list
+is reused by navigateToOriginatingTab / handleResolveElicitation so the
+originating-tab validation lives in one place. The 1.x line has no
+Timeline tab, so "timeline" is intentionally absent from ALL_TABS and
+buildValidTabs (twin of 2.x t_f32dedc6, which carries the entry).
+Covered by App.tabRouterFallback.test.tsx (26 tests: all 11 valid
+hashes, unknown/empty/near-miss fallbacks, hashchange after load,
+capability-ladder default).
+Issue: #226, card: t_e8ab0ebb, sibling PR #227 (2.x).
