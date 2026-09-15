@@ -18,6 +18,7 @@ import {
   LoggingLevel,
   Task,
   GetTaskResultSchema,
+  ServerCapabilities,
 } from "@modelcontextprotocol/sdk/types.js";
 import { OAuthTokensSchema } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type {
@@ -158,6 +159,85 @@ const filterReservedMetadata = (
     },
     {},
   );
+};
+
+// [spring-ai-mcp-inspector PATCH] Tab router fallback (#t_e8ab0ebb, twin of
+// t_f32dedc6): When location.hash is empty, unknown, or a near-miss (wrong
+// case or singular/plural), fall back to a sensible default so exactly one
+// tab is always selected and its tabpanel is visible. Without this, a stale
+// or mistyped bookmark produces a dead UI: no tab has aria-selected=true
+// and zero tabpanels are rendered. Static list of every tab id, used
+// before capabilities are known (initial render). The capability-gated
+// correction runs in the serverCapabilities effect once connected. The 1.x
+// line has no Timeline tab, so "timeline" is intentionally absent here.
+const ALL_TABS: string[] = [
+  "resources",
+  "prompts",
+  "tools",
+  "tasks",
+  "apps",
+  "ping",
+  "sampling",
+  "elicitations",
+  "roots",
+  "auth",
+  "metadata",
+];
+
+const getDefaultTab = (
+  caps: ServerCapabilities | null | undefined,
+): string => {
+  if (caps?.resources) return "resources";
+  if (caps?.prompts) return "prompts";
+  if (caps?.tools) return "tools";
+  if (caps?.tasks) return "tasks";
+  return "ping";
+};
+
+const buildValidTabs = (
+  caps: ServerCapabilities | null | undefined,
+): string[] => [
+  ...(caps?.resources ? ["resources"] : []),
+  ...(caps?.prompts ? ["prompts"] : []),
+  ...(caps?.tools ? ["tools"] : []),
+  ...(caps?.tasks ? ["tasks"] : []),
+  "apps",
+  "ping",
+  "sampling",
+  "elicitations",
+  "roots",
+  "auth",
+  "metadata",
+];
+
+// Near-miss normalization: case-insensitive match and simple singular/plural
+// tolerance (e.g. "#elicitation" -> "#elicitations", "#Resource" ->
+// "#resources"). Returns the canonical tab id, or undefined if no match.
+const normalizeHash = (
+  hash: string,
+  validTabs: string[],
+): string | undefined => {
+  const lower = hash.toLowerCase();
+  // Direct match (case-insensitive)
+  const direct = validTabs.find((t) => t.toLowerCase() === lower);
+  if (direct) return direct;
+  // Singular/plural tolerance: try adding/removing trailing "s"
+  const singular = lower.endsWith("s") ? lower.slice(0, -1) : lower + "s";
+  const variant = validTabs.find((t) => t.toLowerCase() === singular);
+  if (variant) return variant;
+  return undefined;
+};
+
+// Resolve a hash to a valid tab id, falling back to the default tab when
+// the hash is empty, unknown, or a near-miss that cannot be normalized.
+const resolveTab = (
+  hash: string,
+  caps: ServerCapabilities | null | undefined,
+): string => {
+  if (!hash) return getDefaultTab(caps);
+  const validTabs = buildValidTabs(caps);
+  const normalized = normalizeHash(hash, validTabs);
+  return normalized ?? getDefaultTab(caps);
 };
 
 const App = () => {
@@ -336,10 +416,16 @@ const App = () => {
   const progressTokenRef = useRef(0);
   const prefilledAppsToolCallIdRef = useRef(0);
 
+  // [spring-ai-mcp-inspector PATCH] Tab router fallback (#t_e8ab0ebb):
+  // an unknown/near-miss hash must never become the active tab; normalize
+  // it (case/singular-plural) or fall back to the default. Before connect
+  // the capability list is unknown, so validate against ALL_TABS; the
+  // serverCapabilities effect re-checks against real capabilities after
+  // connect.
   const [activeTab, setActiveTab] = useState<string>(() => {
     const hash = window.location.hash.slice(1);
-    const initialTab = hash || "resources";
-    return initialTab;
+    const normalized = normalizeHash(hash, ALL_TABS);
+    return normalized ?? "resources";
   });
 
   const currentTabRef = useRef<string>(activeTab);
@@ -364,19 +450,10 @@ const App = () => {
   const navigateToOriginatingTab = (originatingTab?: string) => {
     if (!originatingTab) return;
 
-    const validTabs = [
-      ...(serverCapabilities?.resources ? ["resources"] : []),
-      ...(serverCapabilities?.prompts ? ["prompts"] : []),
-      ...(serverCapabilities?.tools ? ["tools"] : []),
-      ...(serverCapabilities?.tasks ? ["tasks"] : []),
-      "apps",
-      "ping",
-      "sampling",
-      "elicitations",
-      "roots",
-      "auth",
-      "metadata",
-    ];
+    // [spring-ai-mcp-inspector PATCH] Tab router fallback (#t_e8ab0ebb):
+    // use the shared capability-aware tab list so returning to an
+    // originating tab is validated the same way everywhere.
+    const validTabs = buildValidTabs(serverCapabilities);
 
     if (!validTabs.includes(originatingTab)) return;
 
@@ -501,41 +578,23 @@ const App = () => {
   });
 
   useEffect(() => {
-    if (serverCapabilities) {
+    if (mcpClient || serverCapabilities) {
+      // [spring-ai-mcp-inspector PATCH] Tab router fallback (#t_e8ab0ebb):
+      // resolve the current hash against the real capabilities, with
+      // near-miss normalization, and write the canonical tab back to the
+      // URL so stale/bookmarked/mistyped hashes never leave a dead UI.
+      // setActiveTab is always called: a hashchange while disconnected may
+      // have left a stale non-canonical value in the state. Runs on
+      // mcpClient too: a server may connect with capabilities === null,
+      // and the tab bar renders whenever mcpClient is set.
       const hash = window.location.hash.slice(1);
-
-      const validTabs = [
-        ...(serverCapabilities?.resources ? ["resources"] : []),
-        ...(serverCapabilities?.prompts ? ["prompts"] : []),
-        ...(serverCapabilities?.tools ? ["tools"] : []),
-        ...(serverCapabilities?.tasks ? ["tasks"] : []),
-        "apps",
-        "ping",
-        "sampling",
-        "elicitations",
-        "roots",
-        "auth",
-        "metadata",
-      ];
-
-      const isValidTab = validTabs.includes(hash);
-
-      if (!isValidTab) {
-        const defaultTab = serverCapabilities?.resources
-          ? "resources"
-          : serverCapabilities?.prompts
-            ? "prompts"
-            : serverCapabilities?.tools
-              ? "tools"
-              : serverCapabilities?.tasks
-                ? "tasks"
-                : "ping";
-
-        setActiveTab(defaultTab);
-        window.location.hash = defaultTab;
+      const resolved = resolveTab(hash, serverCapabilities);
+      if (resolved !== hash) {
+        window.location.hash = resolved;
       }
+      setActiveTab(resolved);
     }
-  }, [serverCapabilities]);
+  }, [mcpClient, serverCapabilities]);
 
   useEffect(() => {
     if (mcpClient && activeTab === "tasks") {
@@ -772,16 +831,9 @@ const App = () => {
 
   useEffect(() => {
     if (mcpClient && !window.location.hash) {
-      const defaultTab = serverCapabilities?.resources
-        ? "resources"
-        : serverCapabilities?.prompts
-          ? "prompts"
-          : serverCapabilities?.tools
-            ? "tools"
-            : serverCapabilities?.tasks
-              ? "tasks"
-              : "ping";
-      window.location.hash = defaultTab;
+      // [spring-ai-mcp-inspector PATCH] Tab router fallback (#t_e8ab0ebb):
+      // share the default-tab ladder instead of duplicating it here.
+      window.location.hash = getDefaultTab(serverCapabilities);
     } else if (!mcpClient && window.location.hash) {
       // Clear hash when disconnected - completely remove the fragment
       window.history.replaceState(
@@ -794,15 +846,31 @@ const App = () => {
 
   useEffect(() => {
     const handleHashChange = () => {
+      // [spring-ai-mcp-inspector PATCH] Tab router fallback (#t_e8ab0ebb):
+      // never activate an unknown hash. While connected, resolve against
+      // the real capabilities and rewrite the URL to the canonical tab
+      // (near-miss normalization like #elicitation -> #elicitations);
+      // while disconnected, validate against the static tab list only.
       const hash = window.location.hash.slice(1);
-      if (hash && hash !== activeTab) {
-        setActiveTab(hash);
+      if (serverCapabilities) {
+        const resolved = resolveTab(hash, serverCapabilities);
+        if (resolved !== hash) {
+          window.location.hash = resolved;
+        }
+        if (resolved !== activeTab) {
+          setActiveTab(resolved);
+        }
+        return;
+      }
+      const normalized = normalizeHash(hash, ALL_TABS);
+      if (normalized && normalized !== activeTab) {
+        setActiveTab(normalized);
       }
     };
 
     window.addEventListener("hashchange", handleHashChange);
     return () => window.removeEventListener("hashchange", handleHashChange);
-  }, [activeTab]);
+  }, [activeTab, serverCapabilities]);
 
   const handleApproveSampling = (id: number, result: CreateMessageResult) => {
     setPendingSampleRequests((prev) => {
@@ -835,34 +903,10 @@ const App = () => {
       if (request) {
         request.resolve(response);
 
-        if (request.originatingTab) {
-          const originatingTab = request.originatingTab;
-
-          const validTabs = [
-            ...(serverCapabilities?.resources ? ["resources"] : []),
-            ...(serverCapabilities?.prompts ? ["prompts"] : []),
-            ...(serverCapabilities?.tools ? ["tools"] : []),
-            ...(serverCapabilities?.tasks ? ["tasks"] : []),
-            "apps",
-            "ping",
-            "sampling",
-            "elicitations",
-            "roots",
-            "auth",
-            "metadata",
-          ];
-
-          if (validTabs.includes(originatingTab)) {
-            setActiveTab(originatingTab);
-            window.location.hash = originatingTab;
-
-            clearTimeout(originatingTabTimerRef.current);
-            originatingTabTimerRef.current = setTimeout(() => {
-              setActiveTab(originatingTab);
-              window.location.hash = originatingTab;
-            }, 100);
-          }
-        }
+        // [spring-ai-mcp-inspector PATCH] Tab router fallback (#t_e8ab0ebb):
+        // delegate to the shared navigateToOriginatingTab so the tab list
+        // and the timer de-dup stay in one place.
+        navigateToOriginatingTab(request.originatingTab);
       }
       return prev.filter((r) => r.id !== id);
     });
