@@ -457,5 +457,22 @@ describe("App - tab router hash fallback (#226)", () => {
         expect(window.location.hash).toBe("#ping");
       });
     });
+
+    it("hashchange to #apps with empty capabilities {} stays on Ping", async () => {
+      mockUseConnection.mockReturnValue(connectionState({}));
+      window.location.hash = "#ping";
+      render(<App />);
+
+      await waitFor(() => {
+        expectSingleSelectedTab("ping");
+      });
+
+      await setHash("#apps");
+
+      await waitFor(() => {
+        expectSingleSelectedTab("ping");
+      });
+      expect(window.location.hash).toBe("#ping");
+    });
   });
 });

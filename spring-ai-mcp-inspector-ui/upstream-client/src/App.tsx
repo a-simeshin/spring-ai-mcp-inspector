@@ -878,6 +878,26 @@ const App = () => {
       // (near-miss normalization like #elicitation -> #elicitations);
       // while disconnected, validate against the static tab list only.
       const hash = window.location.hash.slice(1);
+      // [spring-ai-mcp-inspector PATCH] Null-capabilities routing (#t_fdeb9f56):
+      // when connected but serverCapabilities is null, undefined, or an empty
+      // truthy object (resources/prompts/tools absent), only PingTab renders.
+      // Any non-ping hash would leave the UI with zero visible tabpanels.
+      // Check this BEFORE the if(serverCapabilities) branch, because a truthy
+      // {} bypasses the old null-guard and resolveTab({}) routes to #apps.
+      if (
+        mcpClient &&
+        !serverCapabilities?.resources &&
+        !serverCapabilities?.prompts &&
+        !serverCapabilities?.tools
+      ) {
+        if ("ping" !== hash) {
+          window.location.hash = "ping";
+        }
+        if (activeTab !== "ping") {
+          setActiveTab("ping");
+        }
+        return;
+      }
       if (serverCapabilities) {
         const resolved = resolveTab(hash, serverCapabilities);
         if (resolved !== hash) {
@@ -888,10 +908,6 @@ const App = () => {
         }
         return;
       }
-      // [spring-ai-mcp-inspector PATCH] Null-capabilities routing (#t_fdeb9f56):
-      // when connected but serverCapabilities is null or has no capability panels
-      // (resources/prompts/tools), only PingTab renders. Any non-ping hash would
-      // leave the UI with zero visible tabpanels. Force "ping" unconditionally.
       if (mcpClient) {
         if ("ping" !== hash) {
           window.location.hash = "ping";
