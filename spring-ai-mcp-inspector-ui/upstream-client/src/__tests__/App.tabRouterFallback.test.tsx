@@ -177,7 +177,7 @@ jest.mock("../lib/hooks/useConnection", () => ({
   useConnection: jest.fn(),
 }));
 
-function connectionState(serverCapabilities: Record<string, unknown>) {
+function connectionState(serverCapabilities: Record<string, unknown> | null) {
   return {
     connectionStatus: "connected" as const,
     serverCapabilities,
@@ -390,6 +390,72 @@ describe("App - tab router hash fallback (#226)", () => {
           expectSingleSelectedTab(tabId);
         });
       }
+    });
+  });
+
+  describe("null/empty capabilities always route to PingTab (#t_fdeb9f56)", () => {
+    const setHash = async (hash: string) => {
+      await act(async () => {
+        window.location.hash = hash;
+        window.dispatchEvent(
+          new HashChangeEvent("hashchange", { newURL: hash }),
+        );
+      });
+    };
+
+    it("connected with null capabilities and #apps resolves to Ping", async () => {
+      mockUseConnection.mockReturnValue(connectionState(null));
+      window.location.hash = "#apps";
+      render(<App />);
+
+      await waitFor(() => {
+        expectSingleSelectedTab("ping");
+      });
+      await waitFor(() => {
+        expect(window.location.hash).toBe("#ping");
+      });
+    });
+
+    it("connected with null capabilities and #bogus resolves to Ping", async () => {
+      mockUseConnection.mockReturnValue(connectionState(null));
+      window.location.hash = "#bogus";
+      render(<App />);
+
+      await waitFor(() => {
+        expectSingleSelectedTab("ping");
+      });
+      await waitFor(() => {
+        expect(window.location.hash).toBe("#ping");
+      });
+    });
+
+    it("hashchange to #apps with null capabilities stays on Ping", async () => {
+      mockUseConnection.mockReturnValue(connectionState(null));
+      window.location.hash = "#ping";
+      render(<App />);
+      await waitFor(() => {
+        expectSingleSelectedTab("ping");
+      });
+
+      await setHash("#apps");
+
+      await waitFor(() => {
+        expectSingleSelectedTab("ping");
+      });
+      expect(window.location.hash).toBe("#ping");
+    });
+
+    it("empty capabilities object {} also routes to Ping", async () => {
+      mockUseConnection.mockReturnValue(connectionState({}));
+      window.location.hash = "#apps";
+      render(<App />);
+
+      await waitFor(() => {
+        expectSingleSelectedTab("ping");
+      });
+      await waitFor(() => {
+        expect(window.location.hash).toBe("#ping");
+      });
     });
   });
 });

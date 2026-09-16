@@ -605,7 +605,16 @@ const App = () => {
       // mcpClient too: a server may connect with capabilities === null,
       // and the tab bar renders whenever mcpClient is set.
       const hash = window.location.hash.slice(1);
-      const resolved = resolveTab(hash, serverCapabilities);
+      // [spring-ai-mcp-inspector PATCH] Null-capabilities routing (#t_fdeb9f56):
+      // when connected but capabilities have no rendered panels (null or
+      // empty of resources/prompts/tools), only PingTab renders. Force
+      // "ping" as the active tab regardless of the current hash.
+      const resolved = mcpClient &&
+        !serverCapabilities?.resources &&
+        !serverCapabilities?.prompts &&
+        !serverCapabilities?.tools
+        ? "ping"
+        : resolveTab(hash, serverCapabilities);
       if (resolved !== hash) {
         window.location.hash = resolved;
       }
@@ -879,6 +888,19 @@ const App = () => {
         }
         return;
       }
+      // [spring-ai-mcp-inspector PATCH] Null-capabilities routing (#t_fdeb9f56):
+      // when connected but serverCapabilities is null or has no capability panels
+      // (resources/prompts/tools), only PingTab renders. Any non-ping hash would
+      // leave the UI with zero visible tabpanels. Force "ping" unconditionally.
+      if (mcpClient) {
+        if ("ping" !== hash) {
+          window.location.hash = "ping";
+        }
+        if (activeTab !== "ping") {
+          setActiveTab("ping");
+        }
+        return;
+      }
       const normalized = normalizeHash(hash, ALL_TABS);
       if (normalized && normalized !== activeTab) {
         setActiveTab(normalized);
@@ -887,7 +909,7 @@ const App = () => {
 
     window.addEventListener("hashchange", handleHashChange);
     return () => window.removeEventListener("hashchange", handleHashChange);
-  }, [activeTab, serverCapabilities]);
+  }, [activeTab, serverCapabilities, mcpClient]);
 
   const handleApproveSampling = (id: number, result: CreateMessageResult) => {
     setPendingSampleRequests((prev) => {
