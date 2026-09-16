@@ -4,6 +4,7 @@ import { useToast } from "@/lib/hooks/useToast";
 import {
   getMCPProxyAddress,
   getMCPProxyAuthToken,
+  getInitialTransportType,
   initializeInspectorConfig,
 } from "@/utils/configUtils";
 
@@ -168,39 +169,72 @@ function buildJsonRpcEnvelope(payload: Record<string, unknown>): string {
   return JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }, null, 2);
 }
 
+// Escape a string for safe embedding in a POSIX shell single-quoted argument.
+// Every ' becomes '\'' (close quote, literal quote, reopen quote).
+function shellSingleQuote(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
 // Build a curl command targeting the current proxy endpoint.  Reads config
 // from localStorage/sessionStorage so the command is ready to run against the
 // live proxy once the user fills in <TOKEN> (if auth is enabled).
 // [spring-ai-mcp-inspector PATCH] Preserve the active upstream target: when the
 // connection uses streamable-http with a non-default upstream URL, the proxy
 // route is <proxy>/mcp?url=<encoded-sse-url> (matching useConnection.ts:733).
+// [spring-ai-mcp-inspector PATCH] When the active transport is SSE, the
+// endpoint is <proxy>/message?sessionId=<SSE_SESSION_ID> (matching
+// SseProxyController.java:177-179), because SSE delivers JSON-RPC over the
+// message channel, not a direct POST to /sse.
 function buildCurlCommand(payload: Record<string, unknown>): string {
   const CONFIG_KEY = "inspectorConfig_v1";
   const config = initializeInspectorConfig(CONFIG_KEY);
   const proxyAddress = getMCPProxyAddress(config);
   const { token, header } = getMCPProxyAuthToken(config);
 
-  // The active MCP JSON-RPC endpoint is at <proxy>/mcp, matching
-  // useConnection.ts:733 and StreamableHttpProxyController.
-  let mcpEndpoint = `${proxyAddress}/mcp`;
+  // Determine the active transport from the last-used value (the same source
+  // useConnection consults when no ?transport= query param is present).
+  const transportType = getInitialTransportType();
 
-  // [spring-ai-mcp-inspector PATCH] Append the active upstream target when it
-  // differs from the default "/mcp".  The proxy resolves the upstream via the
-  // "url" query param (useConnection.ts:734, ProxyTargetResolver.java:85-104).
-  const lastSseUrl = localStorage.getItem("lastSseUrl");
-  if (lastSseUrl && lastSseUrl !== "/mcp") {
-    mcpEndpoint += `?url=${encodeURIComponent(lastSseUrl)}`;
+  let mcpEndpoint: string;
+
+  if (transportType === "sse") {
+    // [spring-ai-mcp-inspector PATCH] SSE transport: the JSON-RPC message
+    // endpoint is /message?sessionId=..., not /mcp.  The session id is
+    // established when the browser opens the SSE stream and is not persisted;
+    // the user must substitute the live session id before running the command.
+    const lastSseUrl = localStorage.getItem("lastSseUrl");
+    let sseTarget = "";
+    if (lastSseUrl && lastSseUrl !== "/mcp") {
+      sseTarget = `&url=${encodeURIComponent(lastSseUrl)}`;
+    }
+    mcpEndpoint = `${proxyAddress}/message?sessionId=<SSE_SESSION_ID>${sseTarget}`;
+  } else {
+    // streamable-http (and stdio fallback): the active MCP JSON-RPC endpoint
+    // is at <proxy>/mcp, matching useConnection.ts:733 and
+    // StreamableHttpProxyController.
+    mcpEndpoint = `${proxyAddress}/mcp`;
+
+    // [spring-ai-mcp-inspector PATCH] Append the active upstream target when it
+    // differs from the default "/mcp".  The proxy resolves the upstream via the
+    // "url" query param (useConnection.ts:734, ProxyTargetResolver.java:85-104).
+    const lastSseUrl = localStorage.getItem("lastSseUrl");
+    if (lastSseUrl && lastSseUrl !== "/mcp") {
+      mcpEndpoint += `?url=${encodeURIComponent(lastSseUrl)}`;
+    }
   }
 
   const body = buildJsonRpcEnvelope(payload);
   // Single-quote escape: "'" becomes "'\''" (close-quote, literal quote, open-quote).
   const escapedBody = body.replace(/'/g, "'\\''");
 
-  let cmd = `curl -X POST '${mcpEndpoint}' \\\n  -H 'Content-Type: application/json'`;
+  let cmd = `curl -X POST ${shellSingleQuote(mcpEndpoint)} \\
+  -H 'Content-Type: application/json'`;
   if (token) {
-    cmd += ` \\\n  -H '${header}: Bearer <TOKEN>'`;
+    cmd += ` \\
+  -H '${header}: Bearer <TOKEN>'`;
   }
-  cmd += ` \\\n  -d '${escapedBody}'`;
+  cmd += ` \\
+  -d '${escapedBody}'`;
   return cmd;
 }
 

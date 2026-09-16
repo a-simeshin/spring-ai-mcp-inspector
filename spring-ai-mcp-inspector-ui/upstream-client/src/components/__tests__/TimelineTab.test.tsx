@@ -545,12 +545,16 @@ describe("TimelineTab", () => {
     // Clean up seeded config
     localStorage.removeItem("inspectorConfig_v1");
     sessionStorage.removeItem("inspectorConfig_v1_ephemeral");
+    localStorage.removeItem("lastSseUrl");
+    localStorage.removeItem("lastTransportType");
   });
 
   it("omits auth header when no token is configured", async () => {
     // Clear any leftover ephemeral config that may leak from the previous test.
     sessionStorage.clear();
     localStorage.removeItem("inspectorConfig_v1");
+    localStorage.removeItem("lastSseUrl");
+    localStorage.removeItem("lastTransportType");
 
     const mockWriteText = jest.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
@@ -778,6 +782,93 @@ describe("TimelineTab", () => {
     expect(copiedText).not.toContain("?url=");
 
     localStorage.removeItem("inspectorConfig_v1");
+    localStorage.removeItem("lastSseUrl");
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Regression test: curl endpoint is shell-safe
+  // when the upstream URL contains an apostrophe (reviewer blocker on PR #224).
+  it("shell-escapes apostrophes in the upstream URL", async () => {
+    const mockWriteText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+      configurable: true,
+    });
+
+    localStorage.setItem(
+      "inspectorConfig_v1",
+      JSON.stringify({
+        MCP_PROXY_FULL_ADDRESS: {
+          label: "Inspector Proxy Address",
+          description: "Proxy address",
+          value: "http://localhost:9999",
+          is_session_item: false,
+        },
+      }),
+    );
+    localStorage.setItem("lastSseUrl", "https://upstream.example/custom-mcp?x=1'");
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy curl")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy curl"));
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledTimes(1));
+    const copiedText = mockWriteText.mock.calls[0][0] as string;
+    // The URL must not contain a raw apostrophe inside single quotes
+    expect(copiedText).toContain("curl -X POST 'http://localhost:9999/mcp?url=https%3A%2F%2Fupstream.example%2Fcustom-mcp%3Fx%3D1'\\''");
+    // The generated curl must be syntactically valid: bash -n should parse it
+    // without errors. We verify by checking that the escaped apostrophe
+    // sequence '\'' is present (close-quote, literal quote, open-quote).
+    expect(copiedText).toContain("'\\''");
+
+    localStorage.removeItem("inspectorConfig_v1");
+    localStorage.removeItem("lastSseUrl");
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Regression test: SSE transport uses the
+  // /message endpoint, not /mcp (reviewer blocker on PR #224).
+  it("targets /message?sessionId when transport is SSE", async () => {
+    const mockWriteText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: mockWriteText },
+      writable: true,
+      configurable: true,
+    });
+
+    localStorage.setItem(
+      "inspectorConfig_v1",
+      JSON.stringify({
+        MCP_PROXY_FULL_ADDRESS: {
+          label: "Inspector Proxy Address",
+          description: "Proxy address",
+          value: "http://localhost:9999",
+          is_session_item: false,
+        },
+      }),
+    );
+    localStorage.setItem("lastTransportType", "sse");
+    localStorage.setItem("lastSseUrl", "https://upstream.example/custom-mcp");
+
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("Copy curl")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Copy curl"));
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledTimes(1));
+    const copiedText = mockWriteText.mock.calls[0][0] as string;
+    // SSE transport posts JSON-RPC to /message, not /mcp
+    expect(copiedText).toContain("curl -X POST 'http://localhost:9999/message?sessionId=<SSE_SESSION_ID>&url=https%3A%2F%2Fupstream.example%2Fcustom-mcp'");
+    expect(copiedText).not.toContain("/mcp");
+
+    localStorage.removeItem("inspectorConfig_v1");
+    localStorage.removeItem("lastTransportType");
     localStorage.removeItem("lastSseUrl");
   });
 });
