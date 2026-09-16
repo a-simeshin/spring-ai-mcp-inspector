@@ -30,6 +30,8 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.JsonNode;
 
+import io.inspector.mcp.core.protocol.ProtocolMode;
+
 /**
  * A single inspector-proxy session: pairs a browser-facing SSE/HTTP channel with an
  * upstream {@link McpClientTransport} that talks to the target MCP server.
@@ -117,6 +119,15 @@ public final class ProxySession {
 	/** Optional MCP session id captured from the upstream transport's response. */
 	private volatile String upstreamSessionId;
 
+	/** Detected protocol mode for this session. */
+	private volatile ProtocolMode protocolMode = ProtocolMode.LEGACY_SESSION;
+
+	/**
+	 * Key that binds this session for stateless targets. {@code null} for legacy-session
+	 * targets.
+	 */
+	private volatile StatelessSessionKey statelessKey;
+
 	/** Updated on every frame routed in either direction. */
 	private volatile Instant lastActivity;
 
@@ -172,6 +183,33 @@ public final class ProxySession {
 
 	public void upstreamSessionId(final String value) {
 		this.upstreamSessionId = value;
+	}
+
+	/**
+	 * Returns the detected protocol mode for this session.
+	 * @return the protocol mode, never {@code null}
+	 */
+	public ProtocolMode protocolMode() {
+		return this.protocolMode;
+	}
+
+	public void protocolMode(final ProtocolMode protocolMode) {
+		if (protocolMode != null) {
+			this.protocolMode = protocolMode;
+		}
+	}
+
+	/**
+	 * Returns the stateless binding key for this session, or {@code null} when the
+	 * session is bound to a legacy session id.
+	 * @return the stateless key, or {@code null}
+	 */
+	public StatelessSessionKey statelessKey() {
+		return this.statelessKey;
+	}
+
+	public void statelessKey(final StatelessSessionKey statelessKey) {
+		this.statelessKey = statelessKey;
 	}
 
 	public Instant lastActivity() {

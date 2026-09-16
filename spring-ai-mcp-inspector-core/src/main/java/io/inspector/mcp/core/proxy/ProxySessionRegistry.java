@@ -81,6 +81,13 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 
 	private final ConcurrentMap<String, ProxySession> sessions = new ConcurrentHashMap<>();
 
+	/**
+	 * Stateless sessions keyed by (serverUrl, authProfileFingerprint). These replace the
+	 * legacy session-id key for MCP 2026-07-28 targets where no {@code Mcp-Session-Id}
+	 * header exists.
+	 */
+	private final ConcurrentMap<StatelessSessionKey, ProxySession> statelessSessions = new ConcurrentHashMap<>();
+
 	/** Idle budget after which a quiet session is evicted; never {@code null}. */
 	private volatile Duration inactivityBudget = DEFAULT_INACTIVITY_BUDGET;
 
@@ -122,12 +129,55 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	}
 
 	/**
+	 * Adds {@code session} under its {@link StatelessSessionKey}, unless the registry has
+	 * already been drained, in which case the session is closed immediately.
+	 * @param session the session to register (never {@code null}, and
+	 * {@code session.statelessKey()} must not be {@code null})
+	 */
+	public void putStateless(final ProxySession session) {
+		if (this.closed) {
+			session.close();
+			return;
+		}
+		this.statelessSessions.put(session.statelessKey(), session);
+		if (this.closed) {
+			removeStatelessAndClose(session.statelessKey());
+		}
+	}
+
+	/**
 	 * Returns the session for {@code id}, or {@code null} if unknown.
 	 * @param id the session id to look up
 	 * @return the matching session, or {@code null} if not found
 	 */
 	public ProxySession get(final String id) {
 		return (id != null) ? this.sessions.get(id) : null;
+	}
+
+	/**
+	 * Returns the session for the given stateless key, or {@code null} if unknown.
+	 * @param key the stateless session key to look up
+	 * @return the matching session, or {@code null} if not found
+	 */
+	public ProxySession getStateless(final StatelessSessionKey key) {
+		return (key != null) ? this.statelessSessions.get(key) : null;
+	}
+
+	/**
+	 * Removes and closes the session for the given stateless key.
+	 * @param key the stateless session key to remove
+	 * @return {@code true} if a session was actually removed, {@code false} otherwise
+	 */
+	public boolean removeStatelessAndClose(final StatelessSessionKey key) {
+		if (key == null) {
+			return false;
+		}
+		final ProxySession session = this.statelessSessions.remove(key);
+		if (session == null) {
+			return false;
+		}
+		session.close();
+		return true;
 	}
 
 	/**
@@ -164,7 +214,13 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 			.stream()
 			.<Runnable>map((id) -> () -> removeAndClose(id))
 			.toList();
-		ShutdownDrain.drain("proxy session", CLOSE_ALL_BUDGET, closers);
+		final List<Runnable> statelessClosers = this.statelessSessions.keySet()
+			.stream()
+			.<Runnable>map((key) -> () -> removeStatelessAndClose(key))
+			.toList();
+		final List<Runnable> all = new java.util.ArrayList<>(closers);
+		all.addAll(statelessClosers);
+		ShutdownDrain.drain("proxy session", CLOSE_ALL_BUDGET, all);
 	}
 
 	/**
@@ -211,7 +267,7 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	 * @return number of active sessions
 	 */
 	public int size() {
-		return this.sessions.size();
+		return this.sessions.size() + this.statelessSessions.size();
 	}
 
 	/**
@@ -249,6 +305,16 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 			if (closed || idle) {
 				if (removeAndClose(session.sessionId())) {
 					LOG.debug("proxy[{}] reaped (closed={}, idle={})", session.sessionId(), closed, idle);
+				}
+			}
+		}
+		for (final ProxySession session : this.statelessSessions.values()) {
+			final boolean closed = session.isClosed();
+			final boolean idle = session.lastActivity() != null
+					&& Duration.between(session.lastActivity(), now).compareTo(budget) > 0;
+			if (closed || idle) {
+				if (removeStatelessAndClose(session.statelessKey())) {
+					LOG.debug("proxy[{}] reaped stateless (closed={}, idle={})", session.statelessKey(), closed, idle);
 				}
 			}
 		}

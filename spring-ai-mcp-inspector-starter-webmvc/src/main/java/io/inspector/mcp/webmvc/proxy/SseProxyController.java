@@ -47,11 +47,15 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.protocol.ProtocolMode;
+import io.inspector.mcp.core.protocol.ProtocolModeDetector;
+import io.inspector.mcp.core.proxy.AuthProfileHasher;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.proxy.StatelessSessionKey;
 import io.inspector.mcp.webmvc.InspectorServerPortHolder;
 
 /**
@@ -224,7 +228,28 @@ public class SseProxyController {
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
 		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
-		this.registry.put(session);
+
+		// Detect protocol mode: stateless targets get a stateless binding key
+		final String authorization = inboundAuthorization();
+		final Map<String, String> customHeaders = inboundCustomHeaders();
+		final String protocolVersion = (currentRequest() != null)
+				? currentRequest().getHeader(ProtocolModeDetector.MCP_PROTOCOL_VERSION_HEADER) : null;
+		final Map<String, String> headers = new LinkedHashMap<>();
+		if (protocolVersion != null) {
+			headers.put(ProtocolModeDetector.MCP_PROTOCOL_VERSION_HEADER, protocolVersion);
+		}
+		final ProtocolMode mode = ProtocolModeDetector.detectFromHeaders(headers);
+		if (mode == ProtocolMode.STATELESS) {
+			session.protocolMode(ProtocolMode.STATELESS);
+			final String fingerprint = AuthProfileHasher.fingerprint(authorization, customHeaders);
+			session.statelessKey(new StatelessSessionKey(
+					(url != null) ? url : ProxyTargetResolver.resolve(url, loopbackPort(), "/sse").toString(),
+					fingerprint));
+			this.registry.putStateless(session);
+		}
+		else {
+			this.registry.put(session);
+		}
 
 		// SSE prologue — tells SSEClientTransport on the browser where to POST.
 		// The value must carry the deployment prefix: the browser resolves it with

@@ -52,6 +52,9 @@ import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.protocol.ProtocolMode;
+import io.inspector.mcp.core.protocol.ProtocolModeDetector;
+import io.inspector.mcp.core.proxy.AuthProfileHasher;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
 import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
@@ -59,6 +62,7 @@ import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.proxy.StatelessSessionKey;
 import io.inspector.mcp.core.task.TaskHandle;
 import io.inspector.mcp.core.task.TaskNotCancelableException;
 import io.inspector.mcp.core.task.TaskNotFoundException;
@@ -184,10 +188,37 @@ public class StreamableHttpProxyController {
 		return (this.properties != null) ? this.properties.getTimeouts() : new McpInspectorProperties.Timeouts();
 	}
 
+	/**
+	 * Three-argument overload that delegates to the four-argument variant with a
+	 * {@code null} protocol version (legacy session mode).
+	 * @param mcpSessionId the legacy session id header, may be {@code null}
+	 * @param url the target URL query parameter, may be {@code null}
+	 * @param body the JSON-RPC frame
+	 * @return the HTTP response entity
+	 */
+	public ResponseEntity<Object> postMcp(final String mcpSessionId, final String url, final JsonNode body) {
+		return postMcp(mcpSessionId, null, url, body);
+	}
+
 	@PostMapping(path = "/mcp", consumes = MediaType.APPLICATION_JSON_VALUE)
 	public ResponseEntity<Object> postMcp(
 			@RequestHeader(value = ProxyConstants.MCP_SESSION_ID_HEADER, required = false) final String mcpSessionId,
+			@RequestHeader(value = ProtocolModeDetector.MCP_PROTOCOL_VERSION_HEADER,
+					required = false) final String protocolVersion,
 			@RequestParam(value = "url", required = false) final String url, @RequestBody final JsonNode body) {
+		// Detect protocol mode from headers
+		final Map<String, String> headers = new LinkedHashMap<>();
+		if (protocolVersion != null) {
+			headers.put(ProtocolModeDetector.MCP_PROTOCOL_VERSION_HEADER, protocolVersion);
+		}
+		if (mcpSessionId != null) {
+			headers.put(ProtocolModeDetector.MCP_SESSION_ID_HEADER, mcpSessionId);
+		}
+		final ProtocolMode mode = ProtocolModeDetector.detectFromHeaders(headers);
+		if (mode == ProtocolMode.STATELESS) {
+			return handleStatelessPost(url, body);
+		}
+		// Legacy session path: unchanged
 		if (mcpSessionId == null || mcpSessionId.isBlank()) {
 			return openSessionAndForward(url, body);
 		}
@@ -196,6 +227,106 @@ public class StreamableHttpProxyController {
 			return ResponseEntity.status(HttpStatus.NOT_FOUND).body("unknown mcp-session-id: " + mcpSessionId);
 		}
 		return forwardOnExistingSession(session, body);
+	}
+
+	/**
+	 * Handles a stateless POST /mcp request (MCP 2026-07-28). There is no session-id
+	 * header; the proxy binds state by (serverUrl, authProfileFingerprint). Returns 202
+	 * for notifications, or relays the request and waits for the response for requests.
+	 * @param url the target URL
+	 * @param body the JSON-RPC frame
+	 * @return the HTTP response
+	 */
+	private ResponseEntity<Object> handleStatelessPost(final String url, final JsonNode body) {
+		final String authorization = inboundAuthorization();
+		final Map<String, String> customHeaders = inboundCustomHeaders();
+		final String fingerprint = AuthProfileHasher.fingerprint(authorization, customHeaders);
+		final StatelessSessionKey key = new StatelessSessionKey(
+				(url != null) ? url : ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp").toString(), fingerprint);
+		ProxySession session = this.registry.getStateless(key);
+		if (session == null) {
+			session = openStatelessSession(url, authorization, customHeaders, key);
+		}
+		return relayStateless(session, body);
+	}
+
+	/**
+	 * Opens a new stateless proxy session and registers it under the stateless key.
+	 * @param url the target URL
+	 * @param authorization the Authorization header value
+	 * @param customHeaders custom auth headers
+	 * @param key the stateless session key
+	 * @return the new proxy session
+	 */
+	private ProxySession openStatelessSession(final String url, final String authorization,
+			final Map<String, String> customHeaders, final StatelessSessionKey key) {
+		final String sessionId = UUID.randomUUID().toString();
+		final McpClientTransport target;
+		try {
+			final URI resolved = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
+			target = (authorization == null && customHeaders.isEmpty()) ? this.transportFactory.openStreamable(resolved)
+					: this.transportFactory.openStreamable(resolved, authorization, customHeaders);
+		}
+		catch (final Exception ex) {
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
+			LOG.warn("proxy[{}] upstream connect failed ({}): {}", sessionId, failure.reason().wire(), ex.toString());
+			throw new ProxyConnectFailureException(failure, ex);
+		}
+		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
+		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(REPLAY_BUFFER);
+		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
+		session.protocolMode(ProtocolMode.STATELESS);
+		session.statelessKey(key);
+		this.registry.putStateless(session);
+		this.mcpProxy.start(session).subscribe((ignored) -> {
+		}, (err) -> {
+			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+			this.registry.removeStatelessAndClose(key);
+		});
+		return session;
+	}
+
+	/**
+	 * Relays a frame on a stateless session. No session-id header is emitted.
+	 * @param session the stateless session
+	 * @param body the JSON-RPC frame
+	 * @return the HTTP response
+	 */
+	private ResponseEntity<Object> relayStateless(final ProxySession session, final JsonNode body) {
+		final JsonNode idNode = extractRequestId(body);
+		if (idNode == null) {
+			final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
+			if (emitResult.isFailure()) {
+				return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+					.body("emit failed: " + emitResult.name());
+			}
+			session.touch();
+			return ResponseEntity.accepted().build();
+		}
+		final Duration requestTimeout = resolveTimeouts().getStreamableRequest();
+		final Sinks.One<JsonNode> awaiterSink = Sinks.one();
+		session.targetToBrowser()
+			.asFlux()
+			.filter((frame) -> matchesId(frame, idNode))
+			.next()
+			.timeout(requestTimeout)
+			.subscribe(awaiterSink::tryEmitValue, awaiterSink::tryEmitError, () -> awaiterSink.tryEmitEmpty());
+		final Mono<JsonNode> awaiter = awaiterSink.asMono();
+		final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
+		if (emitResult.isFailure()) {
+			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("emit failed: " + emitResult.name());
+		}
+		session.touch();
+		try {
+			final JsonNode response = awaiter.block(requestTimeout);
+			return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(response);
+		}
+		catch (final RuntimeException ex) {
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
+			LOG.warn("proxy[{}] await response failed ({}): {}", session.sessionId(), failure.reason().wire(),
+					ex.toString());
+			return connectFailureResponse(failure);
+		}
 	}
 
 	@GetMapping(path = "/mcp", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
