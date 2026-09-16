@@ -1,0 +1,34 @@
+src/App.tsx: tab router falls back to a default tab on unknown/invalid hash.
+Upstream trusts location.hash blindly in three places: the activeTab
+initial state (hash || "resources"), the hashchange listener (any
+non-empty hash becomes the active tab), and the serverCapabilities
+validation effect (inline validTabs list). A stale/bookmarked/mistyped
+hash such as "#elicitation" (missing trailing "s") matches no tab, so no
+[role=tab] gets aria-selected=true and no [role=tabpanel] renders: the
+main pane stays blank with no hint why. Local fix: shared helpers
+(ALL_TABS, getDefaultTab, buildValidTabs, normalizeHash, resolveTab)
+validate every hash. Unknown hashes fall back to the default tab
+(Resources when the server offers resources, else the first capability
+tab, else Ping). Near-miss hashes are normalized: case-insensitive match
+and singular/plural tolerance ("#elicitation" -> "#elicitations",
+"#Resource" -> "#resources"). The canonical tab is written back to the
+URL so the address bar reflects what is rendered. The same shared list
+also adds the previously missing "timeline" entry to
+navigateToOriginatingTab / handleResolveElicitation validation. Covered
+by App.tabRouterFallback.test.tsx and extended App.routing.test.tsx.
+Issue: #226, card: t_f32dedc6.
+
+App.tsx: when connected but serverCapabilities is null or has no
+capability panels (resources/prompts/tools), only PingTab renders. The
+original hashchange handler and the capability-gated effect both used
+ALL_TABS / resolveTab(hash, null), which allowed non-ping hashes
+(#apps, #sampling) to become activeTab even though no matching panel
+exists. This left the UI dead: zero visible [role=tabpanel] elements.
+Local fix: in the hashchange handler, when mcpClient is present and
+serverCapabilities is falsy, unconditionally force the hash to "ping".
+The same guard in the capability-gated effect uses the render-identical
+condition (!serverCapabilities?.resources && !serverCapabilities?.prompts
+&& !serverCapabilities?.tools) to short-circuit to "ping" instead of
+calling resolveTab. Covered by App.tabRouterFallback.test.tsx
+(null/empty capabilities describe block, 4 tests). Refs #227,
+Rework card: t_fdeb9f56.
