@@ -1,0 +1,128 @@
+diff --git a/spring-ai-mcp-inspector-ui/upstream-client/src/App.tsx b/spring-ai-mcp-inspector-ui/upstream-client/src/App.tsx
+index 9d512e2..747ba34 100644
+--- a/spring-ai-mcp-inspector-ui/upstream-client/src/App.tsx
++++ b/spring-ai-mcp-inspector-ui/upstream-client/src/App.tsx
+@@ -1597,14 +1597,14 @@ const App = () => {
+                       </p>
+                     </div>
+                     <PingTab
+-                      onPingClick={() => {
+-                        void sendMCPRequest(
++                      onPingClick={() =>
++                        sendMCPRequest(
+                           {
+                             method: "ping" as const,
+                           },
+                           EmptyResultSchema,
+-                        );
+-                      }}
++                        )
++                      }
+                     />
+                   </>
+                 ) : (
+@@ -1791,14 +1791,14 @@ const App = () => {
+                     />
+                     <ConsoleTab />
+                     <PingTab
+-                      onPingClick={() => {
+-                        void sendMCPRequest(
++                      onPingClick={() =>
++                        sendMCPRequest(
+                           {
+                             method: "ping" as const,
+                           },
+                           EmptyResultSchema,
+-                        );
+-                      }}
++                        )
++                      }
+                     />
+                     <SamplingTab
+                       pendingRequests={pendingSampleRequests}
+diff --git a/spring-ai-mcp-inspector-ui/upstream-client/src/components/PingTab.tsx b/spring-ai-mcp-inspector-ui/upstream-client/src/components/PingTab.tsx
+index 6546901..0ef754a 100644
+--- a/spring-ai-mcp-inspector-ui/upstream-client/src/components/PingTab.tsx
++++ b/spring-ai-mcp-inspector-ui/upstream-client/src/components/PingTab.tsx
+@@ -1,21 +1,76 @@
+ import { TabsContent } from "@/components/ui/tabs";
+ import { Button } from "@/components/ui/button";
++import { useState, useRef } from "react";
++import { Loader2, Check, X } from "lucide-react";
++
++type PingResult =
++  | { kind: "idle" }
++  | { kind: "pending" }
++  | { kind: "success"; latencyMs: number }
++  | { kind: "error"; message: string };
++
++const PingTab = ({
++  onPingClick,
++}: {
++  onPingClick: () => Promise<unknown>;
++}) => {
++  const [result, setResult] = useState<PingResult>({ kind: "idle" });
++  const mountedRef = useRef(true);
++
++  const handleClick = () => {
++    const startTime = performance.now();
++    setResult({ kind: "pending" });
++
++    onPingClick()
++      .then(() => {
++        if (!mountedRef.current) return;
++        const latencyMs = Math.round(performance.now() - startTime);
++        setResult({ kind: "success", latencyMs });
++      })
++      .catch((err: unknown) => {
++        if (!mountedRef.current) return;
++        const message =
++          err instanceof Error ? err.message : String(err);
++        setResult({ kind: "error", message });
++      });
++  };
+ 
+-const PingTab = ({ onPingClick }: { onPingClick: () => void }) => {
+   return (
+     <TabsContent value="ping">
+       <div className="grid grid-cols-2 gap-4">
+-        <div className="col-span-2 flex justify-center items-center">
++        <div className="col-span-2 flex flex-col justify-center items-center gap-3">
+           <Button
+-            onClick={onPingClick}
++            onClick={handleClick}
++            disabled={result.kind === "pending"}
+             className="font-bold py-6 px-12 rounded-full"
+           >
+             Ping Server
+           </Button>
++
++          {result.kind === "pending" && (
++            <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
++              <Loader2 className="w-4 h-4 animate-spin" />
++              Pinging...
++            </div>
++          )}
++
++          {result.kind === "success" && (
++            <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
++              <Check className="w-4 h-4" />
++              Pong! Round-trip: {result.latencyMs}ms
++            </div>
++          )}
++
++          {result.kind === "error" && (
++            <div className="flex items-center gap-2 text-sm text-red-500 dark:text-red-400 max-w-full break-words px-4 text-center">
++              <X className="w-4 h-4 shrink-0" />
++              <span>Ping failed: {result.message}</span>
++            </div>
++          )}
+         </div>
+       </div>
+     </TabsContent>
+   );
+ };
+ 
+-export default PingTab;
++export default PingTab;
+\ No newline at end of file
