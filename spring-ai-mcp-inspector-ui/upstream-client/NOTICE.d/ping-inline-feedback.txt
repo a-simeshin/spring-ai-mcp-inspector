@@ -1,0 +1,8 @@
+PingTab.tsx, App.tsx - Ping inline feedback (#232): PingTab gains a local
+state machine (idle/pending/success/error) that renders the ping outcome
+inline in the Ping pane instead of only in History. Success shows
+"Pong! Round-trip: Nms" with a green Check icon; failure shows
+"Ping failed: <message>" with a red X icon and text wrapping at 375px.
+Button is disabled while pending. onPingClick prop type changed from
+() => void to () => Promise<unknown>; both call sites in App.tsx updated
+to return the sendMCPRequest promise so PingTab can await it.
