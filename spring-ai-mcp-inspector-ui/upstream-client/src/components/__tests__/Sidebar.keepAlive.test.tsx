@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] Sidebar keep-alive pane tests (#235).
 import { render, screen, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { describe, it, beforeEach, jest } from "@jest/globals";
