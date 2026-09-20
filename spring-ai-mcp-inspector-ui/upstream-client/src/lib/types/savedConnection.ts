@@ -13,6 +13,8 @@ export interface SavedConnection {
   args?: string;
   env?: Record<string, string>;
   customHeaders: CustomHeaders;
+  /** Connection timeout in seconds. undefined = proxy default (30s). */
+  connectionTimeout?: string;
   lastUsedAt: number;
   createdAt: number;
 }

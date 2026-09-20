@@ -82,6 +82,8 @@ describe("Sidebar saved connections UI", () => {
     onSaveConnection: jest.fn() as (name: string) => SavedConnection,
     onDeleteConnection: jest.fn(),
     onSelectConnection: jest.fn(),
+    connectionTimeout: "",
+    setConnectionTimeout: jest.fn(),
   };
 
   const renderSidebar = (props = {}) => {
@@ -339,6 +341,40 @@ describe("Sidebar saved connections UI", () => {
           "Header and environment variable values are not saved, only their names; re-enter them after restoring.",
         ),
       ).toBeInTheDocument();
+    });
+  });
+
+  describe("Connection timeout restoration", () => {
+    it("restores connectionTimeout from saved connection on select", () => {
+      const conn = makeConnection({
+        connectionTimeout: "45",
+      });
+      renderSidebar({
+        savedConnections: [conn],
+      });
+
+      const connEl = screen.getByTestId(`saved-connection-${conn.id}`);
+      fireEvent.click(connEl);
+
+      expect(defaultProps.onSelectConnection).toHaveBeenCalledWith(
+        expect.objectContaining({ connectionTimeout: "45" }),
+      );
+    });
+
+    it("restores empty string when saved connection has no connectionTimeout (legacy)", () => {
+      const conn = makeConnection({
+        connectionTimeout: undefined,
+      });
+      renderSidebar({
+        savedConnections: [conn],
+      });
+
+      const connEl = screen.getByTestId(`saved-connection-${conn.id}`);
+      fireEvent.click(connEl);
+
+      expect(defaultProps.onSelectConnection).toHaveBeenCalledWith(
+        expect.objectContaining({ connectionTimeout: undefined }),
+      );
     });
   });
 

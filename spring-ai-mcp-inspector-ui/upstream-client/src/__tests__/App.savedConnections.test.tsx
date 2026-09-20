@@ -667,4 +667,58 @@ describe("App saved connections integration", () => {
     );
     expect(stagingEntry.url).toBe("http://staging-server:9090/sse");
   });
+
+  it("round-trips connectionTimeout through storage layer", () => {
+    // Save a connection with a connectionTimeout via the storage layer
+    const saved = saveConnection(
+      stripSecrets({
+        name: "timed-server",
+        transport: "sse" as const,
+        connectionType: "proxy" as const,
+        url: "http://localhost:3001/sse",
+        customHeaders: [],
+        connectionTimeout: "45",
+      }),
+    );
+
+    // Verify it persisted with the timeout
+    const stored = JSON.parse(localStorage.getItem(SAVED_CONNECTIONS_KEY)!);
+    const timedEntry = stored.connections.find(
+      (c: { name: string }) => c.name === "timed-server",
+    );
+    expect(timedEntry.connectionTimeout).toBe("45");
+
+    // Load from storage and verify
+    const loaded = JSON.parse(localStorage.getItem(SAVED_CONNECTIONS_KEY)!);
+    const loadedEntry = loaded.connections.find(
+      (c: { name: string }) => c.name === "timed-server",
+    );
+    expect(loadedEntry.connectionTimeout).toBe("45");
+  });
+
+  it("legacy saved connection without connectionTimeout loads without errors", () => {
+    // Seed a legacy connection (no connectionTimeout field)
+    const legacy = saveConnection(
+      stripSecrets({
+        name: "legacy",
+        transport: "sse" as const,
+        connectionType: "proxy" as const,
+        url: "http://legacy:3001/sse",
+        customHeaders: [],
+      }),
+    );
+    // Remove connectionTimeout to simulate legacy entry
+    const stored = JSON.parse(localStorage.getItem(SAVED_CONNECTIONS_KEY)!);
+    const legacyEntry = stored.connections.find(
+      (c: { name: string }) => c.name === "legacy",
+    );
+    delete legacyEntry.connectionTimeout;
+    localStorage.setItem(SAVED_CONNECTIONS_KEY, JSON.stringify(stored));
+
+    // Should load without migration errors
+    const reloaded = JSON.parse(localStorage.getItem(SAVED_CONNECTIONS_KEY)!);
+    expect(reloaded.connections).toHaveLength(1);
+    expect(reloaded.connections[0].name).toBe("legacy");
+    expect(reloaded.connections[0].connectionTimeout).toBeUndefined();
+  });
 });

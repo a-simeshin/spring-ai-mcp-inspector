@@ -99,6 +99,21 @@ describe("savedConnections", () => {
       expect(saved.lastUsedAt).toBeGreaterThan(0);
     });
 
+    it("round-trips connectionTimeout when provided", () => {
+      const saved = saveConnection(mockDraft());
+      expect(saved.connectionTimeout).toBeUndefined();
+      // Save with timeout
+      const withTimeout = saveConnection(
+        { ...mockDraft(), connectionTimeout: "60" },
+        saved.id,
+      );
+      expect(withTimeout.connectionTimeout).toBe("60");
+      // Load from storage
+      const loaded = loadSavedConnections();
+      const found = loaded.find((c) => c.id === saved.id);
+      expect(found?.connectionTimeout).toBe("60");
+    });
+
     it("persists the connection to localStorage", () => {
       saveConnection(mockDraft());
       const loaded = loadSavedConnections();
@@ -270,6 +285,21 @@ describe("savedConnections", () => {
       expect(
         isValidConnection(mockConnection({ command: 123 as unknown as string })),
       ).toBe(false);
+    });
+
+    it("returns false when connectionTimeout is not a string", () => {
+      expect(
+        isValidConnection(
+          mockConnection({ connectionTimeout: 123 as unknown as string }),
+        ),
+      ).toBe(false);
+    });
+
+    it("returns true when connectionTimeout is absent (legacy entry)", () => {
+      const conn = mockConnection();
+      // Legacy saved connections don't have connectionTimeout
+      delete (conn as Record<string, unknown>).connectionTimeout;
+      expect(isValidConnection(conn)).toBe(true);
     });
 
     it("returns true when optional fields are absent", () => {
