@@ -278,6 +278,7 @@ fast). All values use Spring's relaxed `Duration` syntax — e.g. `30s`, `2m`, `
 | `spring.ai.mcp.inspector.timeouts.fetch-connect` | `10s` | Connect timeout for the outbound `/fetch` HTTP client. |
 | `spring.ai.mcp.inspector.timeouts.fetch-request` | `30s` | Per-request timeout for outbound `/fetch` calls. |
 | `spring.ai.mcp.inspector.timeouts.server-request` | `120s` | How long a server→UI request (sampling / elicitation / roots) waits for the browser to answer. |
+| `spring.ai.mcp.inspector.timeouts.connection` | `30s` | Per-phase budget applied to the upstream connect attempt and to the MCP `initialize` handshake. Each phase gets the full budget independently: the budget is **not** a shared total deadline. Overridable per connect attempt via the `connectionTimeout` query parameter (seconds) on the proxy endpoints. |
 
 ```yaml
 spring:

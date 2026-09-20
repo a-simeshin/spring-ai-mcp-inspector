@@ -269,6 +269,18 @@ public class McpInspectorProperties {
 		 */
 		private Duration sessionReaper = Duration.ofMinutes(30);
 
+		/**
+		 * Per-phase budget applied to the upstream connect attempt and to the MCP
+		 * {@code initialize} handshake. Each phase gets the full budget independently:
+		 * the budget is <em>not</em> a shared total deadline. Default 30s, matching
+		 * upstream {@code modelcontextprotocol/inspector} PR #2362.
+		 *
+		 * <p>
+		 * Overridable per connect attempt via the {@code connectionTimeout} query
+		 * parameter (seconds) on the proxy endpoints.
+		 */
+		private Duration connection = Duration.ofSeconds(30);
+
 		public Duration getSseSession() {
 			return this.sseSession;
 		}
@@ -315,6 +327,14 @@ public class McpInspectorProperties {
 
 		public void setSessionReaper(final Duration sessionReaper) {
 			this.sessionReaper = sessionReaper;
+		}
+
+		public Duration getConnection() {
+			return this.connection;
+		}
+
+		public void setConnection(final Duration connection) {
+			this.connection = connection;
 		}
 
 	}

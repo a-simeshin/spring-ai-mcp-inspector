@@ -51,6 +51,7 @@ import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
 import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
+import io.inspector.mcp.core.proxy.ProxyConnectTimeoutException;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
@@ -92,6 +93,8 @@ public class StreamableHttpProxyController {
 	 * {@link #connectFailureResponse}).
 	 */
 	private static final String ERROR_CODE_MCP_CONNECT_FAILED = "MCP_CONNECT_FAILED";
+
+	private static final String ERROR_CODE_CONNECTION_TIMEOUT = "connection_timeout";
 
 	/** Replay buffer size for the {@code targetToBrowser} sink (per session). */
 	private static final int REPLAY_BUFFER = 256;
@@ -142,15 +145,29 @@ public class StreamableHttpProxyController {
 	@PostMapping(path = "/mcp", consumes = MediaType.APPLICATION_JSON_VALUE)
 	public ResponseEntity<Object> postMcp(
 			@RequestHeader(value = ProxyConstants.MCP_SESSION_ID_HEADER, required = false) final String mcpSessionId,
-			@RequestParam(value = "url", required = false) final String url, @RequestBody final JsonNode body) {
+			@RequestParam(value = "url", required = false) final String url,
+			@RequestParam(value = "connectionTimeout", required = false) final Long connectionTimeoutSeconds,
+			@RequestBody final JsonNode body) {
 		if (mcpSessionId == null || mcpSessionId.isBlank()) {
-			return openSessionAndForward(url, body);
+			return openSessionAndForward(url, body, connectionTimeoutSeconds);
 		}
 		final ProxySession session = this.registry.get(mcpSessionId);
 		if (session == null) {
 			return ResponseEntity.status(HttpStatus.NOT_FOUND).body("unknown mcp-session-id: " + mcpSessionId);
 		}
 		return forwardOnExistingSession(session, body);
+	}
+
+	/**
+	 * Three-argument overload retained for callers that pre-date the
+	 * {@code connectionTimeout} parameter; behaves as if no override was supplied.
+	 * @param mcpSessionId the {@code mcp-session-id} header value, may be {@code null}
+	 * @param url the streamable-HTTP target URL
+	 * @param body the JSON-RPC frame to forward
+	 * @return the HTTP response entity
+	 */
+	public ResponseEntity<Object> postMcp(final String mcpSessionId, final String url, final JsonNode body) {
+		return postMcp(mcpSessionId, url, null, body);
 	}
 
 	@GetMapping(path = "/mcp", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -182,26 +199,43 @@ public class StreamableHttpProxyController {
 
 	/**
 	 * Brings up a fresh session and forwards the first frame. If the frame is a JSON-RPC
-	 * request, blocks for up to the configured
-	 * {@code spring.ai.mcp.inspector.timeouts.streamable-request} on the matching
-	 * response. Otherwise returns 202.
+	 * request, blocks for up to the resolved connection budget on the matching response.
+	 * Otherwise returns 202.
 	 * @param url the streamable-HTTP target URL
 	 * @param body the JSON-RPC frame to forward
+	 * @param connectionTimeoutSeconds optional per-phase budget in seconds; when
+	 * {@code null} or non-positive the configured default (30s) applies
 	 * @return the HTTP response entity
 	 */
-	private ResponseEntity<Object> openSessionAndForward(final String url, final JsonNode body) {
+	private ResponseEntity<Object> openSessionAndForward(final String url, final JsonNode body,
+			final Long connectionTimeoutSeconds) {
 		// A blank/relative url is the WAF-safe same-origin default — the proxy resolves
 		// it
 		// to the loopback MCP endpoint server-side (see ProxyTargetResolver). Only an
 		// explicit absolute url targets a non-loopback server.
+		final boolean budgetOverride = connectionTimeoutSeconds != null && connectionTimeoutSeconds > 0;
+		final Duration connectionBudget = resolveConnectionBudget(connectionTimeoutSeconds);
 		final ProxySession session;
 		try {
-			session = openSession(url);
+			session = openSession(url, connectionBudget, budgetOverride);
 		}
 		catch (final ProxyConnectFailureException ex) {
 			return connectFailureResponse(ex.failure());
 		}
-		return relayWithSessionHeader(session, body, true);
+		return relayWithSessionHeader(session, body, true, connectionBudget, budgetOverride);
+	}
+
+	/**
+	 * Resolves the per-phase connection budget: the {@code connectionTimeout} query
+	 * parameter wins over the configured default; both fall back to 30s.
+	 * @param connectionTimeoutSeconds the query parameter value (may be {@code null})
+	 * @return the budget to apply per phase (never {@code null})
+	 */
+	private Duration resolveConnectionBudget(final Long connectionTimeoutSeconds) {
+		if (connectionTimeoutSeconds != null && connectionTimeoutSeconds > 0) {
+			return Duration.ofSeconds(connectionTimeoutSeconds);
+		}
+		return resolveTimeouts().getConnection();
 	}
 
 	/**
@@ -219,6 +253,19 @@ public class StreamableHttpProxyController {
 			.contentType(MediaType.APPLICATION_JSON)
 			.body(Map.of("error", Map.of("code", ERROR_CODE_MCP_CONNECT_FAILED, "reason", failure.reason().wire(),
 					"message", failure.message(), "retryable", Boolean.TRUE)));
+	}
+
+	/**
+	 * Maps a per-phase budget overrun onto a 504 response with the structured
+	 * {@code connection_timeout} payload.
+	 * @param ex the timeout exception (never {@code null})
+	 * @return the HTTP response entity
+	 */
+	private static ResponseEntity<Object> connectTimeoutResponse(final ProxyConnectTimeoutException ex) {
+		return ResponseEntity.status(HttpStatus.GATEWAY_TIMEOUT)
+			.contentType(MediaType.APPLICATION_JSON)
+			.body(Map.of("error", Map.of("code", ERROR_CODE_CONNECTION_TIMEOUT, "phase", ex.phase().wire(), "elapsedMs",
+					ex.elapsedMs(), "budgetMs", ex.budgetMs(), "message", ex.getMessage(), "retryable", Boolean.TRUE)));
 	}
 
 	/**
@@ -285,6 +332,23 @@ public class StreamableHttpProxyController {
 	 */
 	private ResponseEntity<Object> relayWithSessionHeader(final ProxySession session, final JsonNode body,
 			final boolean includeSessionHeader) {
+		return relayWithSessionHeader(session, body, includeSessionHeader, resolveTimeouts().getConnection(), false);
+	}
+
+	/**
+	 * Relays a frame to an existing session, applying the connection budget when this is
+	 * the first frame of the session (the MCP {@code initialize} handshake) and a budget
+	 * override was supplied.
+	 * @param session the live proxy session
+	 * @param body the JSON-RPC frame to relay
+	 * @param includeSessionHeader whether this is the session's first frame
+	 * @param connectionBudget the per-phase budget for the connect/initialize phase
+	 * @param budgetOverride whether the caller explicitly supplied a
+	 * {@code connectionTimeout} parameter
+	 * @return the HTTP response entity
+	 */
+	private ResponseEntity<Object> relayWithSessionHeader(final ProxySession session, final JsonNode body,
+			final boolean includeSessionHeader, final Duration connectionBudget, final boolean budgetOverride) {
 		final JsonNode idNode = extractRequestId(body);
 		// Notification / response — no answer expected from upstream → 202 Accepted.
 		if (idNode == null) {
@@ -310,7 +374,8 @@ public class StreamableHttpProxyController {
 		// Without this the replay sink may not carry the error to a late
 		// subscriber, and the awaiter would block for the full
 		// streamable-request timeout instead of failing fast.
-		final Duration requestTimeout = resolveTimeouts().getStreamableRequest();
+		final Duration requestTimeout = (includeSessionHeader && budgetOverride) ? connectionBudget
+				: resolveTimeouts().getStreamableRequest();
 		final Sinks.One<JsonNode> awaiterSink = Sinks.one();
 		session.targetToBrowser()
 			.asFlux()
@@ -324,6 +389,7 @@ public class StreamableHttpProxyController {
 			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("emit failed: " + emitResult.name());
 		}
 		session.touch();
+		final long initializeStartNanos = System.nanoTime();
 		try {
 			final JsonNode response = awaiter.block(requestTimeout);
 			final ResponseEntity.BodyBuilder builder = ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON);
@@ -333,6 +399,16 @@ public class StreamableHttpProxyController {
 			return builder.body(response);
 		}
 		catch (final RuntimeException ex) {
+			if (includeSessionHeader && budgetOverride
+					&& ex.getCause() instanceof java.util.concurrent.TimeoutException) {
+				final long elapsedMs = (System.nanoTime() - initializeStartNanos) / 1_000_000L;
+				final ProxyConnectTimeoutException timeoutEx = new ProxyConnectTimeoutException(
+						ProxyConnectTimeoutException.Phase.INITIALIZE, elapsedMs, connectionBudget.toMillis());
+				LOG.warn("proxy[{}] initialize phase timed out after {}ms of {}ms budget", session.sessionId(),
+						elapsedMs, connectionBudget.toMillis());
+				this.registry.removeAndClose(session.sessionId());
+				return connectTimeoutResponse(timeoutEx);
+			}
 			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
 			LOG.warn("proxy[{}] await response failed ({}): {}", session.sessionId(), failure.reason().wire(),
 					ex.toString());
@@ -348,14 +424,19 @@ public class StreamableHttpProxyController {
 	/**
 	 * Allocates the {@link ProxySession} and kicks off the {@link McpProxy} pumps.
 	 * @param url the streamable-HTTP target URL
+	 * @param connectionBudget per-phase budget applied to the transport connect
+	 * @param budgetOverride whether the caller explicitly supplied a
+	 * {@code connectionTimeout} parameter; when {@code false} the legacy unbounded
+	 * connect path is preserved
 	 * @return a live {@link ProxySession}
 	 * @throws ProxyConnectFailureException if the transport could not be created
 	 */
-	private ProxySession openSession(final String url) {
+	private ProxySession openSession(final String url, final Duration connectionBudget, final boolean budgetOverride) {
 		final String sessionId = UUID.randomUUID().toString();
 		final String authorization = inboundAuthorization();
 		final Map<String, String> customHeaders = inboundCustomHeaders();
 		final McpClientTransport target;
+		final long connectStartNanos = System.nanoTime();
 		try {
 			final URI resolved = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
 			target = (authorization == null && customHeaders.isEmpty()) ? this.transportFactory.openStreamable(resolved)
@@ -370,11 +451,30 @@ public class StreamableHttpProxyController {
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(REPLAY_BUFFER);
 		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
 		this.registry.put(session);
-		this.mcpProxy.start(session).subscribe((ignored) -> {
-		}, (err) -> {
-			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
-			this.registry.removeAndClose(sessionId);
-		});
+		if (budgetOverride) {
+			this.mcpProxy.start(session).timeout(connectionBudget).subscribe((ignored) -> {
+			}, (err) -> {
+				if (err instanceof java.util.concurrent.TimeoutException) {
+					final long elapsedMs = (System.nanoTime() - connectStartNanos) / 1_000_000L;
+					final ProxyConnectTimeoutException timeoutEx = new ProxyConnectTimeoutException(
+							ProxyConnectTimeoutException.Phase.CONNECT, elapsedMs, connectionBudget.toMillis());
+					LOG.warn("proxy[{}] connect phase timed out after {}ms of {}ms budget", sessionId, elapsedMs,
+							connectionBudget.toMillis());
+					session.failUpstream(timeoutEx);
+				}
+				else {
+					LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+				}
+				this.registry.removeAndClose(sessionId);
+			});
+		}
+		else {
+			this.mcpProxy.start(session).subscribe((ignored) -> {
+			}, (err) -> {
+				LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+				this.registry.removeAndClose(sessionId);
+			});
+		}
 		return session;
 	}
 
