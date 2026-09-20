@@ -561,19 +561,18 @@ public class ProxyHandler {
 
 	/**
 	 * Relays {@code body} to the upstream. If the body is a JSON-RPC request (has an
-	 * {@code id}), waits up to 30s for the matching response and returns it as
+	 * {@code id}), waits up to {@code streamableRequest} (or the {@code connectionBudget}
+	 * when {@code budgetOverride} is true) for the matching response and returns it as
 	 * {@code application/json}. Notification/response frames produce a 202 with empty
 	 * body.
 	 * @param session the proxy session to relay through
 	 * @param body the JSON-RPC frame to relay
 	 * @param includeSessionHeader whether to echo the {@code mcp-session-id} header
+	 * @param connectionBudget the budget to use when {@code budgetOverride} is true
+	 * @param budgetOverride whether the caller explicitly supplied a
+	 * {@code connectionTimeout} parameter
 	 * @return a {@link Mono} emitting the relay result
 	 */
-	private Mono<ServerResponse> relayAndAwait(final ProxySession session, final JsonNode body,
-			final boolean includeSessionHeader) {
-		return relayAndAwait(session, body, includeSessionHeader, this.timeouts.getConnection(), false);
-	}
-
 	private Mono<ServerResponse> relayAndAwait(final ProxySession session, final JsonNode body,
 			final boolean includeSessionHeader, final Duration connectionBudget, final boolean budgetOverride) {
 		final JsonNode idNode = extractRequestId(body);

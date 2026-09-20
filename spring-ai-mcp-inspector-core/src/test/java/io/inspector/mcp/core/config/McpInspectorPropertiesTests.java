@@ -129,6 +129,7 @@ class McpInspectorPropertiesTests {
 			assertThat(timeouts.getFetchConnect()).isEqualTo(Duration.ofSeconds(10));
 			assertThat(timeouts.getFetchRequest()).isEqualTo(Duration.ofSeconds(30));
 			assertThat(timeouts.getServerRequest()).isEqualTo(Duration.ofSeconds(120));
+			assertThat(timeouts.getConnection()).isEqualTo(Duration.ofSeconds(30));
 		}
 
 		@Test
@@ -143,6 +144,7 @@ class McpInspectorPropertiesTests {
 			env.setProperty("spring.ai.mcp.inspector.timeouts.fetch-connect", "2s");
 			env.setProperty("spring.ai.mcp.inspector.timeouts.fetch-request", "15s");
 			env.setProperty("spring.ai.mcp.inspector.timeouts.server-request", "60s");
+			env.setProperty("spring.ai.mcp.inspector.timeouts.connection", "45s");
 
 			// when
 			final McpInspectorProperties bound = Binder.get(env)
@@ -155,6 +157,7 @@ class McpInspectorPropertiesTests {
 			assertThat(bound.getTimeouts().getFetchConnect()).isEqualTo(Duration.ofSeconds(2));
 			assertThat(bound.getTimeouts().getFetchRequest()).isEqualTo(Duration.ofSeconds(15));
 			assertThat(bound.getTimeouts().getServerRequest()).isEqualTo(Duration.ofSeconds(60));
+			assertThat(bound.getTimeouts().getConnection()).isEqualTo(Duration.ofSeconds(45));
 		}
 
 		@Test
