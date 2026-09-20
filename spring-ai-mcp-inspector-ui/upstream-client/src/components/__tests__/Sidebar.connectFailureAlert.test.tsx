@@ -1,7 +1,8 @@
 // [spring-ai-mcp-inspector PATCH] owner-session isolation, auth-profile, D3
 // structured error banner tests, plus status-text and Reset session button
-// tests.
+// tests, plus structured per-phase timeout banner tests.
 // jsdom lacks MediaQueryList; useTheme calls window.matchMedia on mount.
+
 import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import Sidebar from "../Sidebar";
