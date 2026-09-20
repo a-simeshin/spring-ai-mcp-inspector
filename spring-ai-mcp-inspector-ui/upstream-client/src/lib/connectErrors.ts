@@ -1,3 +1,5 @@
+// [spring-ai-mcp-inspector PATCH] Structured connect-failure contract shared with the backend.
+
 /**
  * Structured connect-failure contract shared with the backend.
  *

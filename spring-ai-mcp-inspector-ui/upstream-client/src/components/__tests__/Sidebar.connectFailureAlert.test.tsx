@@ -1,4 +1,6 @@
 // jsdom lacks MediaQueryList; useTheme calls window.matchMedia on mount.
+// [spring-ai-mcp-inspector PATCH] Sidebar connect-failure alert tests
+
 import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import Sidebar from "../Sidebar";
