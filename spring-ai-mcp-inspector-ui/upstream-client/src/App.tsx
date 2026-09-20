@@ -414,6 +414,7 @@ const App = () => {
     serverCapabilities,
     serverImplementation,
     mcpClient,
+    mcpSessionId,
     requestHistory,
     clearRequestHistory,
     makeRequest,
@@ -1820,7 +1821,7 @@ const App = () => {
                       onMetadataChange={handleMetadataChange}
                     />
                     {/* [spring-ai-mcp-inspector PATCH] Timeline tab (#112). */}
-                    <TimelineTab />
+                    <TimelineTab sessionId={mcpSessionId} />
                   </>
                 )}
               </div>
@@ -1886,6 +1887,7 @@ const App = () => {
               serverNotifications={notifications}
               onClearHistory={clearRequestHistory}
               onClearNotifications={handleClearNotifications}
+              sessionId={mcpSessionId}
             />
           </div>
         </div>

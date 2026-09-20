@@ -2,17 +2,20 @@ import { ServerNotification } from "@modelcontextprotocol/sdk/types.js";
 import { useState } from "react";
 import JsonView from "./JsonView";
 import { Button } from "@/components/ui/button";
+import { useKeepAlive } from "@/lib/hooks/useKeepAlive";
 
 const HistoryAndNotifications = ({
   requestHistory,
   serverNotifications,
   onClearHistory,
   onClearNotifications,
+  sessionId,
 }: {
   requestHistory: Array<{ request: string; response?: string }>;
   serverNotifications: ServerNotification[];
   onClearHistory?: () => void;
   onClearNotifications?: () => void;
+  sessionId?: string | null;
 }) => {
   const [expandedRequests, setExpandedRequests] = useState<{
     [key: number]: boolean;
@@ -20,6 +23,8 @@ const HistoryAndNotifications = ({
   const [expandedNotifications, setExpandedNotifications] = useState<{
     [key: number]: boolean;
   }>({});
+  const [keepAliveExpanded, setKeepAliveExpanded] = useState(false);
+  const keepAlive = useKeepAlive(sessionId ?? null);
 
   const toggleRequestExpansion = (index: number) => {
     setExpandedRequests((prev) => ({ ...prev, [index]: !prev[index] }));
@@ -43,6 +48,34 @@ const HistoryAndNotifications = ({
             Clear
           </Button>
         </div>
+        {/* [spring-ai-mcp-inspector PATCH] Collapsed keep-alive pings section (#235). */}
+        {keepAlive.observed && (
+          <div className="mb-4 border border-cyan-800 rounded">
+            <div
+              className="flex items-center justify-between px-3 py-2 cursor-pointer bg-cyan-950/30 hover:bg-cyan-950/50"
+              onClick={() => setKeepAliveExpanded(!keepAliveExpanded)}
+            >
+              <span className="text-sm font-medium text-cyan-300">
+                Keep-alive pings ({keepAlive.recentPings.length})
+              </span>
+              <span className="text-cyan-400 text-xs">
+                {keepAliveExpanded ? "▼" : "▶"}
+              </span>
+            </div>
+            {keepAliveExpanded && (
+              <div className="px-3 py-2 space-y-1">
+                {keepAlive.recentPings.slice().reverse().map((ping, i) => (
+                  <div key={ping} className="text-xs font-mono text-cyan-200">
+                    {keepAlive.recentPings.length - i}. {new Date(ping).toLocaleTimeString()}
+                  </div>
+                ))}
+                {keepAlive.recentPings.length === 0 && (
+                  <div className="text-xs text-cyan-500 italic">No pings recorded yet</div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         {requestHistory.length === 0 ? (
           <p className="text-sm text-gray-500 dark:text-gray-400 italic">
             No history yet
