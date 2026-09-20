@@ -1,5 +1,6 @@
 import { TabsContent } from "@/components/ui/tabs";
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useKeepAlive } from "@/lib/hooks/useKeepAlive";
 
 // [spring-ai-mcp-inspector PATCH] New TimelineTab — MCP event timeline panel (#112).
 // [spring-ai-mcp-inspector PATCH] Protocol-version negotiation badge on initialize
@@ -11,7 +12,8 @@ type TimelineEventType =
   | "MCP_JSONRPC_RESPONSE"
   | "MCP_JSONRPC_NOTIFICATION"
   | "MCP_STREAM_EVENT"
-  | "APP_LOG";
+  | "APP_LOG"
+  | "KEEP_ALIVE";
 
 // Mirrors io.inspector.mcp.core.timeline.TimelineEvent as serialized by the REST
 // API: flat metadata plus the raw JSON-RPC frame (MCP events) or a log-fields
@@ -41,6 +43,7 @@ const EVENT_COLORS: Record<TimelineEventType, string> = {
   MCP_JSONRPC_NOTIFICATION: "text-yellow-400 border-l-yellow-500",
   MCP_STREAM_EVENT: "text-purple-400 border-l-purple-500",
   APP_LOG: "text-gray-400 border-l-gray-500",
+  KEEP_ALIVE: "text-cyan-400 border-l-cyan-500",
 };
 
 const EVENT_BG: Record<TimelineEventType, string> = {
@@ -49,6 +52,7 @@ const EVENT_BG: Record<TimelineEventType, string> = {
   MCP_JSONRPC_NOTIFICATION: "bg-yellow-950/30",
   MCP_STREAM_EVENT: "bg-purple-950/30",
   APP_LOG: "bg-gray-950/30",
+  KEEP_ALIVE: "bg-cyan-950/30",
 };
 
 // Badge color per severity, per the decision record (t_9315a78c).
@@ -177,10 +181,12 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
 }
 
 // [spring-ai-mcp-inspector PATCH] TimelineTab — scrollable timeline of MCP events.
-const TimelineTab = () => {
+// [spring-ai-mcp-inspector PATCH] Keep-alive pings rendered as KEEP_ALIVE events (#235).
+const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const keepAlive = useKeepAlive(sessionId ?? null);
 
   const fetchTimeline = useCallback(async () => {
     const token = sessionStorage.getItem("inspectorConfig_v1_ephemeral");
@@ -207,6 +213,31 @@ const TimelineTab = () => {
       // Silently ignore fetch errors
     }
   }, []);
+
+  // [spring-ai-mcp-inspector PATCH] Merge live keep-alive pings into the timeline
+  // as KEEP_ALIVE events, deduplicated by timestamp (#235).
+  useEffect(() => {
+    if (keepAlive.recentPings.length === 0) return;
+    setEvents((prev) => {
+      const existingTimestamps = new Set(
+        prev.filter((e) => e.type === "KEEP_ALIVE").map((e) => e.timestamp),
+      );
+      const newEvents: TimelineEvent[] = keepAlive.recentPings
+        .filter((ts) => !existingTimestamps.has(ts))
+        .map((ts) => ({
+          id: `keepalive-${ts}`,
+          correlationId: null,
+          sessionId: sessionId ?? null,
+          type: "KEEP_ALIVE" as const,
+          timestamp: ts,
+          payload: { method: "ping" },
+        }));
+      if (newEvents.length === 0) return prev;
+      return [...prev, ...newEvents].sort(
+        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+      );
+    });
+  }, [keepAlive.recentPings, sessionId]);
 
   useEffect(() => {
     void fetchTimeline();

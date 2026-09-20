@@ -21,6 +21,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -77,6 +78,7 @@ import io.inspector.mcp.core.introspect.check.JsonSchemaCompatibilityChecker;
 import io.inspector.mcp.core.introspect.model.IntrospectionReport;
 import io.inspector.mcp.core.introspect.model.McpElementInfo;
 import io.inspector.mcp.core.introspect.model.SchemaWarning;
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
 import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthInitiateResponse;
@@ -451,6 +453,34 @@ public class InspectorHandler implements ApplicationContextAware {
 	}
 
 	/**
+	 * Returns the keep-alive state for the given session. The UI subscribes via SSE for
+	 * live {@code mcp:keepalive-ping} events and polls this endpoint for the initial
+	 * snapshot.
+	 * @param request the incoming request; must carry {@code sessionId}
+	 * @return 200 with the current {@link KeepAliveTracker.State} as JSON, or 404 when
+	 * the session is unknown
+	 */
+	public Mono<ServerResponse> keepalive(final ServerRequest request) {
+		final String sessionId = resolveSessionId(request);
+		final SessionContext ctx = (sessionId != null) ? this.sessions.get(sessionId) : null;
+		if (ctx == null) {
+			return ServerResponse.status(404).bodyValue(Map.of("error", "unknown session: " + sessionId));
+		}
+		final KeepAliveTracker tracker = ctx.keepAliveTracker();
+		if (tracker == null) {
+			return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(Map.of("observed", false));
+		}
+		final KeepAliveTracker.State snapshot = tracker.snapshot(Instant.now());
+		final Map<String, Object> body = new LinkedHashMap<>();
+		body.put("observed", true);
+		body.put("lastPingAt", (snapshot.lastPingAt() != null) ? snapshot.lastPingAt().toString() : null);
+		body.put("recentPings", snapshot.recentPings().stream().map(Instant::toString).toList());
+		body.put("estimatedIntervalMillis", snapshot.estimatedIntervalMillis());
+		body.put("isStale", snapshot.isStale());
+		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(body);
+	}
+
+	/**
 	 * Replaces the session's root list and notifies the backing MCP server via
 	 * {@code notifications/roots/list_changed}.
 	 * @param request the incoming server request
@@ -596,6 +626,7 @@ public class InspectorHandler implements ApplicationContextAware {
 	private Map<String, Object> openSession(final ConnectRequest body) {
 		final String sessionId = UUID.randomUUID().toString();
 		final SessionContextHolder holder = new SessionContextHolder();
+		final KeepAliveTracker keepAliveTracker = new KeepAliveTracker();
 		final InspectorClientHandlers handlers = new InspectorClientHandlers(
 				(req) -> handleSamplingRequest(sessionId, holder, req),
 				(req) -> handleElicitationRequest(sessionId, holder, req),
@@ -604,12 +635,14 @@ public class InspectorHandler implements ApplicationContextAware {
 		final McpSyncClient client = (body != null && body.externalCommand() != null
 				&& !body.externalCommand().isBlank())
 						? this.externalStdioFactory.forCommand(splitCommand(body.externalCommand()), Map.of())
-						: buildLoopbackClient(handlers);
+						: buildLoopbackClient(handlers, keepAliveTracker);
 
 		client.initialize();
 
 		final Sinks.Many<ServerSentEvent<String>> sink = Sinks.many().multicast().onBackpressureBuffer(256, false);
-		final SessionContext ctx = new SessionContext(client, sink);
+		final SessionContext ctx = new SessionContext(client, sink, keepAliveTracker);
+		keepAliveTracker.setListener((at) -> sink
+			.tryEmitNext(ServerSentEvent.<String>builder().event("mcp:keepalive-ping").data(at.toString()).build()));
 		holder.ctx = ctx;
 		this.sessions.put(sessionId, ctx);
 		if (this.closed) {
@@ -632,7 +665,8 @@ public class InspectorHandler implements ApplicationContextAware {
 		return result;
 	}
 
-	private McpSyncClient buildLoopbackClient(final InspectorClientHandlers handlers) {
+	private McpSyncClient buildLoopbackClient(final InspectorClientHandlers handlers,
+			final KeepAliveTracker keepAliveTracker) {
 		final DetectedTransport transport = this.transportDetector.detect();
 		final int port = this.listeningPort.get();
 		if (port <= 0) {
@@ -640,8 +674,9 @@ public class InspectorHandler implements ApplicationContextAware {
 		}
 		final String host = "127.0.0.1";
 		return switch (transport.type()) {
-			case SSE -> this.loopbackFactory.forSse(host, port, transport.endpoint(), handlers);
-			case STREAMABLE -> this.loopbackFactory.forStreamable(host, port, transport.endpoint(), handlers);
+			case SSE -> this.loopbackFactory.forSse(host, port, transport.endpoint(), handlers, keepAliveTracker);
+			case STREAMABLE ->
+				this.loopbackFactory.forStreamable(host, port, transport.endpoint(), handlers, keepAliveTracker);
 			case STATELESS -> this.loopbackFactory.forStateless(host, port, transport.endpoint(), handlers);
 			case STDIO_NO_HTTP -> throw new IllegalStateException(
 					"loopback connect not supported for STDIO_NO_HTTP transport — use externalCommand");

@@ -295,4 +295,40 @@ describe("TimelineTab", () => {
     // Affected methods appear in the expanded block.
     expect(screen.getByText(/affected: initialize/)).toBeInTheDocument();
   });
+
+  // [spring-ai-mcp-inspector PATCH] Keep-alive ping rendering tests (#235).
+
+  const KEEP_ALIVE_EVENT: WireEvent = {
+    id: "keepalive-1",
+    correlationId: null,
+    sessionId: "s-1",
+    type: "KEEP_ALIVE",
+    timestamp: "2026-09-20T12:00:05.000Z",
+    payload: { method: "ping" },
+  };
+
+  it("renders KEEP_ALIVE events with distinct styling", async () => {
+    mockFetch([KEEP_ALIVE_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("KEEP ALIVE")).toBeInTheDocument(),
+    );
+    // The row should have cyan styling - go up to the border-l-2 container
+    const label = screen.getByText("KEEP ALIVE");
+    const row = label.closest("div.border-l-2");
+    expect(row).toHaveClass("text-cyan-400");
+    expect(row).toHaveClass("bg-cyan-950/30");
+  });
+
+  it("renders KEEP_ALIVE events with timestamp and method", async () => {
+    mockFetch([KEEP_ALIVE_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("KEEP ALIVE")).toBeInTheDocument(),
+    );
+    // The label should show the method from payload
+    expect(screen.getByText("ping")).toBeInTheDocument();
+  });
 });

@@ -51,6 +51,10 @@ import {
 } from "./lib/hooks/useDraggablePane";
 // [spring-ai-mcp-inspector PATCH] Compact (<1024px) layout switch (#60).
 import { useIsCompactLayout } from "./lib/hooks/useIsCompactLayout";
+// [spring-ai-mcp-inspector PATCH] useKeepAlive feeds the Connection pane
+// "Last keep-alive: Xs ago" indicator and the stale-connection warning banner
+// (#235, t_3925eae7).
+import { useKeepAlive } from "./lib/hooks/useKeepAlive";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -414,6 +418,7 @@ const App = () => {
     serverCapabilities,
     serverImplementation,
     mcpClient,
+    mcpSessionId,
     requestHistory,
     clearRequestHistory,
     makeRequest,
@@ -513,6 +518,11 @@ const App = () => {
     defaultLoggingLevel: logLevel,
     metadata,
   });
+
+  // [spring-ai-mcp-inspector PATCH] Subscribe to keep-alive pings so the
+  // Connection pane can show "Last keep-alive: Xs ago" and warn when the
+  // stream goes stale (#235, t_3925eae7).
+  const keepAlive = useKeepAlive(mcpSessionId);
 
   useEffect(() => {
     if (serverCapabilities) {
@@ -1407,6 +1417,11 @@ const App = () => {
         <Sidebar
           connectionStatus={connectionStatus}
           connectionError={connectionError}
+          // [spring-ai-mcp-inspector PATCH] Keep-alive observability props
+          // (#235, t_3925eae7).
+          keepAliveLastPingAt={keepAlive.lastPingAt}
+          keepAliveIsStale={keepAlive.isStale}
+          keepAliveObserved={keepAlive.observed}
           transportType={transportType}
           setTransportType={setTransportType}
           command={command}
@@ -1820,7 +1835,7 @@ const App = () => {
                       onMetadataChange={handleMetadataChange}
                     />
                     {/* [spring-ai-mcp-inspector PATCH] Timeline tab (#112). */}
-                    <TimelineTab />
+                    <TimelineTab sessionId={mcpSessionId} />
                   </>
                 )}
               </div>
@@ -1886,6 +1901,7 @@ const App = () => {
               serverNotifications={notifications}
               onClearHistory={clearRequestHistory}
               onClearNotifications={handleClearNotifications}
+              sessionId={mcpSessionId}
             />
           </div>
         </div>

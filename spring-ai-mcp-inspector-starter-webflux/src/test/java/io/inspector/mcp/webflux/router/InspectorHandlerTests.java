@@ -61,6 +61,7 @@ import io.inspector.mcp.core.dto.RootsDto;
 import io.inspector.mcp.core.introspect.model.IntrospectionReport;
 import io.inspector.mcp.core.introspect.model.SchemaWarning;
 import io.inspector.mcp.core.introspect.model.WarningCode;
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
 import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
@@ -156,7 +157,8 @@ class InspectorHandlerTests {
 		this.handler.onWebServerStarted(webServerStartedEvent(8081));
 		given(this.transportDetector.detect())
 			.willReturn(new DetectedTransport(TransportType.STREAMABLE, "/mcp", null, "WEBFLUX"));
-		given(this.loopbackFactory.forStreamable(any(), org.mockito.ArgumentMatchers.eq(8081), any(), any()))
+		given(this.loopbackFactory.forStreamable(any(), org.mockito.ArgumentMatchers.eq(8081), any(), any(),
+				any(KeepAliveTracker.class)))
 			.willReturn(client);
 		final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 			.contentType(MediaType.APPLICATION_JSON)
@@ -374,7 +376,7 @@ class InspectorHandlerTests {
 				.willReturn(new DetectedTransport(TransportType.STREAMABLE, "/mcp", null, "WEBFLUX"));
 			final McpSyncClient client = connectedClient();
 			given(InspectorHandlerTests.this.loopbackFactory.forStreamable(any(), org.mockito.ArgumentMatchers.eq(8081),
-					any(), any()))
+					any(), any(), any(KeepAliveTracker.class)))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -443,7 +445,7 @@ class InspectorHandlerTests {
 				.willReturn(new DetectedTransport(TransportType.SSE, "/app/sse", "/app/mcp/message", "WEBFLUX"));
 			final McpSyncClient client = connectedClient();
 			given(InspectorHandlerTests.this.loopbackFactory.forSse(any(), org.mockito.ArgumentMatchers.eq(8081),
-					org.mockito.ArgumentMatchers.eq("/app/sse"), any()))
+					org.mockito.ArgumentMatchers.eq("/app/sse"), any(), any(KeepAliveTracker.class)))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -456,7 +458,7 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			verify(InspectorHandlerTests.this.loopbackFactory).forSse(any(), org.mockito.ArgumentMatchers.eq(8081),
-					org.mockito.ArgumentMatchers.eq("/app/sse"), any());
+					org.mockito.ArgumentMatchers.eq("/app/sse"), any(), any(KeepAliveTracker.class));
 		}
 
 		@Test
@@ -861,6 +863,42 @@ class InspectorHandlerTests {
 
 			// when
 			final ServerResponse response = InspectorHandlerTests.this.handler.getRoots(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(response.headers().getContentType()).isEqualTo(MediaType.APPLICATION_JSON);
+		}
+
+		@Test
+		@Story("Keep-alive")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("keepalive() for an unknown session returns 404")
+		void keepalive_withUnknownSession_returnsNotFound() {
+			// given
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector/api/keepalive?sessionId=nope").build());
+
+			// when
+			final ServerResponse response = InspectorHandlerTests.this.handler.keepalive(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Keep-alive")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("keepalive() for a session whose tracker never observed a ping returns observed=true with empty state")
+		void keepalive_withKnownSessionAndNoPings_returnsObservedTrueWithNoInterval() {
+			// given
+			final String sessionId = openLoopbackSession(connectedClient());
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector/api/keepalive?sessionId=" + sessionId).build());
+
+			// when
+			final ServerResponse response = InspectorHandlerTests.this.handler.keepalive(request).block();
 
 			// then
 			assertThat(response).isNotNull();
@@ -1707,7 +1745,7 @@ class InspectorHandlerTests {
 				.willReturn(new DetectedTransport(TransportType.STREAMABLE, "/mcp", null, "WEBFLUX"));
 			final McpSyncClient client = connectedClient();
 			given(InspectorHandlerTests.this.loopbackFactory.forStreamable(any(), org.mockito.ArgumentMatchers.eq(8081),
-					any(), any()))
+					any(), any(), any(KeepAliveTracker.class)))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -1720,7 +1758,7 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			verify(InspectorHandlerTests.this.loopbackFactory).forStreamable(any(),
-					org.mockito.ArgumentMatchers.eq(8081), any(), any());
+					org.mockito.ArgumentMatchers.eq(8081), any(), any(), any(KeepAliveTracker.class));
 		}
 
 		@Test
@@ -1736,7 +1774,7 @@ class InspectorHandlerTests {
 			given(client.initialize()).willReturn(null);
 			given(client.getServerInfo()).willReturn(null);
 			given(InspectorHandlerTests.this.loopbackFactory.forStreamable(any(), org.mockito.ArgumentMatchers.eq(8081),
-					any(), any()))
+					any(), any(), any(KeepAliveTracker.class)))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
