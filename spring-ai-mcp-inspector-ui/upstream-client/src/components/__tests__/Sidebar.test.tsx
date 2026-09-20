@@ -183,14 +183,14 @@ describe("Sidebar", () => {
       renderSidebar({ connectionTimeout: "abc" });
       const input = screen.getByLabelText("Connection timeout (s)");
       fireEvent.blur(input);
-      const connectButton = screen.getByRole("button", { name: /connect/i });
+      const connectButton = screen.getByRole("button", { name: /^connect$/i });
       expect(connectButton).toBeDisabled();
     });
 
     it("blocks connect when timeout is invalid on click", () => {
       const onConnect = jest.fn();
       renderSidebar({ connectionTimeout: "0", onConnect });
-      const connectButton = screen.getByRole("button", { name: /connect/i });
+      const connectButton = screen.getByRole("button", { name: /^connect$/i });
       fireEvent.click(connectButton);
       expect(onConnect).not.toHaveBeenCalled();
       expect(screen.getByRole("alert")).toHaveTextContent(

@@ -82,3 +82,14 @@ STORAGE KEY ALIGNMENT WITH #89 (auth profiles):
   stripped before persistence). The key holds only non-secret
   connection metadata (name, transport type, URL, header names
   without values, env keys with empty values).
+
+ADDENDUM (t_de006530): persist per-server connection timeout.
+- `SavedConnection` gains optional `connectionTimeout?: string` field
+  (seconds). `undefined` / absent = proxy default (30s). Old entries
+  without the field load without migration errors.
+- `handleSaveConnection` captures the current form value;
+  `handleSelectConnection` restores it (empty string = default).
+- Form value wins over saved value during the session: clearing the
+  field before connect uses proxy default, but the saved entry keeps
+  its value until the user explicitly re-saves.
+- Tests: round-trip serialization, legacy-entry compat, UI restore.
