@@ -54,6 +54,7 @@ import io.inspector.mcp.core.dto.RootsDto;
 import io.inspector.mcp.core.introspect.model.IntrospectionReport;
 import io.inspector.mcp.core.introspect.model.SchemaWarning;
 import io.inspector.mcp.core.introspect.model.WarningCode;
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
 import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthInitiateResponse;
@@ -168,7 +169,7 @@ class InspectorRestControllerTests {
 			given(InspectorRestControllerTests.this.portHolder.port()).willReturn(1234);
 			final McpSyncClient client = mock(McpSyncClient.class);
 			given(InspectorRestControllerTests.this.loopbackFactory.forSse(eq("127.0.0.1"), eq(1234), eq("/app/sse"),
-					any()))
+					any(), any(KeepAliveTracker.class)))
 				.willReturn(client);
 
 			// when
@@ -212,7 +213,7 @@ class InspectorRestControllerTests {
 				.willReturn(new DetectedTransport(TransportType.STREAMABLE, "/mcp", null, "WEBMVC"));
 			given(InspectorRestControllerTests.this.portHolder.port()).willReturn(1234);
 			given(InspectorRestControllerTests.this.loopbackFactory.forStreamable(anyString(), anyInt(), anyString(),
-					any()))
+					any(), any(KeepAliveTracker.class)))
 				.willThrow(new RuntimeException("boom"));
 
 			// when
@@ -1014,7 +1015,7 @@ class InspectorRestControllerTests {
 			final ArgumentCaptor<InspectorClientHandlers> handlersCaptor = ArgumentCaptor
 				.forClass(InspectorClientHandlers.class);
 			given(InspectorRestControllerTests.this.loopbackFactory.forSse(anyString(), anyInt(), anyString(),
-					handlersCaptor.capture()))
+					handlersCaptor.capture(), any(KeepAliveTracker.class)))
 				.willReturn(client);
 
 			final ResponseEntity<Map<String, Object>> connectResponse = InspectorRestControllerTests.this.controller

@@ -24,6 +24,7 @@ import io.modelcontextprotocol.client.McpSyncClient;
 
 import io.inspector.mcp.core.client.PendingServerRequests;
 import io.inspector.mcp.core.dto.RootDto;
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
 
 /**
@@ -36,6 +37,8 @@ import io.inspector.mcp.core.oauth.OAuthTokenResponse;
 final class SessionState {
 
 	private final McpSyncClient client;
+
+	private final KeepAliveTracker keepAliveTracker;
 
 	private final List<RootDto> roots = new CopyOnWriteArrayList<>();
 
@@ -52,11 +55,25 @@ final class SessionState {
 	private volatile OAuthTokenResponse oauthToken;
 
 	SessionState(final McpSyncClient client) {
+		this(client, null);
+	}
+
+	SessionState(final McpSyncClient client, final KeepAliveTracker keepAliveTracker) {
 		this.client = client;
+		this.keepAliveTracker = keepAliveTracker;
 	}
 
 	McpSyncClient client() {
 		return this.client;
+	}
+
+	/**
+	 * Returns the per-session keep-alive tracker, or {@code null} when the session was
+	 * not built with ping detection.
+	 * @return the tracker, or {@code null}
+	 */
+	KeepAliveTracker keepAliveTracker() {
+		return this.keepAliveTracker;
 	}
 
 	List<RootDto> roots() {
