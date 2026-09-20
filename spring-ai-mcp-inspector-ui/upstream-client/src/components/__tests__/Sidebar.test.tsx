@@ -1,3 +1,4 @@
+import React from "react";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { describe, it, beforeEach, jest } from "@jest/globals";
@@ -63,6 +64,8 @@ describe("Sidebar", () => {
     setConfig: jest.fn(),
     connectionType: "proxy" as const,
     setConnectionType: jest.fn(),
+    connectionTimeout: "",
+    setConnectionTimeout: jest.fn(),
   };
 
   const renderSidebar = (props = {}) => {
@@ -107,6 +110,94 @@ describe("Sidebar", () => {
 
       fireEvent.blur(commandInput);
       expect(setCommand).toHaveBeenLastCalledWith("node");
+    });
+  });
+
+  describe("Connection timeout", () => {
+    it("renders the connection timeout input field", () => {
+      renderSidebar();
+      const input = screen.getByLabelText("Connection timeout (s)");
+      expect(input).toBeInTheDocument();
+      expect(input).toHaveAttribute("type", "number");
+      expect(input).toHaveAttribute("min", "1");
+      expect(input).toHaveAttribute("step", "1");
+    });
+
+    it("shows placeholder with default value", () => {
+      renderSidebar();
+      const input = screen.getByLabelText("Connection timeout (s)");
+      expect(input).toHaveAttribute("placeholder", "30 (default)");
+    });
+
+    it("calls setConnectionTimeout on input change", () => {
+      const setConnectionTimeout = jest.fn();
+      renderSidebar({ setConnectionTimeout });
+      const input = screen.getByLabelText("Connection timeout (s)");
+      fireEvent.change(input, { target: { value: "45" } });
+      expect(setConnectionTimeout).toHaveBeenCalledWith("45");
+    });
+
+    it("shows inline error for non-numeric value on blur", () => {
+      renderSidebar({ connectionTimeout: "abc" });
+      const input = screen.getByLabelText("Connection timeout (s)");
+      fireEvent.blur(input);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Must be a positive number of seconds",
+      );
+    });
+
+    it("shows inline error for value less than 1 on blur", () => {
+      renderSidebar({ connectionTimeout: "0" });
+      const input = screen.getByLabelText("Connection timeout (s)");
+      fireEvent.blur(input);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Must be a positive number of seconds",
+      );
+    });
+
+    it("clears error when input is emptied and blurred", () => {
+      const { rerender } = renderSidebar({ connectionTimeout: "0" });
+      const input = screen.getByLabelText("Connection timeout (s)");
+      fireEvent.blur(input);
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+      // Simulate clearing the field and blurring again
+      rerender(
+        <TooltipProvider>
+          <Sidebar {...defaultProps} connectionTimeout="" />
+        </TooltipProvider>,
+      );
+      fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("disables Connect button when timeout is invalid after blur", () => {
+      renderSidebar({ connectionTimeout: "abc" });
+      const input = screen.getByLabelText("Connection timeout (s)");
+      fireEvent.blur(input);
+      const connectButton = screen.getByRole("button", { name: /connect/i });
+      expect(connectButton).toBeDisabled();
+    });
+
+    it("blocks connect when timeout is invalid on click", () => {
+      const onConnect = jest.fn();
+      renderSidebar({ connectionTimeout: "0", onConnect });
+      const connectButton = screen.getByRole("button", { name: /connect/i });
+      fireEvent.click(connectButton);
+      expect(onConnect).not.toHaveBeenCalled();
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Must be a positive number of seconds",
+      );
+    });
+
+    it("renders for all transport types", () => {
+      const transports = ["stdio", "sse", "streamable-http"] as const;
+      for (const transportType of transports) {
+        const { unmount } = renderSidebar({ transportType });
+        expect(
+          screen.getByLabelText("Connection timeout (s)"),
+        ).toBeInTheDocument();
+        unmount();
+      }
     });
   });
 
