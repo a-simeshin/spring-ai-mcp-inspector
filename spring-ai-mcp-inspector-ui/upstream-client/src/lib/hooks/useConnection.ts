@@ -1892,6 +1892,7 @@ export function useConnection({
     serverCapabilities,
     serverImplementation,
     mcpClient,
+    mcpSessionId,
     requestHistory,
     clearRequestHistory,
     makeRequest,

@@ -1,0 +1,25 @@
+src/lib/hooks/useKeepAlive.ts (new)
+src/components/TimelineTab.tsx
+src/components/HistoryAndNotifications.tsx
+src/App.tsx
+
+Adds keep-alive ping observability to the inspector UI (#235, t_2c3e06c2).
+The useKeepAlive hook subscribes to the inspector's SSE stream for live
+mcp:keepalive-ping events and polls GET /api/keepalive for the initial
+snapshot (last N=10 pings, rolling median interval, staleness flag).
+
+TimelineTab renders each inbound ping as a KEEP_ALIVE event with cyan
+styling (text-cyan-400 / bg-cyan-950/30) so it is visually distinct from
+regular MCP request/response traffic. Pings are merged into the timeline
+in real time and deduplicated by timestamp.
+
+HistoryAndNotifications shows a collapsed "Keep-alive pings" section
+(capped at 10 entries) that expands on click, keeping the main History
+list free of ping spam.
+
+App.tsx passes mcpSessionId (exposed by useConnection) to both components
+so the hook can subscribe to the correct session.
+
+Covered by useKeepAlive.test.ts (7 tests: null session, snapshot fetch,
+SSE subscription, live ping merge, ping cap, cleanup, custom path) and
+TimelineTab.test.tsx (KEEP_ALIVE rendering, styling, label).
