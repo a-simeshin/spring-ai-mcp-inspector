@@ -99,6 +99,7 @@ public class InspectorRouterConfig {
 			.andRoute(POST(apiPath + "/jsonrpc/respond"), handler::respond)
 			.andRoute(GET(apiPath + "/events"), handler::events)
 			.andRoute(GET(apiPath + "/roots"), handler::getRoots)
+			.andRoute(GET(apiPath + "/keepalive"), handler::keepalive)
 			.andRoute(PUT(apiPath + "/roots"), handler::putRoots)
 			.andRoute(POST(apiPath + "/oauth/initiate"), handler::oauthInitiate)
 			.andRoute(GET(apiPath + "/oauth/callback"), handler::oauthCallback)
