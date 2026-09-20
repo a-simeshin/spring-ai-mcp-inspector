@@ -18,6 +18,7 @@ package io.inspector.mcp.webmvc.proxy;
 
 import java.io.IOException;
 import java.net.URI;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -48,6 +49,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyConnectTimeoutException;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
@@ -139,6 +141,8 @@ public class SseProxyController {
 	 * @param command the executable for stdio transport
 	 * @param args the arguments for stdio transport
 	 * @param env the environment variables for stdio transport as JSON
+	 * @param connectionTimeoutSeconds optional per-phase budget in seconds; when
+	 * {@code null} or non-positive the configured default (30s) applies
 	 * @param request the current request, read for its context path
 	 * @return the {@link SseEmitter} for the opened session
 	 */
@@ -148,8 +152,28 @@ public class SseProxyController {
 			@RequestParam(value = "url", required = false) final String url,
 			@RequestParam(value = "command", required = false) final String command,
 			@RequestParam(value = "args", required = false) final String args,
-			@RequestParam(value = "env", required = false) final String env, final HttpServletRequest request) {
-		return openProxiedSession(transportType, url, command, args, env, contextPath(request));
+			@RequestParam(value = "env", required = false) final String env,
+			@RequestParam(value = "connectionTimeout", required = false) final Long connectionTimeoutSeconds,
+			final HttpServletRequest request) {
+		return openProxiedSession(transportType, url, command, args, env, contextPath(request),
+				connectionTimeoutSeconds);
+	}
+
+	/**
+	 * Six-argument overload retained for callers that pre-date the
+	 * {@code connectionTimeout} parameter; behaves as if no override was supplied.
+	 * @param transportType the transport type ({@code sse}, {@code streamable-http}, or
+	 * {@code stdio})
+	 * @param url the target URL for SSE or streamable-HTTP transports
+	 * @param command the executable for stdio transport
+	 * @param args the arguments for stdio transport
+	 * @param env the environment variables for stdio transport as JSON
+	 * @param request the current request, read for its context path
+	 * @return the {@link SseEmitter} for the opened session
+	 */
+	public SseEmitter openSse(final String transportType, final String url, final String command, final String args,
+			final String env, final HttpServletRequest request) {
+		return openProxiedSession(transportType, url, command, args, env, contextPath(request), null);
 	}
 
 	/**
@@ -157,14 +181,32 @@ public class SseProxyController {
 	 * @param command the executable for stdio transport
 	 * @param args the arguments for stdio transport
 	 * @param env the environment variables for stdio transport as JSON
+	 * @param connectionTimeoutSeconds optional per-phase budget in seconds; when
+	 * {@code null} or non-positive the configured default (30s) applies
 	 * @param request the current request, read for its context path
 	 * @return the {@link SseEmitter} for the opened session
 	 */
 	@GetMapping(path = "/stdio", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
 	public SseEmitter openStdio(@RequestParam("command") final String command,
 			@RequestParam(value = "args", required = false) final String args,
-			@RequestParam(value = "env", required = false) final String env, final HttpServletRequest request) {
-		return openProxiedSession("stdio", null, command, args, env, contextPath(request));
+			@RequestParam(value = "env", required = false) final String env,
+			@RequestParam(value = "connectionTimeout", required = false) final Long connectionTimeoutSeconds,
+			final HttpServletRequest request) {
+		return openProxiedSession("stdio", null, command, args, env, contextPath(request), connectionTimeoutSeconds);
+	}
+
+	/**
+	 * Four-argument overload retained for callers that pre-date the
+	 * {@code connectionTimeout} parameter; behaves as if no override was supplied.
+	 * @param command the executable for stdio transport
+	 * @param args the arguments for stdio transport
+	 * @param env the environment variables for stdio transport as JSON
+	 * @param request the current request, read for its context path
+	 * @return the {@link SseEmitter} for the opened session
+	 */
+	public SseEmitter openStdio(final String command, final String args, final String env,
+			final HttpServletRequest request) {
+		return openProxiedSession("stdio", null, command, args, env, contextPath(request), null);
 	}
 
 	/**
@@ -202,11 +244,14 @@ public class SseProxyController {
 	}
 
 	private SseEmitter openProxiedSession(final String transportType, final String url, final String command,
-			final String args, final String env, final String contextPath) {
+			final String args, final String env, final String contextPath, final Long connectionTimeoutSeconds) {
 		final String sessionId = UUID.randomUUID().toString();
 		final SseEmitter emitter = new SseEmitter(resolveTimeouts().getSseSession().toMillis());
+		final Duration connectionBudget = resolveConnectionBudget(connectionTimeoutSeconds);
+		final boolean budgetOverride = connectionTimeoutSeconds != null && connectionTimeoutSeconds > 0;
 
 		final McpClientTransport target;
+		final long connectStartNanos = System.nanoTime();
 		try {
 			target = buildTargetTransport(transportType, url, command, args, env);
 		}
@@ -259,14 +304,47 @@ public class SseProxyController {
 
 		// Kick off the proxy. This call subscribes the browser->target pump
 		// and registers the inbound handler on the target transport.
-		this.mcpProxy.start(session).subscribe((ignored) -> {
-		}, (err) -> {
-			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
-			this.registry.removeAndClose(sessionId);
-			emitter.completeWithError(err);
-		});
+		if (budgetOverride) {
+			this.mcpProxy.start(session).timeout(connectionBudget).subscribe((ignored) -> {
+			}, (err) -> {
+				if (err instanceof java.util.concurrent.TimeoutException) {
+					final long elapsedMs = (System.nanoTime() - connectStartNanos) / 1_000_000L;
+					final ProxyConnectTimeoutException timeoutEx = new ProxyConnectTimeoutException(
+							ProxyConnectTimeoutException.Phase.CONNECT, elapsedMs, connectionBudget.toMillis());
+					LOG.warn("proxy[{}] connect phase timed out after {}ms of {}ms budget", sessionId, elapsedMs,
+							connectionBudget.toMillis());
+					session.failUpstream(timeoutEx);
+				}
+				else {
+					LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+				}
+				this.registry.removeAndClose(sessionId);
+				emitter.completeWithError(err);
+			});
+		}
+		else {
+			this.mcpProxy.start(session).subscribe((ignored) -> {
+			}, (err) -> {
+				LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+				this.registry.removeAndClose(sessionId);
+				emitter.completeWithError(err);
+			});
+		}
 
 		return emitter;
+	}
+
+	/**
+	 * Resolves the per-phase connection budget: the {@code connectionTimeout} query
+	 * parameter wins over the configured default; both fall back to 30s.
+	 * @param connectionTimeoutSeconds the query parameter value (may be {@code null})
+	 * @return the budget to apply per phase (never {@code null})
+	 */
+	private Duration resolveConnectionBudget(final Long connectionTimeoutSeconds) {
+		if (connectionTimeoutSeconds != null && connectionTimeoutSeconds > 0) {
+			return Duration.ofSeconds(connectionTimeoutSeconds);
+		}
+		return resolveTimeouts().getConnection();
 	}
 
 	private void sendMessageEvent(final SseEmitter emitter, final String sessionId, final JsonNode frame) {
