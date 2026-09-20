@@ -36,6 +36,8 @@ import { InspectorConfig } from "@/lib/configurationTypes";
 import { ConnectionStatus } from "@/lib/constants";
 import {
   humanReadableReason,
+  humanReadablePhase,
+  formatBudgetBreakdown,
   type ConnectFailure,
 } from "@/lib/connectionErrors";
 import useTheme from "../lib/hooks/useTheme";
@@ -539,8 +541,10 @@ const Sidebar = ({
           {/* [spring-ai-mcp-inspector PATCH] Render connection failure
               alerts at the TOP of the config pane, above the URL/command
               inputs, so they are immediately visible without scrolling
-              (see NOTICE.d/connect-error-alert.txt and
-              NOTICE.d/connect-error-toast.txt). */}
+              (see NOTICE.d/connect-error-alert.txt,
+              NOTICE.d/connect-error-toast.txt and
+              NOTICE.d/connect-timeout-banner.txt). Shows structured
+              per-phase timeout info when available. */}
           {connectionError && (() => {
             if (connectionError.reason === "unauthorized") {
               return (
@@ -581,6 +585,99 @@ const Sidebar = ({
                     <RotateCcw className="w-4 h-4 mr-2" />
                     Retry
                   </Button>
+                </div>
+              );
+            }
+            if (
+              connectionError.reason === "timeout" &&
+              connectionError.phase
+            ) {
+              return (
+                <div
+                  role="alert"
+                  data-testid="connect-error-alert"
+                  className="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200 rounded-lg p-3 mb-4"
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                    <span className="text-sm font-medium">
+                      Connection timed out
+                    </span>
+                  </div>
+                  <p className="text-xs mb-2">
+                    <span className="font-medium">
+                      {humanReadablePhase(connectionError.phase)}
+                    </span>
+                    {" \u2014 "}
+                    {connectionError.elapsedMs != null &&
+                    connectionError.budgetMs != null
+                      ? formatBudgetBreakdown(
+                          connectionError.elapsedMs,
+                          connectionError.budgetMs,
+                        )
+                      : ""}
+                    {connectionError.message && (
+                      <>
+                        <br />
+                        {connectionError.message}
+                      </>
+                    )}
+                  </p>
+                  <p className="text-xs mb-2">
+                    <span
+                      className="cursor-pointer text-blue-600 dark:text-blue-400 hover:underline"
+                      onClick={() => {
+                        const input = document.getElementById(
+                          "connection-timeout-input",
+                        );
+                        if (input) {
+                          input.focus();
+                          input.scrollIntoView({
+                            behavior: "smooth",
+                            block: "center",
+                          });
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          const input = document.getElementById(
+                            "connection-timeout-input",
+                          );
+                          if (input) {
+                            input.focus();
+                            input.scrollIntoView({
+                              behavior: "smooth",
+                              block: "center",
+                            });
+                          }
+                        }
+                      }}
+                    >
+                      Increase Connection timeout in the connection form
+                    </span>
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      data-testid="retry-connect-button"
+                      size="sm"
+                      variant="outline"
+                      onClick={onConnect}
+                    >
+                      <RotateCcw className="w-4 h-4 mr-2" />
+                      Retry
+                    </Button>
+                    <Button
+                      data-testid="reset-session-button"
+                      size="sm"
+                      variant="default"
+                      onClick={onResetSession}
+                    >
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Reset session
+                    </Button>
+                  </div>
                 </div>
               );
             }
