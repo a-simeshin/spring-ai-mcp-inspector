@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   Play,
   ChevronDown,
@@ -57,6 +57,11 @@ import { validateRedirectUrl, validateServerUrl } from "@/utils/urlValidation";
 interface SidebarProps {
   connectionStatus: ConnectionStatus;
   connectionError: ConnectFailure | null;
+  // [spring-ai-mcp-inspector PATCH] Keep-alive observability props
+  // (#235, t_3925eae7).
+  keepAliveLastPingAt?: string | null;
+  keepAliveIsStale?: boolean;
+  keepAliveObserved?: boolean;
   transportType: "stdio" | "sse" | "streamable-http";
   setTransportType: (type: "stdio" | "sse" | "streamable-http") => void;
   command: string;
@@ -90,9 +95,79 @@ interface SidebarProps {
     | null;
 }
 
+// [spring-ai-mcp-inspector PATCH] Keep-alive indicator component for the
+// Connection pane. Shows "Last keep-alive: Xs ago" with a ticking counter,
+// or a neutral "no keep-alive observed" state. Shows a warning banner when
+// the connection appears stale (#235, t_3925eae7).
+function KeepAliveIndicator({
+  lastPingAt,
+  isStale,
+  observed,
+}: {
+  lastPingAt?: string | null;
+  isStale?: boolean;
+  observed?: boolean;
+}) {
+  const [secondsAgo, setSecondsAgo] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!lastPingAt) {
+      setSecondsAgo(null);
+      return;
+    }
+    const update = () => {
+      const pingTime = new Date(lastPingAt).getTime();
+      const now = Date.now();
+      const diff = Math.max(0, Math.floor((now - pingTime) / 1000));
+      setSecondsAgo(diff);
+    };
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [lastPingAt]);
+
+  if (!observed) {
+    return (
+      <div
+        data-testid="keep-alive-indicator"
+        className="text-xs text-gray-500 dark:text-gray-400 text-center mb-2"
+      >
+        no keep-alive observed
+      </div>
+    );
+  }
+
+  return (
+    <div data-testid="keep-alive-indicator" className="mb-2">
+      <div className="text-xs text-gray-600 dark:text-gray-300 text-center">
+        Last keep-alive: {secondsAgo !== null ? `${secondsAgo}s ago` : "..."}
+      </div>
+      {isStale && (
+        <div
+          data-testid="keep-alive-stale-banner"
+          className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded text-xs text-yellow-800 dark:text-yellow-200"
+        >
+          <div className="flex items-start gap-1">
+            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+            <div>
+              <strong>Connection may be dead.</strong> No keep-alive pings
+              received for longer than 2x the estimated interval. This usually
+              happens when a load balancer or proxy (e.g. ALB, nginx) closes
+              idle connections (typically after 60s).
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const Sidebar = ({
   connectionStatus,
   connectionError,
+  keepAliveLastPingAt,
+  keepAliveIsStale,
+  keepAliveObserved,
   transportType,
   setTransportType,
   command,
@@ -935,6 +1010,16 @@ const Sidebar = ({
                 })()}
               </span>
             </div>
+
+            {/* [spring-ai-mcp-inspector PATCH] Keep-alive observability
+                indicator and stale-connection warning banner (#235, t_3925eae7). */}
+            {connectionStatus === "connected" && (
+              <KeepAliveIndicator
+                lastPingAt={keepAliveLastPingAt}
+                isStale={keepAliveIsStale}
+                observed={keepAliveObserved}
+              />
+            )}
 
             {connectionStatus === "connected" &&
               serverImplementation &&
