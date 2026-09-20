@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] Connection timeout param forwarding tests (connection-timeout.txt).
 import { renderHook, act } from "@testing-library/react";
 import { useConnection } from "../useConnection";
 import { z } from "zod/v3";
@@ -984,6 +985,101 @@ describe("useConnection", () => {
       expect(call.toString()).toContain(
         "url=https%3A%2F%2Fexample.com%3A8443%2Fapi",
       );
+    });
+  });
+
+  describe("Connection timeout", () => {
+    const SSEClientTransport = jest.requireMock(
+      "@modelcontextprotocol/sdk/client/sse.js",
+    ).SSEClientTransport;
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    test("omits connectionTimeout param when not provided", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const url = SSEClientTransport.mock.calls[0][0] as URL;
+      expect(url.searchParams.has("connectionTimeout")).toBe(false);
+    });
+
+    test("omits connectionTimeout param when empty string", async () => {
+      const props = { ...defaultProps, connectionTimeout: "" };
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const url = SSEClientTransport.mock.calls[0][0] as URL;
+      expect(url.searchParams.has("connectionTimeout")).toBe(false);
+    });
+
+    test("forwards connectionTimeout param as seconds when set", async () => {
+      const props = { ...defaultProps, connectionTimeout: "60" };
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const url = SSEClientTransport.mock.calls[0][0] as URL;
+      expect(url.searchParams.get("connectionTimeout")).toBe("60");
+    });
+
+    test("trims whitespace from connectionTimeout before forwarding", async () => {
+      const props = { ...defaultProps, connectionTimeout: "  45  " };
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const url = SSEClientTransport.mock.calls[0][0] as URL;
+      expect(url.searchParams.get("connectionTimeout")).toBe("45");
+    });
+
+    test("applies to stdio transport type", async () => {
+      const props = {
+        ...defaultProps,
+        transportType: "stdio" as const,
+        command: "node",
+        args: "server.js",
+        connectionTimeout: "15",
+      };
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const url = SSEClientTransport.mock.calls[0][0] as URL;
+      expect(url.searchParams.get("connectionTimeout")).toBe("15");
+      expect(url.searchParams.get("command")).toBe("node");
+    });
+
+    test("applies to streamable-http transport type", async () => {
+      const StreamableHTTPClientTransport = jest.requireMock(
+        "@modelcontextprotocol/sdk/client/streamableHttp.js",
+      ).StreamableHTTPClientTransport;
+      const props = {
+        ...defaultProps,
+        transportType: "streamable-http" as const,
+        connectionTimeout: "20",
+      };
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const url = StreamableHTTPClientTransport.mock.calls[0][0] as URL;
+      expect(url.searchParams.get("connectionTimeout")).toBe("20");
     });
   });
 
