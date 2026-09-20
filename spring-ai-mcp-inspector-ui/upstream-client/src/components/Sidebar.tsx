@@ -88,6 +88,11 @@ interface SidebarProps {
   setConfig: (config: InspectorConfig) => void;
   connectionType: "direct" | "proxy";
   setConnectionType: (type: "direct" | "proxy") => void;
+  // [spring-ai-mcp-inspector PATCH] Optional connection timeout in seconds.
+  // Empty string = proxy default (30s). Applies to all transport types;
+  // for stdio the budget covers spawn + initialize.
+  connectionTimeout: string;
+  setConnectionTimeout: (value: string) => void;
   serverImplementation?:
     | (WithIcons & { name?: string; version?: string; websiteUrl?: string })
     | null;
@@ -129,6 +134,8 @@ const Sidebar = ({
   setConfig,
   connectionType,
   setConnectionType,
+  connectionTimeout,
+  setConnectionTimeout,
   serverImplementation,
   savedConnections,
   activeConnectionId,
@@ -147,6 +154,8 @@ const Sidebar = ({
   // [spring-ai-mcp-inspector PATCH] URL validation state: error message and touched flag.
   const [urlError, setUrlError] = useState<string | null>(null);
   const [urlTouched, setUrlTouched] = useState(false);
+  // [spring-ai-mcp-inspector PATCH] Connection timeout validation state.
+  const [timeoutError, setTimeoutError] = useState<string | null>(null);
   const { toast } = useToast();
   // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
   const [showSavedConnections, setShowSavedConnections] = useState(true);
@@ -590,6 +599,43 @@ const Sidebar = ({
               </Tooltip>
             </>
           )}
+
+          {/* [spring-ai-mcp-inspector PATCH] Connection timeout field.
+               Applies to all transport types (stdio: spawn+initialize,
+               SSE/HTTP: connect+initialize). Empty = proxy default (30s).
+               Validation: non-numeric or <1 blocks Connect. */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium" htmlFor="connection-timeout-input">
+              Connection timeout (s)
+            </label>
+            <Input
+              id="connection-timeout-input"
+              type="number"
+              min="1"
+              step="1"
+              placeholder="30 (default)"
+              value={connectionTimeout}
+              onChange={(e) => setConnectionTimeout(e.target.value)}
+              onBlur={() => {
+                if (connectionTimeout === "") {
+                  setTimeoutError(null);
+                } else {
+                  const n = Number(connectionTimeout);
+                  if (!Number.isFinite(n) || n < 1) {
+                    setTimeoutError("Must be a positive number of seconds");
+                  } else {
+                    setTimeoutError(null);
+                  }
+                }
+              }}
+              className={`font-mono ${timeoutError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
+            />
+            {timeoutError && (
+              <p className="text-xs text-red-500 mt-1" role="alert">
+                {timeoutError}
+              </p>
+            )}
+          </div>
 
           {transportType === "stdio" && (
             <div className="space-y-2">
@@ -1048,6 +1094,7 @@ const Sidebar = ({
               </div>
             )}
             {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). Block onConnect when invalid. */}
+            {/* [spring-ai-mcp-inspector PATCH] Also block Connect when connection timeout is invalid. */}
             {connectionStatus !== "connected" && (
               <Button
                 className="w-full"
@@ -1061,9 +1108,19 @@ const Sidebar = ({
                       return;
                     }
                   }
+                  // Block connect if connection timeout is invalid
+                  if (connectionTimeout !== "") {
+                    const n = Number(connectionTimeout);
+                    if (!Number.isFinite(n) || n < 1) {
+                      setTimeoutError("Must be a positive number of seconds");
+                      return;
+                    }
+                  }
                   onConnect();
                 }}
-                disabled={transportType !== "stdio" && !!urlError}
+                disabled={
+                  (transportType !== "stdio" && !!urlError) || !!timeoutError
+                }
               >
                 <Play className="w-4 h-4 mr-2" />
                 Connect

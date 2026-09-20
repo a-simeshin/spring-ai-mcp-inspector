@@ -213,6 +213,11 @@ const App = () => {
       );
     },
   );
+  // [spring-ai-mcp-inspector PATCH] Optional connection timeout (seconds).
+  // Empty string = proxy default (30s). Persisted in localStorage.
+  const [connectionTimeout, setConnectionTimeout] = useState<string>(() => {
+    return localStorage.getItem("lastConnectionTimeout") || "";
+  });
   const [logLevel, setLogLevel] = useState<LoggingLevel>("debug");
   const [notifications, setNotifications] = useState<ServerNotification[]>([]);
   const [roots, setRoots] = useState<Root[]>([]);
@@ -446,6 +451,7 @@ const App = () => {
     oauthScope,
     config,
     connectionType,
+    connectionTimeout,
     onNotification: (notification) => {
       setNotifications((prev) => [...prev, notification as ServerNotification]);
 
@@ -719,6 +725,11 @@ const App = () => {
   useEffect(() => {
     localStorage.setItem("lastConnectionType", connectionType);
   }, [connectionType]);
+
+  // [spring-ai-mcp-inspector PATCH] Persist connection timeout to localStorage.
+  useEffect(() => {
+    localStorage.setItem("lastConnectionTimeout", connectionTimeout);
+  }, [connectionTimeout]);
 
   useEffect(() => {
     if (bearerToken) {
@@ -1569,6 +1580,8 @@ const App = () => {
           loggingSupported={!!serverCapabilities?.logging || false}
           connectionType={connectionType}
           setConnectionType={setConnectionType}
+          connectionTimeout={connectionTimeout}
+          setConnectionTimeout={setConnectionTimeout}
           serverImplementation={serverImplementation}
           // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
           savedConnections={savedConnections}
