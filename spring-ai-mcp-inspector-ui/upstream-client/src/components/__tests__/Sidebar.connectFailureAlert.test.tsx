@@ -1,4 +1,6 @@
 // jsdom lacks MediaQueryList; useTheme calls window.matchMedia on mount.
+// [spring-ai-mcp-inspector PATCH] Sidebar connect-failure alert tests
+
 import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import Sidebar from "../Sidebar";
@@ -141,6 +143,141 @@ describe("Sidebar connect-failure alert", () => {
     expect(alert).toHaveTextContent("invalid");
     // Still has a Retry button
     expect(screen.getByTestId("retry-connect-button")).toBeInTheDocument();
+  });
+
+  describe("structured timeout banner", () => {
+    it("renders phase name and budget breakdown for structured timeout", () => {
+      renderSidebar({
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          message: "connection initialize timed out after 15234ms of 30000ms budget",
+          retryable: true,
+          phase: "initialize",
+          elapsedMs: 15234,
+          budgetMs: 30000,
+        },
+      });
+
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("Connection timed out");
+      expect(alert).toHaveTextContent("MCP initialize");
+      expect(alert).toHaveTextContent("15.2s of 30.0s");
+      expect(alert).toHaveTextContent("Increase Connection timeout");
+    });
+
+    it("renders connect phase timeout correctly", () => {
+      renderSidebar({
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          message: "connection connect timed out after 5432ms of 10000ms budget",
+          retryable: true,
+          phase: "connect",
+          elapsedMs: 5432,
+          budgetMs: 10000,
+        },
+      });
+
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("Transport connect");
+      expect(alert).toHaveTextContent("5.4s of 10.0s");
+      expect(alert).toHaveTextContent("Increase Connection timeout");
+    });
+
+    it("renders timeout without phase data as generic timeout banner", () => {
+      renderSidebar({
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          message: "Timed out",
+          retryable: true,
+        },
+      });
+
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("Failed to connect to the MCP server");
+      expect(alert).toHaveTextContent("Connection timed out");
+      expect(alert).toHaveTextContent("Timed out");
+      // No phase-specific content
+      expect(alert).not.toHaveTextContent("Transport connect");
+      expect(alert).not.toHaveTextContent("MCP initialize");
+    });
+
+    it("shows a clickable hint that attempts to focus the timeout input", () => {
+      // Create a mock input element
+      const mockFocus = jest.fn();
+      const mockScrollIntoView = jest.fn();
+      const getElementByIdMock = jest.spyOn(document, "getElementById");
+      getElementByIdMock.mockReturnValue({
+        focus: mockFocus,
+        scrollIntoView: mockScrollIntoView,
+      } as unknown as HTMLElement);
+
+      renderSidebar({
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          message: "Timed out",
+          retryable: true,
+          phase: "initialize",
+          elapsedMs: 15000,
+          budgetMs: 30000,
+        },
+      });
+
+      const hint = screen.getByText("Increase Connection timeout in the connection form");
+      expect(hint).toBeInTheDocument();
+
+      fireEvent.click(hint);
+      expect(mockFocus).toHaveBeenCalledTimes(1);
+      expect(mockScrollIntoView).toHaveBeenCalledTimes(1);
+
+      getElementByIdMock.mockRestore();
+    });
+
+    it("hint click is no-op when timeout input element does not exist", () => {
+      const getElementByIdMock = jest.spyOn(document, "getElementById");
+      getElementByIdMock.mockReturnValue(null);
+
+      renderSidebar({
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          message: "Timed out",
+          retryable: true,
+          phase: "connect",
+          elapsedMs: 5432,
+          budgetMs: 10000,
+        },
+      });
+
+      const hint = screen.getByText("Increase Connection timeout in the connection form");
+      expect(hint).toBeInTheDocument();
+      // Should not throw when element doesn't exist
+      expect(() => fireEvent.click(hint)).not.toThrow();
+
+      getElementByIdMock.mockRestore();
+    });
+
+    it("still shows the Retry button alongside the timeout detail", () => {
+      renderSidebar({
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          message: "Timed out",
+          retryable: true,
+          phase: "initialize",
+          elapsedMs: 15000,
+          budgetMs: 30000,
+        },
+      });
+
+      // Retry button still present
+      expect(screen.getByTestId("retry-connect-button")).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("retry-connect-button"));
+      expect(baseProps.onConnect).toHaveBeenCalled();
+    });
   });
 
   describe("sidebar status text (connectionStatus === error)", () => {

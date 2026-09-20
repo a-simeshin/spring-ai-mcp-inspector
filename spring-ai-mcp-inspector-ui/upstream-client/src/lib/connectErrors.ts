@@ -1,3 +1,5 @@
+// [spring-ai-mcp-inspector PATCH] Structured connect-failure contract shared with the backend.
+
 /**
  * Structured connect-failure contract shared with the backend.
  *
@@ -6,6 +8,10 @@
  * JSON body of the shape:
  *
  *   {"error":{"code":"MCP_CONNECT_FAILED","reason":"<timeout|connection_refused|dns|unauthorized|not_found|unknown>","message":"<human-readable>","retryable":true}}
+ *
+ * The proxy also returns a richer shape for per-phase connection timeouts:
+ *
+ *   {"error":{"code":"connection_timeout","phase":"<connect|initialize>","elapsedMs":<long>,"budgetMs":<long>,"message":"<human-readable>","retryable":true}}
  *
  * This module parses that body out of transport responses, carries it as an
  * error through the SDK transport layer, and maps arbitrary connect failures
@@ -25,9 +31,16 @@ export interface ConnectFailure {
   reason: ConnectFailureReason;
   message: string;
   retryable: boolean;
+  /** Per-phase timeout detail: which phase exceeded its budget. */
+  phase?: string;
+  /** Wall-clock ms spent in the phase when the budget fired. */
+  elapsedMs?: number;
+  /** Per-phase budget in ms. */
+  budgetMs?: number;
 }
 
 export const CONNECT_FAILED_ERROR_CODE = "MCP_CONNECT_FAILED";
+export const CONNECTION_TIMEOUT_ERROR_CODE = "connection_timeout";
 
 const CONNECT_FAILURE_REASONS: readonly ConnectFailureReason[] = [
   "timeout",
@@ -50,6 +63,9 @@ export class ConnectFailedError extends Error {
   readonly code: string;
   readonly reason: ConnectFailureReason;
   readonly retryable: boolean;
+  readonly phase?: string;
+  readonly elapsedMs?: number;
+  readonly budgetMs?: number;
 
   constructor(failure: ConnectFailure) {
     super(failure.message);
@@ -57,6 +73,9 @@ export class ConnectFailedError extends Error {
     this.code = failure.code;
     this.reason = failure.reason;
     this.retryable = failure.retryable;
+    this.phase = failure.phase;
+    this.elapsedMs = failure.elapsedMs;
+    this.budgetMs = failure.budgetMs;
   }
 }
 
@@ -65,9 +84,11 @@ export function isConnectFailedError(error: unknown): error is ConnectFailedErro
 }
 
 /**
- * Reads the structured `MCP_CONNECT_FAILED` error out of a non-2xx transport
- * response. Consumes only a clone of the body, so callers can still hand the
- * original response to the SDK when the body does not match the contract.
+ * Reads the structured connect-failure error out of a non-2xx transport
+ * response. Handles both the legacy `MCP_CONNECT_FAILED` code and the
+ * per-phase `connection_timeout` code. Consumes only a clone of the body,
+ * so callers can still hand the original response to the SDK when the body
+ * does not match the contract.
  */
 export async function parseConnectFailureResponse(
   response: Response,
@@ -86,6 +107,27 @@ export async function parseConnectFailureResponse(
   if (!isJsonObject(error)) {
     return null;
   }
+
+  // Per-phase connection_timeout payload from the proxy
+  if (error.code === CONNECTION_TIMEOUT_ERROR_CODE) {
+    const phase = typeof error.phase === "string" ? error.phase : undefined;
+    const elapsedMs = typeof error.elapsedMs === "number" ? error.elapsedMs : undefined;
+    const budgetMs = typeof error.budgetMs === "number" ? error.budgetMs : undefined;
+    return {
+      code: CONNECT_FAILED_ERROR_CODE,
+      reason: "timeout",
+      message:
+        typeof error.message === "string"
+          ? error.message
+          : "Connection timed out",
+      retryable: typeof error.retryable === "boolean" ? error.retryable : true,
+      phase,
+      elapsedMs,
+      budgetMs,
+    };
+  }
+
+  // Legacy MCP_CONNECT_FAILED payload
   if (error.code !== CONNECT_FAILED_ERROR_CODE) {
     return null;
   }
@@ -139,6 +181,9 @@ export function connectionFailureFromError(error: unknown): ConnectFailure {
       reason: error.reason,
       message: error.message,
       retryable: error.retryable,
+      phase: error.phase,
+      elapsedMs: error.elapsedMs,
+      budgetMs: error.budgetMs,
     };
   }
   if (isHttp401Error(error)) {
@@ -173,4 +218,27 @@ export function humanReadableReason(reason: ConnectFailureReason): string {
     default:
       return "";
   }
+}
+
+/**
+ * Human-readable phase name shown in the timeout error banner.
+ * Maps internal phase wire values to user-facing labels.
+ */
+const PHASE_LABELS: Record<string, string> = {
+  connect: "Transport connect",
+  initialize: "MCP initialize",
+};
+
+export function humanReadablePhase(phase: string): string {
+  return PHASE_LABELS[phase] ?? phase;
+}
+
+/**
+ * Formats elapsed/budget ms as a short "X.Xs of Ys" string.
+ * Values below 1000ms are shown as "<1s".
+ */
+export function formatBudgetBreakdown(elapsedMs: number, budgetMs: number): string {
+  const elapsed = elapsedMs < 1000 ? "<1" : (elapsedMs / 1000).toFixed(1);
+  const budget = budgetMs < 1000 ? "<1" : (budgetMs / 1000).toFixed(1);
+  return `${elapsed}s of ${budget}s`;
 }
