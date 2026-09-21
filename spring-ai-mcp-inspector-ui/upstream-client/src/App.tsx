@@ -890,9 +890,10 @@ const App = () => {
     request: ClientRequest,
     schema: T,
     tabKey?: keyof typeof errors,
+    signal?: AbortSignal,
   ): Promise<SchemaOutput<T>> => {
     try {
-      const response = await makeRequest(request, schema);
+      const response = await makeRequest(request, schema, { signal });
       if (tabKey !== undefined) {
         clearError(tabKey);
       }
@@ -1066,11 +1067,13 @@ const App = () => {
     cacheToolOutputSchemas(response.tools);
   };
 
+  // [spring-ai-mcp-inspector PATCH] signal param added for concurrency probe abort support
   const callTool = async (
     name: string,
     params: Record<string, unknown>,
     toolMetadata?: Record<string, unknown>,
     runAsTask?: boolean,
+    signal?: AbortSignal,
   ): Promise<CompatibilityCallToolResult> => {
     lastToolCallOriginTabRef.current = currentTabRef.current;
 
@@ -1111,6 +1114,7 @@ const App = () => {
         request,
         CompatibilityCallToolResultSchema,
         "tools",
+        signal,
       );
 
       // Check if this was a task-augmented request that returned a task reference
