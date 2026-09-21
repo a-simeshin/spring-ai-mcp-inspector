@@ -323,6 +323,12 @@ const App = () => {
   const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
   const [selectedTool, setSelectedTool] = useState<Tool | null>(null);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  // [spring-ai-mcp-inspector PATCH] Timeline deep-link target (issue #237):
+  // when set, TimelineTab scrolls to and highlights the event row with this
+  // correlation id. Cleared by TimelineTab via onFocusHandled.
+  const [pendingTimelineFocus, setPendingTimelineFocus] = useState<
+    string | null
+  >(null);
   const [isPollingTask, setIsPollingTask] = useState(false);
   const [nextResourceCursor, setNextResourceCursor] = useState<
     string | undefined
@@ -890,9 +896,10 @@ const App = () => {
     request: ClientRequest,
     schema: T,
     tabKey?: keyof typeof errors,
+    signal?: AbortSignal,
   ): Promise<SchemaOutput<T>> => {
     try {
-      const response = await makeRequest(request, schema);
+      const response = await makeRequest(request, schema, { signal });
       if (tabKey !== undefined) {
         clearError(tabKey);
       }
@@ -1066,11 +1073,13 @@ const App = () => {
     cacheToolOutputSchemas(response.tools);
   };
 
+  // [spring-ai-mcp-inspector PATCH] signal param added for concurrency probe abort support
   const callTool = async (
     name: string,
     params: Record<string, unknown>,
     toolMetadata?: Record<string, unknown>,
     runAsTask?: boolean,
+    signal?: AbortSignal,
   ): Promise<CompatibilityCallToolResult> => {
     lastToolCallOriginTabRef.current = currentTabRef.current;
 
@@ -1111,6 +1120,7 @@ const App = () => {
         request,
         CompatibilityCallToolResultSchema,
         "tools",
+        signal,
       );
 
       // Check if this was a task-augmented request that returned a task reference
@@ -1740,6 +1750,28 @@ const App = () => {
                         clearError("resources");
                         readResource(uri);
                       }}
+                      // [spring-ai-mcp-inspector PATCH] Concurrency probe entry
+                      // point (issue #237): opens the probe dialog for the tool.
+                      // The dialog lives inside ToolsTab so it can reuse the
+                      // current params/metadata state; connectionStatus is
+                      // needed to refuse launching when disconnected.
+                      connectionStatus={connectionStatus}
+                      onProbeTool={(tool) => {
+                        setSelectedTool(tool);
+                      }}
+                      onNavigateToTimeline={(correlationId) => {
+                        // [spring-ai-mcp-inspector PATCH] Deep-link into the
+                        // Timeline tab by correlation id (issue #237): switches
+                        // the active tab and asks TimelineTab to scroll to and
+                        // highlight the matching event row. The correlation id
+                        // is passed through React state, NOT through the URL
+                        // hash: the hashchange listener below would treat a
+                        // "timeline:<id>" hash as a tab name and unmount all
+                        // tab content (no TabsContent matches that value).
+                        setPendingTimelineFocus(correlationId);
+                        setActiveTab("timeline");
+                        window.location.hash = "timeline";
+                      }}
                     />
                     <TasksTab
                       tasks={tasks}
@@ -1820,7 +1852,13 @@ const App = () => {
                       onMetadataChange={handleMetadataChange}
                     />
                     {/* [spring-ai-mcp-inspector PATCH] Timeline tab (#112). */}
-                    <TimelineTab />
+                    {/* [spring-ai-mcp-inspector PATCH] Deep-link focus prop
+                        (issue #237): when set, TimelineTab scrolls to and
+                        highlights the matching correlation-id row. */}
+                    <TimelineTab
+                      focusCorrelationId={pendingTimelineFocus}
+                      onFocusHandled={() => setPendingTimelineFocus(null)}
+                    />
                   </>
                 )}
               </div>

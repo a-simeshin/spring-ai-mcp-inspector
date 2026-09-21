@@ -1,0 +1,43 @@
+concurrency-probe-ui (issue #237)
+
+What: UI surface for the concurrency probe on the 2.x line.
+
+Files and changes:
+- src/components/ConcurrencyProbeDialog.tsx (new): probe parameters dialog
+  (concurrency, iterations, per-call timeout), progress state with Cancel,
+  and the result panel (counts, p50/p95/p99/max, bodyEquality badge,
+  clickable failure groups, per-call table). Renders validation errors and
+  refuses launch when disconnected or when the tool has
+  execution.taskSupport === "required".
+- src/components/ToolsTab.tsx: optional onProbeTool/connectionStatus/
+  onNavigateToTimeline props; per-row Zap action button; renders the dialog
+  reusing the existing params/metadata state.
+- src/components/ListPane.tsx: optional renderActions prop for per-row
+  actions; row content wrapped so action clicks stopPropagation and do not
+  change row selection.
+- src/App.tsx: passes connectionStatus and onNavigateToTimeline into
+  ToolsTab; the handler switches to the Timeline tab and passes the
+  correlation id through React state (pendingTimelineFocus) so TimelineTab
+  scrolls to and highlights the matching row. The URL hash is set to plain
+  "timeline": writing "timeline:<id>" into the hash would be picked up by
+  the existing hashchange listener and would unmount every TabsContent
+  (no tab value matches "timeline:<id>").
+- src/components/TimelineTab.tsx: optional focusCorrelationId /
+  onFocusHandled props; rows expose data-correlation-id and register a ref
+  in a parent-owned map; when focusCorrelationId is set, the matching row
+  is scrolled into view (scrollIntoView) and highlighted with an amber ring
+  until the parent clears the focus. Rows without a correlationId are
+  unaffected.
+- src/components/__tests__/ConcurrencyProbeDialog.test.tsx (new): dialog
+  validation, disconnected/task-required blocking, result panel rendering,
+  failure-group navigation, cancel flow.
+- src/components/__tests__/TimelineTab.test.tsx: regression coverage for
+  the deep-link focus flow (scroll + highlight when the id matches, no
+  scroll when unset, onFocusHandled callback when the id is absent).
+
+Why: implements the UI half of docs/concurrency-probe.md (PR #245); engine
+lives in lib/concurrency/ (PR #247).
+
+Covered by: src/components/__tests__/ConcurrencyProbeDialog.test.tsx,
+src/components/__tests__/TimelineTab.test.tsx (deep-link focus describe
+block), existing ToolsTab/ListPane suites.

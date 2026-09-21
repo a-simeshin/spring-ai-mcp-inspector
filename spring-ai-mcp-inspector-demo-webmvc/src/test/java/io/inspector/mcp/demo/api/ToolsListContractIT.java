@@ -60,8 +60,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>
  * Contract under test:
  * <ul>
- * <li>22 tool entries (the 2.x line includes {@code authorizeViaUrl}, which needs SDK 2.0
- * URL-mode elicitation);</li>
+ * <li>23 tool entries (the 2.x line includes {@code authorizeViaUrl}, which needs SDK 2.0
+ * URL-mode elicitation, plus {@code racyCounter} for the concurrency probe);</li>
  * <li>17 entries with {@code annotations.readOnlyHint=true, destructiveHint=false} (echo,
  * sum, currentTime, addNumbers, concatenate, lookupUser, chooseColor, toggleFlag,
  * optionalGreeting, errorTool, largeOutput, structuredOutput, multiContent, deepJson,
@@ -122,8 +122,8 @@ class ToolsListContractIT {
 			final JsonNode tools = result.path("tools");
 			assertThat(tools.isArray()).as("tools/list must return a tools array").isTrue();
 
-			// then: 22 entries, exact matrix
-			assertThat(tools.size()).as("demo must advertise exactly 22 tools").isEqualTo(22);
+			// then: 23 entries, exact matrix
+			assertThat(tools.size()).as("demo must advertise exactly 23 tools").isEqualTo(23);
 
 			final List<String> names = new ArrayList<>();
 			for (final JsonNode tool : tools) {
@@ -152,8 +152,10 @@ class ToolsListContractIT {
 						.isFalse();
 				}
 				else {
-					// slowEcho — the only remaining tool
-					assertThat(tool.path("name").asString()).as("unexpected tool in tools/list").isEqualTo("slowEcho");
+					// slowEcho and racyCounter: the remaining tools
+					final String name = tool.path("name").asString();
+					assertThat(List.of("slowEcho", "racyCounter")).as("unexpected tool in tools/list: " + name)
+						.contains(name);
 				}
 				// no tool may declare destructiveHint=true
 				if (annotations != null && annotations.has("destructiveHint")) {
@@ -171,6 +173,7 @@ class ToolsListContractIT {
 				assertThat(names).as("interactive tool '%s' missing", name).contains(name);
 			}
 			assertThat(names).as("slowEcho missing").contains("slowEcho");
+			assertThat(names).as("racyCounter missing").contains("racyCounter");
 		}
 		finally {
 			disconnect(sessionId);
