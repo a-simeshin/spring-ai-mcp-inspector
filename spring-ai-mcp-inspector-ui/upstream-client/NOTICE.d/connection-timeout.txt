@@ -1,0 +1,14 @@
+connection-timeout: optional Connection timeout (s) field in Connect form
+Files:
+  spring-ai-mcp-inspector-ui/upstream-client/src/components/Sidebar.tsx
+  spring-ai-mcp-inspector-ui/upstream-client/src/components/__tests__/Sidebar.test.tsx
+  spring-ai-mcp-inspector-ui/upstream-client/src/lib/hooks/useConnection.ts
+  spring-ai-mcp-inspector-ui/upstream-client/src/lib/hooks/__tests__/useConnection.test.tsx
+  spring-ai-mcp-inspector-ui/upstream-client/src/App.tsx
+Description:
+  Adds an optional numeric input for connection timeout in seconds.
+  Empty = proxy default (30s). Filled = forwarded as connectionTimeout
+  query parameter to the proxy. Applies to all transport types
+  (stdio: spawn+initialize; SSE/HTTP: connect+initialize).
+  Validation: non-numeric or <1 blocks Connect.
+  Value persisted to localStorage (lastConnectionTimeout).

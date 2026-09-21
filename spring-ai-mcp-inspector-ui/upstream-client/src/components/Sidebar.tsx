@@ -51,6 +51,9 @@ import CustomHeaders from "./CustomHeaders";
 import { CustomHeaders as CustomHeadersType } from "@/lib/types/customHeaders";
 import { useToast } from "../lib/hooks/useToast";
 import IconDisplay, { WithIcons } from "./IconDisplay";
+// [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+import type { SavedConnection } from "@/lib/types/savedConnection";
+import { Bookmark, Trash2, Plus } from "lucide-react";
 // [spring-ai-mcp-inspector PATCH] validateServerUrl for client-side URL format validation (see NOTICE.d/url-validation.txt).
 import { validateRedirectUrl, validateServerUrl } from "@/utils/urlValidation";
 
@@ -85,9 +88,20 @@ interface SidebarProps {
   setConfig: (config: InspectorConfig) => void;
   connectionType: "direct" | "proxy";
   setConnectionType: (type: "direct" | "proxy") => void;
+  // [spring-ai-mcp-inspector PATCH] Optional connection timeout in seconds.
+  // Empty string = proxy default (30s). Applies to all transport types;
+  // for stdio the budget covers spawn + initialize.
+  connectionTimeout: string;
+  setConnectionTimeout: (value: string) => void;
   serverImplementation?:
     | (WithIcons & { name?: string; version?: string; websiteUrl?: string })
     | null;
+  // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+  savedConnections: SavedConnection[];
+  activeConnectionId?: string;
+  onSaveConnection: (name: string) => SavedConnection | undefined;
+  onDeleteConnection: (id: string) => void;
+  onSelectConnection: (connection: SavedConnection) => void;
 }
 
 const Sidebar = ({
@@ -120,7 +134,14 @@ const Sidebar = ({
   setConfig,
   connectionType,
   setConnectionType,
+  connectionTimeout,
+  setConnectionTimeout,
   serverImplementation,
+  savedConnections,
+  activeConnectionId,
+  onSaveConnection,
+  onDeleteConnection,
+  onSelectConnection,
 }: SidebarProps) => {
   const [theme, setTheme] = useTheme();
   const [showEnvVars, setShowEnvVars] = useState(false);
@@ -133,7 +154,13 @@ const Sidebar = ({
   // [spring-ai-mcp-inspector PATCH] URL validation state: error message and touched flag.
   const [urlError, setUrlError] = useState<string | null>(null);
   const [urlTouched, setUrlTouched] = useState(false);
+  // [spring-ai-mcp-inspector PATCH] Connection timeout validation state.
+  const [timeoutError, setTimeoutError] = useState<string | null>(null);
   const { toast } = useToast();
+  // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+  const [showSavedConnections, setShowSavedConnections] = useState(true);
+  const [saveName, setSaveName] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   const connectionTypeTip =
     "Connect to server directly (requires CORS config on server) or via MCP Inspector Proxy";
@@ -310,6 +337,168 @@ const Sidebar = ({
             </Select>
           </div>
 
+          {/* [spring-ai-mcp-inspector PATCH] Saved connections (#121). */}
+          <div className="space-y-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowSavedConnections(!showSavedConnections)}
+              className="flex items-center w-full"
+              aria-expanded={showSavedConnections}
+            >
+              {showSavedConnections ? (
+                <ChevronDown className="w-4 h-4 mr-2" />
+              ) : (
+                <ChevronRight className="w-4 h-4 mr-2" />
+              )}
+              <Bookmark className="w-4 h-4 mr-2" />
+              Saved Connections
+            </Button>
+            {showSavedConnections && (
+              <div className="space-y-2">
+                {savedConnections.length === 0 ? (
+                  <p className="text-xs text-muted-foreground px-1">
+                    No saved connections yet.
+                  </p>
+                ) : (
+                  <div className="space-y-1 max-h-48 overflow-y-auto">
+                    {[...savedConnections]
+                      .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+                      .map((conn) => (
+                        <div
+                          key={conn.id}
+                          className={`flex items-center gap-2 p-2 rounded cursor-pointer text-sm hover:bg-accent ${
+                            activeConnectionId === conn.id
+                              ? "bg-accent border border-border"
+                              : "border border-transparent"
+                          }`}
+                          onClick={() => onSelectConnection(conn)}
+                          data-testid={`saved-connection-${conn.id}`}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium truncate">
+                              {conn.name}
+                            </div>
+                            <div className="text-xs text-muted-foreground flex items-center gap-1">
+                              <span className="px-1 rounded bg-muted text-[10px] uppercase">
+                                {conn.transport === "streamable-http"
+                                  ? "HTTP"
+                                  : conn.transport.toUpperCase()}
+                              </span>
+                              {conn.lastUsedAt > 0 && (
+                                <span>
+                                  {new Date(
+                                    conn.lastUsedAt,
+                                  ).toLocaleDateString()}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 p-0 shrink-0 text-muted-foreground hover:text-destructive"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteConnection(conn.id);
+                            }}
+                            title="Delete saved connection"
+                            data-testid={`delete-saved-connection-${conn.id}`}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      ))}
+                  </div>
+                )}
+                {isSaving ? (
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Connection name"
+                      value={saveName}
+                      onChange={(e) => setSaveName(e.target.value)}
+                      className="font-mono text-sm h-8"
+                      autoFocus
+                      data-testid="save-connection-name-input"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && saveName.trim()) {
+                          const result = onSaveConnection(saveName.trim());
+                          if (result) {
+                            setSaveName("");
+                            setIsSaving(false);
+                          }
+                        }
+                        if (e.key === "Escape") {
+                          setSaveName("");
+                          setIsSaving(false);
+                        }
+                      }}
+                    />
+                    <Button
+                      size="sm"
+                      variant="default"
+                      className="h-8"
+                      disabled={!saveName.trim()}
+                      onClick={() => {
+                        if (saveName.trim()) {
+                          const result = onSaveConnection(saveName.trim());
+                          if (result) {
+                            setSaveName("");
+                            setIsSaving(false);
+                          }
+                        }
+                      }}
+                      data-testid="confirm-save-connection"
+                    >
+                      Save
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-8"
+                      onClick={() => {
+                        setSaveName("");
+                        setIsSaving(false);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => {
+                      setSaveName("");
+                      setIsSaving(true);
+                    }}
+                    data-testid="save-current-connection"
+                  >
+                    <Plus className="w-3 h-3 mr-2" />
+                    Save Current
+                  </Button>
+                )}
+                {/* [spring-ai-mcp-inspector PATCH] Warn that header and env
+                    values are not persisted, only their names. Combined into
+                    one <p>; text explains what IS stored vs what gets lost.
+                    Check any enabled header name or env key presence, not
+                    value: after restore, values are stripped empty and the
+                    warning must still show. */}
+                {(customHeaders.some(
+                  (h) =>
+                    h.enabled &&
+                    h.name.trim() !== "",
+                ) ||
+                  (env && Object.keys(env).length > 0)) && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 px-1">
+                    Header and environment variable values are not saved, only
+                    their names; re-enter them after restoring.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
           {transportType === "stdio" ? (
             <>
               <div className="space-y-2">
@@ -410,6 +599,43 @@ const Sidebar = ({
               </Tooltip>
             </>
           )}
+
+          {/* [spring-ai-mcp-inspector PATCH] Connection timeout field.
+               Applies to all transport types (stdio: spawn+initialize,
+               SSE/HTTP: connect+initialize). Empty = proxy default (30s).
+               Validation: non-numeric or <1 blocks Connect. */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium" htmlFor="connection-timeout-input">
+              Connection timeout (s)
+            </label>
+            <Input
+              id="connection-timeout-input"
+              type="number"
+              min="1"
+              step="1"
+              placeholder="30 (default)"
+              value={connectionTimeout}
+              onChange={(e) => setConnectionTimeout(e.target.value)}
+              onBlur={() => {
+                if (connectionTimeout === "") {
+                  setTimeoutError(null);
+                } else {
+                  const n = Number(connectionTimeout);
+                  if (!Number.isFinite(n) || n < 1) {
+                    setTimeoutError("Must be a positive number of seconds");
+                  } else {
+                    setTimeoutError(null);
+                  }
+                }
+              }}
+              className={`font-mono ${timeoutError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
+            />
+            {timeoutError && (
+              <p className="text-xs text-red-500 mt-1" role="alert">
+                {timeoutError}
+              </p>
+            )}
+          </div>
 
           {transportType === "stdio" && (
             <div className="space-y-2">
@@ -868,6 +1094,7 @@ const Sidebar = ({
               </div>
             )}
             {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). Block onConnect when invalid. */}
+            {/* [spring-ai-mcp-inspector PATCH] Also block Connect when connection timeout is invalid. */}
             {connectionStatus !== "connected" && (
               <Button
                 className="w-full"
@@ -881,9 +1108,19 @@ const Sidebar = ({
                       return;
                     }
                   }
+                  // Block connect if connection timeout is invalid
+                  if (connectionTimeout !== "") {
+                    const n = Number(connectionTimeout);
+                    if (!Number.isFinite(n) || n < 1) {
+                      setTimeoutError("Must be a positive number of seconds");
+                      return;
+                    }
+                  }
                   onConnect();
                 }}
-                disabled={transportType !== "stdio" && !!urlError}
+                disabled={
+                  (transportType !== "stdio" && !!urlError) || !!timeoutError
+                }
               >
                 <Play className="w-4 h-4 mr-2" />
                 Connect

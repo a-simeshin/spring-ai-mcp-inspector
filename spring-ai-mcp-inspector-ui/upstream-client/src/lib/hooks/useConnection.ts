@@ -110,6 +110,12 @@ interface UseConnectionOptions {
   defaultLoggingLevel?: LoggingLevel;
   serverImplementation?: Implementation;
   metadata?: Record<string, string>;
+  // [spring-ai-mcp-inspector PATCH] Optional per-connection timeout in seconds.
+  // When set, forwarded as the `connectionTimeout` query parameter to the proxy
+  // so the backend can apply a per-phase budget instead of its hard-coded default.
+  // Empty/undefined = proxy default (30s). For stdio the budget covers
+  // process spawn + initialize; for SSE/HTTP it covers connect + initialize.
+  connectionTimeout?: string;
 }
 
 export function useConnection({
@@ -130,6 +136,7 @@ export function useConnection({
   getRoots,
   defaultLoggingLevel,
   metadata = {},
+  connectionTimeout,
 }: UseConnectionOptions) {
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
@@ -791,6 +798,16 @@ export function useConnection({
         }
         serverUrl = mcpProxyServerUrl as URL;
         serverUrl.searchParams.append("transportType", transportType);
+        // [spring-ai-mcp-inspector PATCH] Forward the optional connection timeout
+        // (seconds) to the proxy. Empty/undefined -> proxy applies its default (30s).
+        // For stdio the proxy applies this budget to spawn + initialize; for
+        // SSE/HTTP to connect + initialize.
+        if (connectionTimeout && connectionTimeout.trim() !== "") {
+          serverUrl.searchParams.append(
+            "connectionTimeout",
+            connectionTimeout.trim(),
+          );
+        }
       }
 
       if (onNotification) {
