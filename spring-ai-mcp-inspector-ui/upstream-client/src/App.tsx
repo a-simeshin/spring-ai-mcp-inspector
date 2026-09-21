@@ -1744,6 +1744,23 @@ const App = () => {
                         clearError("resources");
                         readResource(uri);
                       }}
+                      // [spring-ai-mcp-inspector PATCH] Concurrency probe entry
+                      // point (issue #237): opens the probe dialog for the tool.
+                      // The dialog lives inside ToolsTab so it can reuse the
+                      // current params/metadata state; connectionStatus is
+                      // needed to refuse launching when disconnected.
+                      connectionStatus={connectionStatus}
+                      onProbeTool={(tool) => {
+                        setSelectedTool(tool);
+                      }}
+                      onNavigateToTimeline={(correlationId) => {
+                        // [spring-ai-mcp-inspector PATCH] Deep-link into the
+                        // Timeline tab by correlation id (issue #237): switches
+                        // the active tab; the user locates the row by the
+                        // correlation prefix shown on each event.
+                        setActiveTab("timeline");
+                        window.location.hash = `timeline:${correlationId}`;
+                      }}
                     />
                     <TasksTab
                       tasks={tasks}

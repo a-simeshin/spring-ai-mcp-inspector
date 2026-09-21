@@ -1,0 +1,29 @@
+concurrency-probe-ui (issue #237)
+
+What: UI surface for the concurrency probe on the 2.x line.
+
+Files and changes:
+- src/components/ConcurrencyProbeDialog.tsx (new): probe parameters dialog
+  (concurrency, iterations, per-call timeout), progress state with Cancel,
+  and the result panel (counts, p50/p95/p99/max, bodyEquality badge,
+  clickable failure groups, per-call table). Renders validation errors and
+  refuses launch when disconnected or when the tool has
+  execution.taskSupport === "required".
+- src/components/ToolsTab.tsx: optional onProbeTool/connectionStatus/
+  onNavigateToTimeline props; per-row Zap action button; renders the dialog
+  reusing the existing params/metadata state.
+- src/components/ListPane.tsx: optional renderActions prop for per-row
+  actions; row content wrapped so action clicks stopPropagation and do not
+  change row selection.
+- src/App.tsx: passes connectionStatus and onNavigateToTimeline into
+  ToolsTab; the handler switches to the Timeline tab and sets the hash to
+  timeline:<correlationId>.
+- src/components/__tests__/ConcurrencyProbeDialog.test.tsx (new): dialog
+  validation, disconnected/task-required blocking, result panel rendering,
+  failure-group navigation, cancel flow.
+
+Why: implements the UI half of docs/concurrency-probe.md (PR #245); engine
+lives in lib/concurrency/ (PR #247).
+
+Covered by: src/components/__tests__/ConcurrencyProbeDialog.test.tsx,
+existing ToolsTab/ListPane suites.
