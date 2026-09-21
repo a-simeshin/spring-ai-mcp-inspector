@@ -323,6 +323,12 @@ const App = () => {
   const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
   const [selectedTool, setSelectedTool] = useState<Tool | null>(null);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  // [spring-ai-mcp-inspector PATCH] Timeline deep-link target (issue #237):
+  // when set, TimelineTab scrolls to and highlights the event row with this
+  // correlation id. Cleared by TimelineTab via onFocusHandled.
+  const [pendingTimelineFocus, setPendingTimelineFocus] = useState<
+    string | null
+  >(null);
   const [isPollingTask, setIsPollingTask] = useState(false);
   const [nextResourceCursor, setNextResourceCursor] = useState<
     string | undefined
@@ -1756,10 +1762,15 @@ const App = () => {
                       onNavigateToTimeline={(correlationId) => {
                         // [spring-ai-mcp-inspector PATCH] Deep-link into the
                         // Timeline tab by correlation id (issue #237): switches
-                        // the active tab; the user locates the row by the
-                        // correlation prefix shown on each event.
+                        // the active tab and asks TimelineTab to scroll to and
+                        // highlight the matching event row. The correlation id
+                        // is passed through React state, NOT through the URL
+                        // hash: the hashchange listener below would treat a
+                        // "timeline:<id>" hash as a tab name and unmount all
+                        // tab content (no TabsContent matches that value).
+                        setPendingTimelineFocus(correlationId);
                         setActiveTab("timeline");
-                        window.location.hash = `timeline:${correlationId}`;
+                        window.location.hash = "timeline";
                       }}
                     />
                     <TasksTab
@@ -1841,7 +1852,13 @@ const App = () => {
                       onMetadataChange={handleMetadataChange}
                     />
                     {/* [spring-ai-mcp-inspector PATCH] Timeline tab (#112). */}
-                    <TimelineTab />
+                    {/* [spring-ai-mcp-inspector PATCH] Deep-link focus prop
+                        (issue #237): when set, TimelineTab scrolls to and
+                        highlights the matching correlation-id row. */}
+                    <TimelineTab
+                      focusCorrelationId={pendingTimelineFocus}
+                      onFocusHandled={() => setPendingTimelineFocus(null)}
+                    />
                   </>
                 )}
               </div>

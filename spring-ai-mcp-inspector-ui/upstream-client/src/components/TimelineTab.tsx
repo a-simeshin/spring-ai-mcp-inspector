@@ -129,7 +129,20 @@ function ProtocolNegotiationBlock({ negotiation }: { negotiation: ProtocolNegoti
   );
 }
 
-function TimelineEventRow({ event }: { event: TimelineEvent }) {
+function TimelineEventRow({
+  event,
+  rowRef,
+  highlighted,
+}: {
+  event: TimelineEvent;
+  // [spring-ai-mcp-inspector PATCH] Optional ref callback (issue #237): the
+  // parent registers the row's DOM node by correlationId so it can scroll a
+  // deep-linked event into view.
+  rowRef?: (el: HTMLDivElement | null) => void;
+  // [spring-ai-mcp-inspector PATCH] When true, the row gets a persistent
+  // highlight ring (issue #237 deep-link target).
+  highlighted?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const type = event.type;
   const colorClass = EVENT_COLORS[type] || "text-gray-400";
@@ -148,7 +161,13 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
 
   return (
     <div
-      className={`border-l-2 pl-3 py-1.5 mb-1 rounded-r cursor-pointer hover:opacity-80 ${bgClass} ${colorClass}`}
+      ref={rowRef}
+      data-correlation-id={event.correlationId ?? undefined}
+      className={`border-l-2 pl-3 py-1.5 mb-1 rounded-r cursor-pointer hover:opacity-80 ${bgClass} ${colorClass} ${
+        highlighted
+          ? "ring-2 ring-amber-400 ring-offset-1 ring-offset-gray-900"
+          : ""
+      }`}
       onClick={() => setExpanded(!expanded)}
     >
       <div className="flex items-center gap-2 text-xs">
@@ -177,10 +196,24 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
 }
 
 // [spring-ai-mcp-inspector PATCH] TimelineTab — scrollable timeline of MCP events.
-const TimelineTab = () => {
+//
+// [spring-ai-mcp-inspector PATCH] Deep-link focus (issue #237): when
+// focusCorrelationId is set (from the concurrency probe's "show in Timeline"
+// action), the matching row is scrolled into view and highlighted until the
+// user picks another row or the parent clears the focus via onFocusHandled.
+const TimelineTab = ({
+  focusCorrelationId,
+  onFocusHandled,
+}: {
+  focusCorrelationId?: string | null;
+  onFocusHandled?: () => void;
+} = {}) => {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
 
   const fetchTimeline = useCallback(async () => {
     const token = sessionStorage.getItem("inspectorConfig_v1_ephemeral");
@@ -224,6 +257,40 @@ const TimelineTab = () => {
     };
   }, [autoRefresh, fetchTimeline]);
 
+  // [spring-ai-mcp-inspector PATCH] React to a deep-link focus request
+  // (issue #237): wait until events include the correlation id (auto-refresh
+  // may deliver it a tick later), scroll the row into view, and highlight it.
+  useEffect(() => {
+    if (!focusCorrelationId) {
+      setHighlightedId(null);
+      return;
+    }
+    const tryFocus = () => {
+      const el = rowRefs.current.get(focusCorrelationId);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        setHighlightedId(focusCorrelationId);
+        onFocusHandled?.();
+        return true;
+      }
+      return false;
+    };
+    if (tryFocus()) return;
+    // The event may not have arrived yet (auto-refresh polls every 3 s, and
+    // the timeline API limit is 200 rows). Retry a few times with backoff,
+    // then give up silently: the tab switch alone is still useful.
+    let attempts = 0;
+    const timer = setInterval(() => {
+      attempts += 1;
+      if (tryFocus() || attempts >= 10) {
+        clearInterval(timer);
+        if (attempts >= 10) onFocusHandled?.();
+      }
+    }, 300);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusCorrelationId]);
+
   return (
     <TabsContent value="timeline" className="h-96">
       <div className="bg-gray-900 text-gray-100 p-4 rounded-lg h-full font-mono text-sm overflow-auto flex flex-col">
@@ -241,11 +308,31 @@ const TimelineTab = () => {
             Auto-refresh (3s)
           </label>
         </div>
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto" ref={scrollContainerRef}>
           {events.length === 0 ? (
             <div className="opacity-50 text-center mt-8">No timeline events yet</div>
           ) : (
-            events.map((event) => <TimelineEventRow key={event.id} event={event} />)
+            events.map((event) => (
+              <TimelineEventRow
+                key={event.id}
+                event={event}
+                highlighted={
+                  event.correlationId !== null &&
+                  event.correlationId === highlightedId
+                }
+                rowRef={
+                  event.correlationId
+                    ? (el) => {
+                        if (el) {
+                          rowRefs.current.set(event.correlationId!, el);
+                        } else {
+                          rowRefs.current.delete(event.correlationId!);
+                        }
+                      }
+                    : undefined
+                }
+              />
+            ))
           )}
         </div>
       </div>

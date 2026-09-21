@@ -16,14 +16,28 @@ Files and changes:
   actions; row content wrapped so action clicks stopPropagation and do not
   change row selection.
 - src/App.tsx: passes connectionStatus and onNavigateToTimeline into
-  ToolsTab; the handler switches to the Timeline tab and sets the hash to
-  timeline:<correlationId>.
+  ToolsTab; the handler switches to the Timeline tab and passes the
+  correlation id through React state (pendingTimelineFocus) so TimelineTab
+  scrolls to and highlights the matching row. The URL hash is set to plain
+  "timeline": writing "timeline:<id>" into the hash would be picked up by
+  the existing hashchange listener and would unmount every TabsContent
+  (no tab value matches "timeline:<id>").
+- src/components/TimelineTab.tsx: optional focusCorrelationId /
+  onFocusHandled props; rows expose data-correlation-id and register a ref
+  in a parent-owned map; when focusCorrelationId is set, the matching row
+  is scrolled into view (scrollIntoView) and highlighted with an amber ring
+  until the parent clears the focus. Rows without a correlationId are
+  unaffected.
 - src/components/__tests__/ConcurrencyProbeDialog.test.tsx (new): dialog
   validation, disconnected/task-required blocking, result panel rendering,
   failure-group navigation, cancel flow.
+- src/components/__tests__/TimelineTab.test.tsx: regression coverage for
+  the deep-link focus flow (scroll + highlight when the id matches, no
+  scroll when unset, onFocusHandled callback when the id is absent).
 
 Why: implements the UI half of docs/concurrency-probe.md (PR #245); engine
 lives in lib/concurrency/ (PR #247).
 
 Covered by: src/components/__tests__/ConcurrencyProbeDialog.test.tsx,
-existing ToolsTab/ListPane suites.
+src/components/__tests__/TimelineTab.test.tsx (deep-link focus describe
+block), existing ToolsTab/ListPane suites.

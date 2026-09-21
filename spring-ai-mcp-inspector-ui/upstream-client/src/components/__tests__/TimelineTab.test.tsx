@@ -295,4 +295,90 @@ describe("TimelineTab", () => {
     // Affected methods appear in the expanded block.
     expect(screen.getByText(/affected: initialize/)).toBeInTheDocument();
   });
+
+  // [spring-ai-mcp-inspector PATCH] Deep-link focus regression tests (issue #237):
+  // before the fix, clicking a probe failure group set window.location.hash to
+  // "timeline:<id>"; the App-level hashchange listener then set activeTab to
+  // that string, which matched no TabsContent and unmounted the Timeline pane.
+  describe("deep-link focus (issue #237)", () => {
+    it("scrolls to and highlights the row with the requested correlation id", async () => {
+      // jsdom does not implement scrollIntoView; stub it to observe the call.
+      const scrollIntoViewMock = jest.fn();
+      window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+      mockFetch([APP_LOG_EVENT, REQUEST_EVENT]);
+      const onFocusHandled = jest.fn();
+      render(
+        <Tabs defaultValue="timeline">
+          <TimelineTab
+            focusCorrelationId="corr-2"
+            onFocusHandled={onFocusHandled}
+          />
+        </Tabs>,
+      );
+
+      // Wait until the request row is rendered.
+      await waitFor(() =>
+        expect(screen.getByText("tools/list")).toBeInTheDocument(),
+      );
+
+      // The matching row is scrolled into view and highlighted.
+      await waitFor(() => expect(scrollIntoViewMock).toHaveBeenCalled());
+      const targetRow = screen
+        .getByText("tools/list")
+        .closest("[data-correlation-id]");
+      expect(targetRow).not.toBeNull();
+      expect(targetRow?.getAttribute("data-correlation-id")).toBe("corr-2");
+      expect(targetRow?.className).toContain("ring-amber-400");
+      expect(onFocusHandled).toHaveBeenCalled();
+    });
+
+    it("does not scroll when focusCorrelationId is not set", async () => {
+      const scrollIntoViewMock = jest.fn();
+      window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+      mockFetch([APP_LOG_EVENT]);
+      render(
+        <Tabs defaultValue="timeline">
+          <TimelineTab />
+        </Tabs>,
+      );
+
+      await waitFor(() =>
+        expect(screen.getByText("1 event")).toBeInTheDocument(),
+      );
+      expect(scrollIntoViewMock).not.toHaveBeenCalled();
+    });
+
+    it("calls onFocusHandled even when the correlation id is absent", async () => {
+      // Defensive: a stale focus id (e.g. the row fell out of the 200-event
+      // window) must not leave the parent stuck waiting; onFocusHandled is
+      // invoked after the retry budget so the parent clears the focus state.
+      jest.useFakeTimers();
+      try {
+        mockFetch([APP_LOG_EVENT]);
+        const onFocusHandled = jest.fn();
+        render(
+          <Tabs defaultValue="timeline">
+            <TimelineTab
+              focusCorrelationId="corr-does-not-exist"
+              onFocusHandled={onFocusHandled}
+            />
+          </Tabs>,
+        );
+
+        // Flush the initial fetch.
+        await Promise.resolve();
+        await Promise.resolve();
+
+        // The retry loop ticks every 300 ms and gives up after 10 attempts.
+        for (let i = 0; i < 12; i++) {
+          jest.advanceTimersByTime(300);
+        }
+        expect(onFocusHandled).toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
 });
