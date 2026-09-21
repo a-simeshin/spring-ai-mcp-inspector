@@ -670,6 +670,7 @@ describe("App saved connections integration", () => {
 
   it("round-trips connectionTimeout through storage layer", () => {
     // Save a connection with a connectionTimeout via the storage layer
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const saved = saveConnection(
       stripSecrets({
         name: "timed-server",
@@ -698,6 +699,7 @@ describe("App saved connections integration", () => {
 
   it("legacy saved connection without connectionTimeout loads without errors", () => {
     // Seed a legacy connection (no connectionTimeout field)
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const legacy = saveConnection(
       stripSecrets({
         name: "legacy",
