@@ -1667,9 +1667,13 @@ class InspectorUiIT {
 		@DisplayName("historyPersistsAcrossReload - echo call entry survives F5")
 		void history_afterReload_stillShowsEchoEntry() {
 			// given: a clean store, so leftovers from earlier tests cannot
-			// satisfy the assertions below.
+			// satisfy the assertions below. Cleared AFTER open(): no webdriver is
+			// bound to the thread before the first open() call.
+			open("/mcp-inspector/index.html");
 			Selenide.executeJavaScript("localStorage.clear();");
-			openAndConnect();
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+			connectButton().click();
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
 			clickTab("tools");
 			SelenideElement listTools = activePanel().$(byText("List Tools"));
 			if (listTools.exists() && listTools.isEnabled()) {
