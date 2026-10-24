@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] History panel tests (persistent history).
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { useState } from "react";
 import { describe, it, expect, jest } from "@jest/globals";
