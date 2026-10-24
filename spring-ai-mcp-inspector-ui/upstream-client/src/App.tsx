@@ -109,6 +109,16 @@ import {
   CustomHeaders,
   migrateFromLegacyAuth,
 } from "./lib/types/customHeaders";
+// [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+import type { SavedConnection } from "./lib/types/savedConnection";
+import {
+  loadSavedConnections,
+  saveConnection,
+  deleteSavedConnection,
+  findConnectionByName,
+  stripSecrets,
+  touchSavedConnection,
+} from "./lib/savedConnections";
 import MetadataTab from "./components/MetadataTab";
 
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
@@ -513,6 +523,131 @@ const App = () => {
     defaultLoggingLevel: logLevel,
     metadata,
   });
+
+  // [spring-ai-mcp-inspector PATCH] Saved connections state (#121).
+  const [savedConnections, setSavedConnections] = useState<SavedConnection[]>(
+    () => loadSavedConnections(),
+  );
+  const [activeConnectionId, setActiveConnectionId] = useState<
+    string | undefined
+  >(undefined);
+
+  const handleSaveConnection = useCallback(
+    (name: string): SavedConnection | undefined => {
+      const draft = stripSecrets({
+        name,
+        transport: transportType,
+        connectionType,
+        url: transportType !== "stdio" ? sseUrl : undefined,
+        command: transportType === "stdio" ? command : undefined,
+        args: transportType === "stdio" ? args : undefined,
+        env: transportType === "stdio" ? env : undefined,
+        customHeaders,
+      });
+      // [spring-ai-mcp-inspector PATCH] Determine target id by comparing
+      // name against the currently active connection, not by blindly
+      // reusing activeConnectionId (which would overwrite the active
+      // entry when saving under a new name). See PR #149 blocker 1.
+      const allConnections = loadSavedConnections();
+      const activeConnection = allConnections.find(
+        (c) => c.id === activeConnectionId,
+      );
+      let targetId: string | undefined;
+      if (activeConnection && name === activeConnection.name) {
+        // Same name as the active connection: update in-place.
+        targetId = activeConnectionId;
+      } else {
+        // New name: check for collision with a different entry.
+        const existing = findConnectionByName(name);
+        if (existing) {
+          if (
+            !window.confirm(
+              `Connection "${name}" already exists. Overwrite?`,
+            )
+          ) {
+            return undefined;
+          }
+          targetId = existing.id;
+        }
+        // else no collision: targetId undefined -> creates a new entry.
+      }
+      const saved = saveConnection(draft, targetId);
+      setActiveConnectionId(saved.id);
+      setSavedConnections(loadSavedConnections());
+      return saved;
+    },
+    [
+      transportType,
+      connectionType,
+      sseUrl,
+      command,
+      args,
+      env,
+      customHeaders,
+      activeConnectionId,
+    ],
+  );
+
+  const handleDeleteConnection = useCallback(
+    (id: string) => {
+      deleteSavedConnection(id);
+      if (activeConnectionId === id) {
+        setActiveConnectionId(undefined);
+      }
+      setSavedConnections(loadSavedConnections());
+    },
+    [activeConnectionId],
+  );
+
+  // [spring-ai-mcp-inspector PATCH] Saved connections: reset fields
+  // absent from the entry so stale values (e.g. stdio fields leaking
+  // into an sse entry) don't persist across selections.
+  const handleSelectConnection = useCallback(
+    (connection: SavedConnection) => {
+      setTransportType(connection.transport);
+      if (connection.connectionType) {
+        setConnectionType(connection.connectionType);
+      }
+      if (connection.url !== undefined) {
+        setSseUrl(connection.url);
+      } else {
+        setSseUrl("");
+      }
+      if (connection.command !== undefined) {
+        setCommand(connection.command);
+      } else {
+        setCommand("");
+      }
+      if (connection.args !== undefined) {
+        setArgs(connection.args);
+      } else {
+        setArgs("");
+      }
+      if (connection.env !== undefined) {
+        setEnv(connection.env);
+      } else {
+        setEnv({});
+      }
+      if (connection.customHeaders) {
+        setCustomHeaders(connection.customHeaders);
+      }
+      setActiveConnectionId(connection.id);
+      touchSavedConnection(connection.id);
+      // [spring-ai-mcp-inspector PATCH] Refresh the list state after
+      // touchSavedConnection so the "sorted by last used" order is
+      // immediately visible (save/delete already do this).
+      setSavedConnections(loadSavedConnections());
+    },
+    [
+      setTransportType,
+      setConnectionType,
+      setSseUrl,
+      setCommand,
+      setArgs,
+      setEnv,
+      setCustomHeaders,
+    ],
+  );
 
   useEffect(() => {
     if (serverCapabilities) {
@@ -1435,6 +1570,12 @@ const App = () => {
           connectionType={connectionType}
           setConnectionType={setConnectionType}
           serverImplementation={serverImplementation}
+          // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
+          savedConnections={savedConnections}
+          activeConnectionId={activeConnectionId}
+          onSaveConnection={handleSaveConnection}
+          onDeleteConnection={handleDeleteConnection}
+          onSelectConnection={handleSelectConnection}
         />
         {!isCompactLayout && (
           <div
