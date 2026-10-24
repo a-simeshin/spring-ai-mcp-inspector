@@ -546,14 +546,9 @@ public class ProxyHandler {
 		}
 		// Intercept tasks/get, tasks/list and tasks/cancel if a TaskService is available.
 		if (this.taskService != null) {
-			final Mono<ServerResponse> taskResponse = tryHandleTaskMethod(idNode, body);
+			final String sessionIdHeader = includeSessionHeader ? session.sessionId() : null;
+			final Mono<ServerResponse> taskResponse = tryHandleTaskMethod(idNode, body, sessionIdHeader);
 			if (taskResponse != null) {
-				if (includeSessionHeader) {
-					return taskResponse.map((resp) -> {
-						resp.headers().add(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
-						return resp;
-					});
-				}
 				return taskResponse;
 			}
 		}
@@ -642,23 +637,26 @@ public class ProxyHandler {
 	 * {@link #taskService}.
 	 * @param idNode the JSON-RPC request id
 	 * @param body the full JSON-RPC request body
+	 * @param sessionIdHeader session id to attach as the mcp-session-id response header
+	 * on the first POST of a session, or {@code null} to omit the header
 	 * @return a response Mono if the method was handled, or {@code null} to fall through
 	 * to the regular relay path
 	 */
-	private Mono<ServerResponse> tryHandleTaskMethod(final JsonNode idNode, final JsonNode body) {
+	private Mono<ServerResponse> tryHandleTaskMethod(final JsonNode idNode, final JsonNode body,
+			final String sessionIdHeader) {
 		final JsonNode methodNode = body.get("method");
 		if (methodNode == null || !methodNode.isTextual()) {
 			return null;
 		}
 		final String method = methodNode.asText();
 		if ("tasks/get".equals(method)) {
-			return handleTaskGet(idNode, body);
+			return handleTaskGet(idNode, body, sessionIdHeader);
 		}
 		if ("tasks/list".equals(method)) {
-			return handleTaskList(idNode);
+			return handleTaskList(idNode, sessionIdHeader);
 		}
 		if ("tasks/cancel".equals(method)) {
-			return handleTaskCancel(idNode, body);
+			return handleTaskCancel(idNode, body, sessionIdHeader);
 		}
 		return null;
 	}
@@ -667,28 +665,33 @@ public class ProxyHandler {
 	 * Handle a {@code tasks/get} request: look up the task and return its handle.
 	 * @param idNode the JSON-RPC request id
 	 * @param body the full request body
+	 * @param sessionIdHeader session id to attach as the mcp-session-id response header,
+	 * or {@code null} to omit it
 	 * @return a JSON-RPC response with the task handle, or a JSON-RPC error
 	 */
-	private Mono<ServerResponse> handleTaskGet(final JsonNode idNode, final JsonNode body) {
+	private Mono<ServerResponse> handleTaskGet(final JsonNode idNode, final JsonNode body,
+			final String sessionIdHeader) {
 		final String taskId = extractTaskId(body);
 		if (taskId == null) {
-			return jsonRpcError(idNode, -32602, "Invalid params: missing or invalid taskId");
+			return jsonRpcError(idNode, -32602, "Invalid params: missing or invalid taskId", sessionIdHeader);
 		}
 		try {
 			final TaskHandle handle = this.taskService.getTask(taskId);
-			return jsonRpcResult(idNode, taskHandleToNode(handle));
+			return jsonRpcResult(idNode, taskHandleToNode(handle), sessionIdHeader);
 		}
 		catch (final TaskNotFoundException ex) {
-			return jsonRpcError(idNode, -32602, "Failed to retrieve task: " + ex.getMessage());
+			return jsonRpcError(idNode, -32602, "Failed to retrieve task: " + ex.getMessage(), sessionIdHeader);
 		}
 	}
 
 	/**
 	 * Handle a {@code tasks/list} request: return all currently tracked tasks.
 	 * @param idNode the JSON-RPC request id
+	 * @param sessionIdHeader session id to attach as the mcp-session-id response header,
+	 * or {@code null} to omit it
 	 * @return a JSON-RPC response with a {@code tasks} array
 	 */
-	private Mono<ServerResponse> handleTaskList(final JsonNode idNode) {
+	private Mono<ServerResponse> handleTaskList(final JsonNode idNode, final String sessionIdHeader) {
 		final java.util.List<TaskHandle> handles = this.taskService.listTasks();
 		final ArrayNode tasksArray = JsonNodeFactory.instance.arrayNode(handles.size());
 		for (final TaskHandle handle : handles) {
@@ -696,7 +699,7 @@ public class ProxyHandler {
 		}
 		final ObjectNode result = JsonNodeFactory.instance.objectNode();
 		result.set("tasks", tasksArray);
-		return jsonRpcResult(idNode, result);
+		return jsonRpcResult(idNode, result, sessionIdHeader);
 	}
 
 	/**
@@ -704,22 +707,25 @@ public class ProxyHandler {
 	 * handle.
 	 * @param idNode the JSON-RPC request id
 	 * @param body the full request body
+	 * @param sessionIdHeader session id to attach as the mcp-session-id response header,
+	 * or {@code null} to omit it
 	 * @return a JSON-RPC response with the cancelled task handle, or a JSON-RPC error
 	 */
-	private Mono<ServerResponse> handleTaskCancel(final JsonNode idNode, final JsonNode body) {
+	private Mono<ServerResponse> handleTaskCancel(final JsonNode idNode, final JsonNode body,
+			final String sessionIdHeader) {
 		final String taskId = extractTaskId(body);
 		if (taskId == null) {
-			return jsonRpcError(idNode, -32602, "Invalid params: missing or invalid taskId");
+			return jsonRpcError(idNode, -32602, "Invalid params: missing or invalid taskId", sessionIdHeader);
 		}
 		try {
 			final TaskHandle handle = this.taskService.cancelTask(taskId);
-			return jsonRpcResult(idNode, taskHandleToNode(handle));
+			return jsonRpcResult(idNode, taskHandleToNode(handle), sessionIdHeader);
 		}
 		catch (final TaskNotCancelableException ex) {
-			return jsonRpcError(idNode, -32602, ex.getMessage());
+			return jsonRpcError(idNode, -32602, ex.getMessage(), sessionIdHeader);
 		}
 		catch (final TaskNotFoundException ex) {
-			return jsonRpcError(idNode, -32602, "Failed to retrieve task: " + ex.getMessage());
+			return jsonRpcError(idNode, -32602, "Failed to retrieve task: " + ex.getMessage(), sessionIdHeader);
 		}
 	}
 
@@ -744,14 +750,21 @@ public class ProxyHandler {
 	 * Build a successful JSON-RPC response with a result object.
 	 * @param idNode the request id
 	 * @param resultNode the result object to include
+	 * @param sessionIdHeader session id to attach as the mcp-session-id response header,
+	 * or {@code null} to omit it
 	 * @return a 200 OK Mono with the JSON-RPC envelope
 	 */
-	private static Mono<ServerResponse> jsonRpcResult(final JsonNode idNode, final JsonNode resultNode) {
+	private static Mono<ServerResponse> jsonRpcResult(final JsonNode idNode, final JsonNode resultNode,
+			final String sessionIdHeader) {
 		final ObjectNode response = JsonNodeFactory.instance.objectNode();
 		response.put("jsonrpc", "2.0");
 		response.set("id", idNode);
 		response.set("result", resultNode);
-		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(response);
+		final ServerResponse.BodyBuilder ok = ServerResponse.ok().contentType(MediaType.APPLICATION_JSON);
+		if (sessionIdHeader != null) {
+			ok.header(ProxyConstants.MCP_SESSION_ID_HEADER, sessionIdHeader);
+		}
+		return ok.bodyValue(response);
 	}
 
 	/**
@@ -759,10 +772,13 @@ public class ProxyHandler {
 	 * @param idNode the request id
 	 * @param code the JSON-RPC error code
 	 * @param message the error message
+	 * @param sessionIdHeader session id to attach as the mcp-session-id response header,
+	 * or {@code null} to omit it
 	 * @return a 200 OK Mono with the JSON-RPC error envelope (per spec, errors are
 	 * returned with HTTP 200)
 	 */
-	private static Mono<ServerResponse> jsonRpcError(final JsonNode idNode, final int code, final String message) {
+	private static Mono<ServerResponse> jsonRpcError(final JsonNode idNode, final int code, final String message,
+			final String sessionIdHeader) {
 		final ObjectNode response = JsonNodeFactory.instance.objectNode();
 		response.put("jsonrpc", "2.0");
 		response.set("id", idNode);
@@ -770,7 +786,11 @@ public class ProxyHandler {
 		error.put("code", code);
 		error.put("message", message);
 		response.set("error", error);
-		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(response);
+		final ServerResponse.BodyBuilder ok = ServerResponse.ok().contentType(MediaType.APPLICATION_JSON);
+		if (sessionIdHeader != null) {
+			ok.header(ProxyConstants.MCP_SESSION_ID_HEADER, sessionIdHeader);
+		}
+		return ok.bodyValue(response);
 	}
 
 	/**

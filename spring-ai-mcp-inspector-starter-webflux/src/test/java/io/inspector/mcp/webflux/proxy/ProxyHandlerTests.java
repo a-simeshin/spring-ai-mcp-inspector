@@ -65,6 +65,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -1952,6 +1953,98 @@ class ProxyHandlerTests {
 		}
 
 		@Test
+		@Story("tasks/cancel interception")
+		@Severity(SeverityLevel.MINOR)
+		@Description("tasks/cancel without a taskId returns a JSON-RPC -32602 error")
+		void tasksCancel_missingTaskId_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"tasks/cancel\",\"params\":{}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode error = body.get("error");
+			assertThat(error.get("code").asInt()).isEqualTo(-32602);
+			verify(this.taskService, never()).cancelTask(any());
+		}
+
+		@Test
+		@Story("tasks/cancel interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/cancel with an unknown taskId returns a JSON-RPC -32602 error")
+		void tasksCancel_unknownTask_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			given(this.taskService.cancelTask("missing"))
+				.willThrow(new io.inspector.mcp.core.task.TaskNotFoundException("missing"));
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"missing\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode error = body.get("error");
+			assertThat(error.get("code").asInt()).isEqualTo(-32602);
+			assertThat(error.get("message").asText()).containsIgnoringCase("not found");
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.MINOR)
+		@Description("tasks/get without a params object returns a JSON-RPC -32602 error")
+		void tasksGet_missingParams_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"tasks/get\"}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode error = body.get("error");
+			assertThat(error.get("code").asInt()).isEqualTo(-32602);
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.MINOR)
+		@Description("tasks/get with a non-string taskId returns a JSON-RPC -32602 error")
+		void tasksGet_nonStringTaskId_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"tasks/get\",\"params\":{\"taskId\":123}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode body = ProxyHandlerTests.entityJson(response);
+			final JsonNode error = body.get("error");
+			assertThat(error.get("code").asInt()).isEqualTo(-32602);
+		}
+
+		@Test
 		@Story("no interception without TaskService")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("when no TaskService bean is available, tasks/get falls through to the regular relay path")
@@ -2118,6 +2211,159 @@ class ProxyHandlerTests {
 			assertThat(responseBody.path("result").path("capabilities").has("tasks"))
 				.as("tasks must not be injected without a TaskService")
 				.isFalse();
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.MINOR)
+		@Description("an initialize response without a result object passes through without injection")
+		void postMcp_initializeRequest_withoutResult_passesThroughUnchanged() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final JsonNode response = ProxyHandlerTests.this.objectMapper.readTree("{\"jsonrpc\":\"2.0\",\"id\":1}");
+
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse serverResponse = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(serverResponse).isNotNull();
+			assertThat(serverResponse.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = entityJson(serverResponse);
+			assertThat(responseBody.has("result")).as("no result is synthesised").isFalse();
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.MINOR)
+		@Description("an initialize response whose result is not an object passes through without injection")
+		void postMcp_initializeRequest_nonObjectResult_passesThroughUnchanged() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final JsonNode response = ProxyHandlerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"ok\"}");
+
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse serverResponse = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(serverResponse).isNotNull();
+			assertThat(serverResponse.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = entityJson(serverResponse);
+			assertThat(responseBody.path("result").asText()).as("non-object result is preserved").isEqualTo("ok");
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.MINOR)
+		@Description("an initialize response whose result lacks a capabilities object gets no tasks injection")
+		void postMcp_initializeRequest_withoutCapabilities_doesNotInjectTasks() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final JsonNode response = ProxyHandlerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\"}}");
+
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse serverResponse = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(serverResponse).isNotNull();
+			assertThat(serverResponse.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = entityJson(serverResponse);
+			assertThat(responseBody.path("result").has("capabilities")).as("no capabilities object is synthesised")
+				.isFalse();
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.MINOR)
+		@Description("an initialize response with a non-object capabilities value passes through without injection")
+		void postMcp_initializeRequest_nonObjectCapabilities_doesNotInjectTasks() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final JsonNode response = ProxyHandlerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":\"legacy\"}}");
+
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse serverResponse = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(serverResponse).isNotNull();
+			assertThat(serverResponse.statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = entityJson(serverResponse);
+			assertThat(responseBody.path("result").path("capabilities").asText())
+				.as("non-object capabilities value is preserved")
+				.isEqualTo("legacy");
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.MINOR)
+		@Description("an initialize request whose upstream completes without a response returns an empty body and injects nothing")
+		void postMcp_initializeRequest_emptyUpstream_noInjection() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitComplete();
+				return Mono.empty();
+			});
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when
+			final java.util.Optional<ServerResponse> serverResponse = this.handlerWithTasks.postMcp(request)
+				.blockOptional();
+
+			// then - the awaiter completes empty, so no response body is produced and
+			// nothing is injected
+			assertThat(serverResponse).isEmpty();
 		}
 
 		@Test
