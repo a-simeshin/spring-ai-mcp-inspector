@@ -315,8 +315,11 @@ never learns. Observed rate on a loaded CI runner is roughly one to three stalls
 hundred sequential requests.
 
 Every browser-visible wait is bounded, so a stall surfaces as an error rather than a hang:
-the streamable-HTTP proxy answers `504` after `timeouts.streamable-request` and tears down
-the orphaned session, and `/fetch` answers `502` after `timeouts.fetch-request`. Retrying
+the streamable-HTTP proxy answers `504` after `timeouts.streamable-request` and removes
+its own `ProxySession`: the upstream MCP server never receives the `DELETE` that would
+close the upstream session, because the transport learns the `mcp-session-id` from a response
+header and no response has arrived yet. The upstream session remains alive until that server's
+own idle timeout. `/fetch` answers `502` after `timeouts.fetch-request`. Retrying
 the operation from the UI succeeds.
 
 The inspector does not retry on your behalf. The JDK exposes no per-client way to validate
