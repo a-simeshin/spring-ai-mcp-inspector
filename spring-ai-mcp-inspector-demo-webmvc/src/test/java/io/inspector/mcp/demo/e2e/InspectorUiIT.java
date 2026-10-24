@@ -1666,7 +1666,9 @@ class InspectorUiIT {
 		@Description("History entries survive page reload for the same connection: connect, call echo, reload, assert history still shows the entry.")
 		@DisplayName("historyPersistsAcrossReload - echo call entry survives F5")
 		void history_afterReload_stillShowsEchoEntry() {
-			// given: connect and call echo
+			// given: a clean store, so leftovers from earlier tests cannot
+			// satisfy the assertions below.
+			Selenide.executeJavaScript("localStorage.clear();");
 			openAndConnect();
 			clickTab("tools");
 			SelenideElement listTools = activePanel().$(byText("List Tools"));
@@ -1681,6 +1683,15 @@ class InspectorUiIT {
 
 			// assert: history entry appears in panel AND in localStorage
 			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
+			// Pre-reload, assert the CURRENT connection's own bucket (not the
+			// whole store): an assertion satisfied by leftovers from earlier
+			// tests proves nothing about this session.
+			Object preStore = Selenide
+				.executeJavaScript("var s = JSON.parse(localStorage.getItem('mcp-inspector.history.v1'));"
+						+ "var k = 'streamable-http:/mcp';"
+						+ "return (s && s.byConnection && s.byConnection[k]) ? s.byConnection[k].length : 0;");
+			Assertions.assertTrue(((Number) preStore).intValue() >= 2,
+					"the reloaded connection's own bucket must hold the tools/call entries before reload");
 			Object store = Selenide.executeJavaScript("return localStorage.getItem('mcp-inspector.history.v1');");
 			Assertions.assertNotNull(store, "localStorage must contain mcp-inspector.history.v1 after tool call");
 			Assertions.assertTrue(store.toString().contains("tools/call"),

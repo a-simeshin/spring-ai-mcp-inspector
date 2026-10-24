@@ -7,7 +7,7 @@ import {
   loadHistory,
   appendHistory,
   clearHistory,
-  clearAllHistory,
+  isForeignSchemaVersion,
 } from "../persistentHistory";
 
 // ---------------------------------------------------------------------------
@@ -124,16 +124,6 @@ describe("basic operations", () => {
     expect(loadHistory("conn-b")).toHaveLength(1);
   });
 
-  it("clearAllHistory removes everything", () => {
-    appendHistory("conn-a", { request: '{"m":"a"}', at: 1 });
-    appendHistory("conn-b", { request: '{"m":"b"}', at: 2 });
-
-    clearAllHistory();
-
-    expect(loadHistory("conn-a")).toEqual([]);
-    expect(loadHistory("conn-b")).toEqual([]);
-    expect(localStorage.getItem(HISTORY_KEY)).toBeNull();
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -401,15 +391,6 @@ describe("storage error resilience", () => {
     expect(history[0].request).toContain("after-recovery");
   });
 
-  it("clearAllHistory does not throw on SecurityError", () => {
-    jest.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
-      const e = new DOMException("blocked in private mode", "SecurityError");
-      throw e;
-    });
-
-    expect(() => clearAllHistory()).not.toThrow();
-  });
-
   it("clearHistory does not throw on SecurityError in writeStore", () => {
     // First write a normal entry
     appendHistory("some-conn", { request: '{"m":"test"}', at: 1 });
@@ -476,5 +457,177 @@ describe("body truncation", () => {
     const history = loadHistory("conn");
     expect(history[0].request).toBe('{"m":"ping"}');
     expect(history[0].response).toBe('{"ok":true}');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Global limit never wipes the CURRENT connection (PR #218 review blocker 1)
+// RED on the pre-rework evictGlobal: a single-connection store crossing the
+// 500 KB limit used to drop the only (active) bucket wholesale, including
+// the entry the 63rd append had just written.
+// ---------------------------------------------------------------------------
+
+describe("global limit spares the current connection", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("single connection keeps its newest entries when the store crosses 500 KB", () => {
+    // ~8 KB per entry: 63 entries stay under 500 KB, the 63rd push crosses it.
+    const payload = JSON.stringify({
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: { data: "x".repeat(8 * 1024) },
+    });
+    const total = 64;
+    for (let i = 0; i < total; i++) {
+      appendHistory("sse:http://localhost:8080/mcp", {
+        request: payload,
+        at: 1000 + i,
+      });
+    }
+
+    const history = loadHistory("sse:http://localhost:8080/mcp");
+    // RED on old evictGlobal: the whole bucket (incl. the just-written 64th
+    // entry) was deleted, leaving 0 entries.
+    expect(history.length).toBeGreaterThan(0);
+    // The just-written entry must survive.
+    expect(history[history.length - 1].at).toBe(1000 + total - 1);
+    // And the store must actually be back under the cap.
+    const stored = localStorage.getItem(HISTORY_KEY);
+    expect(stored).not.toBeNull();
+    expect(JSON.stringify(JSON.parse(stored!)).length).toBeLessThanOrEqual(
+      500 * 1024,
+    );
+  });
+
+  it("keeps trimming the current bucket entry by entry until the limit is met", () => {
+    // One current connection with entries far beyond what fits in 500 KB
+    // even after per-entry truncation (each entry ~10 KB after truncation).
+    const payload = JSON.stringify({
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: { data: "x".repeat(12 * 1024) },
+    });
+    for (let i = 0; i < 100; i++) {
+      appendHistory("stdio:big-server --all", { request: payload, at: i });
+    }
+
+    const history = loadHistory("stdio:big-server --all");
+    expect(history.length).toBeGreaterThan(0);
+    // FIFO: the newest entries are the survivors.
+    expect(history[history.length - 1].at).toBe(99);
+    // Store is within the cap.
+    const stored = localStorage.getItem(HISTORY_KEY);
+    expect(stored!.length).toBeLessThanOrEqual(500 * 1024);
+  });
+
+  it("evicts OTHER buckets fully before trimming the current one", () => {
+    // Old data on conn-old (LRU loser), current session on conn-current.
+    const payload = JSON.stringify({
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: { data: "y".repeat(8 * 1024) },
+    });
+    for (let i = 0; i < 40; i++) {
+      appendHistory("conn-old", { request: payload, at: i });
+    }
+    for (let i = 0; i < 40; i++) {
+      appendHistory("conn-current", { request: payload, at: 100000 + i });
+    }
+    // One more append on the current connection pushes the store over the
+    // cap; the old bucket must go first, not the current one.
+    appendHistory("conn-current", { request: payload, at: 100040 });
+
+    expect(loadHistory("conn-old")).toEqual([]);
+    const current = loadHistory("conn-current");
+    expect(current.length).toBeGreaterThan(0);
+    expect(current[current.length - 1].at).toBe(100040);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unknown schemaVersion is preserved, not destroyed (PR #218 review minor)
+// A newer schema version in the store must never be overwritten by this code.
+// ---------------------------------------------------------------------------
+
+describe("unknown schema versions are left untouched", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("appendHistory refuses to write over a newer schema version store", () => {
+    localStorage.setItem(
+      HISTORY_KEY,
+      JSON.stringify({ schemaVersion: 2, byConnection: { future: [] } }),
+    );
+
+    appendHistory("mine", { request: '{"m":"x"}', at: 1 });
+
+    // The future store must survive byte-for-byte.
+    const raw = localStorage.getItem(HISTORY_KEY);
+    expect(JSON.parse(raw!).schemaVersion).toBe(2);
+    expect(JSON.parse(raw!).byConnection).toEqual({ future: [] });
+    // And this code reads it as empty rather than destroying it.
+    expect(isForeignSchemaVersion()).toBe(true);
+    expect(loadHistory("mine")).toEqual([]);
+  });
+
+  it("clearHistory refuses to touch a newer schema version store", () => {
+    const future = JSON.stringify({
+      schemaVersion: 2,
+      byConnection: { future: [{ request: '{"m":"keep"}', at: 1 }] },
+    });
+    localStorage.setItem(HISTORY_KEY, future);
+
+    clearHistory("future");
+
+    expect(localStorage.getItem(HISTORY_KEY)).toBe(future);
+  });
+
+  it("isForeignSchemaVersion is false for v1 stores, missing and corrupt data", () => {
+    expect(isForeignSchemaVersion()).toBe(false);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify({ schemaVersion: 1, byConnection: {} }));
+    expect(isForeignSchemaVersion()).toBe(false);
+    localStorage.setItem(HISTORY_KEY, "not-json");
+    expect(isForeignSchemaVersion()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Truncation keeps the JSON-RPC envelope (PR #218 review minor)
+// ---------------------------------------------------------------------------
+
+describe("truncation preserves the envelope fields", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("an over-long request keeps method and id for the History panel label", () => {
+    // A request whose nested strings are each small enough to survive
+    // inner-field truncation but whose array of them stays over 10 KB even
+    // after truncation: the fallback envelope path is taken.
+    const request = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 42,
+      method: "tools/call",
+      params: {
+        items: Array.from({ length: 900 }, (_, i) => `item-${i}-data`),
+      },
+    });
+    appendHistory("conn", { request, at: 1 });
+
+    const stored = loadHistory("conn")[0].request;
+    const parsed = JSON.parse(stored) as {
+      method?: string;
+      id?: number;
+      truncated?: boolean;
+    };
+    expect(parsed.method).toBe("tools/call");
+    expect(parsed.id).toBe(42);
+    expect(parsed.truncated).toBe(true);
+    // RED on the pre-rework code: the body became {"jsonrpc":"2.0","truncated":true}
+    // and the History panel rendered the entry with no label.
+    expect(parsed.method).toBeDefined();
   });
 });

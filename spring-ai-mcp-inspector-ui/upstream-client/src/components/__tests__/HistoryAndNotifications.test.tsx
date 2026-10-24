@@ -216,6 +216,21 @@ describe("HistoryAndNotifications", () => {
     expect(screen.getByText("Response:")).toBeTruthy();
   });
 
+  it("shows the plain-text localStorage storage warning", () => {
+    // PR #218 review: entries (tool arguments and responses) are persisted
+    // unencrypted in browser storage; the panel must say so. RED on the
+    // pre-rework component, which had no warning at all.
+    render(
+      <HistoryAndNotifications
+        requestHistory={mockRequestHistory}
+        serverNotifications={[]}
+      />,
+    );
+    expect(
+      screen.getByText(/saved unencrypted in your browser storage/i),
+    ).toBeTruthy();
+  });
+
   it("displays empty state messages when no data is available", () => {
     render(
       <HistoryAndNotifications requestHistory={[]} serverNotifications={[]} />,

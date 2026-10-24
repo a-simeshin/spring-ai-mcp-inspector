@@ -498,6 +498,12 @@ const App = () => {
     selectedTaskRef.current = selectedTask;
   }, [selectedTask]);
 
+  // [spring-ai-mcp-inspector PATCH] Persistent history (#218): session bucket
+  // id captured at connect(), released on disconnect (review blocker 2).
+  // Declared before useConnection so the frozen key is in scope below.
+  const [activeHistoryConnectionId, setActiveHistoryConnectionId] = useState<
+    string | undefined
+  >(undefined);
   const {
     connectionStatus,
     connectionError,
@@ -526,11 +532,17 @@ const App = () => {
     oauthScope,
     config,
     connectionType,
-    // [spring-ai-mcp-inspector PATCH] Persistent history (#121). Extended scoping (#218).
+    // [spring-ai-mcp-inspector PATCH] Persistent history (#121). The bucket
+    // key is frozen from the Connect click until disconnect (review
+    // blocker 2 on PR #218): while a session id is captured, editing the
+    // URL/command fields neither reshuffles the History panel nor sends
+    // later calls into a half-typed bucket. On disconnect the key returns
+    // to following the form fields, and the next connect() captures fresh.
     connectionId:
-      transportType === "stdio"
+      activeHistoryConnectionId ??
+      (transportType === "stdio"
         ? `stdio:${command} ${args}`
-        : `${transportType}:${sseUrl || "ephemeral"}`,
+        : `${transportType}:${sseUrl || "ephemeral"}`),
     onNotification: (notification) => {
       setNotifications((prev) => [...prev, notification as ServerNotification]);
 
@@ -845,10 +857,35 @@ const App = () => {
     saveInspectorConfig(CONFIG_LOCAL_STORAGE_KEY, config);
   }, [config]);
 
+  // [spring-ai-mcp-inspector PATCH] Persistent history: freeze the history
+  // bucket key at connect() time (PR #218 review blocker 2). The transport-
+  // scoped key is computed once when Connect is clicked and held for the
+  // whole session; disconnect() releases it. While the fields stay editable
+  // during a live connection, the captured key keeps history writes and the
+  // History panel on one stable bucket instead of following every keystroke.
+  const historyConnectionKey = useCallback(() => {
+    return transportType === "stdio"
+      ? `stdio:${command} ${args}`
+      : `${transportType}:${sseUrl || "ephemeral"}`;
+  }, [transportType, command, args, sseUrl]);
+
+  const handleConnect = useCallback(() => {
+    setActiveHistoryConnectionId(historyConnectionKey());
+    void connectMcpServer();
+  }, [connectMcpServer, historyConnectionKey]);
+
+  const handleDisconnect = useCallback(() => {
+    setActiveHistoryConnectionId(undefined);
+    void disconnectMcpServer();
+  }, [disconnectMcpServer]);
+
   const onOAuthConnect = useCallback(
     (serverUrl: string) => {
       setSseUrl(serverUrl);
       setIsAuthDebuggerVisible(false);
+      // OAuth redirects landed on this URL: the history bucket for the new
+      // session must key on it, not on the pre-redirect field value.
+      setActiveHistoryConnectionId(`streamable-http:${serverUrl}`);
       void connectMcpServer();
     },
     [connectMcpServer],
@@ -1652,8 +1689,11 @@ const App = () => {
           setOauthClientSecret={setOauthClientSecret}
           oauthScope={oauthScope}
           setOauthScope={setOauthScope}
-          onConnect={connectMcpServer}
-          onDisconnect={disconnectMcpServer}
+          // [spring-ai-mcp-inspector PATCH] Persistent history (#218):
+          // wrappers capture/release the history bucket key at connect and
+          // disconnect time (see handleConnect/handleDisconnect above).
+          onConnect={handleConnect}
+          onDisconnect={handleDisconnect}
           logLevel={logLevel}
           sendLogLevelRequest={sendLogLevelRequest}
           loggingSupported={!!serverCapabilities?.logging || false}

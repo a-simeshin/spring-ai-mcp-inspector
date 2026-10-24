@@ -6,10 +6,31 @@ into React state. Per-connection FIFO eviction at 100 entries; global 500 KB
 store limit. No upstream equivalent exists; this is a Spring AI MCP Inspector
 custom extension.
 
+Owner-review rework (PR #218, 2026-10-24):
+- The global limit never evicts the CURRENT connection bucket wholesale; when
+  only the current bucket remains over budget, its oldest entries are trimmed
+  one by one, so an active session never loses the entry it just wrote.
+- The history bucket key is captured once when Connect is clicked
+  (App.tsx handleConnect, frozen while connected, released on disconnect):
+  editing the URL/transport fields mid-session no longer reshuffles buckets.
+- A store written by an unknown (e.g. newer) schemaVersion is never rewritten:
+  readStore exposes an empty view, appendHistory/clearHistory refuse to write.
+- Overlong bodies that still exceed the cap after inner-field truncation keep
+  the JSON-RPC envelope fields (jsonrpc, method, id) plus a truncated marker.
+- The History panel shows a plain-text storage warning: arguments and
+  responses are persisted unencrypted in browser storage.
+- Dead clearAllHistory export removed (Clear always scoped to the current
+  connection).
+
 Changed files:
 - src/lib/persistentHistory.ts (new)
 - src/lib/types/historyEntry.ts (new)
 - src/lib/hooks/useConnection.ts (imports + loadHistory on mount + appendHistory
   in pushHistory + clearHistory in clearRequestHistory)
+- src/App.tsx (connectionId wiring: key captured at connect() via
+  handleConnect/handleDisconnect wrappers, frozen while connected)
+- src/components/HistoryAndNotifications.tsx (localStorage plaintext warning)
 
-Covered by: src/lib/__tests__/persistentHistory.test.ts
+Covered by: src/lib/__tests__/persistentHistory.test.ts,
+src/__tests__/App.transportScoping.test.tsx,
+src/components/__tests__/HistoryAndNotifications.test.tsx

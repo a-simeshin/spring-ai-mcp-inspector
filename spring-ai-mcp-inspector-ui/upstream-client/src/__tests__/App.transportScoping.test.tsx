@@ -2,6 +2,7 @@
 import { render, waitFor, act } from "@testing-library/react";
 import App from "../App";
 import { useConnection } from "../lib/hooks/useConnection";
+import { appendHistory, clearHistory, loadHistory } from "../lib/persistentHistory";
 
 // Mock auth dependencies first
 jest.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
@@ -65,12 +66,16 @@ jest.mock("../lib/hooks/useDraggablePane", () => ({
   }),
 }));
 
-// Mock Sidebar with a switcher button so the test can switch transport.
+// Mock Sidebar with switcher/connect/disconnect/url controls so the tests
+// can drive transport switching and the connect lifecycle.
 jest.mock("../components/Sidebar", () => ({
   __esModule: true,
   default: (props: {
     transportType?: string;
     setTransportType?: (t: "stdio" | "sse" | "streamable-http") => void;
+    setSseUrl?: (u: string) => void;
+    onConnect?: () => void;
+    onDisconnect?: () => void;
   }) => (
     <div>
       Sidebar
@@ -85,6 +90,24 @@ jest.mock("../components/Sidebar", () => ({
         onClick={() => props.setTransportType?.("streamable-http")}
       >
         Streamable HTTP
+      </button>
+      <button
+        data-testid="mock-connect"
+        onClick={() => props.onConnect?.()}
+      >
+        Connect
+      </button>
+      <button
+        data-testid="mock-disconnect"
+        onClick={() => props.onDisconnect?.()}
+      >
+        Disconnect
+      </button>
+      <button
+        data-testid="mock-edit-url"
+        onClick={() => props.setSseUrl?.("http://localhost:3001/half-typed")}
+      >
+        Edit URL
       </button>
     </div>
   ),
@@ -180,5 +203,175 @@ describe("App - transport scoping connectionId", () => {
     ][0];
     expect(lastCall.connectionId).not.toBe(`sse:${fixedUrl}`);
     expect(lastCall.connectionId).not.toBe(fixedUrl);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bucket key is captured at connect() time (PR #218 review blocker 2).
+// While a session is open, editing the URL/transport fields must NOT change
+// the connectionId passed to useConnection: the History panel must not
+// reshuffle mid-session, later calls must not land in a half-typed bucket,
+// and Clear must clear the bucket the session is actually writing to.
+// RED on the pre-rework App.tsx: the key was recomputed from the editable
+// form fields on every render.
+// ---------------------------------------------------------------------------
+
+describe("App - history bucket key frozen while connected", () => {
+  const mockUseConnection = jest.mocked(useConnection);
+
+  const connectedState = {
+    ...disconnectedConnectionState,
+    connectionStatus: "connected" as const,
+  };
+
+  beforeEach(() => {
+    jest.restoreAllMocks();
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    localStorage.clear();
+  });
+
+  test("editing the URL while connected keeps the connect-time connectionId", async () => {
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    const { getByTestId } = render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+
+    // Connect: App captures the bucket key for this session.
+    mockUseConnection.mockReturnValue(connectedState);
+    await act(async () => {
+      getByTestId("mock-connect").click();
+    });
+    await waitFor(() => {
+      const last =
+        mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1];
+      expect(last[0].connectionStatus ?? connectedState.connectionStatus).toBe(
+        "connected",
+      );
+    });
+    const keyAtConnect =
+      mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+        .connectionId;
+    expect(keyAtConnect).toBe("sse:http://localhost:3001/sse");
+
+    // The URL input stays enabled while connected: typing a new URL must
+    // NOT move the history bucket.
+    await act(async () => {
+      getByTestId("mock-edit-url").click();
+    });
+    await act(async () => {
+      getByTestId("mock-edit-url").click();
+    });
+    const keyAfterEdit =
+      mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+        .connectionId;
+    expect(keyAfterEdit).toBe(keyAtConnect);
+    expect(keyAfterEdit).not.toBe("sse:http://localhost:3001/half-typed");
+  });
+
+  test("switching transport while connected keeps the connect-time connectionId", async () => {
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    const { getByTestId } = render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+
+    mockUseConnection.mockReturnValue(connectedState);
+    await act(async () => {
+      getByTestId("mock-connect").click();
+    });
+    const keyAtConnect =
+      mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+        .connectionId;
+    expect(keyAtConnect).toBe("sse:http://localhost:3001/sse");
+
+    await act(async () => {
+      getByTestId("switch-to-stdio").click();
+    });
+    const keyAfterSwitch =
+      mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+        .connectionId;
+    // Frozen: the stdio recomputation must not win while a session id is held.
+    expect(keyAfterSwitch).toBe(keyAtConnect);
+    expect(keyAfterSwitch).not.toBe("stdio:mcp-server-everything --verbose");
+  });
+
+  test("disconnect releases the captured id and the key follows the form again", async () => {
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    const { getByTestId } = render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+
+    mockUseConnection.mockReturnValue(connectedState);
+    await act(async () => {
+      getByTestId("mock-connect").click();
+    });
+    const keyAtConnect =
+      mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+        .connectionId;
+    expect(keyAtConnect).toBe("sse:http://localhost:3001/sse");
+
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    await act(async () => {
+      getByTestId("mock-disconnect").click();
+    });
+    await waitFor(() => {
+      const keyAfterDisconnect =
+        mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+          .connectionId;
+      expect(keyAfterDisconnect).toBe("sse:http://localhost:3001/sse");
+    });
+
+    // After disconnect the key follows the form fields again (e.g. a URL
+    // edit changes the pending bucket key for the NEXT connection).
+    await act(async () => {
+      getByTestId("mock-edit-url").click();
+    });
+    const keyAfterEdit =
+      mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+        .connectionId;
+    expect(keyAfterEdit).toBe("sse:http://localhost:3001/half-typed");
+  });
+
+  test("Clear writes through the connect-time bucket, not the edited URL bucket", async () => {
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    const { getByTestId } = render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+
+    // Pre-seed both buckets: the connect-time one and the half-typed one.
+    appendHistory("sse:http://localhost:3001/sse", {
+      request: JSON.stringify({ method: "tools/call", id: 1 }),
+      at: 1,
+    });
+    appendHistory("sse:http://localhost:3001/half-typed", {
+      request: JSON.stringify({ method: "tools/call", id: 2 }),
+      at: 2,
+    });
+
+    mockUseConnection.mockReturnValue(connectedState);
+    await act(async () => {
+      getByTestId("mock-connect").click();
+    });
+    // Edit the URL mid-session: Clear must still clear the CONNECT bucket.
+    await act(async () => {
+      getByTestId("mock-edit-url").click();
+    });
+
+    // The hook's clearRequestHistory closure received the SAME frozen
+    // connectionId as every other call in this session: the option the App
+    // passed at the last render (after the URL edit) is still the
+    // connect-time bucket. Clearing through it clears the connect bucket
+    // and leaves the half-typed bucket untouched.
+    const lastOptions =
+      mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0];
+    expect(lastOptions.connectionId).toBe("sse:http://localhost:3001/sse");
+    clearHistory(lastOptions.connectionId!);
+    expect(loadHistory("sse:http://localhost:3001/sse")).toEqual([]);
+    expect(loadHistory("sse:http://localhost:3001/half-typed")).toHaveLength(
+      1,
+    );
   });
 });
