@@ -1579,14 +1579,15 @@ const App = () => {
                       </p>
                     </div>
                     <PingTab
-                      onPingClick={() => {
-                        void sendMCPRequest(
+                      // [spring-ai-mcp-inspector PATCH] Ping inline feedback (#232): return Promise for await
+                      onPingClick={() =>
+                        sendMCPRequest(
                           {
                             method: "ping" as const,
                           },
                           EmptyResultSchema,
-                        );
-                      }}
+                        )
+                      }
                     />
                   </>
                 ) : (
@@ -1773,14 +1774,15 @@ const App = () => {
                     />
                     <ConsoleTab />
                     <PingTab
-                      onPingClick={() => {
-                        void sendMCPRequest(
+                      // [spring-ai-mcp-inspector PATCH] Ping inline feedback (#232): return Promise for await
+                      onPingClick={() =>
+                        sendMCPRequest(
                           {
                             method: "ping" as const,
                           },
                           EmptyResultSchema,
-                        );
-                      }}
+                        )
+                      }
                     />
                     <SamplingTab
                       pendingRequests={pendingSampleRequests}
