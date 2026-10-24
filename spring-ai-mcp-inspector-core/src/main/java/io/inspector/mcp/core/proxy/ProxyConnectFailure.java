@@ -20,7 +20,10 @@ import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.net.http.HttpTimeoutException;
+import java.nio.channels.UnresolvedAddressException;
 import java.util.concurrent.TimeoutException;
+
+import io.modelcontextprotocol.spec.McpTransportException;
 
 /**
  * Classified outcome of a failed connection attempt to an upstream MCP server.
@@ -53,6 +56,9 @@ public record ProxyConnectFailure(Reason reason, String message) {
 		/** The upstream host name could not be resolved. */
 		DNS("dns"),
 
+		/** The upstream server responded with 404 Not Found. */
+		NOT_FOUND("not_found"),
+
 		/** Any other failure that cannot be classified. */
 		UNKNOWN("unknown");
 
@@ -83,15 +89,33 @@ public record ProxyConnectFailure(Reason reason, String message) {
 	public static ProxyConnectFailure classify(final Throwable error) {
 		Throwable current = error;
 		while (current != null) {
-			if (current instanceof UnknownHostException) {
+			if (current instanceof UnknownHostException || current instanceof UnresolvedAddressException) {
 				return new ProxyConnectFailure(Reason.DNS, "could not resolve the MCP server host name");
 			}
 			if (current instanceof ConnectException) {
+				// The MCP SDK (StreamableHttpClientTransport) wraps DNS failures
+				// into ConnectException before the proxy sees the cause chain.
+				// The Java HTTP client surfaces unresolved hosts as
+				// UnresolvedAddressException (NIO path), while classic socket
+				// code surfaces them as UnknownHostException. Descend into the
+				// ConnectException cause chain to check for either DNS marker;
+				// only if none is found do we classify as connection refused.
+				Throwable cause = current.getCause();
+				while (cause != null) {
+					if (cause instanceof UnknownHostException || cause instanceof UnresolvedAddressException) {
+						return new ProxyConnectFailure(Reason.DNS, "could not resolve the MCP server host name");
+					}
+					cause = cause.getCause();
+				}
 				return new ProxyConnectFailure(Reason.CONNECTION_REFUSED, "connection to the MCP server was refused");
 			}
 			if (current instanceof SocketTimeoutException || current instanceof HttpTimeoutException
 					|| current instanceof TimeoutException) {
 				return new ProxyConnectFailure(Reason.TIMEOUT, "connection to the MCP server timed out");
+			}
+			if (current instanceof McpTransportException && current.getMessage() != null
+					&& current.getMessage().contains("Server Not Found")) {
+				return new ProxyConnectFailure(Reason.NOT_FOUND, "server responded with 404: check the URL");
 			}
 			current = current.getCause();
 		}
