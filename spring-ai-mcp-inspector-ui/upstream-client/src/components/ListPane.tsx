@@ -9,6 +9,10 @@ type ListPaneProps<T> = {
   clearItems?: () => void;
   setSelectedItem: (item: T) => void;
   renderItem: (item: T) => React.ReactNode;
+  // [spring-ai-mcp-inspector PATCH] Optional per-row action area (issue #237):
+  // rendered right-aligned inside each row; clicks must stopPropagation so the
+  // row selection handler does not fire.
+  renderActions?: (item: T) => React.ReactNode;
   title: string;
   buttonText: string;
   isButtonDisabled?: boolean;
@@ -20,6 +24,7 @@ const ListPane = <T extends object>({
   clearItems,
   setSelectedItem,
   renderItem,
+  renderActions,
   title,
   buttonText,
   isButtonDisabled,
@@ -139,7 +144,15 @@ const ListPane = <T extends object>({
               {/* [spring-ai-mcp-inspector PATCH] Tool row (#58): data-testid
                   anchor (tool-row-<index>) for the Selenide row-selection
                   test. */}
-              {renderItem(item)}
+              <div className="flex-1 min-w-0">{renderItem(item)}</div>
+              {renderActions && (
+                <div
+                  className="flex-shrink-0 ml-2"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {renderActions(item)}
+                </div>
+              )}
             </div>
           ))}
           {filteredItems.length === 0 && searchQuery && items.length > 0 && (

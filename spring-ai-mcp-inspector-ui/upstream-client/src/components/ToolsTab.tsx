@@ -38,6 +38,7 @@ import {
   AlertTriangle,
   Copy,
   CheckCheck,
+  Zap,
 } from "lucide-react";
 import { useEffect, useState, useRef, useMemo } from "react";
 import ListPane from "./ListPane";
@@ -55,6 +56,9 @@ import {
   hasValidMetaPrefix,
   isReservedMetaKey,
 } from "@/utils/metaUtils";
+// [spring-ai-mcp-inspector PATCH] Concurrency probe dialog (issue #237).
+import ConcurrencyProbeDialog from "./ConcurrencyProbeDialog";
+import { runProbe } from "@/lib/concurrency";
 
 /**
  * Extended Tool type that includes optional fields used by the inspector.
@@ -203,6 +207,9 @@ const ToolsTab = ({
   listTools,
   clearTools,
   callTool,
+  onProbeTool,
+  connectionStatus,
+  onNavigateToTimeline,
   selectedTool,
   setSelectedTool,
   toolResult,
@@ -222,6 +229,13 @@ const ToolsTab = ({
     metadata?: Record<string, unknown>,
     runAsTask?: boolean,
   ) => Promise<CompatibilityCallToolResult>;
+  // [spring-ai-mcp-inspector PATCH] Concurrency probe entry point (issue #237):
+  // when present, each tool row renders a "Concurrency probe" action button.
+  onProbeTool?: (tool: Tool) => void;
+  /** MCP connection status, used to refuse probe launch when disconnected. */
+  connectionStatus?: string;
+  /** Deep-link handler: switches to Timeline tab for a correlation id. */
+  onNavigateToTimeline?: (correlationId: string) => void;
   selectedTool: Tool | null;
   setSelectedTool: (tool: Tool | null) => void;
   toolResult: CompatibilityCallToolResult | null;
@@ -319,6 +333,31 @@ const ToolsTab = ({
     ? getTaskSupport(selectedTool)
     : "forbidden";
 
+  // [spring-ai-mcp-inspector PATCH] Concurrency probe dialog state (issue #237).
+  const [probeTool, setProbeTool] = useState<Tool | null>(null);
+
+  const openProbe = (tool: Tool) => {
+    setSelectedTool(tool);
+    onProbeTool?.(tool);
+    setProbeTool(tool);
+  };
+
+  const probeMetadata = metadataEntries.reduce<Record<string, unknown>>(
+    (acc, { key, value }) => {
+      const trimmedKey = key.trim();
+      if (
+        trimmedKey !== "" &&
+        hasValidMetaPrefix(trimmedKey) &&
+        !isReservedMetaKey(trimmedKey) &&
+        hasValidMetaName(trimmedKey)
+      ) {
+        acc[trimmedKey] = value;
+      }
+      return acc;
+    },
+    {},
+  );
+
   return (
     <TabsContent value="tools">
       {/* [spring-ai-mcp-inspector PATCH] Responsive Tools list/detail grid
@@ -363,6 +402,25 @@ const ToolsTab = ({
               <ChevronRight className="w-4 h-4 flex-shrink-0 text-gray-400 mt-1" />
             </div>
           )}
+          // [spring-ai-mcp-inspector PATCH] Concurrency probe row action
+          // (issue #237): opens the probe dialog for this tool without
+          // changing the row selection (ListPane stopPropagation wrapper).
+          renderActions={
+            onProbeTool
+              ? (tool) => (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2"
+                    aria-label={`Concurrency probe: ${tool.name}`}
+                    title="Concurrency probe"
+                    onClick={() => openProbe(tool)}
+                  >
+                    <Zap className="w-4 h-4" />
+                  </Button>
+                )
+              : undefined
+          }
           title="Tools"
           buttonText={nextCursor ? "List More Tools" : "List Tools"}
           isButtonDisabled={!nextCursor && tools.length > 0}
@@ -1018,6 +1076,26 @@ const ToolsTab = ({
           </div>
         </div>
       </div>
+      {/* [spring-ai-mcp-inspector PATCH] Concurrency probe dialog (issue #237):
+          reuses the current params/metadata state; launches runProbe with the
+          signal-aware callTool from App.tsx. */}
+      <ConcurrencyProbeDialog
+        tool={probeTool}
+        arguments_={params}
+        metadata={
+          Object.keys(probeMetadata).length > 0 ? probeMetadata : undefined
+        }
+        runProbeFn={runProbe}
+        callTool={callTool}
+        isConnected={connectionStatus === "connected"}
+        isTaskRequired={
+          probeTool !== null &&
+          serverSupportsTaskRequests &&
+          getTaskSupport(probeTool) === "required"
+        }
+        onClose={() => setProbeTool(null)}
+        onNavigateToTimeline={onNavigateToTimeline}
+      />
     </TabsContent>
   );
 };
