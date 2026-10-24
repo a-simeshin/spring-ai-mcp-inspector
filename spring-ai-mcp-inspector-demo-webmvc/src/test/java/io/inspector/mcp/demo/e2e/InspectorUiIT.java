@@ -1687,15 +1687,21 @@ class InspectorUiIT {
 
 			// assert: history entry appears in panel AND in localStorage
 			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
-			// Pre-reload, assert the CURRENT connection's own bucket (not the
-			// whole store): an assertion satisfied by leftovers from earlier
-			// tests proves nothing about this session.
+			// Pre-reload, assert THIS session's own bucket holds the entries (not
+			// just the whole store): the store was cleared right after open(), so
+			// every bucket in it belongs to this session; the bucket containing
+			// the echo tools/call (matched by the unique input text) must hold at
+			// least the tools/list + tools/call pair, i.e. the session history is
+			// intact in ONE bucket. The key is not derived from localStorage form
+			// keys: the clear above races with the app's persistence effects.
 			Object preStore = Selenide
 				.executeJavaScript("var s = JSON.parse(localStorage.getItem('mcp-inspector.history.v1'));"
-						+ "var k = localStorage.getItem('lastTransportType') + ':' + localStorage.getItem('lastSseUrl');"
-						+ "return (s && s.byConnection && s.byConnection[k]) ? s.byConnection[k].length : 0;");
+						+ "if (!s || !s.byConnection) return -1;" + "var best = 0;" + "for (var k in s.byConnection) {"
+						+ "  var b = s.byConnection[k];"
+						+ "  var has = b.some(function(e) { return e.request.indexOf('hello world') >= 0; });"
+						+ "  if (has && b.length > best) best = b.length;" + "}" + "return best;");
 			Assertions.assertTrue(((Number) preStore).intValue() >= 2,
-					"the reloaded connection's own bucket must hold the tools/call entries before reload");
+					"the session's own bucket must hold the tools/list and tools/call entries before reload");
 			Object store = Selenide.executeJavaScript("return localStorage.getItem('mcp-inspector.history.v1');");
 			Assertions.assertNotNull(store, "localStorage must contain mcp-inspector.history.v1 after tool call");
 			Assertions.assertTrue(store.toString().contains("tools/call"),
