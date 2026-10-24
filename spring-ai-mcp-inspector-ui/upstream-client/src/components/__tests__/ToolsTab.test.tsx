@@ -1293,4 +1293,49 @@ describe("ToolsTab", () => {
       expect(screen.getByTestId("run-tool-button")).toBeInTheDocument();
     });
   });
+
+  // [spring-ai-mcp-inspector PATCH] Schema warning UI evidence (PR #204 review)
+  describe("Schema warning badges", () => {
+    const toolWithBrokenRef: Tool = {
+      name: "brokenRefTool",
+      description: "Tool with an unresolvable $ref",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          missing: { $ref: "#/properties/nonexistent" },
+        },
+      },
+    };
+
+    it("shows AlertTriangle badge in list row for tool with broken $ref", () => {
+      renderToolsTab({ tools: [toolWithBrokenRef] });
+
+      const badge = screen.getByLabelText(
+        /schema contains unresolvable \$ref pointers/i,
+      );
+      expect(badge).toBeInTheDocument();
+    });
+
+    it("shows Schema Warning alert in detail pane for selected tool with broken $ref", () => {
+      renderToolsTab({
+        tools: [toolWithBrokenRef],
+        selectedTool: toolWithBrokenRef,
+      });
+
+      const alertTitle = screen.getByText(/schema warning/i);
+      expect(alertTitle).toBeInTheDocument();
+
+      const pointerPath = screen.getByText(/#\/properties\/nonexistent/i);
+      expect(pointerPath).toBeInTheDocument();
+
+      const link = screen.getByRole("link", {
+        name: /learn more about this issue/i,
+      });
+      expect(link).toBeInTheDocument();
+      expect(link).toHaveAttribute(
+        "href",
+        "https://github.com/spring-projects/spring-ai/issues/5888",
+      );
+    });
+  });
 });
