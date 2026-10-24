@@ -1688,7 +1688,7 @@ class InspectorUiIT {
 			// tests proves nothing about this session.
 			Object preStore = Selenide
 				.executeJavaScript("var s = JSON.parse(localStorage.getItem('mcp-inspector.history.v1'));"
-						+ "var k = 'streamable-http:/mcp';"
+						+ "var k = localStorage.getItem('lastTransportType') + ':' + localStorage.getItem('lastSseUrl');"
 						+ "return (s && s.byConnection && s.byConnection[k]) ? s.byConnection[k].length : 0;");
 			Assertions.assertTrue(((Number) preStore).intValue() >= 2,
 					"the reloaded connection's own bucket must hold the tools/call entries before reload");

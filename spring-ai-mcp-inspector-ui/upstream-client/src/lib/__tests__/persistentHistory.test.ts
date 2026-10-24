@@ -472,38 +472,49 @@ describe("global limit spares the current connection", () => {
     localStorage.clear();
   });
 
-  it("single connection keeps its newest entries when the store crosses 500 KB", () => {
-    // ~8 KB per entry: 63 entries stay under 500 KB, the 63rd push crosses it.
+  it("63rd append on the only connection does not zero the history", () => {
+    // The owner-review scenario: one connection, ~8 KB entries. A store
+    // seeded at 62 entries sits at ~500 KB; the 63rd append crosses the
+    // limit. The OLD evictGlobal deleted the only (active) bucket
+    // wholesale, including the entry the 63rd append had just written.
     const payload = JSON.stringify({
       jsonrpc: "2.0",
       method: "tools/call",
-      params: { data: "x".repeat(8 * 1024) },
+      params: { data: "x".repeat(8100) },
     });
-    const total = 64;
-    for (let i = 0; i < total; i++) {
+    // Seed via the public API: 62 entries, store just under the cap
+    // (each append re-runs eviction, so the seed itself stays in shape).
+    for (let i = 0; i < 62; i++) {
       appendHistory("sse:http://localhost:8080/mcp", {
         request: payload,
-        at: 1000 + i,
+        at: 100 + i,
       });
     }
+    // Sanity: seeded store is over the cap is NOT required; the point is
+    // the final append pushes it over.
+    const sizeBefore = (localStorage.getItem(HISTORY_KEY) ?? "").length;
+    expect(sizeBefore).toBeGreaterThan(400 * 1024);
+
+    // The 63rd append: the crossing write.
+    appendHistory("sse:http://localhost:8080/mcp", {
+      request: payload,
+      at: 162,
+    });
 
     const history = loadHistory("sse:http://localhost:8080/mcp");
-    // RED on old evictGlobal: the whole bucket (incl. the just-written 64th
-    // entry) was deleted, leaving 0 entries.
+    // RED on the old evictGlobal: the bucket was deleted entirely.
     expect(history.length).toBeGreaterThan(0);
-    // The just-written entry must survive.
-    expect(history[history.length - 1].at).toBe(1000 + total - 1);
-    // And the store must actually be back under the cap.
-    const stored = localStorage.getItem(HISTORY_KEY);
-    expect(stored).not.toBeNull();
-    expect(JSON.stringify(JSON.parse(stored!)).length).toBeLessThanOrEqual(
-      500 * 1024,
-    );
+    // The just-written entry survives.
+    expect(history[history.length - 1].at).toBe(162);
+    // The store is back under the cap.
+    expect(
+      (localStorage.getItem(HISTORY_KEY) ?? "").length,
+    ).toBeLessThanOrEqual(500 * 1024);
   });
 
   it("keeps trimming the current bucket entry by entry until the limit is met", () => {
-    // One current connection with entries far beyond what fits in 500 KB
-    // even after per-entry truncation (each entry ~10 KB after truncation).
+    // One current connection whose entries are far beyond what fits in
+    // 500 KB even after per-entry truncation (~10 KB each after truncation).
     const payload = JSON.stringify({
       jsonrpc: "2.0",
       method: "tools/call",
@@ -527,7 +538,7 @@ describe("global limit spares the current connection", () => {
     const payload = JSON.stringify({
       jsonrpc: "2.0",
       method: "tools/call",
-      params: { data: "y".repeat(8 * 1024) },
+      params: { data: "y".repeat(8100) },
     });
     for (let i = 0; i < 40; i++) {
       appendHistory("conn-old", { request: payload, at: i });
@@ -544,6 +555,7 @@ describe("global limit spares the current connection", () => {
     expect(current.length).toBeGreaterThan(0);
     expect(current[current.length - 1].at).toBe(100040);
   });
+
 });
 
 // ---------------------------------------------------------------------------
