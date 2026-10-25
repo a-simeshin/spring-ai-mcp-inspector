@@ -19,7 +19,6 @@ package io.inspector.mcp.core.dto;
 import java.util.HashMap;
 import java.util.Map;
 
-import io.modelcontextprotocol.spec.McpSchema;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -32,58 +31,84 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Unit tests for {@link SkillsExtensionSupport}. */
+/**
+ * Unit tests for {@link SkillsExtensionSupport}.
+ *
+ * <p>
+ * The parser works on the raw initialize result frame (the untyped {@code result} map),
+ * because the canonical {@code capabilities.extensions} declaration is dropped by the
+ * SDK's typed {@code ServerCapabilities} record before the typed model could see it.
+ */
 @Epic("MCP Inspector Core")
 @Feature("SEP-2640 skills capability detection")
 class SkillsExtensionSupportTests {
 
-	private static McpSchema.InitializeResult initResult(final Map<String, Object> meta) {
-		final McpSchema.ServerCapabilities capabilities = McpSchema.ServerCapabilities.builder().tools(true).build();
-		return new McpSchema.InitializeResult("2025-06-18", capabilities,
-				new McpSchema.Implementation("test-server", "1.0"), null, meta);
+	private static final String EXT_ID = SkillsExtensionSupport.EXTENSION_ID;
+
+	private static Map<String, Object> rawResult(final Map<String, Object> capabilities,
+			final Map<String, Object> meta) {
+		final Map<String, Object> result = new HashMap<>();
+		if (capabilities != null) {
+			result.put("capabilities", capabilities);
+		}
+		if (meta != null) {
+			result.put("_meta", meta);
+		}
+		return result;
 	}
 
-	private static Map<String, Object> metaWithExtensions(final Map<String, Object> extensions) {
+	private static Map<String, Object> capabilitiesWith(final Map<String, Object> extensions) {
+		final Map<String, Object> capabilities = new HashMap<>();
+		capabilities.put("tools", Map.of());
+		if (extensions != null) {
+			capabilities.put("extensions", extensions);
+		}
+		return capabilities;
+	}
+
+	private static Map<String, Object> metaWith(final Map<String, Object> extensions) {
 		final Map<String, Object> meta = new HashMap<>();
-		meta.put("extensions", extensions);
+		if (extensions != null) {
+			meta.put("extensions", extensions);
+		}
 		return meta;
 	}
 
 	@Nested
-	@DisplayName("present")
-	class Present {
+	@DisplayName("canonical capabilities.extensions")
+	class Canonical {
 
 		@Test
-		@Story("extension declared with directoryRead")
+		@Story("canonical declaration with directoryRead")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("_meta.extensions carries io.modelcontextprotocol/skills with directoryRead=true")
-		void present_withDirectoryReadTrue_supportedAndDirectoryRead() {
-			final SkillsExtensionSupport support = SkillsExtensionSupport.from(initResult(
-					metaWithExtensions(Map.of("io.modelcontextprotocol/skills", Map.of("directoryRead", true)))));
+		@Description("capabilities.extensions carries io.modelcontextprotocol/skills with directoryRead=true")
+		void canonical_withDirectoryReadTrue_supportedAndDirectoryRead() {
+			final SkillsExtensionSupport support = SkillsExtensionSupport.fromRawInitializeResult(
+					rawResult(capabilitiesWith(Map.of(EXT_ID, Map.of("directoryRead", true))), null));
 
 			assertThat(support.supported()).isTrue();
 			assertThat(support.directoryRead()).isTrue();
 		}
 
 		@Test
-		@Story("extension declared with empty object")
+		@Story("canonical declaration with empty object")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("an empty object declares support without optional features")
-		void present_withEmptyObject_supportedWithoutDirectoryRead() {
+		@Description("an empty extension object in the canonical location declares support without optional features")
+		void canonical_withEmptyObject_supportedWithoutDirectoryRead() {
 			final SkillsExtensionSupport support = SkillsExtensionSupport
-				.from(initResult(metaWithExtensions(Map.of("io.modelcontextprotocol/skills", Map.of()))));
+				.fromRawInitializeResult(rawResult(capabilitiesWith(Map.of(EXT_ID, Map.of())), null));
 
 			assertThat(support.supported()).isTrue();
 			assertThat(support.directoryRead()).isFalse();
 		}
 
 		@Test
-		@Story("directoryRead false")
+		@Story("canonical declaration with directoryRead false")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("explicit directoryRead=false keeps directoryRead off")
-		void present_withDirectoryReadFalse_supportedWithoutDirectoryRead() {
-			final SkillsExtensionSupport support = SkillsExtensionSupport.from(initResult(
-					metaWithExtensions(Map.of("io.modelcontextprotocol/skills", Map.of("directoryRead", false)))));
+		@Description("explicit directoryRead=false in the canonical location keeps directoryRead off")
+		void canonical_withDirectoryReadFalse_supportedWithoutDirectoryRead() {
+			final SkillsExtensionSupport support = SkillsExtensionSupport.fromRawInitializeResult(
+					rawResult(capabilitiesWith(Map.of(EXT_ID, Map.of("directoryRead", false))), null));
 
 			assertThat(support.supported()).isTrue();
 			assertThat(support.directoryRead()).isFalse();
@@ -92,24 +117,55 @@ class SkillsExtensionSupportTests {
 		@Test
 		@Story("unrelated extensions ignored")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("other extension identifiers do not trigger skills support")
-		void present_unrelatedExtension_absent() {
-			final SkillsExtensionSupport support = SkillsExtensionSupport
-				.from(initResult(metaWithExtensions(Map.of("io.modelcontextprotocol/tasks", Map.of()))));
+		@Description("other extension identifiers in the canonical map do not trigger skills support")
+		void canonical_unrelatedExtension_absent() {
+			final SkillsExtensionSupport support = SkillsExtensionSupport.fromRawInitializeResult(
+					rawResult(capabilitiesWith(Map.of("io.modelcontextprotocol/tasks", Map.of())), null));
 
 			assertThat(support.supported()).isFalse();
 		}
 
 		@Test
-		@Story("raw canonical extensions map")
-		@Severity(SeverityLevel.NORMAL)
-		@Description("fromExtensions parses a pre-extracted capabilities.extensions map")
-		void present_rawExtensionsMap_supported() {
+		@Story("canonical wins over legacy _meta")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("when both locations declare the extension, the canonical declaration wins")
+		void canonicalWinsOverMeta() {
 			final SkillsExtensionSupport support = SkillsExtensionSupport
-				.fromExtensions(Map.of("io.modelcontextprotocol/skills", Map.of("directoryRead", true)));
+				.fromRawInitializeResult(rawResult(capabilitiesWith(Map.of(EXT_ID, Map.of("directoryRead", true))),
+						metaWith(Map.of(EXT_ID, Map.of("directoryRead", false)))));
+
+			assertThat(support.supported()).isTrue();
+			assertThat(support.directoryRead()).as("canonical capabilities.extensions must win over _meta.extensions")
+				.isTrue();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("legacy _meta.extensions fallback")
+	class LegacyMeta {
+
+		@Test
+		@Story("legacy declaration in _meta")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("_meta.extensions still declares support when the canonical location is absent")
+		void meta_withExtension_supported() {
+			final SkillsExtensionSupport support = SkillsExtensionSupport.fromRawInitializeResult(
+					rawResult(capabilitiesWith(null), metaWith(Map.of(EXT_ID, Map.of("directoryRead", true)))));
 
 			assertThat(support.supported()).isTrue();
 			assertThat(support.directoryRead()).isTrue();
+		}
+
+		@Test
+		@Story("_meta without extensions")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("_meta carrying other keys yields ABSENT")
+		void meta_withoutExtensions_absent() {
+			final SkillsExtensionSupport support = SkillsExtensionSupport
+				.fromRawInitializeResult(rawResult(capabilitiesWith(null), Map.of("other", "value")));
+
+			assertThat(support).isEqualTo(SkillsExtensionSupport.ABSENT);
 		}
 
 	}
@@ -119,28 +175,20 @@ class SkillsExtensionSupportTests {
 	class Absent {
 
 		@Test
-		@Story("no _meta")
+		@Story("no capabilities and no _meta")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("an initialize result without _meta yields ABSENT")
-		void absent_noMeta() {
-			assertThat(SkillsExtensionSupport.from(initResult(null))).isEqualTo(SkillsExtensionSupport.ABSENT);
-		}
-
-		@Test
-		@Story("_meta without extensions")
-		@Severity(SeverityLevel.NORMAL)
-		@Description("_meta carrying other keys yields ABSENT")
-		void absent_metaWithoutExtensions() {
-			assertThat(SkillsExtensionSupport.from(initResult(Map.of("other", "value"))))
+		@Description("a raw result without capabilities or _meta yields ABSENT")
+		void absent_emptyResult() {
+			assertThat(SkillsExtensionSupport.fromRawInitializeResult(new HashMap<>()))
 				.isEqualTo(SkillsExtensionSupport.ABSENT);
 		}
 
 		@Test
-		@Story("null initialize result")
+		@Story("null raw result")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("null initialize result yields ABSENT")
-		void absent_nullInitializeResult() {
-			assertThat(SkillsExtensionSupport.from(null)).isEqualTo(SkillsExtensionSupport.ABSENT);
+		@Description("null raw initialize result yields ABSENT")
+		void absent_nullRawResult() {
+			assertThat(SkillsExtensionSupport.fromRawInitializeResult(null)).isEqualTo(SkillsExtensionSupport.ABSENT);
 		}
 
 		@Test
@@ -149,6 +197,17 @@ class SkillsExtensionSupportTests {
 		@Description("fromExtensions(null) yields ABSENT")
 		void absent_nullExtensions() {
 			assertThat(SkillsExtensionSupport.fromExtensions(null)).isEqualTo(SkillsExtensionSupport.ABSENT);
+		}
+
+		@Test
+		@Story("capabilities without extensions key")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("capabilities that carry no extensions key at all yield ABSENT")
+		void absent_capabilitiesWithoutExtensions() {
+			final SkillsExtensionSupport support = SkillsExtensionSupport
+				.fromRawInitializeResult(rawResult(Map.of("tools", Map.of()), null));
+
+			assertThat(support.supported()).isFalse();
 		}
 
 	}
@@ -160,9 +219,14 @@ class SkillsExtensionSupportTests {
 		@Test
 		@Story("extensions is a string")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("a non-map _meta.extensions yields ABSENT instead of failing")
+		@Description("a non-map capabilities.extensions yields ABSENT instead of failing")
 		void malformed_extensionsString_absent() {
-			final SkillsExtensionSupport support = SkillsExtensionSupport.from(initResult(Map.of("extensions", "x")));
+			final Map<String, Object> capabilities = new HashMap<>();
+			capabilities.put("tools", Map.of());
+			capabilities.put("extensions", "broken");
+
+			final SkillsExtensionSupport support = SkillsExtensionSupport
+				.fromRawInitializeResult(rawResult(capabilities, null));
 
 			assertThat(support.supported()).isFalse();
 		}
@@ -173,7 +237,7 @@ class SkillsExtensionSupportTests {
 		@Description("a non-map extension value yields ABSENT instead of failing")
 		void malformed_stringValue_absent() {
 			final SkillsExtensionSupport support = SkillsExtensionSupport
-				.from(initResult(metaWithExtensions(Map.of("io.modelcontextprotocol/skills", "yes"))));
+				.fromRawInitializeResult(rawResult(capabilitiesWith(Map.of(EXT_ID, "yes")), null));
 
 			assertThat(support.supported()).isFalse();
 		}
@@ -184,10 +248,10 @@ class SkillsExtensionSupportTests {
 		@Description("a null extension value yields ABSENT")
 		void malformed_nullValue_absent() {
 			final Map<String, Object> extensions = new HashMap<>();
-			extensions.put("io.modelcontextprotocol/skills", null);
+			extensions.put(EXT_ID, null);
 
 			final SkillsExtensionSupport support = SkillsExtensionSupport
-				.from(initResult(metaWithExtensions(extensions)));
+				.fromRawInitializeResult(rawResult(capabilitiesWith(extensions), null));
 
 			assertThat(support.supported()).isFalse();
 		}
@@ -197,11 +261,24 @@ class SkillsExtensionSupportTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("a non-boolean directoryRead falls back to the default false")
 		void malformed_directoryReadString_defaultsFalse() {
-			final SkillsExtensionSupport support = SkillsExtensionSupport.from(initResult(
-					metaWithExtensions(Map.of("io.modelcontextprotocol/skills", Map.of("directoryRead", "yes")))));
+			final SkillsExtensionSupport support = SkillsExtensionSupport.fromRawInitializeResult(
+					rawResult(capabilitiesWith(Map.of(EXT_ID, Map.of("directoryRead", "yes"))), null));
 
 			assertThat(support.supported()).isTrue();
 			assertThat(support.directoryRead()).isFalse();
+		}
+
+		@Test
+		@Story("capabilities is a string")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a non-map capabilities value yields ABSENT instead of failing")
+		void malformed_capabilitiesString_absent() {
+			final Map<String, Object> result = new HashMap<>();
+			result.put("capabilities", "broken");
+
+			final SkillsExtensionSupport support = SkillsExtensionSupport.fromRawInitializeResult(result);
+
+			assertThat(support.supported()).isFalse();
 		}
 
 	}

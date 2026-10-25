@@ -18,23 +18,21 @@ package io.inspector.mcp.core.dto;
 
 import java.util.Map;
 
-import io.modelcontextprotocol.spec.McpSchema;
-
 /**
- * Detection result for the SEP-2640 Skills extension, parsed from the server's
- * {@link McpSchema.InitializeResult}.
+ * Detection result for the SEP-2640 Skills extension, parsed from the <em>raw</em>
+ * initialize result frame of the MCP handshake.
  *
  * <p>
  * The extension identifier is {@code io.modelcontextprotocol/skills}. Per SEP-2133 the
- * canonical wire location is {@code result.capabilities.extensions}; however the MCP Java
- * SDK typed {@link McpSchema.ServerCapabilities} record has no {@code extensions}
- * component and Jackson drops the unknown key, so through the typed model the only
- * visible declaration site is {@code result._meta.extensions}. This parser reads the
- * {@code _meta} location from an {@link McpSchema.InitializeResult} and accepts a raw
- * extensions map (either location, pre-extracted from JSON) via
- * {@link #fromExtensions(Map)}. The proxy path relays initialize frames verbatim, so a
- * browser-side SDK still sees the canonical {@code capabilities.extensions} declaration
- * untouched.
+ * canonical wire location is {@code result.capabilities.extensions}. The MCP Java SDK
+ * typed {@code ServerCapabilities} record has no {@code extensions} component, so a
+ * declaration that arrives only in the canonical location is dropped during
+ * deserialization into the typed model. The parser therefore works on the untyped result
+ * map captured at the transport seam (see
+ * {@code io.inspector.mcp.core.client.InitializeResultCapture}) and reads the canonical
+ * location first, honouring a legacy {@code result._meta.extensions} declaration as a
+ * fallback so servers that predate the canonical wire location keep working. When both
+ * are present the canonical declaration wins.
  *
  * <p>
  * The single optional setting defined by the SEP is {@code directoryRead} (boolean,
@@ -68,16 +66,22 @@ public record SkillsExtensionSupport(boolean supported, boolean directoryRead) {
 	}
 
 	/**
-	 * Parses the skills-extension entry out of an initialize result, reading the
-	 * {@code result._meta.extensions} map.
-	 * @param initializeResult the result of {@code initialize}; may be {@code null}
+	 * Parses the skills-extension entry out of a raw initialize result frame: the untyped
+	 * {@code result} object of the initialize response, exactly as it arrived on the wire
+	 * and before the SDK's typed model drops the canonical declaration.
+	 * @param rawInitializeResult the raw initialize result; may be {@code null} or
+	 * contain arbitrary values
 	 * @return the detection result; never {@code null}
 	 */
-	public static SkillsExtensionSupport from(final McpSchema.InitializeResult initializeResult) {
-		if (initializeResult == null) {
+	public static SkillsExtensionSupport fromRawInitializeResult(final Map<String, Object> rawInitializeResult) {
+		if (rawInitializeResult == null) {
 			return ABSENT;
 		}
-		return fromExtensions(extensionsFromMeta(initializeResult.meta()));
+		final SkillsExtensionSupport canonical = fromExtensions(extensionsOf(rawInitializeResult.get("capabilities")));
+		if (canonical.supported()) {
+			return canonical;
+		}
+		return fromExtensions(extensionsOf(rawInitializeResult.get("_meta")));
 	}
 
 	/**
@@ -101,19 +105,19 @@ public record SkillsExtensionSupport(boolean supported, boolean directoryRead) {
 	}
 
 	/**
-	 * Extracts the {@code extensions} map from an initialize result's {@code _meta},
-	 * tolerating any malformed shape.
-	 * @param meta the raw {@code _meta} map; may be {@code null}
+	 * Extracts the {@code extensions} map from a {@code capabilities} or {@code _meta}
+	 * container, tolerating any malformed shape.
+	 * @param container the raw container value; may be {@code null}
 	 * @return the extensions map, or {@code null} when absent or malformed
 	 */
 	@SuppressWarnings("unchecked")
-	private static Map<String, Object> extensionsFromMeta(final Map<String, Object> meta) {
-		if (meta == null) {
+	private static Map<String, Object> extensionsOf(final Object container) {
+		if (!(container instanceof Map<?, ?> map)) {
 			return null;
 		}
-		final Object extensions = meta.get("extensions");
-		if (extensions instanceof Map<?, ?> map) {
-			return (Map<String, Object>) map;
+		final Object extensions = map.get("extensions");
+		if (extensions instanceof Map<?, ?> extensionMap) {
+			return (Map<String, Object>) extensionMap;
 		}
 		return null;
 	}

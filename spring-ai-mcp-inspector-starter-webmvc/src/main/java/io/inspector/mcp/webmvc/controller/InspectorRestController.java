@@ -28,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
@@ -57,6 +58,7 @@ import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
+import io.inspector.mcp.core.client.InitializeResultCapturingTransport;
 import io.inspector.mcp.core.client.InspectorClientHandlers;
 import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
 import io.inspector.mcp.core.client.PendingServerRequests;
@@ -228,8 +230,9 @@ public class InspectorRestController implements ApplicationContextAware {
 				(req) -> handleUrlElicitationRequest(sessionId, holder, req));
 
 		final McpSyncClient client;
+		final AtomicReference<InitializeResultCapturingTransport> initializeCapture = new AtomicReference<>();
 		try {
-			client = buildLoopbackClient(detected, handlers);
+			client = buildLoopbackClient(detected, handlers, initializeCapture);
 		}
 		catch (final Exception ex) {
 			LOG.warn("Failed to build loopback MCP client for {}", type, ex);
@@ -257,11 +260,16 @@ public class InspectorRestController implements ApplicationContextAware {
 		}
 
 		final SessionState state = new SessionState(client);
-		// SEP-2640: detect the skills extension from the initialize result so the
-		// session model (and the UI's Skills tab gate) can see it. Parsing tolerates
-		// absent or malformed declarations and never fails the connection.
+		// SEP-2640: detect the skills extension from the raw initialize frame so the
+		// session model (and the UI's Skills tab gate) can see it. The canonical
+		// declaration lives in capabilities.extensions, which the SDK's typed
+		// ServerCapabilities drops, so detection reads the frame captured at the
+		// transport seam. Parsing tolerates absent or malformed declarations and never
+		// fails the connection.
 		try {
-			state.skillsExtension(SkillsExtensionSupport.from(client.getCurrentInitializationResult()));
+			final InitializeResultCapturingTransport capture = initializeCapture.get();
+			final Map<String, Object> rawInitializeResult = (capture != null) ? capture.rawInitializeResult() : null;
+			state.skillsExtension(SkillsExtensionSupport.fromRawInitializeResult(rawInitializeResult));
 		}
 		catch (final Exception ex) {
 			LOG.debug("skills extension detection failed: {}", ex.toString());
@@ -511,12 +519,15 @@ public class InspectorRestController implements ApplicationContextAware {
 
 	/* ---------------- helpers ---------------- */
 
-	private McpSyncClient buildLoopbackClient(final DetectedTransport t, final InspectorClientHandlers handlers) {
+	private McpSyncClient buildLoopbackClient(final DetectedTransport t, final InspectorClientHandlers handlers,
+			final AtomicReference<InitializeResultCapturingTransport> initializeCapture) {
 		final int port = this.portHolder.port();
 		return switch (t.type()) {
-			case SSE -> this.loopbackFactory.forSse("127.0.0.1", port, t.endpoint(), handlers);
-			case STREAMABLE -> this.loopbackFactory.forStreamable("127.0.0.1", port, t.endpoint(), handlers);
-			case STATELESS -> this.loopbackFactory.forStateless("127.0.0.1", port, t.endpoint(), handlers);
+			case SSE -> this.loopbackFactory.forSse("127.0.0.1", port, t.endpoint(), handlers, initializeCapture);
+			case STREAMABLE -> this.loopbackFactory.forStreamable("127.0.0.1", port, t.endpoint(), handlers,
+					initializeCapture);
+			case STATELESS -> this.loopbackFactory.forStateless("127.0.0.1", port, t.endpoint(), handlers,
+					initializeCapture);
 			case STDIO_NO_HTTP, UNKNOWN -> null;
 		};
 	}
