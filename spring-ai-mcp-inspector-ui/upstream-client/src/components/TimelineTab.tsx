@@ -5,6 +5,8 @@ import { useEffect, useState, useCallback, useRef } from "react";
 // [spring-ai-mcp-inspector PATCH] Protocol-version negotiation badge on initialize
 // response rows (#129, #130). Renders _protocolNegotiation enrichment from
 // McpTrafficRecorder as a severity-colored badge and expanded detail block.
+// [spring-ai-mcp-inspector PATCH] Replay button on tools/call request rows:
+// emits onReplay(toolName, args) to switch to Tools tab and pre-fill.
 
 type TimelineEventType =
   | "MCP_JSONRPC_REQUEST"
@@ -129,7 +131,28 @@ function ProtocolNegotiationBlock({ negotiation }: { negotiation: ProtocolNegoti
   );
 }
 
-function TimelineEventRow({ event }: { event: TimelineEvent }) {
+export interface ReplayInfo {
+  toolName: string;
+  args: Record<string, unknown>;
+}
+
+// Checks whether an event payload represents a tools/call request.
+function isToolCallPayload(payload: Record<string, unknown>): ReplayInfo | null {
+  if (payload.method !== "tools/call") return null;
+  const params = payload.params;
+  if (!params || typeof params !== "object") return null;
+  const name = (params as Record<string, unknown>)["name"];
+  const args = (params as Record<string, unknown>)["arguments"];
+  if (typeof name !== "string") return null;
+  return {
+    toolName: name,
+    args: typeof args === "object" && args !== null
+      ? structuredClone(args as Record<string, unknown>)
+      : {},
+  };
+}
+
+function TimelineEventRow({ event, onReplay }: { event: TimelineEvent; onReplay?: (info: ReplayInfo) => void }) {
   const [expanded, setExpanded] = useState(false);
   const type = event.type;
   const colorClass = EVENT_COLORS[type] || "text-gray-400";
@@ -142,6 +165,8 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
     (typeof payload.message === "string" && payload.message) ||
     (typeof payload.logLevel === "string" && payload.logLevel) ||
     typeLabel;
+
+  const replay = type === "MCP_JSONRPC_REQUEST" ? isToolCallPayload(payload) : null;
 
   // [spring-ai-mcp-inspector PATCH] Protocol negotiation badge on initialize response rows.
   const negotiation = type === "MCP_JSONRPC_RESPONSE" ? protocolNegotiationOf(payload) : null;
@@ -161,6 +186,17 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
             {event.correlationId.substring(0, 8)}
           </span>
         )}
+        {replay && (
+          <button
+            className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-blue-700 hover:bg-blue-600 text-blue-100 ml-2"
+            onClick={(e) => {
+              e.stopPropagation();
+              onReplay?.(replay);
+            }}
+          >
+            Replay
+          </button>
+        )}
       </div>
       {expanded ? (
         <div className="mt-1 text-[11px] font-mono opacity-80 overflow-x-auto whitespace-pre-wrap max-h-40 overflow-y-auto">
@@ -177,7 +213,7 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
 }
 
 // [spring-ai-mcp-inspector PATCH] TimelineTab — scrollable timeline of MCP events.
-const TimelineTab = () => {
+const TimelineTab = ({ onReplay }: { onReplay?: (info: ReplayInfo) => void }) => {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -245,7 +281,7 @@ const TimelineTab = () => {
           {events.length === 0 ? (
             <div className="opacity-50 text-center mt-8">No timeline events yet</div>
           ) : (
-            events.map((event) => <TimelineEventRow key={event.id} event={event} />)
+            events.map((event) => <TimelineEventRow key={event.id} event={event} onReplay={onReplay} />)
           )}
         </div>
       </div>

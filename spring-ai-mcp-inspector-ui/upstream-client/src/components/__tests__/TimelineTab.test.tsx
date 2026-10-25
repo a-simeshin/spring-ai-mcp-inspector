@@ -141,6 +141,54 @@ const INCOMPATIBLE_RESPONSE_EVENT: WireEvent = {
   },
 };
 
+// [spring-ai-mcp-inspector PATCH] Replay button test fixtures.
+const TOOL_CALL_REQUEST_EVENT: WireEvent = {
+  id: "evt-replay-1",
+  correlationId: "corr-replay-1",
+  sessionId: "s-1",
+  type: "MCP_JSONRPC_REQUEST",
+  timestamp: "2026-09-13T10:00:00.000Z",
+  payload: {
+    jsonrpc: "2.0",
+    id: 100,
+    method: "tools/call",
+    params: {
+      name: "echo",
+      arguments: { message: "hello world", count: 42 },
+    },
+  },
+};
+
+const TOOL_CALL_REQUEST_EVENT_NO_ARGS: WireEvent = {
+  id: "evt-replay-2",
+  correlationId: "corr-replay-2",
+  sessionId: "s-1",
+  type: "MCP_JSONRPC_REQUEST",
+  timestamp: "2026-09-13T10:00:01.000Z",
+  payload: {
+    jsonrpc: "2.0",
+    id: 101,
+    method: "tools/call",
+    params: {
+      name: "echo",
+    },
+  },
+};
+
+const PROMT_LIST_REQUEST_EVENT: WireEvent = {
+  id: "evt-replay-3",
+  correlationId: "corr-replay-3",
+  sessionId: "s-1",
+  type: "MCP_JSONRPC_REQUEST",
+  timestamp: "2026-09-13T10:00:02.000Z",
+  payload: {
+    jsonrpc: "2.0",
+    id: 102,
+    method: "prompts/list",
+    params: {},
+  },
+};
+
 function mockFetch(events: WireEvent[]) {
   const fetchMock = jest.fn().mockResolvedValue({
     ok: true,
@@ -294,5 +342,87 @@ describe("TimelineTab", () => {
     expect(screen.getByText(/severity: INCOMPATIBLE/)).toBeInTheDocument();
     // Affected methods appear in the expanded block.
     expect(screen.getByText(/affected: initialize/)).toBeInTheDocument();
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Replay button tests.
+
+  it("shows Replay button on tools/call request rows", async () => {
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("tools/call")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Replay")).toBeInTheDocument();
+  });
+
+  it("does not show Replay button on non-tools/call request rows", async () => {
+    mockFetch([REQUEST_EVENT]); // tools/list, not tools/call
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("tools/list")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Replay")).not.toBeInTheDocument();
+  });
+
+  it("does not show Replay button on prompts/list request rows", async () => {
+    mockFetch([PROMT_LIST_REQUEST_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("prompts/list")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Replay")).not.toBeInTheDocument();
+  });
+
+  it("does not show Replay button on response rows", async () => {
+    mockFetch([DOWNGRADE_RESPONSE_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText(/protocol: 2025-11-25/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Replay")).not.toBeInTheDocument();
+  });
+
+  it("calls onReplay with tool name and args when Replay is clicked", async () => {
+    const onReplay = jest.fn();
+    mockFetch([TOOL_CALL_REQUEST_EVENT]);
+    render(
+      <Tabs defaultValue="timeline">
+        <TimelineTab onReplay={onReplay} />
+      </Tabs>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Replay")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Replay"));
+
+    expect(onReplay).toHaveBeenCalledWith({
+      toolName: "echo",
+      args: { message: "hello world", count: 42 },
+    });
+  });
+
+  it("calls onReplay with empty args when tools/call has no arguments field", async () => {
+    const onReplay = jest.fn();
+    mockFetch([TOOL_CALL_REQUEST_EVENT_NO_ARGS]);
+    render(
+      <Tabs defaultValue="timeline">
+        <TimelineTab onReplay={onReplay} />
+      </Tabs>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Replay")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Replay"));
+
+    expect(onReplay).toHaveBeenCalledWith({
+      toolName: "echo",
+      args: {},
+    });
   });
 });
