@@ -117,6 +117,16 @@ public final class ProxySession {
 	/** Optional MCP session id captured from the upstream transport's response. */
 	private volatile String upstreamSessionId;
 
+	/**
+	 * True once this session's initialize response was augmented with a proxy-injected
+	 * {@code capabilities.tasks} capability. Only such sessions get their
+	 * {@code tasks/get}, {@code tasks/list} and {@code tasks/cancel} requests answered
+	 * locally by the proxy: a session whose upstream advertised its own tasks capability
+	 * keeps the plain relay, so third-party task servers are never hijacked by the local
+	 * task registry. See the proxy controllers' interception paths.
+	 */
+	private volatile boolean tasksInterceptionEnabled;
+
 	/** Updated on every frame routed in either direction. */
 	private volatile Instant lastActivity;
 
@@ -172,6 +182,25 @@ public final class ProxySession {
 
 	public void upstreamSessionId(final String value) {
 		this.upstreamSessionId = value;
+	}
+
+	/**
+	 * Whether the proxy answers task-protocol methods ({@code tasks/get},
+	 * {@code tasks/list}, {@code tasks/cancel}) locally for this session.
+	 * @return {@code true} only after {@link #enableTasksInterception()} was set on this
+	 * session
+	 */
+	public boolean isTasksInterceptionEnabled() {
+		return this.tasksInterceptionEnabled;
+	}
+
+	/**
+	 * Marks this session as one whose {@code capabilities.tasks} was injected by the
+	 * proxy (the upstream did not advertise its own), making the proxy the task authority
+	 * for the session. Idempotent.
+	 */
+	public void enableTasksInterception() {
+		this.tasksInterceptionEnabled = true;
 	}
 
 	public Instant lastActivity() {
