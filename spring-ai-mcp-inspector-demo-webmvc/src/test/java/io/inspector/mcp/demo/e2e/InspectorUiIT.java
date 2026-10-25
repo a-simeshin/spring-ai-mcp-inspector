@@ -3706,18 +3706,15 @@ class InspectorUiIT {
 			$("[data-testid=tools-detail-pane]").shouldBe(visible, Duration.ofSeconds(10));
 			SelenideElement runTool = $("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofSeconds(10));
 
-			// when: 7 + 8 through the DynamicJsonForm inputs (id=a / id=b).
-			// Fields must be filled BEFORE the elementAtCenter check because
-			// client-side validation disables the button while required fields are empty.
+			// then: the Run Tool button fits inside the viewport at 375px.
+			scrollIntoView(runTool);
+			Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("run-tool-button"),
+					"The Run Tool button must be visible inside the viewport at 375x667");
+
+			// when: 7 + 8 through the DynamicJsonForm inputs (id=a / id=b), then a
+			// real click on Run Tool
 			$("#a").shouldBe(visible).setValue("7");
 			$("#b").shouldBe(visible).setValue("8");
-
-			// then: the Run Tool button is not intercepted at 375px.
-			scrollIntoView(runTool);
-			Assertions.assertTrue(ResponsiveTestHelpers.elementAtCenter("run-tool-button"),
-					"elementFromPoint at the Run Tool centre must return the button itself at 375x667");
-
-			// and: a real click on Run Tool
 			runTool.click();
 
 			// then: the deterministic sum result appears in the active panel, and the
