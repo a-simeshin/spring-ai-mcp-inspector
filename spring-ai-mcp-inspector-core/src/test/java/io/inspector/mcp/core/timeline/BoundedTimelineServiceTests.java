@@ -265,4 +265,30 @@ class BoundedTimelineServiceTests {
 		assertThat(result).isEmpty();
 	}
 
+	@Test
+	@DisplayName("query with endpoint filter finds diagnostics event older than the last 500")
+	void queryByEndpointFilter_diagnosticsOlderThanLast500() {
+		final ObjectNode diagPayload = JsonNodeFactory.instance.objectNode();
+		diagPayload.put("endpoint", "client-diagnostics");
+		final ObjectNode otherPayload = JsonNodeFactory.instance.objectNode();
+		otherPayload.put("endpoint", "client");
+		// Use a service with enough capacity to hold all events (2000) so no
+		// eviction happens. Append diagnostics FIRST, then 500 non-diagnostics
+		// events; the diagnostics event is older than the last 500.
+		final BoundedTimelineService large = new BoundedTimelineService(2000);
+		large.append(new TimelineEvent("diag-1", UUID.randomUUID().toString(), null, TimelineEventType.APP_LOG,
+				Instant.now(), diagPayload));
+		for (int i = 0; i < 500; i++) {
+			large.append(new TimelineEvent("other-" + i, UUID.randomUUID().toString(), null,
+					TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), otherPayload));
+		}
+		// Query with endpoint filter and default limit (500)
+		final List<TimelineEvent> result = large
+			.query(TimelineQuery.builder().endpoint("client-diagnostics").limit(500).build());
+		// Must find the single diagnostics event: endpoint filter is applied
+		// before the limit, so events older than the last 500 are still found.
+		assertThat(result).hasSize(1);
+		assertThat(result.get(0).id()).isEqualTo("diag-1");
+	}
+
 }
