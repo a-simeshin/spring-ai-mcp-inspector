@@ -151,6 +151,7 @@ class TaskRegistryTests {
 		// given
 		final Entry entry = registry.createTask(Duration.ofMinutes(1), 2, "demo://task/status");
 		final Instant before = entry.lastKeepAlive.get();
+		final Instant updatedBefore = entry.lastUpdatedAt.get();
 
 		// when: sleep briefly so the timestamp differs
 		Thread.sleep(5);
@@ -159,6 +160,7 @@ class TaskRegistryTests {
 		// then
 		Assertions.assertThat(kept).isTrue();
 		Assertions.assertThat(entry.lastKeepAlive.get()).isAfter(before);
+		Assertions.assertThat(entry.lastUpdatedAt.get()).isAfter(updatedBefore);
 	}
 
 	@Test
@@ -209,6 +211,62 @@ class TaskRegistryTests {
 		// then: working task is NOT evicted even though TTL elapsed
 		Assertions.assertThat(registry.getTaskEntry(entry.taskId)).as("working task must not be evicted").isNotNull();
 		Assertions.assertThat(entry.status.get()).isEqualTo("working");
+	}
+
+	@Test
+	void terminalTransitionAdvancesLastUpdatedAt() throws Exception {
+		// given
+		final Entry entry = registry.createTask(Duration.ofMinutes(1), 2, "demo://task/status");
+		final Instant created = entry.lastUpdatedAt.get();
+
+		// when: sleep briefly so the timestamp differs, then complete
+		Thread.sleep(5);
+		registry.completeTask(entry.taskId, "done");
+
+		// then: lastUpdatedAt advanced past creation, so the reported handle stops
+		// pretending the last update happened at creation time
+		Assertions.assertThat(entry.lastUpdatedAt.get()).isAfter(created);
+	}
+
+	@Test
+	void evictionMeasuredFromCompletionNotCreation() throws Exception {
+		// given: task with a 400ms TTL completed 200ms after creation
+		final Duration ttl = Duration.ofMillis(400);
+		final Entry entry = registry.createTask(ttl, 2, "demo://task/status");
+		Thread.sleep(200);
+		registry.completeTask(entry.taskId, "done");
+
+		// when: sweep 250ms after completion (450ms after creation: past the TTL as
+		// measured from creation, but well inside the TTL measured from completion)
+		Thread.sleep(250);
+		registry.evictExpiredTasks();
+
+		// then: still present, because eviction runs from the completion timestamp
+		Assertions.assertThat(registry.getTaskEntry(entry.taskId))
+			.as("terminal task must survive until TTL elapses after completion")
+			.isNotNull();
+
+		// and when: sweep again after the full TTL has elapsed since completion
+		Thread.sleep(200);
+		registry.evictExpiredTasks();
+
+		// then: evicted
+		Assertions.assertThat(registry.getTaskEntry(entry.taskId))
+			.as("terminal task must be evicted once TTL elapses after completion")
+			.isNull();
+	}
+
+	@Test
+	void getTaskHandleReportsMilliseconds() throws io.inspector.mcp.core.task.TaskNotFoundException {
+		// given: ttl 2 minutes, poll interval 2 seconds
+		final Entry entry = registry.createTask(Duration.ofMinutes(2), 2, "demo://task/status");
+
+		// when
+		final io.inspector.mcp.core.task.TaskHandle handle = registry.getTask(entry.taskId);
+
+		// then: SEP-1686 handles carry millisecond durations, matching tasks/get
+		Assertions.assertThat(handle.ttl()).isEqualTo(Duration.ofMinutes(2).toMillis());
+		Assertions.assertThat(handle.pollInterval()).isEqualTo(2000L);
 	}
 
 	@Test

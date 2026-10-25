@@ -47,18 +47,26 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>
  * The proxy lives at {@code /mcp-inspector-api/mcp}. When the demo app boots the
- * {@code TaskRegistry} (which implements {@code TaskService}), the proxy controllers
- * intercept {@code tasks/get} and {@code tasks/cancel} and answer them locally instead of
- * relaying to the upstream MCP server. The tests verify:
+ * {@code TaskRegistry} (which implements {@code TaskService}) and the proxy itself
+ * injected {@code capabilities.tasks} into the session's initialize response, the proxy
+ * controllers intercept {@code tasks/get}, {@code tasks/list} and {@code tasks/cancel}
+ * and answer them locally instead of relaying to the upstream MCP server. The tests
+ * verify:
  *
  * <ul>
  * <li>{@code tasks/get} on a live task returns the current handle ({@code working}, then
- * {@code cancelled} after cancel).</li>
+ * {@code cancelled} after cancel); {@code ttl}/{@code pollInterval} are milliseconds, the
+ * same unit the demo tool returns.</li>
  * <li>{@code tasks/cancel} on a running task returns {@code cancelled} and stops the
  * background work.</li>
  * <li>{@code tasks/get} on an unknown id returns a JSON-RPC {@code -32602} error.</li>
  * <li>{@code tasks/cancel} on a terminal task returns a JSON-RPC {@code -32602}
  * error.</li>
+ * <li>{@code tasks/list} through the real proxy returns the tracked tasks and honors
+ * {@code params.cursor}/{@code nextCursor} pagination.</li>
+ * <li>A third-party upstream that advertises its own {@code capabilities.tasks} keeps the
+ * plain relay: its {@code tasks/get} responses come from the upstream server, not from
+ * the local registry.</li>
  * </ul>
  */
 @Epic("Inspector Proxy")
@@ -115,9 +123,11 @@ class ProxyTaskProtocolIT {
 		JsonNode getResult = MAPPER.readTree(getResponse.body());
 		assertThat(getResult.get("result").get("taskId").asText()).as("taskId in get response").isEqualTo(taskId);
 		assertThat(getResult.get("result").get("status").asText()).as("status in get response").isEqualTo("working");
-		assertThat(getResult.get("result").get("ttl").asLong()).as("ttl in get response").isPositive();
-		assertThat(getResult.get("result").get("pollInterval").asLong()).as("pollInterval in get response")
-			.isPositive();
+		// milliseconds, matching the demo tool's own handle (DEFAULT_TTL 2min, poll 2s)
+		assertThat(getResult.get("result").get("ttl").asLong()).as("ttl in get response, ms")
+			.isEqualTo(Duration.ofMinutes(2).toMillis());
+		assertThat(getResult.get("result").get("pollInterval").asLong()).as("pollInterval in get response, ms")
+			.isEqualTo(2000L);
 
 		// when: tasks/cancel
 		JsonNode cancelBody = buildJsonRpcRequest("tasks/cancel", 11, taskId);
@@ -245,9 +255,120 @@ class ProxyTaskProtocolIT {
 		assertThat(tasks.isObject()).as("tasks must be an object").isTrue();
 		assertThat(tasks.has("list")).as("tasks must contain list").isTrue();
 		assertThat(tasks.has("cancel")).as("tasks must contain cancel").isTrue();
-		assertThat(tasks.path("requests").path("tools").path("call").isObject())
-			.as("tasks.requests.tools.call must be an object")
-			.isTrue();
+		assertThat(tasks.has("requests"))
+			.as("no tasks.requests.tools.call advertised: no task-augmented call path exists")
+			.isFalse();
+	}
+
+	@Test
+	@DisplayName("tasks/list through the proxy returns tracked tasks and paginates via cursor")
+	@Story("tasks/list through the proxy")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Starts two long-running generateReport tasks, then pages tasks/list through the real "
+			+ "proxy: the first page carries both tasks, and a page fetched with a cursor equal to the list "
+			+ "size terminates pagination without tasks.")
+	void tasksList_throughProxy_returnsTasksAndSupportsCursor() throws Exception {
+		// given
+		app = ProxyAppHarness.start("STREAMABLE", false, null);
+		int port = ProxyAppHarness.port(app);
+		String targetUrl = "http://127.0.0.1:" + port + "/mcp";
+		String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
+		String sessionId = initializeSession(proxyBase, targetUrl);
+		String firstTaskId = startReportTask(proxyBase, sessionId);
+		String secondTaskId = startReportTask(proxyBase, sessionId);
+
+		// when: tasks/list without a cursor
+		ObjectNode listBody = MAPPER.createObjectNode();
+		listBody.put("jsonrpc", "2.0");
+		listBody.put("method", "tasks/list");
+		listBody.put("id", 15);
+		HttpResponse<String> listResponse = postMcp(proxyBase, sessionId, listBody);
+
+		// then: 200, our two tasks are present (this app instance is fresh, so exactly
+		// two)
+		assertThat(listResponse.statusCode()).as("tasks/list status").isEqualTo(200);
+		JsonNode listResult = MAPPER.readTree(listResponse.body());
+		JsonNode tasks = listResult.get("result").get("tasks");
+		assertThat(tasks.isArray()).as("tasks must be an array").isTrue();
+		java.util.Set<String> ids = new java.util.HashSet<>();
+		for (JsonNode task : tasks) {
+			ids.add(task.get("taskId").asText());
+		}
+		assertThat(ids).as("both started tasks must be listed").contains(firstTaskId, secondTaskId);
+		// the full list fits one page: no nextCursor is emitted
+		assertThat(listResult.get("result").has("nextCursor")).as("full list fits one page").isFalse();
+
+		// when: tasks/list with a cursor equal to the list size (last page boundary)
+		ObjectNode pagedBody = MAPPER.createObjectNode();
+		pagedBody.put("jsonrpc", "2.0");
+		pagedBody.put("method", "tasks/list");
+		pagedBody.put("id", 16);
+		pagedBody.putObject("params").put("cursor", String.valueOf(tasks.size()));
+		HttpResponse<String> pagedResponse = postMcp(proxyBase, sessionId, pagedBody);
+
+		// then: empty page, pagination terminated
+		assertThat(pagedResponse.statusCode()).as("paged tasks/list status").isEqualTo(200);
+		JsonNode pagedResult = MAPPER.readTree(pagedResponse.body());
+		assertThat(pagedResult.get("result").get("tasks")).isEmpty();
+		assertThat(pagedResult.get("result").has("nextCursor")).as("terminal page has no nextCursor").isFalse();
+	}
+
+	@Test
+	@DisplayName("tasks/get on a session whose upstream advertises tasks is relayed to that upstream")
+	@Story("task method relay")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Boots the demo app plus a stub SEP-1686 server that advertises capabilities.tasks "
+			+ "and answers tasks/get itself. The proxy must relay the method to the stub and return the "
+			+ "stub's answer, never the local TaskRegistry's.")
+	void tasksGet_whenUpstreamAdvertisesTasks_isRelayedToUpstream() throws Exception {
+		// given: a stub MCP server that advertises capabilities.tasks in initialize and
+		// answers tasks/get with its own vendor payload
+		final com.sun.net.httpserver.HttpServer stub = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		stub.createContext("/mcp", (exchange) -> {
+			byte[] requestBytes = exchange.getRequestBody().readAllBytes();
+			JsonNode request = MAPPER.readTree(requestBytes);
+			String answer;
+			if ("initialize".equals(request.path("method").asText())) {
+				answer = "{\"jsonrpc\":\"2.0\",\"id\":" + request.get("id")
+						+ ",\"result\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{\"tasks\":{\"list\":{},\"get\":{},\"cancel\":{}}}},\"serverInfo\":{\"name\":\"vendor-stub\",\"version\":\"1\"}}";
+			}
+			else if ("tasks/get".equals(request.path("method").asText())) {
+				answer = "{\"jsonrpc\":\"2.0\",\"id\":" + request.get("id")
+						+ ",\"result\":{\"taskId\":\"vendor-task\",\"status\":\"working\",\"createdAt\":\"2026-01-01T00:00:00Z\",\"lastUpdatedAt\":\"2026-01-01T00:00:00Z\",\"ttl\":60000,\"pollInterval\":5000}}";
+			}
+			else {
+				answer = "{\"jsonrpc\":\"2.0\",\"id\":" + request.get("id") + ",\"result\":{}}";
+			}
+			byte[] payload = answer.getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().add("Content-Type", "application/json");
+			exchange.sendResponseHeaders(200, payload.length);
+			exchange.getResponseBody().write(payload);
+			exchange.close();
+		});
+		stub.start();
+		try {
+			app = ProxyAppHarness.start("STREAMABLE", false, null);
+			int port = ProxyAppHarness.port(app);
+			String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
+			String stubUrl = "http://127.0.0.1:" + stub.getAddress().getPort() + "/mcp";
+
+			// when: initialize against the advertising upstream, then tasks/get
+			String sessionId = initializeSession(proxyBase, stubUrl);
+			HttpResponse<String> getResponse = postMcp(proxyBase, sessionId,
+					buildJsonRpcRequest("tasks/get", 21, "vendor-task"));
+
+			// then: the stub's own answer comes back: the proxy relayed the frame and
+			// never consulted the local TaskRegistry
+			assertThat(getResponse.statusCode()).as("tasks/get relay status").isEqualTo(200);
+			JsonNode getBody = MAPPER.readTree(getResponse.body());
+			assertThat(getBody.get("result").get("taskId").asText())
+				.as("upstream tasks/get must be answered by the upstream")
+				.isEqualTo("vendor-task");
+		}
+		finally {
+			stub.stop(0);
+		}
 	}
 
 	// ---------------------------------------------------------------------
