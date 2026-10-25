@@ -104,6 +104,9 @@ public class StreamableHttpProxyController {
 	/** Replay buffer size for the {@code targetToBrowser} sink (per session). */
 	private static final int REPLAY_BUFFER = 256;
 
+	/** Page size for intercepted {@code tasks/list} responses (SEP-1686 pagination). */
+	private static final int TASKS_LIST_PAGE_SIZE = 100;
+
 	private final ProxySessionRegistry registry;
 
 	private final ProxyTransportFactory transportFactory;
@@ -345,10 +348,17 @@ public class StreamableHttpProxyController {
 			}
 			return builder.build();
 		}
-		// Intercept tasks/get, tasks/list and tasks/cancel if a TaskService is available.
-		if (taskService() != null) {
+		// Intercept tasks/get, tasks/list and tasks/cancel only for sessions whose
+		// capabilities.tasks was injected by this proxy (see injectTasksCapability):
+		// a third-party upstream that advertises its own tasks capability keeps the
+		// plain relay, so its tasks are never answered from the local TaskRegistry.
+		if (taskService() != null && session.isTasksInterceptionEnabled()) {
 			final ResponseEntity<Object> taskResponse = tryHandleTaskMethod(idNode, body);
 			if (taskResponse != null) {
+				// Still a routed frame from the browser: refresh the idle-reaper
+				// timestamp, otherwise a session only polled via the Tasks tab is
+				// evicted.
+				session.touch();
 				if (includeSessionHeader) {
 					final ResponseEntity.BodyBuilder builder = ResponseEntity.status(taskResponse.getStatusCode())
 						.contentType(MediaType.APPLICATION_JSON);
@@ -385,7 +395,7 @@ public class StreamableHttpProxyController {
 		try {
 			final JsonNode response = awaiter.block(requestTimeout);
 			if (taskService() != null) {
-				injectTasksCapability(response, body, includeSessionHeader);
+				injectTasksCapability(session, response, body, includeSessionHeader);
 			}
 			final ResponseEntity.BodyBuilder builder = ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON);
 			if (includeSessionHeader) {
@@ -504,7 +514,7 @@ public class StreamableHttpProxyController {
 			return handleTaskGet(idNode, body);
 		}
 		if ("tasks/list".equals(method)) {
-			return handleTaskList(idNode);
+			return handleTaskList(idNode, body);
 		}
 		if ("tasks/cancel".equals(method)) {
 			return handleTaskCancel(idNode, body);
@@ -533,19 +543,51 @@ public class StreamableHttpProxyController {
 	}
 
 	/**
-	 * Handle a {@code tasks/list} request: return all currently tracked tasks.
+	 * Handle a {@code tasks/list} request: return the requested page of tracked tasks,
+	 * honoring {@code params.cursor} and emitting {@code nextCursor} while more tasks
+	 * remain (see {@link #applyTaskListCursor}).
 	 * @param idNode the JSON-RPC request id
+	 * @param body the full JSON-RPC request body (carries the optional cursor)
 	 * @return a JSON-RPC response with a {@code tasks} array
 	 */
-	private ResponseEntity<Object> handleTaskList(final JsonNode idNode) {
+	private ResponseEntity<Object> handleTaskList(final JsonNode idNode, final JsonNode body) {
 		final java.util.List<TaskHandle> handles = taskService().listTasks();
-		final ArrayNode tasksArray = JsonNodeFactory.instance.arrayNode(handles.size());
-		for (final TaskHandle handle : handles) {
+		final int offset = parseTaskListCursor(handles.size(), body);
+		final int end = Math.min(offset + TASKS_LIST_PAGE_SIZE, handles.size());
+		final java.util.List<TaskHandle> page = handles.subList(offset, end);
+		final ArrayNode tasksArray = JsonNodeFactory.instance.arrayNode(page.size());
+		for (final TaskHandle handle : page) {
 			tasksArray.add(taskHandleToNode(handle));
 		}
 		final ObjectNode result = JsonNodeFactory.instance.objectNode();
 		result.set("tasks", tasksArray);
+		if (end < handles.size()) {
+			result.put("nextCursor", String.valueOf(end));
+		}
 		return jsonRpcResult(idNode, result);
+	}
+
+	/**
+	 * Parse the opaque {@code params.cursor} (a decimal list offset previously emitted as
+	 * {@code nextCursor}) into an offset into the ordered task list. An absent,
+	 * non-numeric or out-of-range cursor yields an offset past the end, which produces an
+	 * empty page and terminates client pagination.
+	 * @param listSize the size of the full ordered handle list
+	 * @param body the JSON-RPC request body carrying the optional cursor
+	 * @return the offset the requested page starts at
+	 */
+	private static int parseTaskListCursor(final int listSize, final JsonNode body) {
+		final JsonNode params = (body != null) ? body.get("params") : null;
+		final JsonNode cursorNode = (params != null && params.isObject()) ? params.get("cursor") : null;
+		if (cursorNode != null && cursorNode.isTextual()) {
+			try {
+				return Math.max(0, Math.min(Integer.parseInt(cursorNode.asText()), listSize));
+			}
+			catch (final NumberFormatException ex) {
+				return listSize;
+			}
+		}
+		return 0;
 	}
 
 	/**
@@ -681,12 +723,22 @@ public class StreamableHttpProxyController {
 	 * response is a successful initialize reply ({@code includeSessionHeader} signals the
 	 * first POST of a session, and {@code body.method} equals {@code initialize}) and the
 	 * upstream did not already advertise {@code tasks}. Malformed or error responses pass
-	 * through untouched.
+	 * through untouched. The injected capability advertises only what the proxy serves
+	 * itself: {@code list} and {@code cancel}; there is no
+	 * {@code tasks.requests.tools.call} because no task-augmented call path and no
+	 * {@code tasks/result} serving path exist yet.
+	 *
+	 * <p>
+	 * A successful injection also marks the session for task-method interception via
+	 * {@link ProxySession#enableTasksInterception()}: only sessions whose tasks
+	 * capability came from this proxy get their {@code tasks/get}, {@code tasks/list} and
+	 * {@code tasks/cancel} answered locally by the proxy instead of relayed.
+	 * @param session the proxy session being initialized
 	 * @param response the upstream initialize response JSON tree
 	 * @param body the original JSON-RPC request body
 	 * @param includeSessionHeader whether this is the first POST of a session
 	 */
-	private static void injectTasksCapability(final JsonNode response, final JsonNode body,
+	private void injectTasksCapability(final ProxySession session, final JsonNode response, final JsonNode body,
 			final boolean includeSessionHeader) {
 		if (!includeSessionHeader || body == null) {
 			return;
@@ -713,12 +765,8 @@ public class StreamableHttpProxyController {
 		final ObjectNode tasks = JsonNodeFactory.instance.objectNode();
 		tasks.set("list", JsonNodeFactory.instance.objectNode());
 		tasks.set("cancel", JsonNodeFactory.instance.objectNode());
-		final ObjectNode requests = JsonNodeFactory.instance.objectNode();
-		final ObjectNode tools = JsonNodeFactory.instance.objectNode();
-		tools.set("call", JsonNodeFactory.instance.objectNode());
-		requests.set("tools", tools);
-		tasks.set("requests", requests);
 		capabilities.set("tasks", tasks);
+		session.enableTasksInterception();
 	}
 
 }

@@ -22,9 +22,20 @@ import java.util.List;
  * Service interface for the SEP-1686 task protocol methods consumed by the proxy layer.
  *
  * <p>
- * The proxy controllers call into this interface when they intercept {@code tasks/get}
- * and {@code tasks/cancel} JSON-RPC requests, instead of relaying them to the upstream
- * MCP server.
+ * The proxy controllers call into this interface when they intercept {@code tasks/get},
+ * {@code tasks/list} and {@code tasks/cancel} JSON-RPC requests for a session whose
+ * {@code capabilities.tasks} the proxy itself injected (the upstream did not advertise
+ * its own), instead of relaying them to the upstream MCP server.
+ *
+ * <p>
+ * Implementations are expected to be blocking (the webflux proxy hops to a bounded
+ * elastic scheduler before calling them).
+ *
+ * <p>
+ * Task ids returned by {@link #getTask(String)} et al. are <strong>not</strong> scoped
+ * per proxy session: one registry backs every proxy session of the host application, so a
+ * task started through one session is visible (and cancelable) through another. This
+ * matches the demo-app registry; a session-scoped registry is a future change.
  *
  * <p>
  * This interface lives in core so both the proxy (starter) and the demo app can see it

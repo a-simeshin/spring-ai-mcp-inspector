@@ -59,8 +59,8 @@ public class TaskRegistry implements TaskService {
 
 	/**
 	 * Create a new task in the {@code working} state.
-	 * @param ttl how long after terminal state the task record should be kept before
-	 * eviction
+	 * @param ttl how long after the last update (terminal transition or keep-alive) the
+	 * task record should be kept before eviction
 	 * @param pollIntervalSeconds suggested poll interval in seconds for clients
 	 * @param keepAliveUrl opaque URL the client uses to refresh the task lease
 	 * @return the created entry
@@ -94,7 +94,11 @@ public class TaskRegistry implements TaskService {
 		if (entry == null) {
 			return false;
 		}
-		return entry.status.compareAndSet("working", "cancelled");
+		if (entry.status.compareAndSet("working", "cancelled")) {
+			entry.markUpdated();
+			return true;
+		}
+		return false;
 	}
 
 	/**
@@ -111,6 +115,7 @@ public class TaskRegistry implements TaskService {
 		}
 		if (entry.status.compareAndSet("working", "completed")) {
 			entry.result.set(result);
+			entry.markUpdated();
 			return true;
 		}
 		return false;
@@ -130,6 +135,7 @@ public class TaskRegistry implements TaskService {
 		}
 		if (entry.status.compareAndSet("working", "failed")) {
 			entry.error.set(error);
+			entry.markUpdated();
 			return true;
 		}
 		return false;
@@ -147,13 +153,16 @@ public class TaskRegistry implements TaskService {
 		if (entry == null) {
 			return false;
 		}
-		entry.lastKeepAlive.set(Instant.now());
+		final Instant now = Instant.now();
+		entry.lastKeepAlive.set(now);
+		entry.lastUpdatedAt.set(now);
 		return true;
 	}
 
 	/**
-	 * Periodic sweeper that evicts terminal-state tasks whose TTL has elapsed since their
-	 * last keep-alive (or since they reached terminal state, whichever is later).
+	 * Periodic sweeper that evicts terminal-state tasks whose TTL has elapsed since
+	 * {@link Entry#lastUpdatedAt} (the terminal transition, or a later keep-alive,
+	 * whichever is later). Working tasks are never evicted, whatever their age.
 	 *
 	 * <p>
 	 * Runs every 30 seconds.
@@ -163,7 +172,7 @@ public class TaskRegistry implements TaskService {
 		final Instant deadline = Instant.now();
 		tasks.values().removeIf(entry -> {
 			if (isTerminal(entry.status.get())) {
-				final Instant ref = entry.lastKeepAlive.get();
+				final Instant ref = entry.lastUpdatedAt.get();
 				return ref != null && ref.plus(entry.ttl).isBefore(deadline);
 			}
 			return false;
@@ -197,6 +206,7 @@ public class TaskRegistry implements TaskService {
 			// Should not happen: input_required is not in use yet.
 			throw new TaskNotCancelableException(taskId, current);
 		}
+		entry.markUpdated();
 		return toHandle(entry);
 	}
 
@@ -210,10 +220,9 @@ public class TaskRegistry implements TaskService {
 	}
 
 	private static TaskHandle toHandle(final Entry entry) {
-		final String lastRef = entry.lastKeepAlive.get() != null ? ISO_FORMATTER.format(entry.lastKeepAlive.get())
-				: ISO_FORMATTER.format(entry.createdAt);
-		return new TaskHandle(entry.taskId, entry.status.get(), null, ISO_FORMATTER.format(entry.createdAt), lastRef,
-				entry.ttl.toMillis(), entry.pollIntervalSeconds * 1000L);
+		final Instant lastRef = entry.lastUpdatedAt.get();
+		return new TaskHandle(entry.taskId, entry.status.get(), null, ISO_FORMATTER.format(entry.createdAt),
+				ISO_FORMATTER.format(lastRef), entry.ttl.toMillis(), entry.pollIntervalSeconds * 1000L);
 	}
 
 	private static boolean isTerminal(final String status) {
@@ -229,6 +238,13 @@ public class TaskRegistry implements TaskService {
 
 		final Instant createdAt;
 
+		/**
+		 * When the task state was last observably updated: creation, a terminal
+		 * transition, or a keep-alive, whichever happened last. Drives both the reported
+		 * {@code lastUpdatedAt} and the TTL eviction deadline.
+		 */
+		final AtomicReference<Instant> lastUpdatedAt;
+
 		final AtomicReference<Instant> lastKeepAlive;
 
 		final Duration ttl;
@@ -243,11 +259,17 @@ public class TaskRegistry implements TaskService {
 
 		final String taskId;
 
+		/** Record that the task state was just observably updated (now). */
+		void markUpdated() {
+			this.lastUpdatedAt.set(Instant.now());
+		}
+
 		Entry(final String taskId, final Instant createdAt, final Duration ttl, final int pollIntervalSeconds,
 				final String keepAliveUrl) {
 			this.taskId = taskId;
 			this.status = new AtomicReference<>("working");
 			this.createdAt = createdAt;
+			this.lastUpdatedAt = new AtomicReference<>(createdAt);
 			this.lastKeepAlive = new AtomicReference<>(createdAt);
 			this.ttl = ttl;
 			this.pollIntervalSeconds = pollIntervalSeconds;

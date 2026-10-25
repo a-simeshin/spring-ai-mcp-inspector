@@ -30,7 +30,12 @@ import org.springframework.stereotype.Component;
  * {@code status}, {@code keepAlive}, {@code ttl}, {@code pollInterval}). The actual
  * computation runs in a background thread pool; the client polls
  * {@link #getTaskStatus(String)} to observe the transition from {@code working} to
- * {@code success} or {@code failed}.
+ * {@code completed} or {@code failed}.
+ *
+ * <p>
+ * Units: {@code ttl} and {@code pollInterval} in these tool results are milliseconds,
+ * matching the {@code tasks/get} and {@code tasks/list} handles served by the proxy
+ * (SEP-1686 task handles carry millisecond durations).
  *
  * <p>
  * Hint declarations: these tools are read-only and non-destructive.
@@ -64,7 +69,7 @@ public class DemoTaskEmulatingToolsProvider {
 	 * {@value #MAX_DURATION_SECONDS})
 	 * @param shouldFail if {@code true}, the background work fails instead of succeeding
 	 * @return a task handle map with {@code taskId}, {@code status}, {@code keepAlive},
-	 * {@code ttl}, and {@code pollInterval}
+	 * {@code ttl}, and {@code pollInterval} (both durations in milliseconds)
 	 */
 	@McpTool(name = "generateReport",
 			description = "Start a long-running report generation. Returns immediately with a task handle the client polls for completion.",
@@ -160,8 +165,9 @@ public class DemoTaskEmulatingToolsProvider {
 		map.put("taskId", entry.taskId);
 		map.put("status", entry.status.get());
 		map.put("keepAlive", entry.keepAliveUrl);
-		map.put("ttl", (int) entry.ttl.toSeconds());
-		map.put("pollInterval", entry.pollIntervalSeconds);
+		// milliseconds, same unit as the tasks/get handle (SEP-1686)
+		map.put("ttl", entry.ttl.toMillis());
+		map.put("pollInterval", entry.pollIntervalSeconds * 1000L);
 		return map;
 	}
 
@@ -170,7 +176,8 @@ public class DemoTaskEmulatingToolsProvider {
 		map.put("taskId", entry.taskId);
 		map.put("status", entry.status.get());
 		map.put("keepAlive", entry.keepAliveUrl);
-		map.put("pollInterval", entry.pollIntervalSeconds);
+		// milliseconds, same unit as the tasks/get handle (SEP-1686)
+		map.put("pollInterval", entry.pollIntervalSeconds * 1000L);
 		final Object result = entry.result.get();
 		if (result != null) {
 			map.put("result", result);
