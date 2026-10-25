@@ -90,7 +90,9 @@ interface SidebarProps {
   activeProfileId?: string | null;
   onActiveProfileChange?: (profileId: string | null) => void;
   /** D3 structured error DTO surfaced by the proxy (issue #54). */
-  connectionError?: ProxyErrorDto | null;
+  // D3 authorization DTO (issue #54): the server answered and refused.
+  // Distinct from connectionError, which means the server was never reached.
+  authError?: ProxyErrorDto | null;
   onConnect: () => void;
   onDisconnect: () => void;
   logLevel: LoggingLevel;
@@ -136,7 +138,7 @@ const Sidebar = ({
   onProfilesChange,
   activeProfileId,
   onActiveProfileChange,
-  connectionError,
+  authError,
   onConnect,
   onDisconnect,
   logLevel,
@@ -1152,24 +1154,24 @@ const Sidebar = ({
             {/* [spring-ai-mcp-inspector PATCH] D3 structured error banner
                 (issue #54): exact code/reason/guidance/url from the proxy's
                 `ProxyErrorDto` (SSE named `error` event / streamable body). */}
-            {connectionError && (
+            {authError && (
               <div
                 role="alert"
                 data-testid="connection-error-dto"
                 className="mb-4 rounded border border-red-300 bg-red-50 dark:bg-red-950 dark:border-red-800 p-3 text-xs space-y-1"
               >
                 <div className="font-semibold text-red-700 dark:text-red-300">
-                  {connectionError.status} {connectionError.code}
+                  {authError.status} {authError.code}
                 </div>
                 <div className="text-red-700 dark:text-red-300">
-                  {connectionError.reason}
+                  {authError.reason}
                 </div>
                 <div className="text-red-600 dark:text-red-400">
-                  {connectionError.guidance}
+                  {authError.guidance}
                 </div>
-                {connectionError.url && (
+                {authError.url && (
                   <div className="break-all font-mono text-red-600 dark:text-red-400">
-                    URL: {connectionError.url}
+                    URL: {authError.url}
                   </div>
                 )}
               </div>

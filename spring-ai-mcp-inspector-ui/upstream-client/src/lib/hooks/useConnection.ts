@@ -523,7 +523,7 @@ export function useConnection({
       if (currentEvent === "error" && currentData.length > 0) {
         const dto = parseProxyErrorDto(currentData.join("\n"));
         if (dto) {
-          setConnectionError(dto);
+          setAuthError(dto);
         }
       }
       currentEvent = "";
@@ -611,7 +611,7 @@ export function useConnection({
     // [spring-ai-mcp-inspector PATCH] Both failure banners reset on every attempt:
     // the transport one (issue #56) and the authorization one (issue #54).
     setConnectionError(null);
-
+    setAuthError(null);
     const clientCapabilities = {
       capabilities: {
         sampling: {},
@@ -1470,8 +1470,10 @@ export function useConnection({
 
   return {
     connectionStatus,
-    // [spring-ai-mcp-inspector PATCH] D3 structured error DTO (issue #54).
+    // [spring-ai-mcp-inspector PATCH] Transport failure (issue #56); the
+    // authorization DTO travels separately as authError (issue #54).
     connectionError,
+    authError,
     serverCapabilities,
     serverImplementation,
     mcpClient,

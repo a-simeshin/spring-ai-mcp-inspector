@@ -503,8 +503,12 @@ const App = () => {
 
   const {
     connectionStatus,
-    // [spring-ai-mcp-inspector PATCH] D3 structured error DTO (issue #54).
+    // [spring-ai-mcp-inspector PATCH] Two distinct failures, two fields:
+    // connectionError is the transport contract MCP_CONNECT_FAILED (issue #56,
+    // the server was never reached), authError is the proxy authorization DTO
+    // (issue #54, the server answered and refused).
     connectionError,
+    authError,
     serverCapabilities,
     serverImplementation,
     mcpClient,
@@ -1647,7 +1651,7 @@ const App = () => {
           onProfilesChange={setProfiles}
           activeProfileId={activeProfileId}
           onActiveProfileChange={setActiveProfileId}
-          connectionError={connectionError}
+          authError={authError}
           onConnect={connectMcpServer}
           onDisconnect={disconnectMcpServer}
           logLevel={logLevel}
