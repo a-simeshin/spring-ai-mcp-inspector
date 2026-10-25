@@ -166,6 +166,40 @@ class ProxyHandlerAuthProfileTests {
 		@Test
 		@Story("SSE proxy open with profile")
 		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() without inspector properties falls back to the default proxy base in the SSE prologue")
+		void openSse_withoutProperties_usesDefaultProxyBase() {
+			// given
+			given(ProxyHandlerAuthProfileTests.this.sessionOwnerResolver.resolve(any())).willReturn(OWNER);
+			given(ProxyHandlerAuthProfileTests.this.authProfileStore.resolve(OWNER, PROFILE_ID))
+				.willReturn(Optional.of(new BearerProfile("prod", "tok")));
+			given(ProxyHandlerAuthProfileTests.this.authProfileStore.bind(eq(OWNER), eq(PROFILE_ID), any()))
+				.willReturn(true);
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerAuthProfileTests.this.transportFactory.openSseWithAuth(any(URI.class),
+					any(AuthHeaders.class), any()))
+				.willReturn(target);
+			given(ProxyHandlerAuthProfileTests.this.mcpProxy.start(any())).willReturn(Mono.empty());
+			final ProxyHandler noPropertiesHandler = new ProxyHandler(ProxyHandlerAuthProfileTests.this.registry,
+					ProxyHandlerAuthProfileTests.this.transportFactory, ProxyHandlerAuthProfileTests.this.mcpProxy,
+					ProxyHandlerAuthProfileTests.this.transportDetector, ProxyHandlerAuthProfileTests.this.objectMapper,
+					null, ProxyHandlerAuthProfileTests.this.sessionOwnerResolver,
+					ProxyHandlerAuthProfileTests.this.authProfileStore,
+					ProxyHandlerAuthProfileTests.this.ccTokenManager,
+					ProxyHandlerAuthProfileTests.this.authCodeExchanger);
+
+			// when
+			final ServerResponse response = noPropertiesHandler.openSse(sseRequest(PROFILE_ID)).block();
+
+			// then: session opens, registry receives it, default /mcp-inspector-api base
+			// is used
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			verify(ProxyHandlerAuthProfileTests.this.registry).put(any(ProxySession.class));
+		}
+
+		@Test
+		@Story("SSE proxy open with profile")
+		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() with a CC profile whose token acquisition fails returns 502 token_exchange_failed")
 		void openSse_withCcProfile_tokenFailure_returns502() {
 			// given
@@ -185,6 +219,109 @@ class ProxyHandlerAuthProfileTests {
 			// then
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+		}
+
+		@Test
+		@Story("SSE proxy open with profile")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with an unmappable proxy start failure closes the session without a structured error event")
+		void openSse_proxyStartUnmappableError_skipsErrorEvent() {
+			// given
+			given(ProxyHandlerAuthProfileTests.this.sessionOwnerResolver.resolve(any())).willReturn(OWNER);
+			given(ProxyHandlerAuthProfileTests.this.authProfileStore.resolve(OWNER, PROFILE_ID))
+				.willReturn(Optional.of(new BearerProfile("prod", "tok")));
+			given(ProxyHandlerAuthProfileTests.this.authProfileStore.bind(eq(OWNER), eq(PROFILE_ID), any()))
+				.willReturn(true);
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerAuthProfileTests.this.transportFactory.openSseWithAuth(any(URI.class),
+					any(AuthHeaders.class), any()))
+				.willReturn(target);
+			// handler() stubs start() with Mono.empty(); override it AFTER the handler is
+			// built
+			final ProxyHandler handler = ProxyHandlerAuthProfileTests.this.handler();
+			given(ProxyHandlerAuthProfileTests.this.mcpProxy.start(any()))
+				.willReturn(Mono.error(new RuntimeException("boom without http status")));
+
+			// when
+			final ServerResponse response = handler.openSse(sseRequest(PROFILE_ID)).block();
+
+			// then: 200 SSE response is still returned; the unmappable error path tears
+			// the session down
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			verify(ProxyHandlerAuthProfileTests.this.registry).removeAndClose(any());
+		}
+
+		@Test
+		@Story("SSE proxy open with profile")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with a mappable proxy start failure emits the structured error event before teardown")
+		void openSse_proxyStartMappableError_emitsErrorEvent() {
+			// given
+			given(ProxyHandlerAuthProfileTests.this.sessionOwnerResolver.resolve(any())).willReturn(OWNER);
+			given(ProxyHandlerAuthProfileTests.this.authProfileStore.resolve(OWNER, PROFILE_ID))
+				.willReturn(Optional.of(new BearerProfile("prod", "tok")));
+			given(ProxyHandlerAuthProfileTests.this.authProfileStore.bind(eq(OWNER), eq(PROFILE_ID), any()))
+				.willReturn(true);
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerAuthProfileTests.this.transportFactory.openSseWithAuth(any(URI.class),
+					any(AuthHeaders.class), any()))
+				.willReturn(target);
+			final ProxyHandler handler = ProxyHandlerAuthProfileTests.this.handler();
+			given(ProxyHandlerAuthProfileTests.this.mcpProxy.start(any()))
+				.willReturn(Mono.error(new RuntimeException("upstream rejected: HTTP 401")));
+
+			// when
+			final ServerResponse response = handler.openSse(sseRequest(PROFILE_ID)).block();
+
+			// then: 200 SSE response, the structured 401 event lands in the stream,
+			// session torn down
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			verify(ProxyHandlerAuthProfileTests.this.registry).removeAndClose(any());
+		}
+
+		@Test
+		@Story("SSE proxy open with profile")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() without a profileId takes the synchronous no-profile path")
+		void openSse_withoutProfileId_opensPlainSse() {
+			// given
+			given(ProxyHandlerAuthProfileTests.this.transportFactory.openSse(any(URI.class)))
+				.willReturn(mock(McpClientTransport.class));
+
+			// when
+			final ServerResponse response = ProxyHandlerAuthProfileTests.this.handler()
+				.openSse(sseRequest(null))
+				.block();
+
+			// then: plain SSE open, no profile resolution or bind involved
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			verify(ProxyHandlerAuthProfileTests.this.transportFactory).openSse(any(URI.class));
+			verify(ProxyHandlerAuthProfileTests.this.authProfileStore, org.mockito.Mockito.never()).resolve(any(),
+					any());
+			verify(ProxyHandlerAuthProfileTests.this.registry).put(any(ProxySession.class));
+		}
+
+		@Test
+		@Story("SSE proxy open with profile")
+		@Severity(SeverityLevel.TRIVIAL)
+		@Description("openSse() with a blank profileId takes the synchronous no-profile path")
+		void openSse_withBlankProfileId_opensPlainSse() {
+			// given
+			given(ProxyHandlerAuthProfileTests.this.transportFactory.openSse(any(URI.class)))
+				.willReturn(mock(McpClientTransport.class));
+
+			// when
+			final ServerResponse response = ProxyHandlerAuthProfileTests.this.handler().openSse(sseRequest("")).block();
+
+			// then: blank id behaves as absent, plain SSE open, no bind
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			verify(ProxyHandlerAuthProfileTests.this.transportFactory).openSse(any(URI.class));
+			verify(ProxyHandlerAuthProfileTests.this.authProfileStore, org.mockito.Mockito.never()).bind(any(), any(),
+					any());
 		}
 
 		@Test
