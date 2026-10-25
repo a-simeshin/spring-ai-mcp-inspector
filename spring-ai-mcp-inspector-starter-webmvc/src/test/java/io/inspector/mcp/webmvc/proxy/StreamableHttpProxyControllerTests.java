@@ -1816,8 +1816,11 @@ class StreamableHttpProxyControllerTests {
 				.valueToTree(entity.getBody());
 			assertThat(responseBody.has("error")).as("error response must pass through").isTrue();
 			assertThat(responseBody.path("error").path("code").asInt()).isEqualTo(-32603);
+		}
 
+	}
 
+	@Nested
 	@DisplayName("D8 legacy-session WARN")
 	class LegacySessionWarn {
 

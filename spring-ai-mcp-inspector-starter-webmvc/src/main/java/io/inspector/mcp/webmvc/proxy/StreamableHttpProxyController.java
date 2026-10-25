@@ -70,11 +70,11 @@ import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.proxy.TransportKind;
 import io.inspector.mcp.core.task.TaskHandle;
 import io.inspector.mcp.core.task.TaskNotCancelableException;
 import io.inspector.mcp.core.task.TaskNotFoundException;
 import io.inspector.mcp.core.task.TaskService;
-import io.inspector.mcp.core.proxy.TransportKind;
 import io.inspector.mcp.webmvc.InspectorServerPortHolder;
 import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
 
@@ -160,6 +160,26 @@ public class StreamableHttpProxyController {
 	}
 
 	/**
+	 * Full constructor that also accepts an optional {@link TaskService} via an
+	 * {@link ObjectProvider}. When no {@link TaskService} bean is available the
+	 * controller falls through to the regular relay path for all methods.
+	 * @param registry the proxy session registry
+	 * @param transportFactory the proxy transport factory
+	 * @param mcpProxy the MCP proxy relay
+	 * @param objectMapper the JSON object mapper
+	 * @param properties the inspector properties
+	 * @param portHolder the server port holder
+	 * @param taskServiceProvider provider for an optional {@link TaskService}
+	 */
+	public StreamableHttpProxyController(final ProxySessionRegistry registry,
+			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
+			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,
+			final ObjectProvider<TaskService> taskServiceProvider) {
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, null, null, null, null,
+				taskServiceProvider);
+	}
+
+	/**
 	 * Full constructor with the D8/D9 wiring: the session-owner resolver (owner id from
 	 * the signed cookie) and the owner-scoped auth-profile store + OAuth2 managers used
 	 * to resolve the bound profile into transport headers.
@@ -174,7 +194,6 @@ public class StreamableHttpProxyController {
 	 * @param ccTokenManager the client-credentials token manager
 	 * @param authCodeExchanger the auth-code exchanger
 	 */
-	@Autowired
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
 			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,

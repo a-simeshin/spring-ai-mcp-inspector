@@ -224,6 +224,7 @@ describe("Sidebar connect-failure alert", () => {
       expect(screen.getByText(/MCP server is running/i)).toBeInTheDocument();
       expect(screen.queryByText(/proxy token/i)).not.toBeInTheDocument();
     });
+  });
 });
 
 // [spring-ai-mcp-inspector PATCH] D3 structured error banner tests (issue #54):

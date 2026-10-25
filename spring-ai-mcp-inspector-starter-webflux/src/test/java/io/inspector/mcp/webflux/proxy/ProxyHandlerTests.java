@@ -165,6 +165,14 @@ class ProxyHandlerTests {
 		return event;
 	}
 
+	private static WebServerInitializedEvent mainServerStartedEvent(final int port) {
+		final WebServerInitializedEvent event = webServerStartedEvent(port);
+		final WebServerApplicationContext context = mock(WebServerApplicationContext.class);
+		given(context.getServerNamespace()).willReturn("server");
+		given(event.getApplicationContext()).willReturn(context);
+		return event;
+	}
+
 	@Nested
 	@DisplayName("health()")
 	class Health {
@@ -576,6 +584,25 @@ class ProxyHandlerTests {
 
 			// then — the port is still unset, so the resolver falls back to 8080
 			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
+		}
+
+		@Test
+		@Story("Management server guard")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("A WebServerInitializedEvent from the main server context updates the loopback port")
+		void onWebServerStarted_withMainNamespace_updatesLoopbackPort() {
+			// given: a non-management context event reports port 7373
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			ProxyHandlerTests.this.handler.onWebServerStarted(mainServerStartedEvent(7373));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse").build());
+
+			// when
+			ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then: loopbackPort() returns the reported port (port > 0 branch)
+			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:7373/sse"));
 		}
 
 		@Test

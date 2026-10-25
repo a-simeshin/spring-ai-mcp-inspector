@@ -67,11 +67,11 @@ import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.proxy.TransportKind;
 import io.inspector.mcp.core.task.TaskHandle;
 import io.inspector.mcp.core.task.TaskNotCancelableException;
 import io.inspector.mcp.core.task.TaskNotFoundException;
 import io.inspector.mcp.core.task.TaskService;
-import io.inspector.mcp.core.proxy.TransportKind;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.core.transport.TransportType;
@@ -147,8 +147,8 @@ public class ProxyHandler {
 	}
 
 	/**
-	 * Constructor that also accepts an optional {@link TaskService} for local
-	 * task-method interception (no auth wiring).
+	 * Constructor that also accepts an optional {@link TaskService} for local task-method
+	 * interception (no auth wiring).
 	 * @param registry the proxy session registry
 	 * @param transportFactory the proxy transport factory
 	 * @param mcpProxy the proxy relay pump

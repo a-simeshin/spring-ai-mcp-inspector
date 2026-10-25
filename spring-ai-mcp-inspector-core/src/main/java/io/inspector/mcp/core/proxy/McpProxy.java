@@ -32,13 +32,13 @@ import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 import io.inspector.mcp.core.auth.AuthProfile;
 import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.auth.OAuth2GrantMode;
 import io.inspector.mcp.core.auth.OAuth2Profile;
+import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 
 /**
  * Wires a {@link ProxySession}'s two sinks to the target {@link McpClientTransport}.
@@ -82,8 +82,6 @@ public final class McpProxy {
 
 	private final JacksonMcpJsonMapper mcpJsonMapper;
 
-	private final McpTrafficRecorder trafficRecorder;
-
 	/** Owner-scoped auth-profile store; {@code null} in bare (non-Spring) wiring. */
 	private final AuthProfileStore authProfileStore;
 
@@ -93,10 +91,9 @@ public final class McpProxy {
 	/** Auth-code exchanger; {@code null} in bare wiring. */
 	private final OAuth2AuthCodeTokenExchanger authCodeExchanger;
 
-	/**
-	 * Creates a proxy with no traffic recording and no auth wiring.
-	 * @param objectMapper the JSON mapper (may be {@code null} to use a default)
-	 */
+	/** Traffic recorder; {@code null} to skip recording. */
+	private final McpTrafficRecorder trafficRecorder;
+
 	public McpProxy(final JsonMapper objectMapper) {
 		this(objectMapper, null, null, null, null);
 	}
@@ -120,12 +117,26 @@ public final class McpProxy {
 	public McpProxy(final JsonMapper objectMapper, final AuthProfileStore authProfileStore,
 			final OAuth2ClientCredentialsTokenManager ccTokenManager,
 			final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
+		this(objectMapper, authProfileStore, ccTokenManager, authCodeExchanger, null);
+	}
+
+	/**
+	 * Creates a proxy with the OAuth2 wiring and optional traffic recording.
+	 * @param objectMapper the JSON mapper backing the relay
+	 * @param authProfileStore the owner-scoped profile store (may be {@code null})
+	 * @param ccTokenManager the client-credentials token manager (may be {@code null})
+	 * @param authCodeExchanger the auth-code exchanger (may be {@code null})
+	 * @param trafficRecorder the traffic recorder, or {@code null} to skip recording
+	 */
+	public McpProxy(final JsonMapper objectMapper, final AuthProfileStore authProfileStore,
+			final OAuth2ClientCredentialsTokenManager ccTokenManager,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger, final McpTrafficRecorder trafficRecorder) {
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.mcpJsonMapper = new JacksonMcpJsonMapper(this.objectMapper);
-		this.trafficRecorder = trafficRecorder;
 		this.authProfileStore = authProfileStore;
 		this.ccTokenManager = ccTokenManager;
 		this.authCodeExchanger = authCodeExchanger;
+		this.trafficRecorder = trafficRecorder;
 	}
 
 	/**

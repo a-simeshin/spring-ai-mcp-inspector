@@ -294,6 +294,7 @@ public final class ProxySession {
 	 */
 	public void enableTasksInterception() {
 		this.tasksInterceptionEnabled = true;
+	}
 
 	public URI targetUri() {
 		return this.targetUri;
