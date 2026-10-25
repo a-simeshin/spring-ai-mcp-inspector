@@ -666,10 +666,10 @@ public class InspectorHandler implements ApplicationContextAware {
 		final String host = "127.0.0.1";
 		return switch (transport.type()) {
 			case SSE -> this.loopbackFactory.forSse(host, port, transport.endpoint(), handlers, initializeCapture);
-			case STREAMABLE -> this.loopbackFactory.forStreamable(host, port, transport.endpoint(), handlers,
-					initializeCapture);
-			case STATELESS -> this.loopbackFactory.forStateless(host, port, transport.endpoint(), handlers,
-					initializeCapture);
+			case STREAMABLE ->
+				this.loopbackFactory.forStreamable(host, port, transport.endpoint(), handlers, initializeCapture);
+			case STATELESS ->
+				this.loopbackFactory.forStateless(host, port, transport.endpoint(), handlers, initializeCapture);
 			case STDIO_NO_HTTP -> throw new IllegalStateException(
 					"loopback connect not supported for STDIO_NO_HTTP transport — use externalCommand");
 			case UNKNOWN -> throw new IllegalStateException(

@@ -100,7 +100,7 @@ class ProxySkillsExtensionPassThroughIT {
 	}
 
 	@Test
-	@DisplayName("skills/list, skills/get and directory-read errors pass through the proxy unchanged")
+	@DisplayName("skills/list, skills/get and resources/directory/read pass through the proxy unchanged")
 	@Story("SEP-2640 pass-through")
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Against a mock MCP server: the skills extension advertisement survives initialize, "
@@ -224,7 +224,7 @@ class ProxySkillsExtensionPassThroughIT {
 	@Description("For servers without the extension the proxy does not short-circuit: initialize relays "
 			+ "without an extensions key and skills/list surfaces the server's own -32601 (documented "
 			+ "pass-through choice), so non-SEP-2640 servers see no regression")
-	void nonSkillsServer_throughStreamableProxy_passesThroughAndSurfacesServer404() throws Exception {
+	void nonSkillsServer_throughStreamableProxy_passesThroughAndSurfacesMethodNotFound() throws Exception {
 		// given: mock MCP server WITHOUT the skills extension
 		final MockMcpServer mock = new MockMcpServer(false);
 		this.mockServer = mock.server;
@@ -259,8 +259,15 @@ class ProxySkillsExtensionPassThroughIT {
 			.as("skills/list on %s, body=%s", ProxyAppHarness.stack(), listResponse.body())
 			.isEqualTo(200);
 		final JsonNode listBody = MAPPER.readTree(listResponse.body());
-		assertThat(listBody.path("error").path("code").asInt()).isEqualTo(-32601);
-		assertThat(listBody.path("error").path("message").asText()).isEqualTo("Method not found");
+		// The whole error object is asserted: a relay that drops or rewrites
+		// error.data must not pass.
+		final ObjectNode expectedError = MAPPER.createObjectNode();
+		expectedError.put("code", -32601);
+		expectedError.put("message", "Method not found");
+		expectedError.putObject("data").put("method", "skills/list");
+		assertThat(listBody.path("error"))
+			.as("skills/list error relayed verbatim, including error.data, body=%s", listResponse.body())
+			.isEqualTo(expectedError);
 	}
 
 	// ------------------------------------------------------------------
@@ -406,6 +413,10 @@ class ProxySkillsExtensionPassThroughIT {
 			result.put("protocolVersion", "2025-06-18");
 			final ObjectNode capabilities = result.putObject("capabilities");
 			capabilities.putObject("tools");
+			// SEP-2640 requires resources alongside the extension (the skills tree is
+			// exposed as skill:// resources); directory reads additionally need the
+			// resources capability declared.
+			capabilities.putObject("resources").put("listChanged", false);
 			if (advertiseSkills) {
 				capabilities.putObject("extensions").putObject(SKILLS_EXT_ID).put("directoryRead", true);
 			}

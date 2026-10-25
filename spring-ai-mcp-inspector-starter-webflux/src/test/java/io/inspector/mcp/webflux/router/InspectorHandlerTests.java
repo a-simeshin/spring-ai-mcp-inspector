@@ -156,7 +156,7 @@ class InspectorHandlerTests {
 		this.handler.onWebServerStarted(webServerStartedEvent(8081));
 		given(this.transportDetector.detect())
 			.willReturn(new DetectedTransport(TransportType.STREAMABLE, "/mcp", null, "WEBFLUX"));
-		given(this.loopbackFactory.forStreamable(any(), org.mockito.ArgumentMatchers.eq(8081), any(), any()))
+		given(this.loopbackFactory.forStreamable(any(), org.mockito.ArgumentMatchers.eq(8081), any(), any(), any()))
 			.willReturn(client);
 		final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 			.contentType(MediaType.APPLICATION_JSON)
@@ -374,7 +374,7 @@ class InspectorHandlerTests {
 				.willReturn(new DetectedTransport(TransportType.STREAMABLE, "/mcp", null, "WEBFLUX"));
 			final McpSyncClient client = connectedClient();
 			given(InspectorHandlerTests.this.loopbackFactory.forStreamable(any(), org.mockito.ArgumentMatchers.eq(8081),
-					any(), any()))
+					any(), any(), any()))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -417,7 +417,7 @@ class InspectorHandlerTests {
 			// given
 			InspectorHandlerTests.this.handler.onWebServerStarted(webServerStartedEvent(8081));
 			final McpSyncClient client = connectedClient();
-			given(InspectorHandlerTests.this.externalStdioFactory.forCommand(any(), any())).willReturn(client);
+			given(InspectorHandlerTests.this.externalStdioFactory.forCommand(any(), any(), any())).willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
 				.body("{\"externalCommand\":\"node server.js --flag\"}"));
@@ -428,7 +428,7 @@ class InspectorHandlerTests {
 			// then
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(InspectorHandlerTests.this.externalStdioFactory).forCommand(any(), any());
+			verify(InspectorHandlerTests.this.externalStdioFactory).forCommand(any(), any(), any());
 			verify(client).initialize();
 		}
 
@@ -443,7 +443,7 @@ class InspectorHandlerTests {
 				.willReturn(new DetectedTransport(TransportType.SSE, "/app/sse", "/app/mcp/message", "WEBFLUX"));
 			final McpSyncClient client = connectedClient();
 			given(InspectorHandlerTests.this.loopbackFactory.forSse(any(), org.mockito.ArgumentMatchers.eq(8081),
-					org.mockito.ArgumentMatchers.eq("/app/sse"), any()))
+					org.mockito.ArgumentMatchers.eq("/app/sse"), any(), any()))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -456,7 +456,7 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			verify(InspectorHandlerTests.this.loopbackFactory).forSse(any(), org.mockito.ArgumentMatchers.eq(8081),
-					org.mockito.ArgumentMatchers.eq("/app/sse"), any());
+					org.mockito.ArgumentMatchers.eq("/app/sse"), any(), any());
 		}
 
 		@Test
@@ -470,7 +470,7 @@ class InspectorHandlerTests {
 				.willReturn(new DetectedTransport(TransportType.STATELESS, "/mcp", null, "WEBFLUX"));
 			final McpSyncClient client = connectedClient();
 			given(InspectorHandlerTests.this.loopbackFactory.forStateless(any(), org.mockito.ArgumentMatchers.eq(8081),
-					any(), any()))
+					any(), any(), any()))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -483,7 +483,7 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			verify(InspectorHandlerTests.this.loopbackFactory).forStateless(any(),
-					org.mockito.ArgumentMatchers.eq(8081), any(), any());
+					org.mockito.ArgumentMatchers.eq(8081), any(), any(), any());
 		}
 
 		@Test
@@ -1707,7 +1707,7 @@ class InspectorHandlerTests {
 				.willReturn(new DetectedTransport(TransportType.STREAMABLE, "/mcp", null, "WEBFLUX"));
 			final McpSyncClient client = connectedClient();
 			given(InspectorHandlerTests.this.loopbackFactory.forStreamable(any(), org.mockito.ArgumentMatchers.eq(8081),
-					any(), any()))
+					any(), any(), any()))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -1720,7 +1720,7 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			verify(InspectorHandlerTests.this.loopbackFactory).forStreamable(any(),
-					org.mockito.ArgumentMatchers.eq(8081), any(), any());
+					org.mockito.ArgumentMatchers.eq(8081), any(), any(), any());
 		}
 
 		@Test
@@ -1736,7 +1736,7 @@ class InspectorHandlerTests {
 			given(client.initialize()).willReturn(null);
 			given(client.getServerInfo()).willReturn(null);
 			given(InspectorHandlerTests.this.loopbackFactory.forStreamable(any(), org.mockito.ArgumentMatchers.eq(8081),
-					any(), any()))
+					any(), any(), any()))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)

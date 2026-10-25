@@ -524,10 +524,10 @@ public class InspectorRestController implements ApplicationContextAware {
 		final int port = this.portHolder.port();
 		return switch (t.type()) {
 			case SSE -> this.loopbackFactory.forSse("127.0.0.1", port, t.endpoint(), handlers, initializeCapture);
-			case STREAMABLE -> this.loopbackFactory.forStreamable("127.0.0.1", port, t.endpoint(), handlers,
-					initializeCapture);
-			case STATELESS -> this.loopbackFactory.forStateless("127.0.0.1", port, t.endpoint(), handlers,
-					initializeCapture);
+			case STREAMABLE ->
+				this.loopbackFactory.forStreamable("127.0.0.1", port, t.endpoint(), handlers, initializeCapture);
+			case STATELESS ->
+				this.loopbackFactory.forStateless("127.0.0.1", port, t.endpoint(), handlers, initializeCapture);
 			case STDIO_NO_HTTP, UNKNOWN -> null;
 		};
 	}
