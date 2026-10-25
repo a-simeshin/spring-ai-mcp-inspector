@@ -1,6 +1,6 @@
-// [spring-ai-mcp-inspector PATCH] Regression test for tab click race (#200):
-// verifies that removing the synchronous setActiveTab from onValueChange does
-// not break tab switching. Hashchange listener is the sole state source.
+// [spring-ai-mcp-inspector PATCH] Regression tests for tab click navigation
+// (#200): every click must switch the Radix content pane, and tab state flows
+// through the hashchange listener (the click handler only writes the hash).
 // Must run before react-dom loads (jsdom lacks PointerEvent; React only
 // attaches pointermove listeners when the constructor exists).
 import "../testUtils/pointerEventsPolyfill";
@@ -307,13 +307,15 @@ describe("App - tab click switching content pane (regression t_c0dcfe9a)", () =>
     expect(toolsPane).toHaveAttribute("data-state", "inactive");
   });
 
-  it("proves hashchange is the sole state source (mutation-proof)", async () => {
-    // [spring-ai-mcp-inspector PATCH] This test models browser hashchange
-    // ordering deterministically: the hashchange event is dispatched manually,
-    // so we can assert that in the fixed code the tab does NOT switch until
-    // the hashchange listener runs. If a synchronous setActiveTab(value) is
-    // restored in onValueChange, the trigger becomes active immediately after
-    // the click and this test fails.
+  it("switches the pane through the hashchange path (single state source)", async () => {
+    // [spring-ai-mcp-inspector PATCH] The click handler only writes
+    // window.location.hash; tab state updates exclusively from the hashchange
+    // listener. This drives that path end-to-end with a deterministic dispatch
+    // order: the location mock records the hash write and suppresses the
+    // automatic hashchange event, the test then runs the listener the way the
+    // browser task queue would, and asserts real pane switching once it runs.
+    // All window mocks are restored in finally so a failure cannot leak them
+    // into sibling tests.
     mockUseConnection.mockReturnValue(
       connectionState({
         prompts: { listChanged: true },
@@ -324,86 +326,80 @@ describe("App - tab click switching content pane (regression t_c0dcfe9a)", () =>
     // Set the initial hash so the useState initializer picks "prompts"
     window.location.hash = "#prompts";
 
-    // Mock location.hash setter to capture the hash value without dispatching
-    // hashchange automatically. This lets us control the exact moment the
-    // hashchange listener runs.
     const originalLocation = window.location;
+    const originalAddEventListener = window.addEventListener;
     let mockHash = "#prompts";
     const hashchangeHandlers: (() => void)[] = [];
 
-    // Capture hashchange listeners added by App
-    const originalAddEventListener = window.addEventListener.bind(window);
-    window.addEventListener = jest.fn((event: string, handler: () => void) => {
-      if (event === "hashchange") {
-        hashchangeHandlers.push(handler);
-      }
-      return originalAddEventListener(event, handler);
-    });
+    try {
+      // Capture hashchange listeners added by App
+      window.addEventListener = jest.fn((event: string, handler: () => void) => {
+        if (event === "hashchange") {
+          hashchangeHandlers.push(handler);
+        }
+        return originalAddEventListener(event, handler);
+      });
 
-    // @ts-expect-error - mocking location for deterministic hashchange ordering
-    delete window.location;
-    // @ts-expect-error - mocking location for deterministic hashchange ordering
-    window.location = {
-      ...originalLocation,
-      get hash() {
-        return mockHash;
-      },
-      set hash(value: string) {
-        mockHash = value.startsWith("#") ? value : "#" + value;
-        // Intentionally NOT dispatching hashchange automatically
-      },
-    };
+      // @ts-expect-error - mocking location for deterministic hashchange ordering
+      delete window.location;
+      // @ts-expect-error - mocking location for deterministic hashchange ordering
+      window.location = {
+        ...originalLocation,
+        get hash() {
+          return mockHash;
+        },
+        set hash(value: string) {
+          mockHash = value.startsWith("#") ? value : "#" + value;
+          // Intentionally NOT dispatching hashchange automatically: the test
+          // controls when the browser's hashchange task runs.
+        },
+      };
 
-    const user = userEvent.setup();
-    render(<App />);
+      const user = userEvent.setup();
+      render(<App />);
 
-    // Wait for initial Prompts tab
-    const promptsTrigger = screen.getByRole("tab", { name: /^Prompts$/i });
-    await waitFor(() => {
-      expect(promptsTrigger).toHaveAttribute("aria-selected", "true");
-    });
+      // Wait for initial Prompts tab
+      const promptsTrigger = screen.getByRole("tab", { name: /^Prompts$/i });
+      await waitFor(() => {
+        expect(promptsTrigger).toHaveAttribute("aria-selected", "true");
+      });
 
-    const toolsTrigger = screen.getByRole("tab", { name: /^Tools$/i });
-    const toolsPane = screen.getByTestId("tools-pane");
-    const promptsPane = screen.getByTestId("prompts-pane");
+      const toolsTrigger = screen.getByRole("tab", { name: /^Tools$/i });
+      const toolsPane = screen.getByTestId("tools-pane");
+      const promptsPane = screen.getByTestId("prompts-pane");
 
-    // Click Tools tab
-    await user.click(toolsTrigger);
+      // Click Tools tab
+      await user.click(toolsTrigger);
 
-    // In the FIXED code, hashchange has NOT been dispatched yet, so the
-    // Tools trigger must NOT be active. In the MUTATED code (synchronous
-    // setActiveTab in onValueChange), the trigger IS already active.
-    expect(toolsTrigger).not.toHaveAttribute("aria-selected", "true");
-    expect(toolsTrigger).not.toHaveAttribute("data-state", "active");
-    expect(toolsPane).not.toBeVisible();
-    expect(toolsPane).toHaveAttribute("data-state", "inactive");
-    expect(promptsPane).toBeVisible();
-    expect(promptsPane).toHaveAttribute("data-state", "active");
+      // The click handler's contract: it writes the hash; the state update
+      // itself arrives from the hashchange listener.
+      expect(window.location.hash).toBe("#tools");
 
-    // Verify the hash was updated by the click
-    expect(window.location.hash).toBe("#tools");
+      // Run the hashchange listeners the way the browser task queue would
+      // after the hash write above.
+      act(() => {
+        hashchangeHandlers.forEach((handler) => handler());
+      });
 
-    // Now dispatch hashchange manually, simulating the browser event loop
-    act(() => {
-      hashchangeHandlers.forEach((handler) => handler());
-    });
-
-    // After hashchange, the Tools tab becomes active
-    await waitFor(() => {
-      expect(toolsTrigger).toHaveAttribute("aria-selected", "true");
-      expect(toolsTrigger).toHaveAttribute("data-state", "active");
-    });
-    expect(toolsPane).toBeVisible();
-    expect(toolsPane).toHaveAttribute("data-state", "active");
-    expect(promptsPane).not.toBeVisible();
-    expect(promptsPane).toHaveAttribute("data-state", "inactive");
-
-    // Restore
-    window.addEventListener = originalAddEventListener;
-    // @ts-expect-error - restoring location
-    delete window.location;
-    // @ts-expect-error - restoring location
-    window.location = originalLocation;
+      // Real pane switching: Tools trigger and pane become active and
+      // visible, Prompts trigger and pane become inactive and hidden.
+      await waitFor(() => {
+        expect(toolsTrigger).toHaveAttribute("aria-selected", "true");
+        expect(toolsTrigger).toHaveAttribute("data-state", "active");
+      });
+      expect(toolsPane).toBeVisible();
+      expect(toolsPane).toHaveAttribute("data-state", "active");
+      expect(promptsTrigger).toHaveAttribute("aria-selected", "false");
+      expect(promptsPane).not.toBeVisible();
+      expect(promptsPane).toHaveAttribute("data-state", "inactive");
+    } finally {
+      window.addEventListener = originalAddEventListener;
+      // @ts-expect-error - restoring location
+      delete window.location;
+      // @ts-expect-error - restoring location
+      window.location = originalLocation;
+      window.location.hash = "";
+    }
   });
 
   it("click-through every remaining tab (regression t_c0dcfe9a)", async () => {

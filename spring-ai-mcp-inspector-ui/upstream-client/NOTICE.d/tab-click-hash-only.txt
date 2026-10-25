@@ -1,11 +1,15 @@
 src/App.tsx: onValueChange only sets the hash, not the state directly.
 The upstream handler calls both setActiveTab(value) and
-window.location.hash = value. There is already a hashchange listener
-that calls setActiveTab; calling it twice, once synchronously in
-onValueChange and once asynchronously from the hashchange dispatch,
-creates a race condition in real browsers where the second call
-overwrites the first, leaving the pane unswitched. Local fix: remove
-the synchronous setActiveTab call; the hashchange listener is now the
-single source of truth for tab state. Covered by the two regression
-tests in App.tabClickRegression.test.tsx (t_c0dcfe9a, t_f91ff901).
+window.location.hash = value, while the hashchange listener also
+calls setActiveTab. A controlled reproduction on the exact base
+commit (real Chromium via Playwright, real clicks, CPU throttling
+1x-20x, 186 navigations across three click patterns) found no
+divergence between the active tab trigger and the active panel, so
+no race is claimed. The change is a simplification: the hashchange
+listener becomes the single source of truth for tab state and the
+redundant synchronous setState is removed. Covered by the three
+regression tests in App.tabClickRegression.test.tsx (t_c0dcfe9a,
+t_f91ff901): pane switching on click, pane switching through the
+hashchange path with deterministic dispatch order, and a
+click-through of every remaining tab.
 Issue: #200.
