@@ -7,7 +7,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 // McpTrafficRecorder as a severity-colored badge and expanded detail block.
 // [spring-ai-mcp-inspector PATCH] Error highlighting for CallToolResult frames
 // with isError=true (#184). Renders the row with a distinct error color, a
-// "validation failed" badge, and a tooltip showing the server error text.
+// "tool error" badge, and the server error text in the tooltip and expanded row.
 
 type TimelineEventType =
   | "MCP_JSONRPC_REQUEST"
@@ -164,6 +164,20 @@ function ProtocolNegotiationBlock({ negotiation }: { negotiation: ProtocolNegoti
   );
 }
 
+// [spring-ai-mcp-inspector PATCH] Expanded error detail for CallToolResult
+// isError=true rows (#184): the server-side error message rendered prominently
+// above the raw JSON dump, so the validator text is visible without hovering.
+function ToolErrorBlock({ text }: { text: string | null }) {
+  return (
+    <div className="mb-1 p-2 border border-red-800 rounded bg-red-950/40 text-red-300">
+      <div className="font-semibold text-red-200 mb-1">Tool error:</div>
+      <div data-testid="timeline-tool-error-message">
+        {text ?? "CallToolResult returned isError=true"}
+      </div>
+    </div>
+  );
+}
+
 function TimelineEventRow({ event }: { event: TimelineEvent }) {
   const [expanded, setExpanded] = useState(false);
   const type = event.type;
@@ -198,10 +212,11 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
         {negotiation && <ProtocolBadge negotiation={negotiation} />}
         {isError && (
           <span
+            data-testid="timeline-tool-error-badge"
             className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-red-800 text-red-200"
             title={errorText ?? "CallToolResult returned isError=true"}
           >
-            validation failed
+            tool error
           </span>
         )}
         {event.correlationId && (
@@ -213,6 +228,7 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
       {expanded ? (
         <div className="mt-1 text-[11px] font-mono opacity-80 overflow-x-auto whitespace-pre-wrap max-h-40 overflow-y-auto">
           {negotiation && <ProtocolNegotiationBlock negotiation={negotiation} />}
+          {isError && <ToolErrorBlock text={errorText} />}
           {Object.keys(payload).length > 0 ? (
             <div className="mb-1">{JSON.stringify(payload, null, 2)}</div>
           ) : (

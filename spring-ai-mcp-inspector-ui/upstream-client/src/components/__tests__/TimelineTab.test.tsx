@@ -352,37 +352,75 @@ describe("TimelineTab", () => {
 
   // [spring-ai-mcp-inspector PATCH] CallToolResult isError=true tests (#184).
 
-  it("renders a validation failed badge with tooltip for isError=true CallToolResult", async () => {
+  // Each test locates the event row via its correlationId suffix and asserts the
+  // full color class list, so reverting the error color scheme (TimelineTab.tsx
+  // colorClass/bgClass) or the badge itself fails the suite.
+
+  const rowByCorrelation = (suffix: string) => {
+    const rows = screen.getAllByText(suffix).map((el) => el.closest("div.border-l-2"));
+    expect(rows).toHaveLength(1);
+    return rows[0] as HTMLElement;
+  };
+
+  it("renders an error row with tool error badge and tooltip for isError=true CallToolResult", async () => {
     mockFetch([VALIDATION_ERROR_RESPONSE_EVENT]);
     renderTab();
 
     const badge = await waitFor(() =>
-      screen.getByText("validation failed"),
+      screen.getByTestId("timeline-tool-error-badge"),
     );
-    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveTextContent("tool error");
     expect(badge).toHaveAttribute(
       "title",
       "Parameter 'limit' must be a positive integer",
     );
+
+    const row = rowByCorrelation("corr-6");
+    expect(row.className).toContain("text-red-400");
+    expect(row.className).toContain("border-l-red-500");
+    expect(row.className).toContain("bg-red-950/30");
   });
 
-  it("does not render validation failed badge for isError=false", async () => {
+  it("shows the validator error message in the expanded row", async () => {
+    mockFetch([VALIDATION_ERROR_RESPONSE_EVENT]);
+    renderTab();
+
+    fireEvent.click(await screen.findByTestId("timeline-tool-error-badge"));
+    const message = await screen.findByTestId("timeline-tool-error-message");
+    expect(message).toHaveTextContent(
+      "Parameter 'limit' must be a positive integer",
+    );
+  });
+
+  it("renders a successful CallToolResult row with the regular response colors", async () => {
     mockFetch([SUCCESS_CALL_RESPONSE_EVENT]);
     renderTab();
 
     await waitFor(() =>
       expect(screen.getByText("1 event")).toBeInTheDocument(),
     );
-    expect(screen.queryByText("validation failed")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("timeline-tool-error-badge")).not.toBeInTheDocument();
+
+    const row = rowByCorrelation("corr-7");
+    expect(row.className).toContain("text-green-400");
+    expect(row.className).toContain("border-l-green-500");
+    expect(row.className).toContain("bg-green-950/30");
+    expect(row.className).not.toContain("red");
   });
 
-  it("does not render validation failed badge when isError is absent", async () => {
+  it("renders a response row without isError with the regular response colors", async () => {
     mockFetch([NO_ISERROR_RESPONSE_EVENT]);
     renderTab();
 
     await waitFor(() =>
       expect(screen.getByText("1 event")).toBeInTheDocument(),
     );
-    expect(screen.queryByText("validation failed")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("timeline-tool-error-badge")).not.toBeInTheDocument();
+
+    const row = rowByCorrelation("corr-8");
+    expect(row.className).toContain("text-green-400");
+    expect(row.className).toContain("border-l-green-500");
+    expect(row.className).toContain("bg-green-950/30");
+    expect(row.className).not.toContain("red");
   });
 });
