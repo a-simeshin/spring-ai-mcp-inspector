@@ -3,6 +3,8 @@ import { render, waitFor, act } from "@testing-library/react";
 import App from "../App";
 import { useConnection } from "../lib/hooks/useConnection";
 import { appendHistory, clearHistory, loadHistory } from "../lib/persistentHistory";
+import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
+import { SESSION_KEYS } from "../lib/constants";
 
 // Mock auth dependencies first
 jest.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
@@ -373,5 +375,83 @@ describe("App - history bucket key frozen while connected", () => {
     expect(loadHistory("sse:http://localhost:3001/half-typed")).toHaveLength(
       1,
     );
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// OAuth callback captures a transport-correct bucket key (PR #218 review,
+// round 2 finding). The SSE transport also carries an authProvider, so the
+// OAuth redirect flow is reachable with transportType === "sse": the captured
+// history key must derive from the live transport, not hardcode
+// "streamable-http:". Otherwise the just-authenticated SSE session writes into
+// a wrong-transport bucket, and after Disconnect+Reconnect (key re-derived as
+// sse:<url>) the OAuth session's entries vanish from the History panel.
+// RED on a hardcoded streamable-http: prefix.
+// ---------------------------------------------------------------------------
+
+describe("App - OAuth callback captures a transport-correct bucket key", () => {
+  const mockUseConnection = jest.mocked(useConnection);
+
+  beforeEach(() => {
+    jest.restoreAllMocks();
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    sessionStorage.clear();
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    // OAuthCallback itself replaceState("/") after processing; restore the
+    // root path for any later describe in this file.
+    window.history.replaceState({}, document.title, "/");
+  });
+
+  test("OAuth callback on the sse transport captures sse:<url>, not streamable-http:<url>", async () => {
+    // The OAuth redirect returns to /oauth/callback?code=... with the server
+    // URL stashed in sessionStorage by InspectorOAuthClientProvider. Use an
+    // OAuth URL DIFFERENT from the form's initial URL so the captured key is
+    // distinguishable from the pre-callback form-derived key.
+    const oauthServerUrl = "http://localhost:3001/oauth-mcp-sse";
+    const formUrl = "http://localhost:3001/sse";
+    sessionStorage.setItem(SESSION_KEYS.SERVER_URL, oauthServerUrl);
+    // jsdom cannot navigate (location.replace is not implemented); pushState
+    // updates location.pathname/search in place, which is all App reads.
+    window.history.pushState({}, "", "/oauth/callback?code=x");
+    // getInitialTransportType mock (this file) restores "sse".
+    const mockAuth = auth as unknown as jest.Mock;
+    mockAuth.mockResolvedValue("AUTHORIZED");
+
+    render(<App />);
+
+    // Pre-callback key follows the form fields: sse:<formUrl>.
+    const preCallbackKey =
+      mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+        .connectionId;
+    expect(preCallbackKey).toBe(`sse:${formUrl}`);
+
+    // OAuthCallback (lazy) resolves, auth() returns AUTHORIZED, onConnect
+    // fires (connect invoked) and the captured key lands on a re-render
+    // (connect is called synchronously before the state flush, so wait for
+    // the connectionId to move off the pre-callback form key).
+    await waitFor(
+      () => {
+        expect(disconnectedConnectionState.connect).toHaveBeenCalled();
+        const last =
+          mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1];
+        expect(last[0].connectionId).not.toBe(preCallbackKey);
+      },
+      { timeout: 5000 },
+    );
+    // The captured key must follow the live transport ("sse") and the OAuth
+    // server URL, not the hardcoded "streamable-http:" prefix.
+    const capturedKey =
+      mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+        .connectionId;
+    expect(capturedKey).toBe(`sse:${oauthServerUrl}`);
+    expect(
+      mockUseConnection.mock.calls.some(
+        (call) => call[0].connectionId === `streamable-http:${oauthServerUrl}`,
+      ),
+    ).toBe(false);
   });
 });

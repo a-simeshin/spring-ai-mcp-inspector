@@ -884,11 +884,22 @@ const App = () => {
       setSseUrl(serverUrl);
       setIsAuthDebuggerVisible(false);
       // OAuth redirects landed on this URL: the history bucket for the new
-      // session must key on it, not on the pre-redirect field value.
-      setActiveHistoryConnectionId(`streamable-http:${serverUrl}`);
+      // session must key on it, not on the pre-redirect field value. The
+      // prefix follows the live transportType (the OAuth flow is reachable
+      // on SSE too, SSE carries the same authProvider): a hardcoded
+      // "streamable-http:" would land an SSE session in a wrong-transport
+      // bucket that Disconnect+Reconnect (sse:<url>) can no longer see.
+      // Derived here from the callback argument, not via
+      // historyConnectionKey(): setSseUrl above does not update the closure
+      // variable this render, so the helper would read the pre-redirect URL.
+      setActiveHistoryConnectionId(
+        transportType === "stdio"
+          ? `stdio:${command} ${args}`
+          : `${transportType}:${serverUrl}`,
+      );
       void connectMcpServer();
     },
-    [connectMcpServer],
+    [connectMcpServer, transportType, command, args],
   );
 
   const onOAuthDebugConnect = useCallback(

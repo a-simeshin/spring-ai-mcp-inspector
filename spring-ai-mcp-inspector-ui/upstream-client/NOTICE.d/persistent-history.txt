@@ -13,6 +13,11 @@ Owner-review rework (PR #218, 2026-10-24):
 - The history bucket key is captured once when Connect is clicked
   (App.tsx handleConnect, frozen while connected, released on disconnect):
   editing the URL/transport fields mid-session no longer reshuffles buckets.
+  The OAuth-callback path (onOAuthConnect) captures with the live
+  transportType prefix, not a hardcoded "streamable-http:" (the OAuth flow is
+  reachable on the SSE transport too, which carries the same authProvider);
+  otherwise an SSE OAuth session would write into a wrong-transport bucket
+  invisible to a later manual reconnect.
 - A store written by an unknown (e.g. newer) schemaVersion is never rewritten:
   readStore exposes an empty view, appendHistory/clearHistory refuse to write.
 - Overlong bodies that still exceed the cap after inner-field truncation keep
@@ -28,7 +33,8 @@ Changed files:
 - src/lib/hooks/useConnection.ts (imports + loadHistory on mount + appendHistory
   in pushHistory + clearHistory in clearRequestHistory)
 - src/App.tsx (connectionId wiring: key captured at connect() via
-  handleConnect/handleDisconnect wrappers, frozen while connected)
+  handleConnect/handleDisconnect wrappers, frozen while connected;
+  onOAuthConnect derives the prefix from the live transportType)
 - src/components/HistoryAndNotifications.tsx (localStorage plaintext warning)
 
 Covered by: src/lib/__tests__/persistentHistory.test.ts,
