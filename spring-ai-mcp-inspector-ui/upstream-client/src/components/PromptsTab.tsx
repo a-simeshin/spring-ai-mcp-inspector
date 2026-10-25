@@ -10,18 +10,17 @@ import {
   ResourceReference,
 } from "@modelcontextprotocol/sdk/types.js";
 import { AlertCircle, ChevronRight } from "lucide-react";
+// [spring-ai-mcp-inspector PATCH] Client-side required/type validation for
+// prompt forms. The Get Prompt button is derived-disabled on every render
+// via validatePromptArgs(), and submit is blocked by validateAll().
+// fieldErrors state is only for showing hints after blur/submit.
+import { cn } from "@/lib/utils";
+import { validatePromptArgs } from "@/utils/paramValidation";
 import { useEffect, useState, useCallback } from "react";
 import ListPane from "./ListPane";
 import { useCompletionState } from "@/lib/hooks/useCompletionState";
 import JsonView from "./JsonView";
 import IconDisplay, { WithIcons } from "./IconDisplay";
-import { cn } from "@/lib/utils";
-// [spring-ai-mcp-inspector PATCH] Client-side prompt argument validation
-// (see NOTICE.d/param-validation.txt). The Get Prompt button is
-// derived-disabled on every render via validatePromptArgs(), and submit is
-// blocked by validateAll(). fieldErrors state is only for showing hints
-// after blur/submit.
-import { validatePromptArgs } from "@/utils/paramValidation";
 
 export type Prompt = {
   name: string;
@@ -109,30 +108,23 @@ const PromptsTab = ({
     triggerCompletions(argName, currentValue);
   };
 
-  // [spring-ai-mcp-inspector PATCH] Validate a single prompt argument.
-  // Sets/clears the fieldErrors entry for that argument.
-  const handleBlur = useCallback(
-    (argName: string) => {
-      if (!selectedPrompt?.arguments) return;
-      const result = validatePromptArgs(
-        selectedPrompt.arguments,
-        promptArgs,
-      );
-      const error = result.find((e) => e.field === argName);
-      setFieldErrors((prev) => {
-        if (error) {
-          return { ...prev, [argName]: error.message };
-        }
-        const next = { ...prev };
-        delete next[argName];
-        return next;
-      });
-    },
-    [selectedPrompt, promptArgs],
-  );
+  const handleBlur = (argName: string) => {
+    if (!selectedPrompt?.arguments) return;
+    const result = validatePromptArgs(
+      selectedPrompt.arguments,
+      promptArgs,
+    );
+    const error = result.find((e) => e.field === argName);
+    setFieldErrors((prev) => {
+      if (error) {
+        return { ...prev, [argName]: error.message };
+      }
+      const next = { ...prev };
+      delete next[argName];
+      return next;
+    });
+  };
 
-  // [spring-ai-mcp-inspector PATCH] Validate all prompt arguments. Called
-  // from handleGetPrompt; returns true if no errors.
   const validateAll = useCallback(() => {
     if (!selectedPrompt?.arguments) return true;
     const result = validatePromptArgs(
@@ -255,8 +247,6 @@ const PromptsTab = ({
                       />
                     </div>
 
-                    {/* [spring-ai-mcp-inspector PATCH] Inline field error hint
-                        shown after blur or submit (see NOTICE.d/param-validation.txt) */}
                     {fieldErrors[arg.name] && (
                       <p
                         id={`${arg.name}-error`}
@@ -278,8 +268,8 @@ const PromptsTab = ({
                 ))}
                 <Button
                   onClick={handleGetPrompt}
-                  className="w-full"
                   disabled={derivedFieldErrors.length > 0}
+                  className="w-full"
                 >
                   Get Prompt
                 </Button>

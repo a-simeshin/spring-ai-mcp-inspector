@@ -15,18 +15,18 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 
+// [spring-ai-mcp-inspector PATCH] Added onBlur prop to support blur-based validation in ToolsTab/PromptsTab
+// [spring-ai-mcp-inspector PATCH] Added aria-invalid/aria-describedby props for a11y error wiring
 interface ComboboxProps {
   value: string;
   onChange: (value: string) => void;
   onInputChange: (value: string) => void;
   onFocus?: () => void;
-  // [spring-ai-mcp-inspector PATCH] Optional blur handler for validation
   onBlur?: () => void;
   options: string[];
   placeholder?: string;
   emptyMessage?: string;
   id?: string;
-  // [spring-ai-mcp-inspector PATCH] aria attributes for validation hints
   "aria-invalid"?: boolean;
   "aria-describedby"?: string;
 }
@@ -42,7 +42,7 @@ export function Combobox({
   emptyMessage = "No results found.",
   id,
   "aria-invalid": ariaInvalid,
-  "aria-describedby": ariaDescribedBy,
+  "aria-describedby": ariaDescribedby,
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false);
 
@@ -78,11 +78,11 @@ export function Combobox({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          aria-controls={id}
           aria-invalid={ariaInvalid}
-          aria-describedby={ariaDescribedBy}
-          onBlur={onBlur}
+          aria-describedby={ariaDescribedby}
+          aria-controls={id}
           className="w-full justify-between"
+          onBlur={onBlur}
         >
           {value || placeholder}
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -94,6 +94,7 @@ export function Combobox({
             placeholder={placeholder}
             value={value}
             onValueChange={handleInputChange}
+            onBlur={onBlur}
           />
           <CommandEmpty>{emptyMessage}</CommandEmpty>
           <CommandGroup>
