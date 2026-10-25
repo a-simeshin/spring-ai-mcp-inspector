@@ -21,3 +21,18 @@ Covered by App.tabRouterFallback.test.tsx (26 tests: all 11 valid
 hashes, unknown/empty/near-miss fallbacks, hashchange after load,
 capability-ladder default).
 Issue: #226, card: t_e8ab0ebb, sibling PR #227 (2.x).
+
+App.tsx: when connected but serverCapabilities is null or has no
+capability panels (resources/prompts/tools), only PingTab renders. The
+original hashchange handler and the capability-gated effect both used
+ALL_TABS / resolveTab(hash, null), which allowed non-ping hashes
+(#apps, #sampling) to become activeTab even though no matching panel
+exists. This left the UI dead: zero visible [role=tabpanel] elements.
+Local fix: in the hashchange handler, when mcpClient is present and
+serverCapabilities is falsy, unconditionally force the hash to "ping".
+The same guard in the capability-gated effect uses the render-identical
+condition (!serverCapabilities?.resources && !serverCapabilities?.prompts
+&& !serverCapabilities?.tools) to short-circuit to "ping" instead of
+calling resolveTab. Covered by App.tabRouterFallback.test.tsx
+(null/empty capabilities describe block, 4 tests). Refs #227/#228,
+Rework card: t_fdeb9f56, 1.x port: t_b14e7e91.
