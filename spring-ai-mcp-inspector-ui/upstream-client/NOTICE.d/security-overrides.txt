@@ -1,5 +1,6 @@
-package.json overrides: npm overrides for 7 transitive dependency security
-advisories (GHSA advisories, all within current major). postcss bumped as
-direct devDependency. Vite pinned to ^7.3.5 to close GHSA-fx2h-pf6j-xcff and
-GHSA-v6wh-96g9-6wx3 while staying on the 7.x line (8.x jumps the bundler to
-Rolldown and broke an E2E: vite 8 proposal declined in PR #168).
+package.json: vite devDependency pinned to ^7.3.5 to close
+GHSA-fx2h-pf6j-xcff and GHSA-v6wh-96g9-6wx3 while staying on the 7.x line
+(8.x jumps the bundler to Rolldown and broke an E2E: vite 8 proposal
+declined in PR #168). Unlike 2.x (PR #107), this line carries no npm
+overrides block; the remaining transitive advisories are closed by plain
+npm audit fix in package-lock.json, no package.json overrides needed.
