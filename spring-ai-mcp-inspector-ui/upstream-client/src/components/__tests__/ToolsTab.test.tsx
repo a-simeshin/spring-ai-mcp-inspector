@@ -1579,4 +1579,138 @@ describe("ToolsTab", () => {
     expect(errorEl).toHaveAttribute("id", "name-error");
     expect(errorEl).toHaveTextContent("This field is required");
   });
+
+  // [spring-ai-mcp-inspector PATCH] Hint lifecycle regression tests for
+  // param-validation (issue #256, see NOTICE.d/param-validation.txt):
+  // a blur hint must clear on the next change without requiring another
+  // blur, and the enum select trigger must carry the full error wiring.
+  describe("validation hint clearing and select aria wiring", () => {
+    beforeEach(() => {
+      // Mock scrollIntoView for Radix UI Select
+      Element.prototype.scrollIntoView = jest.fn();
+    });
+
+    it("blurred required textarea shows hint; typing a valid value clears hint and aria-invalid without another blur", async () => {
+      const toolWithRequiredString = {
+        name: "reqStringTool",
+        description: "Tool with required string",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            name: { type: "string" as const },
+          },
+          required: ["name"],
+        },
+      } as unknown as Tool;
+
+      renderToolsTab({
+        tools: [toolWithRequiredString],
+        selectedTool: toolWithRequiredString,
+      });
+
+      const textarea = screen.getByRole("textbox");
+      await act(async () => {
+        fireEvent.blur(textarea);
+      });
+
+      // Hint is visible right after blur of the empty required field
+      expect(screen.getByText("This field is required")).toBeInTheDocument();
+      expect(textarea).toHaveAttribute("aria-invalid", "true");
+
+      // Type a valid value: onChange must drop the field error immediately,
+      // without waiting for another blur
+      await act(async () => {
+        fireEvent.change(textarea, { target: { value: "hello" } });
+      });
+
+      expect(
+        screen.queryByText("This field is required"),
+      ).not.toBeInTheDocument();
+      expect(textarea).not.toHaveAttribute("aria-invalid", "true");
+      expect(textarea).not.toHaveAttribute("aria-describedby");
+    });
+
+    it("blurred required numeric input shows hint; typing a valid number clears hint and aria-invalid without another blur", async () => {
+      const toolWithRequiredInt = {
+        name: "reqIntTool",
+        description: "Tool with required integer",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            count: { type: "integer" as const },
+          },
+          required: ["count"],
+        },
+      } as unknown as Tool;
+
+      renderToolsTab({
+        tools: [toolWithRequiredInt],
+        selectedTool: toolWithRequiredInt,
+      });
+
+      const input = screen.getByRole("textbox", { name: /count/i });
+      await act(async () => {
+        fireEvent.blur(input);
+      });
+
+      expect(screen.getByText("This field is required")).toBeInTheDocument();
+      expect(input).toHaveAttribute("aria-invalid", "true");
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: "42" } });
+      });
+
+      expect(
+        screen.queryByText("This field is required"),
+      ).not.toBeInTheDocument();
+      expect(input).not.toHaveAttribute("aria-invalid", "true");
+    });
+
+    it("empty required enum select after blur carries aria-invalid, aria-describedby, border-red-500", async () => {
+      const toolWithRequiredEnum = {
+        name: "reqEnumTool",
+        description: "Tool with required enum",
+        inputSchema: {
+          type: "object" as const,
+          properties: {
+            format: {
+              type: "string" as const,
+              enum: ["json", "xml"],
+              description: "Output format",
+            },
+          },
+          required: ["format"],
+        },
+      } as unknown as Tool;
+
+      renderToolsTab({
+        tools: [toolWithRequiredEnum],
+        selectedTool: toolWithRequiredEnum,
+      });
+
+      const trigger = screen.getByRole("combobox", { name: /format/i });
+
+      // Open the select. The click path opens it because the Radix
+      // trigger treats the default (touch) pointer type as a toggle.
+      await act(async () => {
+        fireEvent.click(trigger);
+      });
+
+      // Close it without picking a value: onOpenChange(false) runs
+      // validateField and the empty required field gets its hint
+      await act(async () => {
+        fireEvent.keyDown(document.activeElement ?? document.body, {
+          key: "Escape",
+        });
+      });
+
+      expect(trigger).toHaveAttribute("aria-invalid", "true");
+      expect(trigger).toHaveAttribute("aria-describedby", "format-error");
+      expect(trigger.className).toContain("border-red-500");
+
+      const errorEl = screen.getByRole("alert");
+      expect(errorEl).toHaveAttribute("id", "format-error");
+      expect(errorEl).toHaveTextContent("This field is required");
+    });
+  });
 });

@@ -54,7 +54,11 @@ Covered by:
 - `src/components/__tests__/ToolsTab.test.tsx`: untouched sum tool
   → Run Tool disabled; submit payload regression test (a=2,b=3
   sends exactly {a:2,b:3}); aria-invalid and aria-describedby
-  verified after blur of empty required textarea.
+  verified after blur of empty required textarea; hint-lifecycle
+  regression tests (issue #256): a blur hint on a required textarea
+  or numeric input clears on the next change without another blur,
+  and an empty required enum select carries aria-invalid,
+  aria-describedby and border-red-500 on its trigger after close.
 - `src/components/__tests__/PromptsTab.test.tsx`: untouched prompt
   → Get Prompt disabled; fills required arg → button enabled;
   aria-invalid and aria-describedby verified on combobox trigger
