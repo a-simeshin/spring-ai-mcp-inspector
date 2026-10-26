@@ -61,6 +61,28 @@ describe("parseConnectFailureResponse", () => {
     ).toBeNull();
   });
 
+  it("parses a body with the invalid_request reason (restricted header name)", async () => {
+    const failure = await parseConnectFailureResponse(
+      responseWithBody({
+        error: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "invalid_request",
+          message:
+            "custom header 'host' is not allowed by the JDK HTTP client: restricted header name: \"host\"",
+          retryable: true,
+        },
+      }),
+    );
+
+    expect(failure).toEqual({
+      code: "MCP_CONNECT_FAILED",
+      reason: "invalid_request",
+      message:
+        "custom header 'host' is not allowed by the JDK HTTP client: restricted header name: \"host\"",
+      retryable: true,
+    });
+  });
+
   it("returns null for unknown reasons", async () => {
     expect(
       await parseConnectFailureResponse(
@@ -137,6 +159,9 @@ describe("humanReadableReason", () => {
     expect(humanReadableReason("timeout")).toBe("Connection timed out");
     expect(humanReadableReason("connection_refused")).toBe("Connection refused");
     expect(humanReadableReason("dns")).toBe("Cannot resolve host");
+    expect(humanReadableReason("invalid_request")).toBe(
+      "Server rejected the request: check the custom headers",
+    );
     expect(humanReadableReason("unauthorized")).toBe("Authentication required");
     expect(humanReadableReason("not_found")).toBe("Server responded 404: check the URL path");
     expect(humanReadableReason("unknown")).toBe("");

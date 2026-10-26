@@ -33,6 +33,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -41,7 +42,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
-import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
@@ -50,6 +50,7 @@ import tools.jackson.databind.json.JsonMapper;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
+import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
@@ -77,6 +78,14 @@ import io.inspector.mcp.webmvc.InspectorServerPortHolder;
  * browser-side {@code SSEClientTransport} where to POST messages. Subsequent frames from
  * the target are streamed as {@code event: message}.
  *
+ * <p>
+ * A target that cannot be brought up is answered before the stream starts: the handler
+ * throws {@link ProxyConnectFailureException} and the {@link #connectFailure} advice maps
+ * it onto the same structured {@code MCP_CONNECT_FAILED} JSON body the streamable
+ * controller serves. A plain {@code ResponseStatusException} would delegate to Boot's
+ * {@code /error} dispatch, whose default {@code include-message=never} drops the message
+ * from both the status line and the body - exactly what this advice exists to avoid.
+ *
  * @author Artem Simeshin
  */
 @RestController
@@ -84,6 +93,12 @@ import io.inspector.mcp.webmvc.InspectorServerPortHolder;
 public class SseProxyController {
 
 	private static final Logger LOG = LoggerFactory.getLogger(SseProxyController.class);
+
+	/**
+	 * Error code of the structured connect-failure payload (mirrors
+	 * {@code StreamableHttpProxyController#connectFailureResponse}).
+	 */
+	private static final String ERROR_CODE_MCP_CONNECT_FAILED = "MCP_CONNECT_FAILED";
 
 	private final ProxySessionRegistry registry;
 
@@ -219,7 +234,7 @@ public class SseProxyController {
 			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
 			LOG.warn("proxy[{}] failed to build target transport ({}): {}", sessionId, failure.reason().wire(),
 					ex.toString());
-			throw new ResponseStatusException(connectFailureStatus(failure), failure.message(), ex);
+			throw new ProxyConnectFailureException(failure, ex);
 		}
 
 		// browserToTarget stays unicast (single consumer in McpProxy);
@@ -316,15 +331,26 @@ public class SseProxyController {
 	}
 
 	/**
-	 * Maps a classified connect failure onto an HTTP status: 504 Gateway Timeout for
-	 * {@link ProxyConnectFailure.Reason#TIMEOUT}, 502 Bad Gateway for every other reason.
-	 * Mirrors {@code StreamableHttpProxyController#connectFailureResponse}.
-	 * @param failure the classified connect failure (never {@code null})
-	 * @return the HTTP status for the error response
+	 * Answers a failed session bring-up with the structured {@code MCP_CONNECT_FAILED}
+	 * payload: 504 Gateway Timeout for {@link ProxyConnectFailure.Reason#TIMEOUT}, 502
+	 * Bad Gateway for every other reason. The body is written by this controller itself
+	 * (same contract as {@code StreamableHttpProxyController#connectFailureResponse})
+	 * because the container error page a thrown status exception would delegate to drops
+	 * the message on the wire (Boot's default
+	 * {@code server.error.include-message=never}); the cause stays server-side in the
+	 * log.
+	 * @param ex the connect failure signalled by the session bring-up
+	 * @return the HTTP response entity carrying the structured error body
 	 */
-	private static HttpStatus connectFailureStatus(final ProxyConnectFailure failure) {
-		return (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT) ? HttpStatus.GATEWAY_TIMEOUT
+	@ExceptionHandler(ProxyConnectFailureException.class)
+	private ResponseEntity<Object> connectFailure(final ProxyConnectFailureException ex) {
+		final ProxyConnectFailure failure = ex.failure();
+		final HttpStatus status = (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT) ? HttpStatus.GATEWAY_TIMEOUT
 				: HttpStatus.BAD_GATEWAY;
+		return ResponseEntity.status(status)
+			.contentType(MediaType.APPLICATION_JSON)
+			.body(Map.of("error", Map.of("code", ERROR_CODE_MCP_CONNECT_FAILED, "reason", failure.reason().wire(),
+					"message", failure.message(), "retryable", Boolean.TRUE)));
 	}
 
 	/**

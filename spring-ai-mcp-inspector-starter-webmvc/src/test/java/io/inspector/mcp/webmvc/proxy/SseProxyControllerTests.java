@@ -38,7 +38,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
-import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Mono;
@@ -48,6 +47,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyConnectFailure;
+import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
@@ -261,10 +262,10 @@ class SseProxyControllerTests {
 		@Test
 		@Story("Open SSE session")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("openSse() surfaces the offending header name and JDK reason as a 502 when a "
-				+ "restricted custom header name is rejected at transport build time, instead of a "
-				+ "bodyless 500 from completeWithError")
-		void openSse_whenRestrictedCustomHeaderRejected_throws502WithHeaderName() {
+		@Description("openSse() fails with a classified connect failure carrying the header name and "
+				+ "JDK reason when a restricted custom header name is rejected at transport build time; the "
+				+ "@ExceptionHandler maps it onto the structured 502 body (see SseProxyControllerWireTests)")
+		void openSse_whenRestrictedCustomHeaderRejected_failsWithHeaderName() {
 			// given - inbound custom headers route the controller onto the header-aware
 			// overload, whose build-time rejection carries the offending header name
 			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
@@ -275,12 +276,11 @@ class SseProxyControllerTests {
 				.willThrow(new IllegalArgumentException(
 						"custom header 'host' is not allowed by the JDK HTTP client: restricted header name"));
 
-			// when & then - a classified connect failure (502) carrying the header
-			// name, never a bodyless 500
+			// when & then - a classified connect failure carrying the header name;
+			// the @ExceptionHandler maps it onto the MCP_CONNECT_FAILED wire body
 			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
 					null, null, request))
-				.isInstanceOf(ResponseStatusException.class)
-				.hasMessageContaining("502 BAD_GATEWAY")
+				.isInstanceOf(ProxyConnectFailureException.class)
 				.hasMessageContaining("custom header 'host' is not allowed by the JDK HTTP client");
 			verify(SseProxyControllerTests.this.registry, never()).put(any());
 		}
@@ -288,8 +288,9 @@ class SseProxyControllerTests {
 		@Test
 		@Story("Open SSE session")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() maps a timeout-classified build failure onto 504, not 502")
-		void openSse_whenBuildTimesOut_throws504() {
+		@Description("openSse() classifies a timeout build failure as Reason.TIMEOUT, which the "
+				+ "@ExceptionHandler maps onto 504 (not 502)")
+		void openSse_whenBuildTimesOut_failsAsTimeout() {
 			// given - headers bound so the header-aware overload fires
 			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
 			request.addHeader("x-custom-auth-headers", "X-Tenant");
@@ -301,8 +302,9 @@ class SseProxyControllerTests {
 			// when & then
 			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
 					null, null, request))
-				.isInstanceOf(ResponseStatusException.class)
-				.hasMessageContaining("504 GATEWAY_TIMEOUT");
+				.isInstanceOf(ProxyConnectFailureException.class)
+				.extracting((ex) -> ((ProxyConnectFailureException) ex).failure().reason())
+				.isEqualTo(ProxyConnectFailure.Reason.TIMEOUT);
 		}
 
 		@Test
@@ -314,8 +316,7 @@ class SseProxyControllerTests {
 			// 502 instead of an SSE stream that dies with a bodyless 500
 			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openSse("carrier-pigeon", "x", null, null,
 					null, REQUEST))
-				.isInstanceOf(ResponseStatusException.class)
-				.hasMessageContaining("502 BAD_GATEWAY");
+				.isInstanceOf(ProxyConnectFailureException.class);
 			verify(SseProxyControllerTests.this.registry, never()).put(any());
 		}
 
@@ -419,8 +420,7 @@ class SseProxyControllerTests {
 			// when & then - the missing-command rejection surfaces as an immediate 502
 			// instead of an SSE stream that dies with a bodyless 500
 			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openStdio("   ", null, null, REQUEST))
-				.isInstanceOf(ResponseStatusException.class)
-				.hasMessageContaining("502 BAD_GATEWAY");
+				.isInstanceOf(ProxyConnectFailureException.class);
 			verify(SseProxyControllerTests.this.registry, never()).put(any());
 		}
 
