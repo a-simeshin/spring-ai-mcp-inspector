@@ -56,7 +56,7 @@ const HistoryAndNotifications = ({
               .map((request, index) => (
                 <li
                   key={index}
-                  className={`text-sm text-foreground bg-secondary py-2 px-3 rounded ${request.isError ? "border-l-4 border-red-500" : ""}`}
+                  className={`text-sm text-foreground bg-secondary py-2 px-3 rounded border-l-4 ${request.isError ? "border-red-500" : "border-transparent"}`}
                 >
                   <div
                     className="flex justify-between items-center cursor-pointer"

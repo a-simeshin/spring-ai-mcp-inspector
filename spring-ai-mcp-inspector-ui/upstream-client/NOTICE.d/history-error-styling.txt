@@ -7,10 +7,16 @@ each entry (#195).
 
 Change: pushHistory() in useConnection.ts now computes an isError flag when a
 history entry is recorded (true when the response has an `error` key or
-`isError: true`). HistoryAndNotifications.tsx applies `border-l-4 border-red-500`
-on the row and `text-red-600 dark:text-red-400` on the method text for failed
-entries. Successful entries keep the neutral style. Row height and spacing are
-unchanged (color + border only, no new elements).
+`isError: true`). HistoryAndNotifications.tsx applies a red left border and
+`text-red-600 dark:text-red-400` on the method text for failed entries. Every
+row carries `border-l-4` with `border-transparent` on successful entries, so
+failed rows no longer shift 4px relative to successful ones. Row height and
+spacing are unchanged (color + border only, no new elements).
 
 Tests: HistoryAndNotifications.test.tsx covers failed-isError entry (red style),
-transport-error entry (red style), and successful entry (neutral style).
+transport-error entry (red style), and successful entry (neutral style with the
+transparent left border). useConnection.test.tsx covers the producer side
+("requestHistory isError flag"): isError=true for responses carrying `error` or
+`isError: true` and for thrown transport errors; isError=false for successful
+responses and notifications without response. Forcing either branch to a
+constant fails these hook tests.

@@ -322,10 +322,12 @@ describe("HistoryAndNotifications", () => {
     const failedMethodSpan = failedRow.querySelector("span");
     expect(failedMethodSpan?.className).toContain("text-red-600");
 
-    // Successful entry (echo) should NOT have error styling
+    // Successful entry (echo) should NOT have error styling, but keeps the
+    // transparent left border so all rows stay aligned
     const successRow = rows[1];
     expect(successRow.className).not.toContain("border-red-500");
-    expect(successRow.className).not.toContain("border-l-4");
+    expect(successRow.className).toContain("border-l-4");
+    expect(successRow.className).toContain("border-transparent");
     const successMethodSpan = successRow.querySelector("span");
     expect(successMethodSpan?.className).not.toContain("text-red-600");
   });
@@ -351,5 +353,35 @@ describe("HistoryAndNotifications", () => {
     expect(row?.className).toContain("border-l-4");
     const methodSpan = row?.querySelector("span");
     expect(methodSpan?.className).toContain("text-red-600");
+  });
+
+  it("keeps successful entries aligned with failed ones via transparent left border", () => {
+    const mixedHistory = [
+      {
+        request: JSON.stringify({ method: "tools/call", params: { name: "echo" } }),
+        response: JSON.stringify({ content: [{ type: "text", text: "ok" }] }),
+      },
+      {
+        request: JSON.stringify({ method: "tools/call", params: { name: "errorTool" } }),
+        response: JSON.stringify({ error: "Connection refused" }),
+        isError: true,
+      },
+    ];
+
+    const { container } = render(
+      <HistoryAndNotifications
+        requestHistory={mixedHistory}
+        serverNotifications={[]}
+      />,
+    );
+
+    const rows = container.querySelectorAll("ul > li");
+    expect(rows).toHaveLength(2);
+    // Newest first: rows[0] failed, rows[1] successful
+    expect(rows[0].className).toContain("border-red-500");
+    // Both rows carry border-l-4 so the 4px shift applies to none of them
+    rows.forEach((row) => expect(row.className).toContain("border-l-4"));
+    expect(rows[1].className).toContain("border-transparent");
+    expect(rows[1].className).not.toContain("border-red-500");
   });
 });
