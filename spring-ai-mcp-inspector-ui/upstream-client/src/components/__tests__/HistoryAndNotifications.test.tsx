@@ -332,7 +332,7 @@ describe("HistoryAndNotifications", () => {
     expect(successMethodSpan?.className).not.toContain("text-red-600");
   });
 
-  it("applies error styling to entries with transport error in response and detection is driven by response error key", () => {
+  it("applies error styling to entries with transport error response when the isError prop is set", () => {
     const historyWithTransportError = [
       {
         request: JSON.stringify({ method: "tools/call", params: { name: "broken" } }),
