@@ -432,12 +432,13 @@ class InspectorUiIT {
 	/**
 	 * History column inside the bottom {@code HistoryAndNotifications} panel. The
 	 * upstream component renders the left column as
-	 * {@code <div class="flex-1 overflow-y-auto p-4 border-r">} — the {@code border-r} is
-	 * unique to the left (History) side; the right (Server Notifications) side has no
-	 * right border. Use {@code .flex-1.border-r} as a stable anchor.
+	 * {@code <div class="flex-1 overflow-y-auto p-4 border-b md:border-r md:border-b-0">}
+	 * -- the {@code border-b} with {@code md:border-r} distinguishes it from the right
+	 * (Server Notifications) side which has neither. Use
+	 * {@code .flex-1.border-b.md\:border-r} as a stable anchor.
 	 */
 	private static SelenideElement historyColumn() {
-		return $(".flex-1.overflow-y-auto.p-4.border-r");
+		return $(".flex-1.overflow-y-auto.p-4.border-b.md\\:border-r");
 	}
 
 	/**
@@ -3795,6 +3796,105 @@ class InspectorUiIT {
 			// URL field still shows the user-entered value
 			$("#sse-url-input").shouldBe(visible);
 			$("#sse-url-input").shouldHave(Condition.value("http://localhost:" + port + "/sse"));
+		}
+
+	}
+
+	// =====================================================================
+	// Mobile viewport (375x812) regression test: issue #230 companion.
+	// Proves the part of the mobile contract that is fixed today: after
+	// connect, History and Server Notifications stack vertically at 375px
+	// and the document does not overflow horizontally.
+	//
+	// Deliberately NOT asserted: URL input / Connect button reachability.
+	// At 375px the sidebar IS in compact mode (matchMedia max-width
+	// 1023.98px, no UA sniffing involved), but in compact mode the config
+	// pane is capped at 30vh with an inner scroll area, and on the live
+	// head both the URL input (top ~193) and the Connect button (top
+	// ~481) sit inside that scroll area (clientHeight 113 vs scrollHeight
+	// 500), out of view at scrollY=0. Verified live on this head with a
+	// full device-metrics override (375x812, DPR 2, mobile=true, iPhone
+	// UA): geometry identical to a plain resize, so no emulation makes
+	// them reachable. Selenide scrolls elements into view before a
+	// visibility probe or click, so an "URL/Connect visible" assertion
+	// here would be a false guarantee. Fixing their visibility is a
+	// product change (compact sidebar layout) tracked as the open
+	// remainder of issue #230.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Mobile viewport 375x812 (connect form + history stack)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class MobileViewport375x812 {
+
+		/** Each scenario boots a fresh app: clean up after every method. */
+		@AfterEach
+		void tearDown() {
+			stopApp();
+		}
+
+		/**
+		 * True when the History and Server Notifications sections are stacked vertically:
+		 * the top of Server Notifications >= the bottom of History. This is the <768px
+		 * (md breakpoint) stacked layout.
+		 */
+		private static boolean historyAboveNotifications() {
+			Object result = Selenide
+				.executeJavaScript("const all = Array.from(document.querySelectorAll('.flex-1.overflow-y-auto.p-4'));"
+						+ "const h = all.find(el => el.textContent.includes('History'));"
+						+ "const n = all.find(el => el.textContent.includes('Server Notifications'));"
+						+ "if (!h || !n) { return 'pane-not-found: ' + all.length + ' panes, h=' + !!h + ', n=' + !!n; }"
+						+ "const hr = h.getBoundingClientRect();" + "const nr = n.getBoundingClientRect();"
+						+ "if (nr.top < hr.bottom) { return 'not-stacked: history=' + Math.round(hr.top) + '..' + Math.round(hr.bottom)"
+						+ "+ ', notifications=' + Math.round(nr.top) + '..' + Math.round(nr.bottom)"
+						+ "+ ', scrollY=' + window.scrollY + ', panes=' + all.length; }" + "return true;");
+			if (result instanceof String) {
+				Assertions.fail((String) result);
+			}
+			return Boolean.TRUE.equals(result);
+		}
+
+		@Test
+		@Story("Mobile viewport")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At 375x812 the History and Server Notifications panes stack vertically (top of Notifications >= bottom of History) and the document has no horizontal overflow. Connect-form reachability at this viewport is intentionally NOT asserted: see the group comment above and the open remainder of issue #230.")
+		@DisplayName("historyAndNotificationsStack_375x812: panes stack vertically, no horizontal overflow")
+		void historyAndNotificationsStack_375x812() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+
+			// Set the exact mobile viewport right after opening. Note: reachability
+			// of the URL input / Connect button is NOT asserted at this viewport.
+			// In compact mode the config pane is capped at 30vh with an inner
+			// scroll area and both controls sit inside it out of view (see the
+			// group comment above); Selenide would scroll them into view before
+			// any probe, making a visibility assertion a false guarantee. That
+			// part of the mobile contract (issue #230) is tracked separately.
+			ResponsiveTestHelpers.setViewportExactly(375, 812);
+
+			// Wait for the sidebar to render at mobile viewport
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+
+			// Connect (History/Notifications pane mounts after connect).
+			// Selenide scrolls the button into the sidebar's inner scroll
+			// area before clicking: this is a layout drill-down, not a
+			// tap-reachability proof.
+			connectButton().click();
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			ResponsiveTestHelpers.scrollToTop();
+
+			// 1) No horizontal document overflow
+			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 375px");
+
+			// 2) History and Server Notifications stack vertically
+			// (both panes are rendered after connect)
+			SelenideElement historyCol = $$(".flex-1.overflow-y-auto.p-4").first();
+			historyCol.shouldBe(visible);
+			SelenideElement notificationsCol = $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications"));
+			notificationsCol.shouldBe(visible);
+			Assertions.assertTrue(historyAboveNotifications(),
+					"History section must be above Server Notifications at 375px (stacked, not side-by-side)");
 		}
 
 	}
