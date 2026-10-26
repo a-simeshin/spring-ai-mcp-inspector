@@ -4059,9 +4059,25 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// Mobile viewport (375x812) regression test: issue #58/#60 companion.
-	// Verifies that the connect form and the History/Notifications pane
-	// render correctly on a 375x812 viewport (iPhone 14/15 CSS pixels).
+	// Mobile viewport (375x812) regression test: issue #230 companion.
+	// Proves the part of the mobile contract that is fixed today: after
+	// connect, History and Server Notifications stack vertically at 375px
+	// and the document does not overflow horizontally.
+	//
+	// Deliberately NOT asserted: URL input / Connect button reachability.
+	// At 375px the sidebar IS in compact mode (matchMedia max-width
+	// 1023.98px, no UA sniffing involved), but in compact mode the config
+	// pane is capped at 30vh with an inner scroll area, and on the live
+	// head both the URL input (top ~193) and the Connect button (top
+	// ~481) sit inside that scroll area (clientHeight 113 vs scrollHeight
+	// 500), out of view at scrollY=0. Verified live on this head with a
+	// full device-metrics override (375x812, DPR 2, mobile=true, iPhone
+	// UA): geometry identical to a plain resize, so no emulation makes
+	// them reachable. Selenide scrolls elements into view before a
+	// visibility probe or click, so an "URL/Connect visible" assertion
+	// here would be a false guarantee. Fixing their visibility is a
+	// product change (compact sidebar layout) tracked as the open
+	// remainder of issue #230.
 	// =====================================================================
 
 	@Nested
@@ -4076,17 +4092,6 @@ class InspectorUiIT {
 		}
 
 		/**
-		 * True when the bounding box of the given element lies fully inside the
-		 * 375px-wide viewport: left >= 0 and right <= 375.
-		 */
-		private static boolean fitsIn375px(final SelenideElement element) {
-			Object result = Selenide.executeJavaScript(
-					"const r = arguments[0].getBoundingClientRect();" + "return r.left >= 0 && r.right <= 375;",
-					element);
-			return Boolean.TRUE.equals(result);
-		}
-
-		/**
 		 * True when the History and Server Notifications sections are stacked vertically:
 		 * the top of Server Notifications >= the bottom of History. This is the <768px
 		 * (md breakpoint) stacked layout.
@@ -4098,8 +4103,10 @@ class InspectorUiIT {
 						+ "const n = all.find(el => el.textContent.includes('Server Notifications'));"
 						+ "if (!h || !n) { return 'pane-not-found: ' + all.length + ' panes, h=' + !!h + ', n=' + !!n; }"
 						+ "const hr = h.getBoundingClientRect();" + "const nr = n.getBoundingClientRect();"
-						+ "return nr.top >= hr.bottom;");
-			if (result instanceof String && ((String) result).startsWith("pane-not-found")) {
+						+ "if (nr.top < hr.bottom) { return 'not-stacked: history=' + Math.round(hr.top) + '..' + Math.round(hr.bottom)"
+						+ "+ ', notifications=' + Math.round(nr.top) + '..' + Math.round(nr.bottom)"
+						+ "+ ', scrollY=' + window.scrollY + ', panes=' + all.length; }" + "return true;");
+			if (result instanceof String) {
 				Assertions.fail((String) result);
 			}
 			return Boolean.TRUE.equals(result);
@@ -4108,51 +4115,37 @@ class InspectorUiIT {
 		@Test
 		@Story("Mobile viewport")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("At 375x812 (iPhone 14/15) the URL input, Connect button, and the History/Notifications pane all render within the viewport without horizontal overflow, and History/Notifications stack vertically (top of Notifications >= bottom of History).")
-		@DisplayName("connectFormAndHistoryStack_375x812: URL/Connect visible, no h-overflow, History above Notifications")
-		void connectFormAndHistoryStack_375x812() {
+		@Description("At 375x812 the History and Server Notifications panes stack vertically (top of Notifications >= bottom of History) and the document has no horizontal overflow. Connect-form reachability at this viewport is intentionally NOT asserted: see the group comment above and the open remainder of issue #230.")
+		@DisplayName("historyAndNotificationsStack_375x812: panes stack vertically, no horizontal overflow")
+		void historyAndNotificationsStack_375x812() {
 			startApp(new Combo("sse"));
 			open("/mcp-inspector/index.html");
 
-			// Set the exact mobile viewport right after opening so the page
-			// transitions to compact mode before we connect.
+			// Set the exact mobile viewport right after opening. Note: reachability
+			// of the URL input / Connect button is NOT asserted at this viewport.
+			// In compact mode the config pane is capped at 30vh with an inner
+			// scroll area and both controls sit inside it out of view (see the
+			// group comment above); Selenide would scroll them into view before
+			// any probe, making a visibility assertion a false guarantee. That
+			// part of the mobile contract (issue #230) is tracked separately.
 			ResponsiveTestHelpers.setViewportExactly(375, 812);
 
 			// Wait for the sidebar to render at mobile viewport
 			connectButton().shouldBe(visible, Duration.ofSeconds(15));
 
-			// Connect (History/Notifications pane mounts after connect)
+			// Connect (History/Notifications pane mounts after connect).
+			// Selenide scrolls the button into the sidebar's inner scroll
+			// area before clicking: this is a layout drill-down, not a
+			// tap-reachability proof.
 			connectButton().click();
 			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
 			ResponsiveTestHelpers.scrollToTop();
 
-			// The compact layout removes border-r from the sidebar, so use the
-			// data-testid anchor instead of the desktop sidebar() selector.
-			SelenideElement configPane = $("[data-testid=config-pane]");
-
-			// 1) URL label is visible and within bounds
-			SelenideElement urlLabel = configPane.$(byText("URL"));
-			urlLabel.shouldBe(visible);
-			Assertions.assertTrue(fitsIn375px(urlLabel),
-					"URL label must fit within 375px, rect: " + urlLabel.getRect());
-
-			// 2) URL input is visible and within bounds
-			SelenideElement urlInput = $("#sse-url-input");
-			urlInput.shouldBe(visible);
-			Assertions.assertTrue(fitsIn375px(urlInput),
-					"URL input must fit within 375px, rect: " + urlInput.getRect());
-
-			// 3) Connect/Reconnect button is visible and within bounds
-			SelenideElement connectBtn = $("[data-testid=connect-button]");
-			connectBtn.shouldBe(visible);
-			Assertions.assertTrue(fitsIn375px(connectBtn),
-					"Connect button must fit within 375px, rect: " + connectBtn.getRect());
-
-			// 4) No horizontal document overflow
+			// 1) No horizontal document overflow
 			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
 					"document.documentElement must not overflow horizontally at 375px");
 
-			// 5) History and Server Notifications stack vertically
+			// 2) History and Server Notifications stack vertically
 			// (both panes are rendered after connect)
 			SelenideElement historyCol = $$(".flex-1.overflow-y-auto.p-4").first();
 			historyCol.shouldBe(visible);
