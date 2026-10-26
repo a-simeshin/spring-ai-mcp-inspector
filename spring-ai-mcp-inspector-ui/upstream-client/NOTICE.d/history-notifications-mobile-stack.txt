@@ -1,0 +1,18 @@
+src/components/HistoryAndNotifications.tsx: the History / Server
+Notifications split pane stacks vertically below the `md` (768px)
+breakpoint instead of sharing one row at every viewport. Upstream
+renders the split as a `flex` row with two `flex-1` columns, so at a
+375px mobile viewport each column gets about half the width and the
+History list is effectively unusable. Local fix, companion of the
+compact-layout and mobile-layout-grid patches (issue #58/#60 mobile
+contract): the wrapper becomes `flex flex-col md:flex-row` and the
+left (History) column switches its divider from `border-r` to
+`border-b md:border-r md:border-b-0`, so the stacked layout keeps a
+horizontal divider and the desktop row keeps the upstream vertical
+one; desktop (>=768px) geometry is unchanged. Covered by the
+Selenide InspectorUiIT updates delivered with this change set: the
+historyColumn selector re-anchored to
+`.flex-1.border-b.md\:border-r` (desktop row layout assertions stay
+honest) and the new MobileViewport375x812 nested group (no
+horizontal document overflow at 375x812, History stacked above
+Server Notifications: top of Notifications >= bottom of History).
