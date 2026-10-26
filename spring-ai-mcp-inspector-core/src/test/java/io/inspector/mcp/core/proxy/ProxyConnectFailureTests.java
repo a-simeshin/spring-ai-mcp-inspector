@@ -88,6 +88,52 @@ class ProxyConnectFailureTests {
 
 		@Test
 		@Story("Classification")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("An IllegalArgumentException (transport-build rejection) is classified as "
+				+ "invalid_request and keeps the value-safe message")
+		void classify_illegalArgument_returnsInvalidRequestWithMessage() {
+			// given / when
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(new IllegalArgumentException(
+					"custom header 'host' is not allowed by the JDK HTTP client: restricted header name"));
+
+			// then
+			assertThat(failure.reason()).isEqualTo(ProxyConnectFailure.Reason.INVALID_REQUEST);
+			assertThat(failure.message())
+				.isEqualTo("custom header 'host' is not allowed by the JDK HTTP client: restricted header name");
+		}
+
+		@Test
+		@Story("Classification")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("An IllegalArgumentException in a cause chain maps to invalid_request")
+		void classify_wrappedIllegalArgument_returnsInvalidRequest() {
+			// given: a controller may catch a wrapper thrown around the factory reject
+			final RuntimeException wrapper = new RuntimeException("build failed",
+					new IllegalArgumentException("custom header 'connection' is not allowed by the JDK HTTP client"));
+
+			// when
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(wrapper);
+
+			// then
+			assertThat(failure.reason()).isEqualTo(ProxyConnectFailure.Reason.INVALID_REQUEST);
+			assertThat(failure.message()).isEqualTo("custom header 'connection' is not allowed by the JDK HTTP client");
+		}
+
+		@Test
+		@Story("Classification")
+		@Severity(SeverityLevel.MINOR)
+		@Description("An IllegalArgumentException with a null message still yields a non-null message")
+		void classify_illegalArgumentWithNullMessage_keepsNonNullMessage() {
+			// given / when
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(new IllegalArgumentException());
+
+			// then
+			assertThat(failure.reason()).isEqualTo(ProxyConnectFailure.Reason.INVALID_REQUEST);
+			assertThat(failure.message()).isNotNull();
+		}
+
+		@Test
+		@Story("Classification")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("An unrecognized exception is classified as unknown without throwing")
 		void classify_unrecognizedException_returnsUnknown() {
@@ -278,6 +324,7 @@ class ProxyConnectFailureTests {
 			assertThat(ProxyConnectFailure.Reason.TIMEOUT.wire()).isEqualTo("timeout");
 			assertThat(ProxyConnectFailure.Reason.CONNECTION_REFUSED.wire()).isEqualTo("connection_refused");
 			assertThat(ProxyConnectFailure.Reason.DNS.wire()).isEqualTo("dns");
+			assertThat(ProxyConnectFailure.Reason.INVALID_REQUEST.wire()).isEqualTo("invalid_request");
 			assertThat(ProxyConnectFailure.Reason.NOT_FOUND.wire()).isEqualTo("not_found");
 			assertThat(ProxyConnectFailure.Reason.UNKNOWN.wire()).isEqualTo("unknown");
 		}

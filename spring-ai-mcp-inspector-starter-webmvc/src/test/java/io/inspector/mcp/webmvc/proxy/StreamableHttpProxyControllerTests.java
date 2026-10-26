@@ -206,6 +206,40 @@ class StreamableHttpProxyControllerTests {
 
 		@Test
 		@Story("New session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() surfaces the offending header name and JDK reason when a restricted "
+				+ "custom header name is rejected at transport build time")
+		void postMcp_whenRestrictedCustomHeaderRejected_surfacesHeaderNameAndReason() throws Exception {
+			// given - inbound custom headers route the controller onto the header-aware
+			// overload; the factory throws the value-safe IllegalArgumentException built
+			// by validateHeaderNames(), which the controller must not collapse into the
+			// generic "failed to connect" message
+			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
+			request.addHeader("x-custom-auth-headers", "X-Tenant");
+			request.addHeader("X-Tenant", "acme");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class), any(), any()))
+				.willThrow(new IllegalArgumentException(
+						"custom header 'host' is not allowed by the JDK HTTP client: restricted header name"));
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
+
+			// when
+			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", body);
+
+			// then - the header name and the JDK reason reach the caller
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(response.getBody())
+				.path("error");
+			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.path("reason").asText()).isEqualTo("invalid_request");
+			assertThat(error.path("message").asText())
+				.isEqualTo("custom header 'host' is not allowed by the JDK HTTP client: restricted header name");
+		}
+
+		@Test
+		@Story("New session")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() reports dns when building the transport throws an UnknownHostException")
 		void postMcp_whenUpstreamHostUnknown_returnsStructured502Dns() throws Exception {

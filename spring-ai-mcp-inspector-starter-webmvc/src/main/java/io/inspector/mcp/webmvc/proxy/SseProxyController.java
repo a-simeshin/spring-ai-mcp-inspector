@@ -41,6 +41,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
@@ -48,6 +49,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyConnectFailure;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
@@ -211,9 +213,13 @@ public class SseProxyController {
 			target = buildTargetTransport(transportType, url, command, args, env);
 		}
 		catch (final Exception ex) {
-			LOG.warn("proxy[{}] failed to build target transport: {}", sessionId, ex.toString());
-			emitter.completeWithError(ex);
-			return emitter;
+			// classify() maps transport-build rejections onto a message the browser
+			// can read; completeWithError(ex) would answer a bodyless 500 and lose the
+			// offending header name entirely.
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
+			LOG.warn("proxy[{}] failed to build target transport ({}): {}", sessionId, failure.reason().wire(),
+					ex.toString());
+			throw new ResponseStatusException(connectFailureStatus(failure), failure.message(), ex);
 		}
 
 		// browserToTarget stays unicast (single consumer in McpProxy);
@@ -307,6 +313,18 @@ public class SseProxyController {
 			}
 			default -> throw new IllegalArgumentException("unsupported transportType: " + transportType);
 		};
+	}
+
+	/**
+	 * Maps a classified connect failure onto an HTTP status: 504 Gateway Timeout for
+	 * {@link ProxyConnectFailure.Reason#TIMEOUT}, 502 Bad Gateway for every other reason.
+	 * Mirrors {@code StreamableHttpProxyController#connectFailureResponse}.
+	 * @param failure the classified connect failure (never {@code null})
+	 * @return the HTTP status for the error response
+	 */
+	private static HttpStatus connectFailureStatus(final ProxyConnectFailure failure) {
+		return (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT) ? HttpStatus.GATEWAY_TIMEOUT
+				: HttpStatus.BAD_GATEWAY;
 	}
 
 	/**

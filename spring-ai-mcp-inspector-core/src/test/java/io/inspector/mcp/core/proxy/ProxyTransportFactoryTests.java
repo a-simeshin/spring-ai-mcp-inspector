@@ -216,6 +216,46 @@ class ProxyTransportFactoryTests {
 		}
 
 		@Test
+		@Story("Restricted header diagnostic - colon in header name")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A header NAME containing a colon (rejected by the JDK as 'invalid header name') "
+				+ "is reported verbatim, next to its own JDK reason - not truncated at the first colon")
+		void openSse_withColonInHeaderName_reportsNameAndReasonVerbatim() {
+			// given - "X-Cu:stom" is an illegal header NAME; the old "name: reason"
+			// join + indexOf(':') split truncated it to "X-Cu" and garbled the reason
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+
+			// when & then
+			assertThatThrownBy(
+					() -> ProxyTransportFactoryTests.this.factory.openSse(sseUri, null, Map.of("X-Cu:stom", "value")))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("'X-Cu:stom'")
+				.hasMessageContaining("invalid header name");
+		}
+
+		@Test
+		@Story("Restricted header diagnostic - colon together with a restricted name")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Multiple offenders, one with a colon in its name: every name and its own JDK "
+				+ "reason survive the round trip through offender collection")
+		void openSse_withColonNameAmongMultipleOffenders_reportsAllPairs() {
+			// given - one illegal name (colon) plus one restricted name (host)
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+			final Map<String, String> headers = new LinkedHashMap<>();
+			headers.put("X-Cu:stom", "value");
+			headers.put("host", "evil.example.com");
+
+			// when & then
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openSse(sseUri, null, headers))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("X-Cu:stom")
+				.hasMessageContaining("invalid header name")
+				.hasMessageContaining("host")
+				.hasMessageContaining("restricted header name")
+				.hasMessageNotContaining("evil.example.com");
+		}
+
+		@Test
 		@Story("Restricted header diagnostic - multiple offenders")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() collects ALL restricted header names in one exception when multiple "
@@ -258,6 +298,34 @@ class ProxyTransportFactoryTests {
 			final java.io.StringWriter sw = new java.io.StringWriter();
 			thrown.printStackTrace(new java.io.PrintWriter(sw));
 			assertThat(sw.toString()).doesNotContain("super-secret-value");
+		}
+
+		@Test
+		@Story("Authorization value never leaks")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("An Authorization value the JDK rejects (newline) triggers a value-safe "
+				+ "IllegalArgumentException whose message and cause chain never contain the token")
+		void openSse_withInvalidAuthorizationValue_neverLeaksToken() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+			final String secretToken = "Bearer super-secret-token" + (char) 10;
+
+			// when - the transport builds; the customizer applies the header on connect
+			final var transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, secretToken, null);
+
+			// then - the rethrow is value-safe: the header name, never the token
+			assertThat(transport).isNotNull();
+			final Throwable thrown = org.assertj.core.api.Assertions
+				.catchThrowable(() -> transport.connect((inbound) -> inbound).block());
+			assertThat(thrown).isInstanceOf(IllegalArgumentException.class);
+			assertThat(thrown.getMessage()).contains("Authorization").doesNotContain("super-secret-token");
+			final java.io.StringWriter sw = new java.io.StringWriter();
+			Throwable current = thrown;
+			while (current != null) {
+				sw.append(String.valueOf(current.getMessage())).append(System.lineSeparator());
+				current = current.getCause();
+			}
+			assertThat(sw.toString()).doesNotContain("super-secret-token");
 		}
 
 	}

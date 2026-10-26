@@ -18,7 +18,7 @@ package io.inspector.mcp.core.proxy;
 
 import java.net.URI;
 import java.net.http.HttpRequest;
-import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -230,7 +230,12 @@ public class ProxyTransportFactory {
 		}
 		return (builder, method, endpoint, body, context) -> {
 			if (hasAuth) {
-				builder.setHeader("Authorization", authorization);
+				try {
+					builder.setHeader("Authorization", authorization);
+				}
+				catch (final IllegalArgumentException ex) {
+					throw new IllegalArgumentException("Authorization header rejected: invalid value", null);
+				}
 			}
 			if (hasCustom) {
 				customHeaders.forEach((name, value) -> {
@@ -260,7 +265,10 @@ public class ProxyTransportFactory {
 	 * @param customHeaders the headers to validate (never {@code null})
 	 */
 	private static void validateHeaderNames(final Map<String, String> customHeaders) {
-		final List<String> offenders = new ArrayList<>();
+		// name -> JDK rejection reason, kept as a pair: a header NAME may itself
+		// contain a colon (rejected by the JDK as "invalid header name"), so joining
+		// "name: reason" and splitting back on ':' garbles both fields.
+		final Map<String, String> offenders = new LinkedHashMap<>();
 		for (final Map.Entry<String, String> entry : customHeaders.entrySet()) {
 			final String name = entry.getKey();
 			if (name != null && !name.isBlank() && entry.getValue() != null) {
@@ -268,17 +276,13 @@ public class ProxyTransportFactory {
 					HttpRequest.newBuilder().setHeader(name, "probe");
 				}
 				catch (final IllegalArgumentException ex) {
-					offenders.add(name + ": " + ex.getMessage());
+					offenders.put(name, ex.getMessage());
 				}
 			}
 		}
 		if (!offenders.isEmpty()) {
-			final String names = offenders.stream()
-				.map((o) -> o.substring(0, o.indexOf(':')))
-				.collect(Collectors.joining(", "));
-			final String reasons = offenders.stream()
-				.map((o) -> o.substring(o.indexOf(':') + 2))
-				.collect(Collectors.joining("; "));
+			final String names = String.join(", ", offenders.keySet());
+			final String reasons = offenders.values().stream().collect(Collectors.joining("; "));
 			if (offenders.size() == 1) {
 				throw new IllegalArgumentException(
 						"custom header '" + names + "' is not allowed by the JDK HTTP client: " + reasons);
