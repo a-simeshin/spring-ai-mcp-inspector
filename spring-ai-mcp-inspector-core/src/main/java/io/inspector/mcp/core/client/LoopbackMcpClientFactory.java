@@ -16,6 +16,7 @@
 
 package io.inspector.mcp.core.client;
 
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import io.modelcontextprotocol.client.McpClient;
@@ -72,6 +73,23 @@ public class LoopbackMcpClientFactory {
 	 */
 	public McpSyncClient forSse(final String host, final int port, final String sseEndpoint,
 			final InspectorClientHandlers handlers) {
+		return forSse(host, port, sseEndpoint, handlers, null);
+	}
+
+	/**
+	 * Variant of {@link #forSse(String, int, String, InspectorClientHandlers)} that also
+	 * captures the raw initialize result frame for SEP-2640 extension detection.
+	 * @param host loopback host
+	 * @param port loopback port
+	 * @param sseEndpoint the SSE endpoint path, deployment prefix included; defaults to
+	 * {@code /sse} when blank
+	 * @param handlers inspector client handlers to register; may be {@code null}
+	 * @param capture receives the {@link InitializeResultCapturingTransport} wrapper;
+	 * {@code null} skips the wrapping
+	 * @return a connected-ready {@link McpSyncClient} for SSE with handlers applied
+	 */
+	public McpSyncClient forSse(final String host, final int port, final String sseEndpoint,
+			final InspectorClientHandlers handlers, final AtomicReference<InitializeResultCapturingTransport> capture) {
 		final String baseUri = buildBaseUri(host, port);
 		final String ssePath = (sseEndpoint == null || sseEndpoint.isBlank() || "/".equals(sseEndpoint))
 				? DEFAULT_SSE_PATH : sseEndpoint;
@@ -81,7 +99,7 @@ public class LoopbackMcpClientFactory {
 			.messageEndpointValidator(loopbackNoopValidator())
 			.build();
 
-		return applyHandlers(McpClient.sync(transport), handlers).build();
+		return applyHandlers(McpClient.sync(wrap(transport, capture)), handlers).build();
 	}
 
 	/**
@@ -92,7 +110,7 @@ public class LoopbackMcpClientFactory {
 	 * @return a connected-ready {@link McpSyncClient} for streamable-HTTP
 	 */
 	public McpSyncClient forStreamable(final String host, final int port, final String endpoint) {
-		return buildStreamable(host, port, endpoint, InspectorClientHandlers.none());
+		return buildStreamable(host, port, endpoint, InspectorClientHandlers.none(), null);
 	}
 
 	/**
@@ -106,7 +124,25 @@ public class LoopbackMcpClientFactory {
 	 */
 	public McpSyncClient forStreamable(final String host, final int port, final String endpoint,
 			final InspectorClientHandlers handlers) {
-		return buildStreamable(host, port, endpoint, handlers);
+		return buildStreamable(host, port, endpoint, handlers, null);
+	}
+
+	/**
+	 * Variant of {@link #forStreamable(String, int, String, InspectorClientHandlers)}
+	 * that also captures the raw initialize result frame for SEP-2640 extension
+	 * detection.
+	 * @param host loopback host
+	 * @param port loopback port
+	 * @param endpoint the MCP endpoint path (e.g. {@code /mcp})
+	 * @param handlers inspector client handlers to register; may be {@code null}
+	 * @param capture receives the {@link InitializeResultCapturingTransport} wrapper;
+	 * {@code null} skips the wrapping
+	 * @return a connected-ready {@link McpSyncClient} for streamable-HTTP with handlers
+	 * applied
+	 */
+	public McpSyncClient forStreamable(final String host, final int port, final String endpoint,
+			final InspectorClientHandlers handlers, final AtomicReference<InitializeResultCapturingTransport> capture) {
+		return buildStreamable(host, port, endpoint, handlers, capture);
 	}
 
 	/**
@@ -121,7 +157,7 @@ public class LoopbackMcpClientFactory {
 	 * @return a connected-ready {@link McpSyncClient} for stateless-HTTP
 	 */
 	public McpSyncClient forStateless(final String host, final int port, final String endpoint) {
-		return buildStreamable(host, port, endpoint, InspectorClientHandlers.none());
+		return buildStreamable(host, port, endpoint, InspectorClientHandlers.none(), null);
 	}
 
 	/**
@@ -135,17 +171,45 @@ public class LoopbackMcpClientFactory {
 	 */
 	public McpSyncClient forStateless(final String host, final int port, final String endpoint,
 			final InspectorClientHandlers handlers) {
-		return buildStreamable(host, port, endpoint, handlers);
+		return buildStreamable(host, port, endpoint, handlers, null);
+	}
+
+	/**
+	 * Variant of {@link #forStateless(String, int, String, InspectorClientHandlers)} that
+	 * also captures the raw initialize result frame for SEP-2640 extension detection.
+	 * @param host loopback host
+	 * @param port loopback port
+	 * @param endpoint the MCP endpoint path (e.g. {@code /mcp})
+	 * @param handlers inspector client handlers to register; may be {@code null}
+	 * @param capture receives the {@link InitializeResultCapturingTransport} wrapper;
+	 * {@code null} skips the wrapping
+	 * @return a connected-ready {@link McpSyncClient} for stateless-HTTP with handlers
+	 * applied
+	 */
+	public McpSyncClient forStateless(final String host, final int port, final String endpoint,
+			final InspectorClientHandlers handlers, final AtomicReference<InitializeResultCapturingTransport> capture) {
+		return buildStreamable(host, port, endpoint, handlers, capture);
 	}
 
 	private McpSyncClient buildStreamable(final String host, final int port, final String endpoint,
-			final InspectorClientHandlers handlers) {
+			final InspectorClientHandlers handlers, final AtomicReference<InitializeResultCapturingTransport> capture) {
 		final String baseUri = buildBaseUri(host, port);
 		final String path = (endpoint == null || endpoint.isBlank()) ? "/mcp" : endpoint;
 
 		final McpClientTransport transport = HttpClientStreamableHttpTransport.builder(baseUri).endpoint(path).build();
 
-		return applyHandlers(McpClient.sync(transport), handlers).build();
+		return applyHandlers(McpClient.sync(wrap(transport, capture)), handlers).build();
+	}
+
+	/**
+	 * Wraps the transport for raw-initialize capture when an observer is present.
+	 * @param transport the transport built for this client
+	 * @param capture the observer; {@code null} returns the transport unchanged
+	 * @return the (possibly wrapped) transport
+	 */
+	private static McpClientTransport wrap(final McpClientTransport transport,
+			final AtomicReference<InitializeResultCapturingTransport> capture) {
+		return InitializeResultCapturingTransport.wrapIfObserved(transport, capture);
 	}
 
 	/**

@@ -32,6 +32,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
@@ -63,6 +64,7 @@ import io.inspector.mcp.core.bootstrap.BootstrapHtmlRenderer;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrap;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapAssembler;
 import io.inspector.mcp.core.client.ExternalStdioClientFactory;
+import io.inspector.mcp.core.client.InitializeResultCapturingTransport;
 import io.inspector.mcp.core.client.InspectorClientHandlers;
 import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
 import io.inspector.mcp.core.client.PendingServerRequests;
@@ -72,6 +74,7 @@ import io.inspector.mcp.core.dto.ConnectRequest;
 import io.inspector.mcp.core.dto.JsonRpcRelay;
 import io.inspector.mcp.core.dto.RootDto;
 import io.inspector.mcp.core.dto.RootsDto;
+import io.inspector.mcp.core.dto.SkillsExtensionSupport;
 import io.inspector.mcp.core.introspect.McpBeanIntrospector;
 import io.inspector.mcp.core.introspect.check.JsonSchemaCompatibilityChecker;
 import io.inspector.mcp.core.introspect.model.IntrospectionReport;
@@ -601,15 +604,34 @@ public class InspectorHandler implements ApplicationContextAware {
 				(req) -> handleElicitationRequest(sessionId, holder, req),
 				(req) -> handleUrlElicitationRequest(sessionId, holder, req));
 
-		final McpSyncClient client = (body != null && body.externalCommand() != null
-				&& !body.externalCommand().isBlank())
-						? this.externalStdioFactory.forCommand(splitCommand(body.externalCommand()), Map.of())
-						: buildLoopbackClient(handlers);
+		final McpSyncClient client;
+		final AtomicReference<InitializeResultCapturingTransport> initializeCapture = new AtomicReference<>();
+		if (body != null && body.externalCommand() != null && !body.externalCommand().isBlank()) {
+			client = this.externalStdioFactory.forCommand(splitCommand(body.externalCommand()), Map.of(),
+					initializeCapture);
+		}
+		else {
+			client = buildLoopbackClient(handlers, initializeCapture);
+		}
 
 		client.initialize();
 
 		final Sinks.Many<ServerSentEvent<String>> sink = Sinks.many().multicast().onBackpressureBuffer(256, false);
 		final SessionContext ctx = new SessionContext(client, sink);
+		// SEP-2640: detect the skills extension from the raw initialize frame so the
+		// session model (and the UI's Skills tab gate) can see it. The canonical
+		// declaration lives in capabilities.extensions, which the SDK's typed
+		// ServerCapabilities drops, so detection reads the frame captured at the
+		// transport seam. Parsing tolerates absent or malformed declarations and never
+		// fails the connection.
+		try {
+			final InitializeResultCapturingTransport capture = initializeCapture.get();
+			final Map<String, Object> rawInitializeResult = (capture != null) ? capture.rawInitializeResult() : null;
+			ctx.skillsExtension(SkillsExtensionSupport.fromRawInitializeResult(rawInitializeResult));
+		}
+		catch (final Exception ex) {
+			LOG.debug("skills extension detection failed: {}", ex.toString());
+		}
 		holder.ctx = ctx;
 		this.sessions.put(sessionId, ctx);
 		if (this.closed) {
@@ -629,10 +651,13 @@ public class InspectorHandler implements ApplicationContextAware {
 		result.put("sessionId", sessionId);
 		result.put("serverName", (info != null) ? info.name() : null);
 		result.put("serverVersion", (info != null) ? info.version() : null);
+		final SkillsExtensionSupport skills = ctx.skillsExtension();
+		result.put("skillsExtension", Map.of("supported", skills.supported(), "directoryRead", skills.directoryRead()));
 		return result;
 	}
 
-	private McpSyncClient buildLoopbackClient(final InspectorClientHandlers handlers) {
+	private McpSyncClient buildLoopbackClient(final InspectorClientHandlers handlers,
+			final AtomicReference<InitializeResultCapturingTransport> initializeCapture) {
 		final DetectedTransport transport = this.transportDetector.detect();
 		final int port = this.listeningPort.get();
 		if (port <= 0) {
@@ -640,9 +665,11 @@ public class InspectorHandler implements ApplicationContextAware {
 		}
 		final String host = "127.0.0.1";
 		return switch (transport.type()) {
-			case SSE -> this.loopbackFactory.forSse(host, port, transport.endpoint(), handlers);
-			case STREAMABLE -> this.loopbackFactory.forStreamable(host, port, transport.endpoint(), handlers);
-			case STATELESS -> this.loopbackFactory.forStateless(host, port, transport.endpoint(), handlers);
+			case SSE -> this.loopbackFactory.forSse(host, port, transport.endpoint(), handlers, initializeCapture);
+			case STREAMABLE ->
+				this.loopbackFactory.forStreamable(host, port, transport.endpoint(), handlers, initializeCapture);
+			case STATELESS ->
+				this.loopbackFactory.forStateless(host, port, transport.endpoint(), handlers, initializeCapture);
 			case STDIO_NO_HTTP -> throw new IllegalStateException(
 					"loopback connect not supported for STDIO_NO_HTTP transport — use externalCommand");
 			case UNKNOWN -> throw new IllegalStateException(

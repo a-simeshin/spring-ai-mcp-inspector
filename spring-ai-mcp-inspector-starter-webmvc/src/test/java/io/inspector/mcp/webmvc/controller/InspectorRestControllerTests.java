@@ -168,7 +168,7 @@ class InspectorRestControllerTests {
 			given(InspectorRestControllerTests.this.portHolder.port()).willReturn(1234);
 			final McpSyncClient client = mock(McpSyncClient.class);
 			given(InspectorRestControllerTests.this.loopbackFactory.forSse(eq("127.0.0.1"), eq(1234), eq("/app/sse"),
-					any()))
+					any(), any()))
 				.willReturn(client);
 
 			// when
@@ -212,7 +212,7 @@ class InspectorRestControllerTests {
 				.willReturn(new DetectedTransport(TransportType.STREAMABLE, "/mcp", null, "WEBMVC"));
 			given(InspectorRestControllerTests.this.portHolder.port()).willReturn(1234);
 			given(InspectorRestControllerTests.this.loopbackFactory.forStreamable(anyString(), anyInt(), anyString(),
-					any()))
+					any(), any()))
 				.willThrow(new RuntimeException("boom"));
 
 			// when
@@ -235,7 +235,7 @@ class InspectorRestControllerTests {
 			given(InspectorRestControllerTests.this.portHolder.port()).willReturn(1234);
 			final McpSyncClient client = mock(McpSyncClient.class);
 			given(InspectorRestControllerTests.this.loopbackFactory.forStateless(anyString(), anyInt(), anyString(),
-					any()))
+					any(), any()))
 				.willReturn(client);
 			willThrow(new RuntimeException("init failed")).given(client).initialize();
 
@@ -1014,7 +1014,7 @@ class InspectorRestControllerTests {
 			final ArgumentCaptor<InspectorClientHandlers> handlersCaptor = ArgumentCaptor
 				.forClass(InspectorClientHandlers.class);
 			given(InspectorRestControllerTests.this.loopbackFactory.forSse(anyString(), anyInt(), anyString(),
-					handlersCaptor.capture()))
+					handlersCaptor.capture(), any()))
 				.willReturn(client);
 
 			final ResponseEntity<Map<String, Object>> connectResponse = InspectorRestControllerTests.this.controller
