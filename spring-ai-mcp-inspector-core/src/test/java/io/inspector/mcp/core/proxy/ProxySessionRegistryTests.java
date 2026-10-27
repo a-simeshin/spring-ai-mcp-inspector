@@ -548,7 +548,7 @@ class ProxySessionRegistryTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("bind → closed registry → put: the late-closed session clears its bound profile mapping")
 		void put_afterCloseAll_clearsBoundAuthProfile() {
-			// given — a profile BOUND to the session that will arrive late
+			// given - a profile BOUND to the session that will arrive late
 			final AuthProfileStore store = new AuthProfileStore();
 			final String ownerId = "owner-a";
 			final String profileId = store.register(ownerId, new BearerProfile("prod", "tok"));
@@ -561,7 +561,7 @@ class ProxySessionRegistryTests {
 			// when
 			ProxySessionRegistryTests.this.registry.put(late);
 
-			// then — the mapping is removed with the session (no stale profile binding
+			// then - the mapping is removed with the session (no stale profile binding
 			// survives)
 			assertThat(late.isClosed()).isTrue();
 			assertThat(store.resolve(ownerId, profileId)).isEmpty();

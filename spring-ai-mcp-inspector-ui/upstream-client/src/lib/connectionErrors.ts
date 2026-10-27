@@ -4,6 +4,16 @@
 // 401/403 bodies) and connectErrors.ts (MCP_CONNECT_FAILED structured error
 // parsing from the proxy transport, ConnectFailedError class).
 //
+// When the MCP Inspector Proxy cannot reach the upstream MCP server, the
+// POST /mcp-inspector-api/mcp handler answers with a non-2xx status and a
+// JSON body of the shape:
+//
+//   {"error":{"code":"MCP_CONNECT_FAILED","reason":"<timeout|connection_refused|dns|unauthorized|not_found|unknown>","message":"<human-readable>","retryable":true}}
+//
+// This module parses that body out of transport responses, carries it as an
+// error through the SDK transport layer, and maps arbitrary connect failures
+// to the same shape so the UI can always show a reason + Retry.
+//
 // NOTE: only `McpError` (types.js) is imported from the SDK - the SDK client
 // modules (sse.js / streamableHttp.js / auth.js) transitively require the
 // ESM-only `pkce-challenge` package, which jest's CJS resolver cannot load.
@@ -73,16 +83,6 @@ export function mcpProxyTransportErrorDataIndicatesUnauthorized(
  * StreamableHTTPError carry the HTTP status in `code`; UnauthorizedError is
  * identified by its class name; McpError (transport envelope) carries the
  * proxy's `upstream401`/`httpStatus` snapshot in `data`.
- *
- * When the MCP Inspector Proxy cannot reach the upstream MCP server, the
- * POST /mcp-inspector-api/mcp handler answers with a non-2xx status and a
- * JSON body of the shape:
- *
- *   {"error":{"code":"MCP_CONNECT_FAILED","reason":"<timeout|connection_refused|dns|unauthorized|not_found|unknown>","message":"<human-readable>","retryable":true}}
- *
- * This module parses that body out of transport responses, carries it as an
- * error through the SDK transport layer, and maps arbitrary connect failures
- * to the same shape so the UI can always show a reason + Retry.
  */
 export function isConnectionAuthError(error: unknown): boolean {
   if (

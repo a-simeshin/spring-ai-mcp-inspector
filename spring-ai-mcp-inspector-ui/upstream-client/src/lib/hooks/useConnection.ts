@@ -588,18 +588,15 @@ export function useConnection({
     });
 
   /**
-   * Wraps the streamable transport fetch: a 401/403/3xx response body carries the
-   * D3 DTO (streamable 400/404 are legacy 502/504 — no DTO per D3).
+   * Wraps the streamable transport fetch: a 401/403 response body carries the
+   * D3 DTO (any other status is the legacy contract, no DTO per D3).
    */
   const streamableFetchWithDtoParse = (
     url: string | URL | globalThis.Request,
     init?: RequestInit,
   ): Promise<Response> =>
     fetch(url, init).then((response) => {
-      if (
-        response.ok ||
-        (response.status !== 401 && response.status !== 403 && (response.status < 300 || response.status >= 400))
-      ) {
+      if (response.ok || (response.status !== 401 && response.status !== 403)) {
         return response;
       }
       return response.text().then((text) => {

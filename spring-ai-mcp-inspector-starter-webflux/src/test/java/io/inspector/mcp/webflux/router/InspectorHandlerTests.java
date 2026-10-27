@@ -18,6 +18,7 @@ package io.inspector.mcp.webflux.router;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.server.McpServerFeatures;
@@ -54,6 +55,7 @@ import io.inspector.mcp.core.bootstrap.BootstrapHtmlRenderer;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrap;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapAssembler;
 import io.inspector.mcp.core.client.ExternalStdioClientFactory;
+import io.inspector.mcp.core.client.InitializeResultCapturingTransport;
 import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.dto.RootDto;
@@ -430,6 +432,46 @@ class InspectorHandlerTests {
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			verify(InspectorHandlerTests.this.externalStdioFactory).forCommand(any(), any(), any());
 			verify(client).initialize();
+		}
+
+		@Test
+		@Story("Open session")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("connect() with an externalCommand reports the skills extension declared in the captured raw initialize frame (capture != null branch, SEP-2640)")
+		void connect_withExternalCommand_reportsSkillsExtensionFromCapturedFrame() {
+			// given: the external factory hands back the capturing transport it was
+			// asked to observe, pre-populated with the raw initialize frame a stdio
+			// server would have returned
+			InspectorHandlerTests.this.handler.onWebServerStarted(webServerStartedEvent(8081));
+			final McpSyncClient client = connectedClient();
+			final io.modelcontextprotocol.spec.McpClientTransport delegateTransport = org.mockito.Mockito
+				.mock(io.modelcontextprotocol.spec.McpClientTransport.class);
+			final InitializeResultCapturingTransport capture = new InitializeResultCapturingTransport(
+					delegateTransport);
+			final java.util.Map<String, Object> rawFrame = new java.util.HashMap<>(Map.of("capabilities",
+					Map.of("extensions", Map.of("io.modelcontextprotocol/skills", Map.of("directoryRead", true)))));
+			capture.unmarshalFrom(rawFrame, io.modelcontextprotocol.client.McpAsyncClient.INITIALIZE_RESULT_TYPE_REF);
+			given(InspectorHandlerTests.this.externalStdioFactory.forCommand(any(), any(), any()))
+				.willAnswer((invocation) -> {
+					final AtomicReference<InitializeResultCapturingTransport> ref = invocation.getArgument(2);
+					ref.set(capture);
+					return client;
+				});
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"externalCommand\":\"node server.js\"}"));
+
+			// when
+			final ServerResponse response = InspectorHandlerTests.this.handler.connect(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final Map<String, Object> body = entityBody(response);
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> skillsExtension = (Map<String, Object>) body.get("skillsExtension");
+			assertThat(skillsExtension.get("supported")).isEqualTo(true);
+			assertThat(skillsExtension.get("directoryRead")).isEqualTo(true);
 		}
 
 		@Test

@@ -51,10 +51,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Verifies the D3 error contract (plan v13, issue #54) on a real HTTP stack: upstream
  * 401/403 answers surface the exact structured error DTO on both transports (SSE relay
- * and streamable HTTP), upstream 3xx redirects surface the {@code redirect} DTO on both
- * transports (SSE relay and streamable HTTP), and an unsuccessful initial handshake
- * leaves no partial connect state (the proxy session is deleted, the next connect starts
- * fresh).
+ * and streamable HTTP), upstream 3xx redirects surface the {@code redirect} DTO on the
+ * SSE relay only (streamable HTTP keeps the legacy 502 contract), and an unsuccessful
+ * initial handshake leaves no partial connect state (the proxy session is deleted, the
+ * next connect starts fresh).
  *
  * <p>
  * The class lives in {@code demo-app}'s test-jar, so Failsafe's

@@ -74,7 +74,7 @@ describe("parseProxyErrorDto", () => {
     expect(parseProxyErrorDto("[]")).toBeNull();
   });
 
-  it("parses a 302 redirect DTO (streamable 3xx contract, owner review round 2)", () => {
+  it("parses a 302 redirect DTO (SSE preflight 3xx contract)", () => {
     const dto = parseProxyErrorDto(
       JSON.stringify({
         status: 302,
