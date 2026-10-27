@@ -126,7 +126,7 @@ public final class McpClientTrafficRecorder {
 			return;
 		}
 		// Orphan: no matching pending request found
-		final String correlationId = fallbackCorrelationId(clientName, id);
+		final String correlationId = UUID.randomUUID().toString();
 		final ObjectNode payload = buildPayload(clientName, transportType, "server->client", null, id,
 				(response.error() != null) ? response.error().message() : null);
 		if (id != null) {
@@ -178,7 +178,7 @@ public final class McpClientTrafficRecorder {
 			return;
 		}
 		// Orphan: no matching server request found
-		final String correlationId = fallbackCorrelationId(clientName, id);
+		final String correlationId = UUID.randomUUID().toString();
 		final ObjectNode payload = buildPayload(clientName, transportType, "client->server", null, id,
 				(response.error() != null) ? response.error().message() : null);
 		if (id != null) {
@@ -258,13 +258,6 @@ public final class McpClientTrafficRecorder {
 
 	private static String correlationId(final String clientName, final Object requestId) {
 		return CORRELATION_PREFIX + clientName + ":" + requestId;
-	}
-
-	private static String fallbackCorrelationId(final String clientName, final Object requestId) {
-		if (requestId != null) {
-			return CORRELATION_PREFIX + clientName + ":" + requestId;
-		}
-		return UUID.randomUUID().toString();
 	}
 
 	private static ObjectNode buildPayload(final String clientName, final String transportType, final String direction,

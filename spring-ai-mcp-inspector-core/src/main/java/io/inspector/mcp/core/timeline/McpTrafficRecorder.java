@@ -232,7 +232,8 @@ public final class McpTrafficRecorder {
 
 	/**
 	 * Stores a pending request correlation, keeping the map bounded. The
-	 * {@link PendingCorrelationStore} handles LRU eviction internally.
+	 * {@link PendingCorrelationStore} handles eldest-entry (insertion-order, not
+	 * access-order) eviction internally.
 	 * @param key the session-scoped request key
 	 * @param correlationId the generated correlation id
 	 * @param progressToken the request's progress token text, may be {@code null}

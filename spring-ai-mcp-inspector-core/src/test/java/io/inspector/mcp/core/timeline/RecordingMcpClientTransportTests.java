@@ -189,14 +189,127 @@ class RecordingMcpClientTransportTests {
 				.query(TimelineQuery.all());
 			// 2 requests (client + server) + 1 response = 3 events
 			assertThat(events).hasSize(3);
+			final TimelineEvent serverRequestEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_REQUEST
+						&& "sampling/createMessage".equals(e.payload().path("method").asText()))
+				.findFirst()
+				.orElseThrow();
 			final TimelineEvent responseEvent = events.stream()
 				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
 				.findFirst()
 				.orElseThrow();
 			assertThat(responseEvent.payload().path("direction").asText()).isEqualTo("client->server");
 			assertThat(responseEvent.payload().has("orphan")).isFalse();
+			// The response carries the SERVER request's correlation id: proving the
+			// srv: lookup won and the two same-id correlations were not swapped.
+			assertThat(responseEvent.correlationId()).isEqualTo(serverRequestEvent.correlationId());
 			// The client request's pending correlation should still be pending
 			assertThat(RecordingMcpClientTransportTests.this.recorder.pendingCorrelations()).isEqualTo(1);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("recorder exception guards")
+	class RecorderExceptionGuards {
+
+		private RecordingMcpClientTransport newFailingTransport(final McpClientTrafficRecorder failingRecorder) {
+			return new RecordingMcpClientTransport(RecordingMcpClientTransportTests.this.delegate, "fail-client",
+					"stdio", failingRecorder);
+		}
+
+		private void driveInbound(final RecordingMcpClientTransport transport, final JSONRPCMessage message) {
+			given(RecordingMcpClientTransportTests.this.delegate.connect(any(Function.class)))
+				.willAnswer((invocation) -> {
+					@SuppressWarnings("unchecked")
+					final Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>> handler = invocation.getArgument(0);
+					return Mono.fromSupplier(() -> {
+						handler.apply(Mono.just(message)).block();
+						return (Void) null;
+					}).then();
+				});
+			transport.connect((inbound) -> inbound).block();
+			then(RecordingMcpClientTransportTests.this.delegate).should().connect(any(Function.class));
+		}
+
+		@Test
+		@DisplayName("outbound notification recorder failure does not break the transport call")
+		void outboundNotificationGuardSwallowsRecorderFailure() {
+			// given: a recorder that throws on the notification path
+			final McpClientTrafficRecorder failingRecorder = mock(McpClientTrafficRecorder.class);
+			org.mockito.BDDMockito.willThrow(new RuntimeException("test recorder failure"))
+				.given(failingRecorder)
+				.recordClientNotification(any(), any(), any());
+
+			// when
+			final JSONRPCNotification notification = new JSONRPCNotification("notifications/initialized", null);
+			newFailingTransport(failingRecorder).sendMessage(notification).block();
+
+			// then: the delegate still receives the message
+			then(RecordingMcpClientTransportTests.this.delegate).should().sendMessage(notification);
+		}
+
+		@Test
+		@DisplayName("outbound response recorder failure does not break the transport call")
+		void outboundResponseGuardSwallowsRecorderFailure() {
+			// given
+			final McpClientTrafficRecorder failingRecorder = mock(McpClientTrafficRecorder.class);
+			org.mockito.BDDMockito.willThrow(new RuntimeException("test recorder failure"))
+				.given(failingRecorder)
+				.recordOutboundResponse(any(), any(), any());
+
+			// when
+			final JSONRPCResponse response = JSONRPCResponse.result(1, java.util.Map.of());
+			newFailingTransport(failingRecorder).sendMessage(response).block();
+
+			// then
+			then(RecordingMcpClientTransportTests.this.delegate).should().sendMessage(response);
+		}
+
+		@Test
+		@DisplayName("inbound response recorder failure does not break the inbound handler")
+		void inboundResponseGuardSwallowsRecorderFailure() {
+			// given
+			final McpClientTrafficRecorder failingRecorder = mock(McpClientTrafficRecorder.class);
+			org.mockito.BDDMockito.willThrow(new RuntimeException("test recorder failure"))
+				.given(failingRecorder)
+				.recordClientResponse(any(), any(), any());
+
+			// when: push an inbound response through the wrapped handler
+			driveInbound(newFailingTransport(failingRecorder), JSONRPCResponse.result(1, java.util.Map.of()));
+
+			// then: driveInbound asserts connect completed without error
+		}
+
+		@Test
+		@DisplayName("inbound request recorder failure does not break the inbound handler")
+		void inboundRequestGuardSwallowsRecorderFailure() {
+			// given
+			final McpClientTrafficRecorder failingRecorder = mock(McpClientTrafficRecorder.class);
+			org.mockito.BDDMockito.willThrow(new RuntimeException("test recorder failure"))
+				.given(failingRecorder)
+				.recordServerRequest(any(), any(), any());
+
+			// when
+			driveInbound(newFailingTransport(failingRecorder),
+					new JSONRPCRequest("2.0", "sampling/createMessage", 1, null));
+
+			// then: driveInbound asserts connect completed without error
+		}
+
+		@Test
+		@DisplayName("inbound notification recorder failure does not break the inbound handler")
+		void inboundNotificationGuardSwallowsRecorderFailure() {
+			// given
+			final McpClientTrafficRecorder failingRecorder = mock(McpClientTrafficRecorder.class);
+			org.mockito.BDDMockito.willThrow(new RuntimeException("test recorder failure"))
+				.given(failingRecorder)
+				.recordServerNotification(any(), any(), any());
+
+			// when
+			driveInbound(newFailingTransport(failingRecorder), new JSONRPCNotification("notifications/progress", null));
+
+			// then: driveInbound asserts connect completed without error
 		}
 
 	}

@@ -127,13 +127,18 @@ public final class RecordingTransportPostProcessor implements BeanPostProcessor 
 	}
 
 	private Object wrapBean(final Object bean) throws ReflectiveOperationException {
-		final McpClientTrafficRecorder recorder = resolveRecorder();
-		if (recorder == null) {
-			LOG.warn("McpClientTrafficRecorder not yet available; skipping wrap of {}", NAMED_CLIENT_TRANSPORT_FQCN);
-			return bean;
-		}
 		final String clientName = (String) invokeAccessor(bean, "name");
 		final McpClientTransport delegate = (McpClientTransport) invokeAccessor(bean, "transport");
+		// Guard against double wrapping: skip if the transport is already a
+		// RecordingMcpClientTransport (mirrors the list path).
+		if (delegate instanceof RecordingMcpClientTransport) {
+			return bean;
+		}
+		final McpClientTrafficRecorder recorder = resolveRecorder();
+		if (recorder == null) {
+			LOG.warn("McpClientTrafficRecorder not available; skipping wrap of {}", NAMED_CLIENT_TRANSPORT_FQCN);
+			return bean;
+		}
 		final String transportType = detectTransportType(delegate);
 		final RecordingMcpClientTransport recordingTransport = new RecordingMcpClientTransport(delegate, clientName,
 				transportType, recorder);
@@ -143,8 +148,10 @@ public final class RecordingTransportPostProcessor implements BeanPostProcessor 
 	private McpClientTrafficRecorder resolveRecorder() {
 		McpClientTrafficRecorder result = this.trafficRecorder;
 		if (result == null) {
-			result = this.trafficRecorderProvider.getObject();
-			this.trafficRecorder = result;
+			result = this.trafficRecorderProvider.getIfAvailable();
+			if (result != null) {
+				this.trafficRecorder = result;
+			}
 		}
 		return result;
 	}

@@ -153,6 +153,10 @@ class McpClientTrafficRecorderTests {
 			assertThat(events).hasSize(1);
 			final TimelineEvent event = events.get(0);
 			assertThat(event.payload().path("orphan").asText()).isEqualTo("true");
+			// Orphans are unpaired: their correlation id is a fresh UUID, never the
+			// deterministic mcpc:<client>:<id> key that a future paired request could
+			// collide with.
+			assertThat(event.correlationId()).matches("[a-f0-9-]{36}");
 		}
 
 		@Test
@@ -226,6 +230,31 @@ class McpClientTrafficRecorderTests {
 			final TimelineEvent event = events.get(0);
 			assertThat(event.payload().path("direction").asText()).isEqualTo("client->server");
 			assertThat(event.payload().path("orphan").asText()).isEqualTo("true");
+		}
+
+		@Test
+		@DisplayName("orphan responses get fresh UUID correlation ids, never deterministic keys")
+		void orphanResponsesGetFreshUuids() {
+			// given: a pending client request with id=5 exists
+			McpClientTrafficRecorderTests.this.recorder.recordClientRequest("c", "stdio",
+					new JSONRPCRequest("2.0", "tools/call", 5, null));
+
+			// when: an orphan inbound response with a DIFFERENT id arrives
+			McpClientTrafficRecorderTests.this.recorder.recordClientResponse("c", "stdio",
+					JSONRPCResponse.result(9, java.util.Map.of()));
+
+			// then: the orphan event carries a fresh UUID correlation id, not the
+			// mcpc:c:9 deterministic key
+			final List<TimelineEvent> events = McpClientTrafficRecorderTests.this.timelineService
+				.query(TimelineQuery.all());
+			final TimelineEvent orphan = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.findFirst()
+				.orElseThrow();
+			assertThat(orphan.payload().path("orphan").asText()).isEqualTo("true");
+			assertThat(orphan.correlationId()).matches("[a-f0-9-]{36}");
+			// and it did not consume the pending entry for id=5
+			assertThat(McpClientTrafficRecorderTests.this.recorder.pendingCorrelations()).isEqualTo(1);
 		}
 
 		@Test

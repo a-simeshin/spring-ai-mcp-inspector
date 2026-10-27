@@ -57,7 +57,7 @@ class RecordingTransportPostProcessorTests {
 		this.timelineService = new BoundedTimelineService();
 		this.recorder = new McpClientTrafficRecorder(this.timelineService);
 		this.recorderProvider = mock(ObjectProvider.class);
-		given(this.recorderProvider.getObject()).willReturn(this.recorder);
+		given(this.recorderProvider.getIfAvailable()).willReturn(this.recorder);
 		this.postProcessor = new RecordingTransportPostProcessor(this.recorderProvider);
 	}
 
@@ -228,15 +228,15 @@ class RecordingTransportPostProcessorTests {
 		@Test
 		@DisplayName("resolves recorder lazily on first wrap, not at BPP creation")
 		void resolvesRecorderLazilyOnFirstWrap() throws Exception {
-			// given: a provider whose getObject() would fail if called eagerly
+			// given: a provider that records whether it was resolved
+			final java.util.concurrent.atomic.AtomicBoolean resolved = new java.util.concurrent.atomic.AtomicBoolean(
+					false);
 			final McpClientTrafficRecorder realRecorder = new McpClientTrafficRecorder(
 					RecordingTransportPostProcessorTests.this.timelineService);
 			final ObjectProvider<McpClientTrafficRecorder> lazyProvider = new ObjectProvider<>() {
-				private boolean called = false;
-
 				@Override
 				public McpClientTrafficRecorder getObject() {
-					this.called = true;
+					resolved.set(true);
 					return realRecorder;
 				}
 
@@ -257,16 +257,62 @@ class RecordingTransportPostProcessorTests {
 			};
 			final RecordingTransportPostProcessor lazyPp = new RecordingTransportPostProcessor(lazyProvider);
 
+			// then: constructing the post-processor alone did not resolve the provider
+			assertThat(resolved).isFalse();
+
 			// when: wrap a bean
 			final McpClientTransport mockTransport = mock(McpClientTransport.class);
 			given(mockTransport.sendMessage(any(JSONRPCMessage.class))).willReturn(Mono.empty());
 			final Object named = newNamedClientMcpTransport("lazy-client", mockTransport);
 			final Object result = lazyPp.postProcessAfterInitialization(named, "namedTransport");
 
-			// then: the provider was called and the bean was wrapped
+			// then: resolution happened on first wrap and the bean was wrapped
+			assertThat(resolved).isTrue();
 			assertThat(result).isNotSameAs(named);
 			final Object transport = named.getClass().getMethod("transport").invoke(result);
 			assertThat(transport).isInstanceOf(RecordingMcpClientTransport.class);
+		}
+
+		@Test
+		@DisplayName("returns single already-wrapped record unchanged (no double wrap)")
+		void returnsSingleAlreadyWrappedRecordUnchanged() throws Exception {
+			// given: a record whose transport is already a recording decorator
+			final McpClientTransport mockTransport = mock(McpClientTransport.class);
+			given(mockTransport.sendMessage(any(JSONRPCMessage.class))).willReturn(Mono.empty());
+			final Object named = newNamedClientMcpTransport("already-wrapped", new RecordingMcpClientTransport(
+					mockTransport, "already-wrapped", "stdio", RecordingTransportPostProcessorTests.this.recorder));
+
+			// when
+			final Object result = RecordingTransportPostProcessorTests.this.postProcessor
+				.postProcessAfterInitialization(named, "namedTransport");
+
+			// then: the bean is returned unchanged (no double wrap on the single-record
+			// path)
+			assertThat(result).isSameAs(named);
+		}
+
+		@Test
+		@DisplayName("returns bean unchanged when the recorder is not available")
+		void returnsBeanUnchangedWhenRecorderUnavailable() throws Exception {
+			// given: a provider with no recorder behind it; getObject() would throw
+			// (Spring's NoSuchBeanDefinitionException), getIfAvailable() returns null
+			@SuppressWarnings("unchecked")
+			final ObjectProvider<McpClientTrafficRecorder> emptyProvider = mock(ObjectProvider.class);
+			given(emptyProvider.getIfAvailable()).willReturn(null);
+			org.mockito.BDDMockito
+				.willThrow(new org.springframework.beans.factory.NoSuchBeanDefinitionException(
+						McpClientTrafficRecorder.class))
+				.given(emptyProvider)
+				.getObject();
+			final RecordingTransportPostProcessor emptyPp = new RecordingTransportPostProcessor(emptyProvider);
+			final McpClientTransport mockTransport = mock(McpClientTransport.class);
+			final Object named = newNamedClientMcpTransport("no-recorder", mockTransport);
+
+			// when
+			final Object result = emptyPp.postProcessAfterInitialization(named, "namedTransport");
+
+			// then: no wrap, no exception (getIfAvailable, not getObject)
+			assertThat(result).isSameAs(named);
 		}
 
 		@Test
