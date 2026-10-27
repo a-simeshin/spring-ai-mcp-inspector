@@ -1695,7 +1695,7 @@ const App = () => {
               value={activeTab}
               className="w-full p-4"
               onValueChange={(value) => {
-                setActiveTab(value);
+                // [spring-ai-mcp-inspector PATCH] Tab state flows through the hashchange listener only (#200): the redundant synchronous setActiveTab is removed, the listener is the single source of truth. A controlled reproduction on the base commit (real Chromium, real clicks, CPU throttling up to 20x) found no trigger/panel divergence, so no race is claimed.
                 window.location.hash = value;
               }}
             >
