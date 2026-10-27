@@ -141,6 +141,80 @@ describe("TasksTab behavior tests", () => {
       jest.advanceTimersByTime(10000);
       expect(listTasks).toHaveBeenCalledTimes(1); // no more calls
     });
+
+    it("keeps the list poll alive across parent re-renders that replace the listTasks identity", () => {
+      // Regression (owner review BLOCK 1 on 0a41ca9): App passes an inline
+      // arrow, so listTasks has a new identity on every App render, and the
+      // per-task tasks/get alone re-renders App every 2s. With the effect
+      // keyed on [listTasks, activeTab] the interval was torn down before it
+      // fired and tasks/list never ran. Re-renders here arrive every 1900ms
+      // against the 2000ms poll: red under the old deps (0 calls), green on
+      // the fix.
+      const identities: jest.Mock[] = [jest.fn()];
+      const { rerender } = render(
+        <TasksTab {...defaultProps} listTasks={identities[0]} />,
+      );
+
+      for (let i = 1; i <= 10; i++) {
+        jest.advanceTimersByTime(1900);
+        // Fresh identity every cycle, exactly like App re-rendering
+        identities.push(jest.fn());
+        rerender(
+          <TasksTab
+            {...defaultProps}
+            listTasks={identities[identities.length - 1]}
+          />,
+        );
+      }
+
+      // The poll must have fired at t=2000, 4000, ... 19000ms despite the
+      // re-renders at 1900, 3800, ... 19000ms.
+      const totalCalls = identities.reduce(
+        (sum, fn) => sum + fn.mock.calls.length,
+        0,
+      );
+      expect(totalCalls).toBeGreaterThanOrEqual(9);
+    });
+
+    it("backs off the list poll while tasks/list keeps failing and resets after a clean poll", () => {
+      // The error prop is how App reports a failed tasks/list. A failing
+      // server must not be re-polled at full rate forever.
+      const listTasks = jest.fn();
+      const { rerender } = render(
+        <TasksTab {...defaultProps} listTasks={listTasks} error={null} />,
+      );
+
+      // t=2000: first poll; App then reports the failure via the error prop
+      jest.advanceTimersByTime(2000);
+      expect(listTasks).toHaveBeenCalledTimes(1);
+      rerender(
+        <TasksTab {...defaultProps} listTasks={listTasks} error="boom" />,
+      );
+
+      // t=4000: second poll; the delay read at this tick doubles to 4000
+      jest.advanceTimersByTime(2000);
+      expect(listTasks).toHaveBeenCalledTimes(2);
+
+      // Backed off: no poll at t=6000
+      jest.advanceTimersByTime(2000);
+      expect(listTasks).toHaveBeenCalledTimes(2);
+
+      // t=8000: third poll; delay doubles again to 8000
+      jest.advanceTimersByTime(2000);
+      expect(listTasks).toHaveBeenCalledTimes(3);
+
+      // The poll succeeds: App clears the error
+      rerender(
+        <TasksTab {...defaultProps} listTasks={listTasks} error={null} />,
+      );
+
+      // t=16000: fourth poll (one more backed-off gap), then the reset
+      // delay of 2000ms puts the fifth at t=18000
+      jest.advanceTimersByTime(8000);
+      expect(listTasks).toHaveBeenCalledTimes(4);
+      jest.advanceTimersByTime(2000);
+      expect(listTasks).toHaveBeenCalledTimes(5);
+    });
   });
 
   describe("per-task poll", () => {
@@ -241,15 +315,177 @@ describe("TasksTab behavior tests", () => {
       jest.advanceTimersByTime(2000); // total 3000
       expect(getTask).toHaveBeenCalledTimes(4); // t1@1000, t1@2000, t1@3000, t2@3000
     });
+
+    it("uses the latest getTask callback when parent re-renders with same task IDs", () => {
+      // Regression: effect deps are [activeTaskIdString] only, so the interval
+      // must read getTask/setSelectedTask through refs at call time rather
+      // than capturing them at effect setup. Otherwise a fresh callback from
+      // a parent re-render is never used and the poll goes stale.
+      const firstGetTask = jest.fn().mockResolvedValue(
+        makeTask({ taskId: "t1", status: "working" }),
+      );
+      const secondGetTask = jest.fn().mockResolvedValue(
+        makeTask({ taskId: "t1", status: "working" }),
+      );
+      const tasks = [
+        makeTask({ taskId: "t1", status: "working", pollInterval: 1000 }),
+      ];
+
+      const { rerender } = render(
+        <TasksTab
+          {...defaultProps}
+          tasks={tasks}
+          getTask={firstGetTask}
+        />,
+      );
+
+      jest.advanceTimersByTime(1000);
+      expect(firstGetTask).toHaveBeenCalledTimes(1);
+      expect(secondGetTask).not.toHaveBeenCalled();
+
+      // Parent re-renders: fresh tasks array (same IDs), fresh getTask
+      // callback identity. Active ID string is unchanged, so the effect
+      // does NOT re-run and the existing interval survives.
+      rerender(
+        <TasksTab
+          {...defaultProps}
+          tasks={[makeTask({ taskId: "t1", status: "working", pollInterval: 1000 })]}
+          getTask={secondGetTask}
+        />,
+      );
+
+      jest.advanceTimersByTime(1000);
+      // The still-running interval must call the NEW callback via the ref,
+      // not the stale one captured when the effect first ran.
+      expect(secondGetTask).toHaveBeenCalledTimes(1);
+      expect(secondGetTask).toHaveBeenCalledWith("t1");
+      expect(firstGetTask).toHaveBeenCalledTimes(1); // unchanged
+    });
+
+    it("keeps polling despite parent re-renders with fresh array identity faster than pollInterval", () => {
+      // Regression (owner review on 0a41ca9, list-poll analogue): with effect
+      // deps [tasks, getTask, setSelectedTask] every re-render tears the
+      // poller down before it fires. Here re-renders arrive every 1900ms
+      // while pollInterval is 2000ms: under the reverted deps the task is
+      // never polled, on the fixed head it is.
+      const getTask = jest.fn().mockResolvedValue(
+        makeTask({ taskId: "t1", status: "working" }),
+      );
+
+      const { rerender } = render(
+        <TasksTab
+          {...defaultProps}
+          tasks={[makeTask({ taskId: "t1", status: "working", pollInterval: 2000 })]}
+          getTask={getTask}
+        />,
+      );
+
+      // 10 re-renders with a fresh tasks array every 1900ms (faster than the
+      // 2000ms pollInterval), same task id
+      for (let i = 0; i < 10; i++) {
+        jest.advanceTimersByTime(1900);
+        rerender(
+          <TasksTab
+            {...defaultProps}
+            tasks={[makeTask({ taskId: "t1", status: "working", pollInterval: 2000 })]}
+            getTask={getTask}
+          />,
+        );
+      }
+
+      expect(getTask.mock.calls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("does not restart a surviving task's poller when another task joins the list", () => {
+      // Regression: the old cleanup cleared the whole interval map on every
+      // dep change, so every surviving task's timer restarted from zero.
+      // t1 (3000ms) must still fire at t=3000 even though t2 (1000ms) was
+      // added at t=1000.
+      const getTask = jest.fn().mockImplementation((id: string) =>
+        Promise.resolve(makeTask({ taskId: id, status: "working" })),
+      );
+
+      const { rerender } = render(
+        <TasksTab
+          {...defaultProps}
+          tasks={[makeTask({ taskId: "t1", status: "working", pollInterval: 3000 })]}
+          getTask={getTask}
+        />,
+      );
+
+      jest.advanceTimersByTime(1000);
+      // t2 joins: active ID string changes, effect re-runs, but t1's poller
+      // must survive untouched
+      rerender(
+        <TasksTab
+          {...defaultProps}
+          tasks={[
+            makeTask({ taskId: "t1", status: "working", pollInterval: 3000 }),
+            makeTask({ taskId: "t2", status: "working", pollInterval: 1000 }),
+          ]}
+          getTask={getTask}
+        />,
+      );
+
+      jest.advanceTimersByTime(2000); // total 3000: t1's original schedule
+      expect(getTask).toHaveBeenCalledWith("t1");
+      const t1Calls = getTask.mock.calls.filter(([id]) => id === "t1");
+      expect(t1Calls.length).toBe(1);
+    });
+
+    it("backs off per-task polling on repeated failures and resets on success", async () => {
+      const getTask = jest
+        .fn()
+        .mockRejectedValueOnce(new Error("boom"))
+        .mockRejectedValueOnce(new Error("boom"))
+        .mockResolvedValue(makeTask({ taskId: "t1", status: "working" }));
+
+      render(
+        <TasksTab
+          {...defaultProps}
+          tasks={[makeTask({ taskId: "t1", status: "working", pollInterval: 1000 })]}
+          getTask={getTask}
+        />,
+      );
+
+      // advanceTimersByTimeAsync also flushes the promise handlers that
+      // adjust the backoff delay.
+      // t=1000: first poll fails -> delay becomes 2000
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(getTask).toHaveBeenCalledTimes(1);
+
+      // t=2000: second poll (scheduled at the base interval before the first
+      // failure landed); it fails too -> delay becomes 4000
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(getTask).toHaveBeenCalledTimes(2);
+
+      // Backed off: no poll at t=3000
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(getTask).toHaveBeenCalledTimes(2);
+
+      // t=4000: third poll fires and succeeds -> delay resets to 1000ms
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(getTask).toHaveBeenCalledTimes(3);
+
+      // t=5000..7000: no poll (this tick's reschedule used the backed-off
+      // 4000ms delay before the reset)
+      await jest.advanceTimersByTimeAsync(3000);
+      expect(getTask).toHaveBeenCalledTimes(3);
+
+      // t=8000 and t=9000: back to the base interval
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(getTask).toHaveBeenCalledTimes(4);
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(getTask).toHaveBeenCalledTimes(5);
+    });
   });
 
   describe("terminal statuses", () => {
     it.each([
-      ["completed", "completed"],
-      ["success", "success"],
-      ["failed", "failed"],
-      ["cancelled", "cancelled"],
-    ] as const)("stops per-task poll when task status is '%s'", (_label, status) => {
+      ["completed"],
+      ["failed"],
+      ["cancelled"],
+    ] as const)("stops per-task poll when task status is '%s'", (status) => {
       const getTask = jest.fn().mockResolvedValue(
         makeTask({ taskId: "t1", status: status as Task["status"] }),
       );
@@ -267,9 +503,9 @@ describe("TasksTab behavior tests", () => {
       expect(getTask).not.toHaveBeenCalled();
     });
 
-    it("stops polling when task changes from working to success", () => {
+    it("stops polling when task changes from working to completed", () => {
       const getTask = jest.fn().mockResolvedValue(
-        makeTask({ taskId: "t1", status: "success" as Task["status"] }),
+        makeTask({ taskId: "t1", status: "completed" }),
       );
       const workingTasks = [makeTask({ taskId: "t1", status: "working", pollInterval: 2000 })];
 
@@ -284,12 +520,13 @@ describe("TasksTab behavior tests", () => {
       jest.advanceTimersByTime(2000);
       expect(getTask).toHaveBeenCalledTimes(1);
 
-      // Task transitions to success (terminal)
-      const successTasks = [makeTask({ taskId: "t1", status: "success" as Task["status"] })];
+      // Task transitions to completed (terminal in the SDK enum; the backend
+      // of #196 emits this status)
+      const doneTasks = [makeTask({ taskId: "t1", status: "completed" })];
       rerender(
         <TasksTab
           {...defaultProps}
-          tasks={successTasks}
+          tasks={doneTasks}
           getTask={getTask}
         />,
       );

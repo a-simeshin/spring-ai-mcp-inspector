@@ -20,10 +20,12 @@ const MCP_TASKS_DOCS_URL =
   "https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks";
 const LIST_POLL_INTERVAL_MS = 2000;
 const DEFAULT_TASK_POLL_INTERVAL_MS = 2000;
+const MAX_POLL_BACKOFF_MS = 30000;
 const TTL_COUNTDOWN_INTERVAL_MS = 1000;
-const TERMINAL_STATUSES: readonly (Task["status"] | "success")[] = [
+// Aligned with the SDK TaskStatus enum: the backend (#196 TaskRegistry) emits
+// "completed" for finished tasks and never "success".
+const TERMINAL_STATUSES: readonly Task["status"][] = [
   "completed",
-  "success",
   "failed",
   "cancelled",
 ] as const;
@@ -32,7 +34,7 @@ const TaskStatusIcon = ({
   status,
   className,
 }: {
-  status: Task["status"] | "success";
+  status: Task["status"];
   className?: string;
 }) => {
   switch (status) {
@@ -47,7 +49,6 @@ const TaskStatusIcon = ({
         <AlertTriangle className={cn("h-4 w-4 text-yellow-500", className)} />
       );
     case "completed":
-    case "success":
       return (
         <CheckCircle2 className={cn("h-4 w-4 text-green-500", className)} />
       );
@@ -60,9 +61,12 @@ const TaskStatusIcon = ({
   }
 };
 
-const formatTtl = (createdAt: string, ttl: number | null): string => {
+const formatTtl = (referenceTimestamp: string, ttl: number | null): string => {
   if (ttl === null) return "Infinite";
-  const elapsed = Date.now() - new Date(createdAt).getTime();
+  const reference = new Date(referenceTimestamp).getTime();
+  // An unparsable timestamp must not leak "NaNm NaNs" into the UI.
+  if (Number.isNaN(reference)) return "Invalid date";
+  const elapsed = Date.now() - reference;
   const remaining = Math.max(0, ttl - elapsed);
   if (remaining <= 0) return "Expired";
   if (remaining < 1000) return `${remaining}ms`;
@@ -107,8 +111,8 @@ const TasksTab = ({
     Record<string, TaskRowState>
   >({});
 
-  // Track per-task polling intervals
-  const taskPollIntervalsRef = useRef<Map<string, ReturnType<typeof setInterval>>>(new Map());
+  // Track per-task pollers (recursive timeouts with backoff)
+  const taskPollersRef = useRef<Map<string, { stop: () => void }>>(new Map());
   const taskStatusesRef = useRef<Map<string, Task["status"]>>(new Map());
   const transitionTimeoutsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const selectedTaskRef = useRef<Task | null>(null);
@@ -126,28 +130,64 @@ const TasksTab = ({
     setSelectedTaskRef.current = setSelectedTask;
   }, [setSelectedTask]);
 
-  // Auto-poll the task list every ~2s when the tab is active
+  // Stable ref for the list callback: App passes an inline arrow, so
+  // listTasks gets a new identity on every App render (every MCP call pushes
+  // into requestHistory and re-renders App). Reading the ref at call time and
+  // keying the effect only on activeTab keeps the timer alive across those
+  // re-renders; otherwise the per-task tasks/get alone would tear the list
+  // poll down before it fires.
+  const listTasksRef = useRef(listTasks);
+  useEffect(() => {
+    listTasksRef.current = listTasks;
+  }, [listTasks]);
+  const listErrorRef = useRef(error);
+  useEffect(() => {
+    listErrorRef.current = error;
+  }, [error]);
+
+  // Auto-poll the task list every ~2s when the tab is active. A failing
+  // tasks/list (reflected in the error prop on the next tick) doubles the
+  // delay up to MAX_POLL_BACKOFF_MS; a clean poll resets it.
   useEffect(() => {
     if (activeTab !== "tasks") return;
-    const interval = setInterval(() => {
-      listTasks();
-    }, LIST_POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
-  }, [listTasks, activeTab]);
+    let delay = LIST_POLL_INTERVAL_MS;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const tick = () => {
+      void listTasksRef.current();
+      delay = listErrorRef.current
+        ? Math.min(delay * 2, MAX_POLL_BACKOFF_MS)
+        : LIST_POLL_INTERVAL_MS;
+      timeoutId = setTimeout(tick, delay);
+    };
+    timeoutId = setTimeout(tick, delay);
+    return () => {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    };
+  }, [activeTab]);
 
-  // TTL countdown update every second
+  // TTL countdown ticker: only runs while the tasks tab is active and at
+  // least one task has a TTL, instead of re-rendering at 1 Hz for the whole
+  // session.
+  const hasTtlTasks = tasks.some((t) => t.ttl !== null);
   useEffect(() => {
+    if (activeTab !== "tasks" || !hasTtlTasks) return;
     const interval = setInterval(() => {
       setNow(Date.now());
     }, TTL_COUNTDOWN_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, []);
+  }, [activeTab, hasTtlTasks]);
 
-  // Update TTL countdowns reactively
+  // Update TTL countdowns reactively. The backend (#196 TaskRegistry) expires
+  // a task from its last update timestamp (creation, transitions and
+  // keep-alives all refresh it), so the countdown is measured from
+  // lastUpdatedAt, not createdAt: a keep-alive moves the countdown.
   useEffect(() => {
     const newCountdowns: Record<string, string> = {};
     for (const task of tasks) {
-      newCountdowns[task.taskId] = formatTtl(task.createdAt, task.ttl);
+      newCountdowns[task.taskId] = formatTtl(
+        task.lastUpdatedAt || task.createdAt,
+        task.ttl,
+      );
     }
     setTtlCountdowns(newCountdowns);
   }, [tasks, now]);
@@ -188,66 +228,90 @@ const TasksTab = ({
     };
   }, [tasks]);
 
-  // Per-task polling: for each non-terminal task, poll tasks/get at its pollInterval
-  // Keyed on active task IDs (string join) to avoid re-creating intervals every 2s
-  // when the tasks array reference changes but the set of active IDs does not.
+  // Per-task polling: for each non-terminal task, poll tasks/get at its own
+  // pollInterval. Keyed on active task IDs (string join) so a new tasks array
+  // identity with the same IDs never restarts a poller. Callbacks are read
+  // through refs at call time so a parent re-render's fresh callback is used
+  // by the already-running poller.
   const activeTaskIdString = tasks
     .filter((t) => !TERMINAL_STATUSES.includes(t.status))
     .map((t) => t.taskId)
     .sort()
     .join(",");
   useEffect(() => {
-    const intervals = taskPollIntervalsRef.current;
-    const getTaskFn = getTaskRef.current;
-    const setSelectedTaskFn = setSelectedTaskRef.current;
+    const pollers = taskPollersRef.current;
     const activeIds = activeTaskIdString
       ? new Set(activeTaskIdString.split(","))
       : new Set<string>();
 
-    // Stop polling for tasks that are no longer active or no longer in the list
-    for (const [taskId] of intervals) {
+    // Stop pollers for tasks that became terminal or left the list
+    for (const [taskId, poller] of [...pollers]) {
       if (!activeIds.has(taskId)) {
-        clearInterval(intervals.get(taskId));
-        intervals.delete(taskId);
+        poller.stop();
+        pollers.delete(taskId);
       }
     }
 
-    // Start polling for new active tasks
+    // Start pollers for newly active tasks. Each poller is a recursive
+    // timeout: a failed tasks/get doubles the delay up to MAX_POLL_BACKOFF_MS
+    // and a successful one resets it.
     for (const task of tasks) {
       if (TERMINAL_STATUSES.includes(task.status)) continue;
-      if (intervals.has(task.taskId)) continue;
+      if (pollers.has(task.taskId)) continue;
 
-      const pollInterval =
-        task.pollInterval ?? DEFAULT_TASK_POLL_INTERVAL_MS;
-      const intervalId = setInterval(async () => {
-        try {
-          const updated = await getTaskFn(task.taskId);
-          // Update selectedTask if this is the currently selected task
-          if (selectedTaskRef.current?.taskId === task.taskId) {
-            setSelectedTaskFn(updated);
-          }
-        } catch (e) {
-          // Ignore polling errors for individual tasks
-          console.debug(
-            `[TasksTab] Poll error for ${task.taskId}:`,
-            e instanceof Error ? e.message : String(e),
-          );
-        }
-      }, pollInterval);
-      intervals.set(task.taskId, intervalId);
+      const baseInterval = task.pollInterval ?? DEFAULT_TASK_POLL_INTERVAL_MS;
+      // Delay for the NEXT tick, updated from the outcome of the previous
+      // poll: a failure doubles it (capped), a success resets it.
+      let delay = baseInterval;
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const tick = () => {
+        // Schedule the next tick synchronously at the current delay so the
+        // poller keeps running independently of promise resolution; stop()
+        // clears the pending timeout. The outcome below only adjusts the
+        // delay used by the following reschedule.
+        timeoutId = setTimeout(tick, delay);
+        getTaskRef
+          .current(task.taskId)
+          .then((updated) => {
+            delay = baseInterval;
+            // Update selectedTask if this is the currently selected task
+            if (selectedTaskRef.current?.taskId === task.taskId) {
+              setSelectedTaskRef.current(updated);
+            }
+          })
+          .catch((e) => {
+            delay = Math.min(delay * 2, MAX_POLL_BACKOFF_MS);
+            console.debug(
+              `[TasksTab] Poll error for ${task.taskId}:`,
+              e instanceof Error ? e.message : String(e),
+            );
+          });
+      };
+      timeoutId = setTimeout(tick, delay);
+
+      pollers.set(task.taskId, {
+        stop: () => {
+          if (timeoutId !== undefined) clearTimeout(timeoutId);
+        },
+      });
     }
-
-    return () => {
-      // Only clean up during unmount: intervals for surviving active tasks
-      // are reused. The 'activeIds' deps guard re-creates intervals only when
-      // the active set changes.
-      for (const [, intervalId] of intervals) {
-        clearInterval(intervalId);
-      }
-      intervals.clear();
-    };
+    // Intentionally no cleanup here: React would run it on every change of
+    // activeTaskIdString and tear down surviving tasks' pollers, restarting
+    // their timers from zero. Removals are handled above; unmount is handled
+    // by the dedicated effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTaskIdString]);
+
+  // Unmount-only cleanup for the per-task pollers
+  useEffect(() => {
+    const pollers = taskPollersRef.current;
+    return () => {
+      for (const poller of pollers.values()) {
+        poller.stop();
+      }
+      pollers.clear();
+    };
+  }, []);
 
   const displayedTask = selectedTask
     ? tasks.find((t) => t.taskId === selectedTask.taskId) || selectedTask
@@ -347,8 +411,7 @@ const TasksTab = ({
                                 "inline-block px-1 py-0.5 rounded text-[10px] font-medium uppercase",
                                 task.status === "working" &&
                                   "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
-                                (task.status === "completed" ||
-                                  (task.status as string) === "success") &&
+                                task.status === "completed" &&
                                   "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300",
                                 task.status === "failed" &&
                                   "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
@@ -464,8 +527,7 @@ const TasksTab = ({
                       className={cn(
                         "font-semibold capitalize",
                         displayedTask.status === "working" && "text-blue-500",
-                        (displayedTask.status === "completed" ||
-                          (displayedTask.status as string) === "success") &&
+                        displayedTask.status === "completed" &&
                           "text-green-500",
                         displayedTask.status === "failed" && "text-red-500",
                         displayedTask.status === "cancelled" &&
