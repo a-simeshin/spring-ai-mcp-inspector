@@ -28,6 +28,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.webmvc.auth.InspectorSessionAttributes;
+import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
 
 /**
  * Servlet filter that guards all {@code /mcp-inspector/api/**} routes with a bearer-style
@@ -37,6 +39,14 @@ import io.inspector.mcp.core.config.McpInspectorProperties;
  * The token may be supplied either via the {@code X-MCP-Inspector-Auth} header (preferred
  * for JSON/REST calls) or as the {@code auth} query parameter (required by
  * {@code EventSource}, which cannot set custom headers).
+ *
+ * <p>
+ * After the guard passes, the filter resolves the signed session-owner cookie
+ * ({@code MCP_INSPECTOR_SESSION}) via {@link ServletSessionOwnerResolver} — minting a
+ * fresh signed token when absent/forged/expired — and stashes the validated
+ * {@code ownerId} as the {@code OWNER_ID} request attribute (D8). A request that FAILS
+ * the {@code X-MCP-Inspector-Auth} guard is rejected with 401/403 BEFORE any cookie is
+ * minted.
  *
  * <p>
  * Static resources (the UI itself) and the templated {@code index.html} are intentionally
@@ -57,10 +67,18 @@ public class InspectorAuthFilter extends OncePerRequestFilter {
 
 	private final InspectorAuthTokenProvider tokenProvider;
 
+	private final ServletSessionOwnerResolver sessionOwnerResolver;
+
 	public InspectorAuthFilter(final McpInspectorProperties properties,
 			final InspectorAuthTokenProvider tokenProvider) {
+		this(properties, tokenProvider, null);
+	}
+
+	public InspectorAuthFilter(final McpInspectorProperties properties, final InspectorAuthTokenProvider tokenProvider,
+			final ServletSessionOwnerResolver sessionOwnerResolver) {
 		this.properties = properties;
 		this.tokenProvider = tokenProvider;
+		this.sessionOwnerResolver = sessionOwnerResolver;
 	}
 
 	@Override
@@ -88,6 +106,12 @@ public class InspectorAuthFilter extends OncePerRequestFilter {
 		if (presented == null || !constantTimeEquals(presented, expected)) {
 			response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid or missing inspector auth token");
 			return;
+		}
+		// D8: after the inspector guard passes the session owner is ALWAYS established
+		// (mint/parse the signed cookie); there is no "missing owner → 401".
+		if (this.sessionOwnerResolver != null) {
+			request.setAttribute(InspectorSessionAttributes.OWNER_ID,
+					this.sessionOwnerResolver.resolve(request, response));
 		}
 		chain.doFilter(request, response);
 	}

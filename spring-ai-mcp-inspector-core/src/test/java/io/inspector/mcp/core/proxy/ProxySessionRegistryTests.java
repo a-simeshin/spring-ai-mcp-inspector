@@ -16,7 +16,11 @@
 
 package io.inspector.mcp.core.proxy;
 
+import java.lang.reflect.Field;
 import java.time.Duration;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
@@ -31,6 +35,9 @@ import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
+
+import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.BearerProfile;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.BDDMockito.given;
@@ -55,6 +62,42 @@ class ProxySessionRegistryTests {
 		final McpClientTransport transport = mock(McpClientTransport.class);
 		given(transport.closeGracefully()).willReturn(Mono.empty());
 		return transport;
+	}
+
+	/**
+	 * Test-only map that lets a caller block inside {@link #put} until released, so the
+	 * lost-race between {@code put()} and {@code closeAll()} can be reproduced
+	 * deterministically.
+	 */
+	private static final class BlockingConcurrentHashMap<K, V> extends ConcurrentHashMap<K, V> {
+
+		private final CountDownLatch blockPutOnKey;
+
+		private final CountDownLatch putReleased;
+
+		private final K keyToBlock;
+
+		private BlockingConcurrentHashMap(final K keyToBlock, final CountDownLatch blockPutOnKey,
+				final CountDownLatch putReleased) {
+			this.keyToBlock = keyToBlock;
+			this.blockPutOnKey = blockPutOnKey;
+			this.putReleased = putReleased;
+		}
+
+		@Override
+		public V put(final K key, final V value) {
+			if (this.keyToBlock.equals(key)) {
+				this.blockPutOnKey.countDown();
+				try {
+					this.putReleased.await(5, TimeUnit.SECONDS);
+				}
+				catch (final InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+			}
+			return super.put(key, value);
+		}
+
 	}
 
 	@Nested
@@ -99,6 +142,66 @@ class ProxySessionRegistryTests {
 
 			// then
 			assertThat(found).isNull();
+		}
+
+		@Test
+		@Story("Concurrent same-key registration")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Two threads concurrently put() sessions with the same session id; the loser is closed")
+		void put_concurrentSameKey_orphanedSessionIsClosed() throws InterruptedException {
+			// given
+			final McpClientTransport loserTransport = mockTransport();
+			final McpClientTransport winnerTransport = mockTransport();
+			final ProxySession loser = sessionWith("s-race", loserTransport);
+			final ProxySession winner = sessionWith("s-race", winnerTransport);
+
+			// Both threads line up before the registry, then race to put the same key
+			final CountDownLatch bothReady = new CountDownLatch(2);
+			final CountDownLatch go = new CountDownLatch(1);
+
+			final Thread threadA = new Thread(() -> {
+				bothReady.countDown();
+				try {
+					go.await();
+					ProxySessionRegistryTests.this.registry.put(loser);
+				}
+				catch (final InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+			}, "put-loser");
+
+			final Thread threadB = new Thread(() -> {
+				bothReady.countDown();
+				try {
+					go.await();
+					ProxySessionRegistryTests.this.registry.put(winner);
+				}
+				catch (final InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+			}, "put-winner");
+
+			threadA.start();
+			threadB.start();
+			assertThat(bothReady.await(5, TimeUnit.SECONDS)).as("both threads ready").isTrue();
+			go.countDown();
+			threadA.join(5000);
+			threadB.join(5000);
+
+			// then: exactly one session survives, the loser was closed
+			assertThat(ProxySessionRegistryTests.this.registry.size()).isEqualTo(1);
+			final ProxySession survivor = ProxySessionRegistryTests.this.registry.get("s-race");
+			assertThat(survivor).isNotNull();
+
+			// The loser (whichever was displaced) must have been closed via the
+			// displaced-session path in put()
+			final McpClientTransport survivorTransport = (survivor == loser) ? loserTransport : winnerTransport;
+			if (survivor == loser) {
+				verify(winnerTransport).closeGracefully();
+			}
+			else {
+				verify(loserTransport).closeGracefully();
+			}
 		}
 
 	}
@@ -359,7 +462,7 @@ class ProxySessionRegistryTests {
 		@Story("Shutdown ordering")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("A session registered after the shutdown sweep is closed immediately instead of being "
-				+ "silently kept — a GET /sse still connecting upstream when ContextClosedEvent fires used to "
+				+ "silently kept. A GET /sse still connecting upstream when ContextClosedEvent fires used to "
 				+ "land in the map afterwards and hold its stream open for the whole graceful phase")
 		void put_afterCloseAll_closesTheLateSessionAndDoesNotRegisterIt() {
 			// given
@@ -373,6 +476,175 @@ class ProxySessionRegistryTests {
 			assertThat(late.isClosed()).as("late session closed on arrival").isTrue();
 			assertThat(ProxySessionRegistryTests.this.registry.size()).as("late session not registered").isZero();
 			assertThat(ProxySessionRegistryTests.this.registry.get("late")).isNull();
+		}
+
+		@Test
+		@Story("Shutdown lost-race")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("put() that passes the first closed check but is blocked inside sessions.put while "
+				+ "closeAll() sweeps; on resume, the lost-race branch removes the registry entry and closes "
+				+ "the session")
+		void put_lostRaceWithCloseAll_removesRegistryEntry() throws Exception {
+			// given: fresh registry with a blocking map so put() can be frozen between
+			// the first closed check and the actual insertion
+			final ProxySessionRegistry freshRegistry = new ProxySessionRegistry();
+			final CountDownLatch putBlocked = new CountDownLatch(1);
+			final CountDownLatch putRelease = new CountDownLatch(1);
+			final BlockingConcurrentHashMap<String, ProxySession> blockingMap = new BlockingConcurrentHashMap<>(
+					"late-race", putBlocked, putRelease);
+			final Field sessionsField = ProxySessionRegistry.class.getDeclaredField("sessions");
+			sessionsField.setAccessible(true);
+			sessionsField.set(freshRegistry, blockingMap);
+			assertThat(freshRegistry.size()).as("injection: map is empty").isZero();
+
+			final McpClientTransport lateTransport = mockTransport();
+			final ProxySession late = sessionWith("late-race", lateTransport);
+
+			final CountDownLatch closeAllDone = new CountDownLatch(1);
+			final CountDownLatch putDone = new CountDownLatch(1);
+
+			final Thread putThread = new Thread(() -> {
+				freshRegistry.put(late);
+				putDone.countDown();
+			}, "late-put");
+
+			final Thread closeAllThread = new Thread(() -> {
+				try {
+					putBlocked.await(5, TimeUnit.SECONDS);
+				}
+				catch (final InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+				freshRegistry.closeAll();
+				closeAllDone.countDown();
+			}, "closeAll");
+
+			putThread.start();
+			closeAllThread.start();
+
+			// when: wait until closeAll() has fully swept, then let put() resume
+			assertThat(closeAllDone.await(5, TimeUnit.SECONDS)).as("closeAll() completed").isTrue();
+			assertThat(freshRegistry.size()).as("sweep cleared registry").isZero();
+			putRelease.countDown();
+			assertThat(putDone.await(5, TimeUnit.SECONDS)).as("put() finished").isTrue();
+			putThread.join(5000);
+			closeAllThread.join(5000);
+
+			// then: the registry does not retain the closed late session
+			assertThat(freshRegistry.size()).as("registry does not retain closed late entry").isZero();
+			assertThat(freshRegistry.get("late-race")).isNull();
+			assertThat(late.isClosed()).as("late session transport closed").isTrue();
+			verify(lateTransport).closeGracefully();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("auth-profile store hooks (D4)")
+	class AuthProfileHooks {
+
+		@Test
+		@Story("Cleanup race")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("bind → closed registry → put: the late-closed session clears its bound profile mapping")
+		void put_afterCloseAll_clearsBoundAuthProfile() {
+			// given — a profile BOUND to the session that will arrive late
+			final AuthProfileStore store = new AuthProfileStore();
+			final String ownerId = "owner-a";
+			final String profileId = store.register(ownerId, new BearerProfile("prod", "tok"));
+			store.bind(ownerId, profileId, "s-late");
+			ProxySessionRegistryTests.this.registry.setAuthProfileStore(store);
+			ProxySessionRegistryTests.this.registry.closeAll();
+			final ProxySession late = sessionWith("s-late", mockTransport());
+			late.bindProfile(ownerId, profileId);
+
+			// when
+			ProxySessionRegistryTests.this.registry.put(late);
+
+			// then — the mapping is removed with the session (no stale profile binding
+			// survives)
+			assertThat(late.isClosed()).isTrue();
+			assertThat(store.resolve(ownerId, profileId)).isEmpty();
+			assertThat(store.size()).isZero();
+		}
+
+		@Test
+		@Story("Cleanup race")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("removeAndClose() clears the session's bound profile mapping")
+		void removeAndClose_clearsBoundAuthProfile() {
+			// given
+			final AuthProfileStore store = new AuthProfileStore();
+			final String ownerId = "owner-a";
+			final String profileId = store.register(ownerId, new BearerProfile("prod", "tok"));
+			store.bind(ownerId, profileId, "s-1");
+			ProxySessionRegistryTests.this.registry.setAuthProfileStore(store);
+			final ProxySession session = sessionWith("s-1", mockTransport());
+			session.bindProfile(ownerId, profileId);
+			ProxySessionRegistryTests.this.registry.put(session);
+
+			// when
+			ProxySessionRegistryTests.this.registry.removeAndClose("s-1");
+
+			// then
+			assertThat(store.resolve(ownerId, profileId)).isEmpty();
+			assertThat(store.size()).isZero();
+		}
+
+		@Test
+		@Story("Cleanup race")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("closeSession() clears the session's bound profile mapping without removing the session")
+		void closeSession_clearsBoundAuthProfile() {
+			// given
+			final AuthProfileStore store = new AuthProfileStore();
+			final String ownerId = "owner-a";
+			final String profileId = store.register(ownerId, new BearerProfile("prod", "tok"));
+			store.bind(ownerId, profileId, "s-1");
+			ProxySessionRegistryTests.this.registry.setAuthProfileStore(store);
+			final ProxySession session = sessionWith("s-1", mockTransport());
+			session.bindProfile(ownerId, profileId);
+			ProxySessionRegistryTests.this.registry.put(session);
+
+			// when
+			ProxySessionRegistryTests.this.registry.closeSession("s-1");
+
+			// then
+			assertThat(store.resolve(ownerId, profileId)).isEmpty();
+		}
+
+		@Test
+		@Story("TTL sweep")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("reap() drives the store's expired-profile sweep when the store is present")
+		void reap_delegatesExpiredProfileSweepToStore() {
+			// given
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			ProxySessionRegistryTests.this.registry.setAuthProfileStore(store);
+
+			// when
+			ProxySessionRegistryTests.this.registry.reap();
+
+			// then
+			verify(store).removeExpired(org.mockito.ArgumentMatchers.any(java.time.Instant.class));
+		}
+
+		@Test
+		@Story("Cleanup race")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("closeSession() on an unbounded session never touches the store")
+		void closeSession_withoutProfileId_doesNotClearStore() {
+			// given
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			ProxySessionRegistryTests.this.registry.setAuthProfileStore(store);
+			final ProxySession session = sessionWith("s-1", mockTransport());
+			ProxySessionRegistryTests.this.registry.put(session);
+
+			// when
+			ProxySessionRegistryTests.this.registry.closeSession("s-1");
+
+			// then
+			verify(store, never()).clearBySession(org.mockito.ArgumentMatchers.anyString());
 		}
 
 	}

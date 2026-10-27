@@ -16,10 +16,20 @@
 
 package io.inspector.mcp.core.proxy;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
+import com.sun.net.httpserver.Headers;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
 import io.modelcontextprotocol.client.transport.StdioClientTransport;
@@ -30,15 +40,19 @@ import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.auth.AuthHeaders;
 import io.inspector.mcp.core.transport.TransportType;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /** Unit tests for {@link ProxyTransportFactory}. */
 @Epic("MCP Inspector Core")
@@ -63,7 +77,8 @@ class ProxyTransportFactoryTests {
 			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri);
 
 			// then
-			assertThat(transport).isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -78,7 +93,8 @@ class ProxyTransportFactoryTests {
 			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri);
 
 			// then
-			assertThat(transport).isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -106,7 +122,8 @@ class ProxyTransportFactoryTests {
 					"Bearer tok-123", null);
 
 			// then
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -123,7 +140,8 @@ class ProxyTransportFactoryTests {
 					Map.of("X-Tenant", "acme"));
 
 			// then
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -140,7 +158,8 @@ class ProxyTransportFactoryTests {
 					"Bearer tok-abc", Map.of("X-Tenant", "acme"));
 
 			// then
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -157,7 +176,8 @@ class ProxyTransportFactoryTests {
 					Map.of());
 
 			// then
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -173,7 +193,27 @@ class ProxyTransportFactoryTests {
 			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
 					Map.of("host", "evil.example.com"));
 
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Invalid custom header entries swallowed")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() silently skips custom headers with blank names or null values")
+		void openSse_withInvalidCustomHeaderEntries_skipsThemSilently() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+			final Map<String, String> customHeaders = new HashMap<>();
+			customHeaders.put(" ", "bad-name");
+			customHeaders.put("X-Null", null);
+
+			// when & then — must not throw
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+					customHeaders);
+
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 	}
@@ -366,6 +406,21 @@ class ProxyTransportFactoryTests {
 				.hasMessageContaining("command");
 		}
 
+		@Test
+		@Story("Build stdio transport")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openStdio() with an empty env map builds a transport without extra environment variables")
+		void openStdio_withEmptyEnv_buildsStdioTransport() {
+			// given
+			final List<String> command = List.of("node", "server.js");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openStdio(command, Map.of());
+
+			// then
+			assertThat(transport).isInstanceOf(StdioClientTransport.class);
+		}
+
 	}
 
 	@Nested
@@ -382,6 +437,22 @@ class ProxyTransportFactoryTests {
 
 			// when
 			final McpClientTransport transport = defaultFactory.openStreamable(URI.create("http://localhost:8080/mcp"));
+
+			// then
+			assertThat(transport).isInstanceOf(HttpClientStreamableHttpTransport.class);
+		}
+
+		@Test
+		@Story("Construction")
+		@Severity(SeverityLevel.MINOR)
+		@Description("the JsonMapper constructor tolerates a null mapper and falls back to a default one")
+		void jsonMapperConstructor_withNullMapper_buildsUsableFactory() {
+			// given
+			final ProxyTransportFactory nullMapperFactory = new ProxyTransportFactory(null);
+
+			// when
+			final McpClientTransport transport = nullMapperFactory
+				.openStreamable(URI.create("http://localhost:8080/mcp"));
 
 			// then
 			assertThat(transport).isInstanceOf(HttpClientStreamableHttpTransport.class);
@@ -405,6 +476,460 @@ class ProxyTransportFactoryTests {
 			assertThat(values).containsExactly(TransportType.SSE, TransportType.STREAMABLE, TransportType.STATELESS,
 					TransportType.STDIO_NO_HTTP, TransportType.UNKNOWN);
 			assertThat(TransportType.valueOf("STREAMABLE")).isEqualTo(TransportType.STREAMABLE);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("openSseWithAuth()")
+	class OpenSseWithAuth {
+
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSseWithAuth() rejects a null URI")
+		void openSseWithAuth_withNullUri_throwsIllegalArgument() {
+			// when & then
+			assertThatThrownBy(
+					() -> ProxyTransportFactoryTests.this.factory.openSseWithAuth(null, AuthHeaders.none(), null))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("sseUri");
+		}
+
+		@Test
+		@Story("Build SSE transport with auth")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSseWithAuth() builds an SSE transport and applies authorization, custom headers and "
+				+ "multiple query parameters")
+		void openSseWithAuth_withFullUriAndAllHeaders_buildsSseTransport() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/events");
+			final AuthHeaders headers = new AuthHeaders("Bearer tok-1", Map.of("X-Tenant", "acme"),
+					Map.of("api_key", "k1", "trace", "t2"));
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSseWithAuth(sseUri,
+					headers, null);
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Default endpoint branch")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSseWithAuth() with no path, no port and empty headers falls back to /sse and skips the "
+				+ "header customizer")
+		void openSseWithAuth_withNoPathAndEmptyHeaders_buildsTransportWithDefaults() {
+			// given
+			final URI sseUri = URI.create("http://localhost");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSseWithAuth(sseUri,
+					AuthHeaders.none(), null);
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Null query params guard")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSseWithAuth() tolerates null query params and leaves the endpoint path unchanged")
+		void openSseWithAuth_withNullQueryParams_buildsTransportWithDefaults() {
+			// given
+			final URI sseUri = URI.create("http://localhost/sse");
+			final AuthHeaders headers = new AuthHeaders(null, Map.of(), null);
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSseWithAuth(sseUri,
+					headers, null);
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Live authorization ref")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSseWithAuth() reads the authorization value through the AtomicReference when provided")
+		void openSseWithAuth_withAuthorizationRef_readsLiveValue() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+			final AuthHeaders headers = new AuthHeaders(null, Map.of(), Map.of());
+			final AtomicReference<String> authorizationRef = new AtomicReference<>("Bearer live-token");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSseWithAuth(sseUri,
+					headers, authorizationRef);
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Blank authorization skipped")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSseWithAuth() with a blank authorization value forwards only the custom headers")
+		void openSseWithAuth_withBlankAuthorizationAndCustomHeaders_skipsAuthHeader() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+			final AuthHeaders headers = new AuthHeaders("   ", Map.of("X-Tenant", "acme"), Map.of());
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSseWithAuth(sseUri,
+					headers, null);
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Invalid custom header entries swallowed")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSseWithAuth() silently skips custom headers with blank names, null values or restricted "
+				+ "names")
+		void openSseWithAuth_withInvalidCustomHeaderEntries_skipsThemSilently() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
+			final Map<String, String> customHeaders = new HashMap<>();
+			customHeaders.put("X-Tenant", "acme");
+			customHeaders.put(" ", "bad-name");
+			customHeaders.put("X-Null", null);
+			customHeaders.put("host", "evil.example.com");
+			final AuthHeaders headers = new AuthHeaders(null, customHeaders, Map.of());
+
+			// when & then — must not throw
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSseWithAuth(sseUri,
+					headers, null);
+
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("openStreamableWithAuth()")
+	class OpenStreamableWithAuth {
+
+		@Test
+		@Story("Validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openStreamableWithAuth() rejects a null URI")
+		void openStreamableWithAuth_withNullUri_throwsIllegalArgument() {
+			// when & then
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openStreamableWithAuth(null,
+					AuthHeaders.none(), null))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("mcpUri");
+		}
+
+		@Test
+		@Story("Build streamable transport with auth")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openStreamableWithAuth() builds a streamable transport and applies authorization, custom "
+				+ "headers and query parameters")
+		void openStreamableWithAuth_withFullUriAndAllHeaders_buildsStreamableTransport() {
+			// given
+			final URI mcpUri = URI.create("https://example.com:9443/mcp");
+			final AuthHeaders headers = new AuthHeaders("Bearer tok-1", Map.of("X-Tenant", "acme"),
+					Map.of("api_key", "k1", "trace", "t2"));
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openStreamableWithAuth(mcpUri,
+					headers, null);
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientStreamableHttpTransport.class);
+		}
+
+		@Test
+		@Story("Default endpoint branch")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openStreamableWithAuth() with no path and empty headers falls back to /mcp and skips the "
+				+ "header customizer")
+		void openStreamableWithAuth_withNoPathAndEmptyHeaders_buildsTransportWithDefaultEndpoint() {
+			// given
+			final URI mcpUri = URI.create("http://localhost:8080");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openStreamableWithAuth(mcpUri,
+					AuthHeaders.none(), null);
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientStreamableHttpTransport.class);
+		}
+
+		@Test
+		@Story("Live authorization ref")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openStreamableWithAuth() reads the authorization value through the AtomicReference when provided")
+		void openStreamableWithAuth_withAuthorizationRef_readsLiveValue() {
+			// given
+			final URI mcpUri = URI.create("http://127.0.0.1:8080/mcp");
+			final AuthHeaders headers = new AuthHeaders(null, Map.of(), Map.of());
+			final AtomicReference<String> authorizationRef = new AtomicReference<>("Bearer live-token");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openStreamableWithAuth(mcpUri,
+					headers, authorizationRef);
+
+			// then
+			assertThat(transport).isNotNull().isInstanceOf(HttpClientStreamableHttpTransport.class);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("outbound request customization")
+	class RequestCustomizer {
+
+		private volatile Headers lastRequestHeaders;
+
+		private volatile String lastQuery;
+
+		private HttpServer server;
+
+		private URI sseUri;
+
+		@BeforeEach
+		void setUp() throws IOException {
+			this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+			this.server.createContext("/sse", this::handleSse);
+			this.server.setExecutor(null);
+			this.server.start();
+			this.sseUri = URI.create("http://127.0.0.1:" + this.server.getAddress().getPort() + "/sse");
+		}
+
+		@AfterEach
+		void tearDown() {
+			this.server.stop(0);
+		}
+
+		@Test
+		@Story("Header forwarding — live request")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a real SSE connect through openSseWithAuth() sends the authorization header, custom headers "
+				+ "and query parameters to the upstream server")
+		void sseConnect_withAuthAndCustomHeaders_forwardsAllHeaders() {
+			// given
+			final AuthHeaders headers = new AuthHeaders("Bearer tok-1", Map.of("X-Tenant", "acme"),
+					Map.of("api_key", "k1", "trace", "t2"));
+
+			// when
+			connectAndClose(ProxyTransportFactoryTests.this.factory.openSseWithAuth(this.sseUri, headers, null));
+
+			// then
+			assertThat(this.lastRequestHeaders.getFirst("Authorization")).isEqualTo("Bearer tok-1");
+			assertThat(this.lastRequestHeaders.getFirst("X-Tenant")).isEqualTo("acme");
+			assertThat(this.lastQuery).contains("api_key=k1").contains("trace=t2");
+		}
+
+		@Test
+		@Story("Header forwarding — invalid entries")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a real SSE connect with a blank authorization value and invalid custom header entries forwards "
+				+ "only the valid ones")
+		void sseConnect_withBlankAuthAndInvalidEntries_skipsThem() {
+			// given
+			final Map<String, String> customHeaders = new HashMap<>();
+			customHeaders.put("X-Tenant", "acme");
+			customHeaders.put(" ", "bad-name");
+			customHeaders.put("X-Null", null);
+			customHeaders.put("host", "evil.example.com");
+			final AuthHeaders headers = new AuthHeaders("   ", customHeaders, Map.of());
+
+			// when
+			connectAndClose(ProxyTransportFactoryTests.this.factory.openSseWithAuth(this.sseUri, headers, null));
+
+			// then
+			assertThat(this.lastRequestHeaders.getFirst("Authorization")).isNull();
+			assertThat(this.lastRequestHeaders.getFirst("X-Tenant")).isEqualTo("acme");
+			assertThat(this.lastRequestHeaders.getFirst("host")).isNotEqualTo("evil.example.com");
+		}
+
+		@Test
+		@Story("Live authorization ref")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a real SSE connect reads the authorization value through the AtomicReference when provided")
+		void sseConnect_withAuthorizationRef_readsCurrentValue() {
+			// given
+			final AuthHeaders headers = new AuthHeaders(null, Map.of(), Map.of());
+			final AtomicReference<String> authorizationRef = new AtomicReference<>("Bearer live-token");
+
+			// when
+			connectAndClose(
+					ProxyTransportFactoryTests.this.factory.openSseWithAuth(this.sseUri, headers, authorizationRef));
+
+			// then
+			assertThat(this.lastRequestHeaders.getFirst("Authorization")).isEqualTo("Bearer live-token");
+		}
+
+		@Test
+		@Story("Legacy header forwarding — live request")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a real SSE connect through the legacy openSse() overload forwards authorization and custom "
+				+ "headers together")
+		void sseConnect_withLegacyAuthAndCustomHeaders_forwardsBoth() {
+			// when
+			connectAndClose(ProxyTransportFactoryTests.this.factory.openSse(this.sseUri, "Bearer tok-legacy",
+					Map.of("X-Tenant", "acme")));
+
+			// then
+			assertThat(this.lastRequestHeaders.getFirst("Authorization")).isEqualTo("Bearer tok-legacy");
+			assertThat(this.lastRequestHeaders.getFirst("X-Tenant")).isEqualTo("acme");
+		}
+
+		@Test
+		@Story("Legacy header forwarding — auth only")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a real SSE connect through the legacy openSse() overload with no custom headers forwards only "
+				+ "the authorization header")
+		void sseConnect_withLegacyAuthOnly_forwardsAuthorization() {
+			// when
+			connectAndClose(ProxyTransportFactoryTests.this.factory.openSse(this.sseUri, "Bearer tok-legacy", null));
+
+			// then
+			assertThat(this.lastRequestHeaders.getFirst("Authorization")).isEqualTo("Bearer tok-legacy");
+			assertThat(this.lastRequestHeaders.getFirst("X-Tenant")).isNull();
+		}
+
+		@Test
+		@Story("Legacy header forwarding — custom headers only")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a real SSE connect through the legacy openSse() overload with no authorization forwards only "
+				+ "the custom headers")
+		void sseConnect_withLegacyCustomHeadersOnly_skipsAuthorization() {
+			// when
+			connectAndClose(
+					ProxyTransportFactoryTests.this.factory.openSse(this.sseUri, null, Map.of("X-Tenant", "acme")));
+
+			// then
+			assertThat(this.lastRequestHeaders.getFirst("Authorization")).isNull();
+			assertThat(this.lastRequestHeaders.getFirst("X-Tenant")).isEqualTo("acme");
+		}
+
+		@Test
+		@Story("Legacy header forwarding — invalid entries")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a real SSE connect through the legacy openSse() overload silently skips custom headers with "
+				+ "blank names, null values or restricted names")
+		void sseConnect_withLegacyInvalidEntries_skipsThem() {
+			// given
+			final Map<String, String> customHeaders = new HashMap<>();
+			customHeaders.put("X-Tenant", "acme");
+			customHeaders.put(" ", "bad-name");
+			customHeaders.put("X-Null", null);
+			customHeaders.put("host", "evil.example.com");
+
+			// when
+			connectAndClose(
+					ProxyTransportFactoryTests.this.factory.openSse(this.sseUri, "Bearer tok-legacy", customHeaders));
+
+			// then
+			assertThat(this.lastRequestHeaders.getFirst("Authorization")).isEqualTo("Bearer tok-legacy");
+			assertThat(this.lastRequestHeaders.getFirst("X-Tenant")).isEqualTo("acme");
+			assertThat(this.lastRequestHeaders.getFirst("host")).isNotEqualTo("evil.example.com");
+		}
+
+		private void handleSse(final HttpExchange exchange) throws IOException {
+			this.lastRequestHeaders = exchange.getRequestHeaders();
+			this.lastQuery = exchange.getRequestURI().getQuery();
+			final String body = "event: endpoint\ndata: http://127.0.0.1:" + this.server.getAddress().getPort()
+					+ "/messages\n\n";
+			exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+			exchange.sendResponseHeaders(200, body.length());
+			try (OutputStream out = exchange.getResponseBody()) {
+				out.write(body.getBytes(StandardCharsets.UTF_8));
+			}
+		}
+
+		private void connectAndClose(final McpClientTransport transport) {
+			transport.connect((inbound) -> inbound).block(Duration.ofSeconds(5));
+			transport.closeGracefully().block(Duration.ofSeconds(5));
+		}
+
+	}
+
+	@Nested
+	@DisplayName("SSE handshake preflight status check")
+	class SsePreflight {
+
+		private HttpServer server;
+
+		@BeforeEach
+		void setUp() throws IOException {
+			this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+			this.server.setExecutor(null);
+			this.server.start();
+		}
+
+		@AfterEach
+		void tearDown() {
+			this.server.stop(0);
+		}
+
+		@Test
+		@Story("Preflight 401")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("An SSE handshake whose upstream answers 401 with a body that carries no SSE event (the "
+				+ "silent-hang case: the SDK would otherwise parse it as an empty SSE stream and never complete "
+				+ "connect()) surfaces a status-bearing transport error instead")
+		void sseConnect_whenUpstreamAnswers401WithNoSseBody_errorsWithStatus() {
+			// given — a 401 whose body produces no SSE event (bare JSON error body)
+			this.server.createContext("/sse", (exchange) -> {
+				final byte[] body = "{\"error\":\"unauthorized\"}".getBytes(StandardCharsets.UTF_8);
+				exchange.sendResponseHeaders(401, body.length);
+				try (OutputStream out = exchange.getResponseBody()) {
+					out.write(body);
+				}
+			});
+			final URI sseUri = URI.create("http://127.0.0.1:" + this.server.getAddress().getPort() + "/sse");
+
+			// when — the preflight-wrapped transport connects
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri);
+
+			// then — the connect errors (does not hang), carrying the 401 for the D3
+			// mapper
+			final Throwable error = catchThrowable(
+					() -> transport.connect((inbound) -> inbound).block(Duration.ofSeconds(5)));
+			assertThat(error).isNotNull().hasMessageContaining("401");
+			assertThat(ProxyErrorMapper.extractStatus(error)).contains(401);
+		}
+
+		@Test
+		@Story("Preflight 200")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A healthy SSE handshake (2xx, endpoint event) still connects through the preflight wrapper — "
+				+ "the status check never blocks a successful connect")
+		void sseConnect_whenUpstreamAnswers200_stillConnects() {
+			// given — a healthy SSE handshake answering the endpoint event and closing
+			this.server.createContext("/sse", (exchange) -> {
+				exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+				final String body = "event: endpoint\ndata: http://127.0.0.1:" + this.server.getAddress().getPort()
+						+ "/messages\n\n";
+				final byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+				exchange.sendResponseHeaders(200, bytes.length);
+				try (OutputStream out = exchange.getResponseBody()) {
+					out.write(bytes);
+				}
+			});
+			final URI sseUri = URI.create("http://127.0.0.1:" + this.server.getAddress().getPort() + "/sse");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri);
+
+			// then — connect completes (no hang)
+			final Throwable error = catchThrowable(
+					() -> transport.connect((inbound) -> inbound).block(Duration.ofSeconds(5)));
+			assertThat(error).as("healthy connect must not error").isNull();
+			transport.closeGracefully().block(Duration.ofSeconds(5));
 		}
 
 	}
