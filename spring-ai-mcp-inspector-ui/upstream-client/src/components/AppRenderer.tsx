@@ -60,8 +60,14 @@ export function checkToolVisibility(
     | Record<string, unknown>
     | undefined;
   const ui = meta?.ui as Record<string, unknown> | undefined;
-  const toolVisibility = ui?.visibility as string[] | undefined;
-  const effectiveVisibility = toolVisibility ?? ["model", "app"];
+  // Guard the type with Array.isArray before treating visibility as a string[]:
+  // a malformed _meta.ui.visibility (a bare string, an object) must neither pass
+  // (a string like "happy" would make includes("app") true) nor throw.
+  const rawVisibility = ui?.visibility;
+  const toolVisibility = Array.isArray(rawVisibility)
+    ? (rawVisibility as unknown[])
+    : undefined;
+  const effectiveVisibility: unknown[] = toolVisibility ?? ["model", "app"];
   if (!effectiveVisibility.includes("app")) {
     return { allowed: false, reason: "not available to apps" };
   }

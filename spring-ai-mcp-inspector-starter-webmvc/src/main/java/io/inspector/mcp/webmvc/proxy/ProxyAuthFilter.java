@@ -42,8 +42,10 @@ import io.inspector.mcp.core.config.McpInspectorProperties;
  * does the same).
  *
  * <p>
- * {@code /mcp-inspector-api/health} is intentionally <em>not</em> protected so
- * load-balancer probes can hit it without credentials.
+ * {@code /mcp-inspector-api/health} and {@code /mcp-inspector-api/sandbox} are
+ * intentionally <em>not</em> protected: load-balancer probes hit health without
+ * credentials, and the sandbox proxy page is loaded into an iframe whose document carries
+ * no headers. Both are matched by exact path, never by suffix.
  *
  * <p>
  * Skipped entirely when {@code spring.ai.mcp.inspector.auth-enabled=false}.
@@ -56,9 +58,21 @@ public class ProxyAuthFilter extends OncePerRequestFilter {
 
 	private final InspectorAuthTokenProvider tokenProvider;
 
+	/**
+	 * Exact paths of the intentionally open endpoints (health probe and sandbox proxy
+	 * page), derived from the configured inspector path. Compared for equality, not by
+	 * suffix: a suffix match would also exempt any other endpoint that merely ends with
+	 * /health or /sandbox.
+	 */
+	private final String healthPath;
+
+	private final String sandboxPath;
+
 	public ProxyAuthFilter(final McpInspectorProperties properties, final InspectorAuthTokenProvider tokenProvider) {
 		this.properties = properties;
 		this.tokenProvider = tokenProvider;
+		this.healthPath = (properties != null) ? properties.getProxyPath() + "/health" : "/mcp-inspector-api/health";
+		this.sandboxPath = (properties != null) ? properties.getProxyPath() + "/sandbox" : "/mcp-inspector-api/sandbox";
 	}
 
 	@Override
@@ -78,7 +92,7 @@ public class ProxyAuthFilter extends OncePerRequestFilter {
 		}
 
 		final String path = request.getRequestURI();
-		if (path != null && (path.endsWith("/health") || path.endsWith("/sandbox"))) {
+		if (this.healthPath.equals(path) || this.sandboxPath.equals(path)) {
 			chain.doFilter(request, response);
 			return;
 		}
