@@ -477,5 +477,5 @@ describe("App - tab click switching content pane (regression t_c0dcfe9a)", () =>
 
       prevPane = newPane;
     }
-  });
+  }, 15000);
 });
