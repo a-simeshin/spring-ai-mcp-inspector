@@ -70,6 +70,9 @@ class SandboxProxyIT {
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 		assertThat(response.getHeaders().getContentType().toString()).contains("text/html");
 		assertThat(response.getHeaders().getFirst("Content-Security-Policy")).contains("default-src 'none'");
+		// frame-ancestors 'self' stops any other origin from framing the sandbox
+		// endpoint (owner review PR #199, BLOCK 1)
+		assertThat(response.getHeaders().getFirst("Content-Security-Policy")).contains("frame-ancestors 'self'");
 		assertThat(response.getHeaders().getCacheControl()).contains("no-store");
 		assertThat(response.getBody()).contains("sandbox-proxy-ready");
 	}
