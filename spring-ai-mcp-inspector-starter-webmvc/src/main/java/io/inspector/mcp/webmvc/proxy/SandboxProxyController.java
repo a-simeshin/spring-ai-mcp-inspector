@@ -90,7 +90,7 @@ public class SandboxProxyController {
 	 * script-src 'self' 'unsafe-inline' (for the proxy relay script) and the frame
 	 * sandbox does the heavy lifting via the inner view iframe's opaque origin.
 	 */
-	private static final String DEFAULT_CSP = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'none'; frame-src 'self'; base-uri 'none'; form-action 'none'";
+	private static final String DEFAULT_CSP = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'none'; frame-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'";
 
 	private static final int CSP_PARAM_MAX_LENGTH = 4096;
 

@@ -33,3 +33,24 @@ Security fixes (t_e6c85c96):
 - AppsTab.tsx: bounds the traffic ingress queue (max 500 pending entries,
   singleton dropped-N marker per flush window); truncates params/result > 64 KB
   to {truncated: true, bytes: N}.
+Origin-trust hardening (t_81f6d85b, PR #199 owner review BLOCK 1):
+- sandbox-proxy.html: the inner view iframe sandbox is now a hardcoded
+  'allow-scripts' token set; the parent-supplied params.sandbox value is
+  ignored entirely (the legit @mcp-ui/client host sends only {html, csp}).
+  allow-same-origin can never be granted to the srcdoc guest.
+- sandbox-proxy.html: host messages are additionally rejected when
+  event.origin differs from the page's own origin; cross-origin framing
+  parents are dropped silently.
+- SandboxProxyController (webmvc) and SandboxProxyHandler (webflux):
+  DEFAULT_CSP now carries frame-ancestors 'self' so no other origin can
+  frame the sandbox endpoint.
+- Origin model: the SEP-1865 draft (specification/draft/apps.mdx, "Sandbox
+  proxy", item 1) requires host and sandbox on different origins. This
+  deployment serves the sandbox from the host origin because the vendored
+  @mcp-ui/client hardcodes the outer iframe sandbox to
+  "allow-scripts allow-same-origin allow-forms" and expects to load the
+  proxy from the deployment it manages; see the in-page comment for why the
+  same-origin deviation is safe with the three fixes above.
+- New test: src/lib/__tests__/sandbox-proxy-page.test.ts (loads the page
+  script into jsdom, asserts hardcoded sandbox and origin rejection).
+

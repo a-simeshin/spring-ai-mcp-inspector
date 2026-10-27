@@ -15,6 +15,17 @@
 (function() {
   'use strict';
 
+  // Origin model deviation (SEP-1865 draft, "Sandbox proxy", item 1 requires
+  // host and sandbox on different origins): this page is served by the same
+  // origin as the host. Separation cannot be implemented with the vendored
+  // @mcp-ui/client, which creates the outer iframe with a hardcoded
+  // sandbox="allow-scripts allow-same-origin allow-forms" and would need a
+  // separate deployment origin we do not control. The same-origin deviation
+  // is contained: the inner view iframe never gets allow-same-origin (see
+  // VIEW_IFRAME_SANDBOX), messages whose event.origin is not this page's own
+  // origin are dropped (see the message handler), and frame-ancestors 'self'
+  // in the served CSP stops any other origin from framing this page.
+
   var container = document.getElementById('container');
   var innerIframe = null;
   var readySent = false;
@@ -72,13 +83,20 @@
     return parts.join("; ");
   }
 
+  // Hardcoded sandbox token set for the inner view iframe. The framing page
+  // must never control this attribute: a parent-supplied value (for example
+  // "allow-scripts allow-same-origin") would land the srcdoc guest on the
+  // host origin and defeat the isolation boundary. The legit host
+  // (@mcp-ui/client AppFrame) sends only {html, csp}; the spec-draft
+  // "sandbox" param is deliberately ignored.
+  var VIEW_IFRAME_SANDBOX = 'allow-scripts';
+
   // Create the inner view iframe with the given HTML
-  function createViewIframe(html, sandbox, csp) {
-    var attrs = sandbox || 'allow-scripts';
+  function createViewIframe(html, csp) {
     var iframe = document.createElement('iframe');
 
-    // Set sandbox attribute; NO allow-same-origin by default
-    iframe.setAttribute('sandbox', attrs);
+    // Set sandbox attribute; allow-same-origin is never granted
+    iframe.setAttribute('sandbox', VIEW_IFRAME_SANDBOX);
 
     // Parse csp param (JSON object or string) and serialize to CSP meta tag
     var cspStr;
@@ -124,6 +142,12 @@
 
     if (!isFromHost && !isFromView) return; // Unknown source, drop
 
+    // Host messages must additionally come from this page's own origin.
+    // The inner view iframe is sandboxed without allow-same-origin, so it is
+    // opaque-origin and never matches. A cross-origin page that somehow gets
+    // window.parent as its source frame is dropped silently.
+    if (isFromHost && event.origin !== location.origin) return;
+
     var data = event.data;
     if (!data || typeof data !== 'object') return;
 
@@ -141,7 +165,7 @@
       var params = data.params || {};
       var html = params.html;
       if (!html) return;
-      createViewIframe(html, params.sandbox, params.csp);
+      createViewIframe(html, params.csp);
       return;
     }
 

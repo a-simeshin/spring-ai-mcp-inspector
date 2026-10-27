@@ -54,6 +54,14 @@ class SandboxProxyHandlerTests {
 	}
 
 	@Test
+	void serveSandboxDefaultCsp_carriesFrameAncestorsSelf() {
+		final String cspHeader = this.handler.parseAndSerializeCsp(null);
+		// frame-ancestors 'self' stops any other origin from framing the sandbox
+		// endpoint; the default (no csp param) is what a plain frame load gets.
+		assertThat(cspHeader).contains("frame-ancestors 'self'");
+	}
+
+	@Test
 	void serveSandboxWithValidCspParam_serializesJsonToHeader() {
 		final String cspJson = "{\"connectDomains\":[\"https://api.example.com\"],\"resourceDomains\":[\"https://cdn.example.com\"]}";
 		final MockServerHttpRequest request = MockServerHttpRequest

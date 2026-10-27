@@ -39,6 +39,19 @@ class SandboxProxyControllerTests {
 	}
 
 	@Test
+	void parseAndSerializeCsp_defaultAndErrorPaths_carryFrameAncestorsSelf() {
+		// frame-ancestors 'self' stops any other origin from framing the sandbox
+		// endpoint; required on every path that returns the page-level DEFAULT_CSP.
+		final String nullParam = SandboxProxyController.parseAndSerializeCsp(null);
+		assertThat(nullParam).contains("frame-ancestors 'self'");
+		final String malformed = SandboxProxyController.parseAndSerializeCsp("not-json{");
+		assertThat(malformed).contains("frame-ancestors 'self'");
+		final String dangerous = SandboxProxyController
+			.parseAndSerializeCsp("{\"connectDomains\":[\"javascript:alert(1)\"]}");
+		assertThat(dangerous).contains("frame-ancestors 'self'");
+	}
+
+	@Test
 	void parseAndSerializeCsp_validJson_serializesCorrectly() {
 		final String cspJson = "{\"connectDomains\":[\"https://api.example.com\"],\"resourceDomains\":[\"https://cdn.example.com\"]}";
 		final String result = SandboxProxyController.parseAndSerializeCsp(cspJson);
