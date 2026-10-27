@@ -144,7 +144,7 @@ export function useConnection({
     null,
   );
   const [requestHistory, setRequestHistory] = useState<
-    { request: string; response?: string }[]
+    { request: string; response?: string; isError?: boolean }[]
   >([]);
   const [completionsSupported, setCompletionsSupported] = useState(false);
   const [mcpSessionId, setMcpSessionId] = useState<string | null>(null);
@@ -200,11 +200,20 @@ export function useConnection({
   }, [oauthScope, sseUrl]);
 
   const pushHistory = (request: object, response?: object) => {
+    // [spring-ai-mcp-inspector PATCH] history-error-styling: persist isError flag
+    // in history entries so the UI can render failed calls distinctly (#195).
+    const isError = (() => {
+      if (response === undefined) return false;
+      if ("error" in response) return true;
+      if ("isError" in response && (response as { isError?: boolean }).isError === true) return true;
+      return false;
+    })();
     setRequestHistory((prev) => [
       ...prev,
       {
         request: JSON.stringify(request),
         response: response !== undefined ? JSON.stringify(response) : undefined,
+        isError,
       },
     ]);
   };
