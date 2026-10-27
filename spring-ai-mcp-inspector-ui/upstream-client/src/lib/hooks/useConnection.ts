@@ -215,7 +215,6 @@ export function useConnection({
   }, [connectionId]);
 
   const pushHistory = (request: object, response?: object) => {
-  const pushHistory = (request: object, response?: object) => {
     // [spring-ai-mcp-inspector PATCH] history-error-styling: persist isError flag
     // in history entries so the UI can render failed calls distinctly (#195).
     const isError = (() => {
@@ -239,7 +238,6 @@ export function useConnection({
       response: entry.response,
       at: Date.now(),
     });
-  };
   };
 
   const makeRequest = async <T extends AnySchema>(
