@@ -1603,11 +1603,17 @@ export function useConnection({
 
     } finally {
       // [spring-ai-mcp-inspector PATCH] Only the attempt that still owns the
-      // guard may release it: a stale attempt finishing here must not clear
-      // connectingRef while a newer attempt is mid-handshake, or a third
-      // connect() would slip past the double-click guard (NOTICE.d:
-      // "Stale attempts no longer release connectingRef"). Refs #157.
-      if (retryCount === 0 && generation === connectAttemptRef.current) {
+      // current generation may release the guard: a stale attempt finishing
+      // here must not clear connectingRef while a newer attempt is
+      // mid-handshake, or a third connect() would slip past the double-click
+      // guard (NOTICE.d: "Stale attempts no longer release connectingRef").
+      // The recursive OAuth retry runs with retryCount > 0 and, when it
+      // completes, IS the current generation, so it must release too:
+      // gating on retryCount === 0 left the guard latched after every
+      // OAuth retry (the outer attempt had become stale), silently
+      // swallowing all later connect() calls until a page reload.
+      // Refs #157.
+      if (generation === connectAttemptRef.current) {
         connectingRef.current = false;
       }
     }

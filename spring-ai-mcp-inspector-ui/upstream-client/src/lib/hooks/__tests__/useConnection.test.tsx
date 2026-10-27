@@ -3244,3 +3244,64 @@ describe("useConnection", () => {
       expect(oauthToastCalls.length).toBe(0);
     });
   });
+
+  // [spring-ai-mcp-inspector PATCH] Regression test for the PR #166 round 3
+  // review finding: the OAuth retry runs as its own connect attempt
+  // (retryCount = 1) and, when it completes, owns the current generation.
+  // The finally used to release connectingRef only for retryCount === 0,
+  // and the outer attempt had already become stale by then, so a successful
+  // OAuth retry left the guard latched and every later connect() was
+  // silently swallowed until a page reload. Refs #157.
+  describe("PR #166 OAuth retry guard regression", () => {
+    const defaultProps: Parameters<typeof useConnection>[0] = {
+      transportType: "sse" as const,
+      command: "",
+      args: "",
+      sseUrl: "http://localhost:8080",
+      env: {},
+      config: DEFAULT_INSPECTOR_CONFIG,
+    };
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockClient.connect.mockResolvedValue(undefined);
+      mockAuth.mockResolvedValue("AUTHORIZED");
+    });
+
+    test("connect works again after a successful OAuth retry (guard released)", async () => {
+      const { Client } = jest.requireMock(
+        "@modelcontextprotocol/sdk/client/index.js",
+      );
+      const mockErrorEvent = new ErrorEvent("error", {
+        message: "Mock error event",
+      });
+
+      // First attempt: 401, auth() returns AUTHORIZED, the recursive retry
+      // (retryCount = 1) completes the handshake. Two Clients are built.
+      mockClient.connect.mockRejectedValueOnce(
+        new SseError(401, "Unauthorized", mockErrorEvent),
+      );
+      const { result } = renderHook(() => useConnection(defaultProps));
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+      expect(mockAuth).toHaveBeenCalledTimes(1);
+      expect(Client.mock.calls.length).toBe(2);
+
+      await act(async () => {
+        await result.current.disconnect();
+      });
+      expect(result.current.connectionStatus).toBe("disconnected");
+
+      // The completing retry must have released connectingRef: this connect()
+      // runs a fresh handshake (a third Client, status connected). With the
+      // guard still latched it is swallowed at the top of connect() and
+      // constructs nothing.
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(Client.mock.calls.length).toBe(3);
+      expect(result.current.connectionStatus).toBe("connected");
+    });
+  });
