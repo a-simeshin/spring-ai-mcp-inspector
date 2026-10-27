@@ -12,9 +12,11 @@ File: src/utils/schemaUtils.ts
   additionalItems, propertyNames, dependentSchemas, patternProperties,
   contentSchema, unevaluatedProperties, unevaluatedItems
   (no mutation of stored schema).
-- decodePointerToken applies RFC 6901 percent-decoding (~1 -> /, ~0 -> ~,
-  then URI percent-decoding); malformed percent escapes (e.g. "a%") decode
-  to null and read as unresolvable instead of throwing URIError, both in
+- decodePointerToken applies RFC 6901 section 6 fragment decoding: URI
+  percent-decoding first, then ~1 -> /, ~0 -> ~ (so "#/properties/a%7E1b"
+  resolves the key "a/b", not "a~1b"; owner review follow-up, issue #261);
+  malformed percent escapes (e.g. "a%") decode to null and read as
+  unresolvable instead of throwing URIError, both in
   the detector and in resolveRef (owner review fix: the render-phase scan
   must never blank the UI on untrusted server input).
 - canResolveRef excludes external URIs and plain-name ($anchor) refs from
@@ -30,4 +32,4 @@ File: src/components/ToolsTab.tsx
   unresolved refs is selected, listing each broken pointer path and linking
   to https://github.com/spring-projects/spring-ai/issues/5888.
 
-Covered by: src/utils/__tests__/schemaUtils.test.ts (46 unit tests)
+Covered by: src/utils/__tests__/schemaUtils.test.ts (51 unit tests)
