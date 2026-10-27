@@ -3008,11 +3008,26 @@ describe("useConnection", () => {
       const authPromise = new Promise<string>((_resolve, reject) => {
         rejectAuth = reject;
       });
-      mockAuth.mockReturnValue(authPromise);
+      // Record the moment attempt A actually enters auth(). Rejecting
+      // before A attached its `await` handler turns the rejection into a
+      // one-macrotask unhandled rejection (jest fails the test on that
+      // event even though the hook handles it a tick later); observed as
+      // a CI-only flake, so gate deterministically instead of on a timer.
+      let enteredAuth = false;
+      mockAuth.mockImplementation(() => {
+        enteredAuth = true;
+        return authPromise;
+      });
 
       const aPromise = result.current.connect();
       await act(async () => {
-        await new Promise((r) => setTimeout(r, 10));
+        const deadline = Date.now() + 1000;
+        while (!enteredAuth && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 5));
+        }
+        expect(enteredAuth).toBe(true);
+        // One more turn so A attaches its await handler to authPromise.
+        await new Promise((r) => setTimeout(r, 0));
       });
 
       // Attempt B: reset and let it fully connect.
