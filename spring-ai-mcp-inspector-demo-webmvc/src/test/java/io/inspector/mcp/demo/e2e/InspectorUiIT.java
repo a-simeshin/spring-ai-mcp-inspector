@@ -1642,6 +1642,118 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
+	// H2. History persistence across reload (regression for #121)
+	// =====================================================================
+
+	@Nested
+	@DisplayName("History persistence across reload")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class HistoryPersistence {
+
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@Test
+		@Story("History persistence")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("History entries survive page reload for the same connection: connect, call echo, reload, assert history still shows the entry.")
+		@DisplayName("historyPersistsAcrossReload - echo call entry survives F5")
+		void history_afterReload_stillShowsEchoEntry() {
+			// given: a clean store, so leftovers from earlier tests cannot
+			// satisfy the assertions below. Cleared AFTER open(): no webdriver is
+			// bound to the thread before the first open() call.
+			open("/mcp-inspector/index.html");
+			Selenide.executeJavaScript("localStorage.clear();");
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+			connectButton().click();
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			clickTab("tools");
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$(".cursor-pointer").shouldHave(CollectionCondition.sizeGreaterThan(0));
+			selectRow("echo");
+			$("#text").shouldBe(visible).setValue("hello world");
+			activePanel().$(byText("Run Tool")).click();
+			activePanel().shouldHave(text("hello world"), Duration.ofSeconds(15));
+
+			// assert: history entry appears in panel AND in localStorage
+			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
+			// Pre-reload, assert THIS session's own bucket holds the entries (not
+			// just the whole store): the store was cleared right after open(), so
+			// every bucket in it belongs to this session; the bucket containing
+			// the echo tools/call (matched by the unique input text) must hold at
+			// least the tools/list + tools/call pair, i.e. the session history is
+			// intact in ONE bucket. The key is not derived from localStorage form
+			// keys: the clear above races with the app's persistence effects.
+			Object preStore = Selenide
+				.executeJavaScript("var s = JSON.parse(localStorage.getItem('mcp-inspector.history.v1'));"
+						+ "if (!s || !s.byConnection) return -1;" + "var best = 0;" + "for (var k in s.byConnection) {"
+						+ "  var b = s.byConnection[k];"
+						+ "  var has = b.some(function(e) { return e.request.indexOf('hello world') >= 0; });"
+						+ "  if (has && b.length > best) best = b.length;" + "}" + "return best;");
+			Assertions.assertTrue(((Number) preStore).intValue() >= 2,
+					"the session's own bucket must hold the tools/list and tools/call entries before reload");
+			Object store = Selenide.executeJavaScript("return localStorage.getItem('mcp-inspector.history.v1');");
+			Assertions.assertNotNull(store, "localStorage must contain mcp-inspector.history.v1 after tool call");
+			Assertions.assertTrue(store.toString().contains("tools/call"),
+					"localStorage history must contain a tools/call entry");
+
+			// when: reload the page and reconnect (URL restored from lastSseUrl)
+			Selenide.refresh();
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+			connectButton().click();
+
+			// then: history panel still shows the echo entry (tools/call), not just a
+			// count
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			historyColumn().shouldNotHave(text("No history yet"), Duration.ofSeconds(10));
+			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
+			historyColumn().$$("li").find(Condition.text("tools/call")).shouldBe(visible, Duration.ofSeconds(5));
+		}
+
+		@Test
+		@Story("History persistence")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("History is scoped per connection: a different server URL must not show the previous connection's history.")
+		@DisplayName("historyPerConnection - different URL shows no previous history")
+		void history_differentConnection_showsNoPreviousHistory() {
+			// given: connect and call echo to create history
+			openAndConnect();
+			clickTab("tools");
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$(".cursor-pointer").shouldHave(CollectionCondition.sizeGreaterThan(0));
+			selectRow("echo");
+			$("#text").shouldBe(visible).setValue("hello world");
+			activePanel().$(byText("Run Tool")).click();
+			activePanel().shouldHave(text("hello world"), Duration.ofSeconds(15));
+			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
+
+			// when: disconnect and change URL (no reconnect: history must clear on
+			// connectionId change)
+			sidebar().$(byText("Disconnect")).shouldBe(visible).click();
+			connectButton().shouldBe(visible);
+			int port = ((WebServerApplicationContext) app).getWebServer().getPort();
+			setReactInputValue("#sse-url-input", "http://localhost:" + port + "/other");
+
+			// then: history panel shows 'No history yet' for the new connection
+			historyColumn().shouldHave(text("No history yet"), Duration.ofSeconds(10));
+		}
+
+	}
+
+	// =====================================================================
 	// I. Sidebar — collapsibles, custom headers, theme switch.
 	// =====================================================================
 

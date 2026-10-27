@@ -498,6 +498,32 @@ const App = () => {
     selectedTaskRef.current = selectedTask;
   }, [selectedTask]);
 
+  // [spring-ai-mcp-inspector PATCH] Persistent history (#218): session bucket
+  // id captured at connect(), released on disconnect (review blocker 2).
+  // Declared before useConnection so the frozen key is in scope below.
+  const [activeHistoryConnectionId, setActiveHistoryConnectionId] = useState<
+    string | undefined
+  >(undefined);
+  // [spring-ai-mcp-inspector PATCH] Saved connections state (#121),
+  // declared before useConnection: the pending history bucket key follows
+  // the active saved entry.
+  const [activeConnectionId, setActiveConnectionId] = useState<
+    string | undefined
+  >(undefined);
+  // [spring-ai-mcp-inspector PATCH] Pending history bucket key (owner
+  // decision on PR #218, 2026-10-24: the history layer is keyed on
+  // activeConnectionId). A saved connection keys its bucket by the saved
+  // entry id, so two saved connections with the same URL never share a
+  // bucket and editing a saved connection's URL cannot orphan its history;
+  // ad-hoc (unsaved) connections keep the transport-scoped form key.
+  const historyKeyForConnection = useCallback(() => {
+    return (
+      activeConnectionId ??
+      (transportType === "stdio"
+        ? `stdio:${command} ${args}`
+        : `${transportType}:${sseUrl || "ephemeral"}`)
+    );
+  }, [activeConnectionId, transportType, command, args, sseUrl]);
   const {
     connectionStatus,
     connectionError,
@@ -526,6 +552,14 @@ const App = () => {
     oauthScope,
     config,
     connectionType,
+    // [spring-ai-mcp-inspector PATCH] Persistent history (#121). The bucket
+    // key is frozen from the Connect click until disconnect (review
+    // blocker 2 on PR #218): while a session id is captured, editing the
+    // URL/command fields neither reshuffles the History panel nor sends
+    // later calls into a half-typed bucket. On disconnect the key returns
+    // to following the form fields, and the next connect() captures fresh.
+    connectionId:
+      activeHistoryConnectionId ?? historyKeyForConnection(),
     onNotification: (notification) => {
       setNotifications((prev) => [...prev, notification as ServerNotification]);
 
@@ -608,9 +642,6 @@ const App = () => {
   const [savedConnections, setSavedConnections] = useState<SavedConnection[]>(
     () => loadSavedConnections(),
   );
-  const [activeConnectionId, setActiveConnectionId] = useState<
-    string | undefined
-  >(undefined);
 
   const handleSaveConnection = useCallback(
     (name: string): SavedConnection | undefined => {
@@ -840,13 +871,46 @@ const App = () => {
     saveInspectorConfig(CONFIG_LOCAL_STORAGE_KEY, config);
   }, [config]);
 
+  // [spring-ai-mcp-inspector PATCH] Persistent history: freeze the history
+  // bucket key at connect() time (PR #218 review blocker 2). The transport-
+  // scoped key is computed once when Connect is clicked and held for the
+  // whole session; disconnect() releases it. While the fields stay editable
+  // during a live connection, the captured key keeps history writes and the
+  // History panel on one stable bucket instead of following every keystroke.
+  const handleConnect = useCallback(() => {
+    setActiveHistoryConnectionId(historyKeyForConnection());
+    void connectMcpServer();
+  }, [connectMcpServer, historyKeyForConnection]);
+
+  const handleDisconnect = useCallback(() => {
+    setActiveHistoryConnectionId(undefined);
+    void disconnectMcpServer();
+  }, [disconnectMcpServer]);
+
   const onOAuthConnect = useCallback(
     (serverUrl: string) => {
       setSseUrl(serverUrl);
       setIsAuthDebuggerVisible(false);
+      // OAuth redirects landed on this URL: the history bucket for the new
+      // session must key on the active saved connection when one is selected
+      // (same precedence as handleConnect); an ad-hoc session keys on this
+      // URL. The prefix follows the live transportType (the OAuth flow is
+      // reachable on SSE too, SSE carries the same authProvider): a
+      // hardcoded "streamable-http:" would land an SSE session in a
+      // wrong-transport bucket that Disconnect+Reconnect (sse:<url>) can no
+      // longer see. Derived here from the callback argument, not via
+      // historyKeyForConnection(): setSseUrl above does not update the
+      // closure variable this render, so the helper would read the
+      // pre-redirect URL for the ad-hoc branch.
+      setActiveHistoryConnectionId(
+        activeConnectionId ??
+          (transportType === "stdio"
+            ? `stdio:${command} ${args}`
+            : `${transportType}:${serverUrl}`),
+      );
       void connectMcpServer();
     },
-    [connectMcpServer],
+    [connectMcpServer, transportType, command, args, activeConnectionId],
   );
 
   const onOAuthDebugConnect = useCallback(
@@ -1647,8 +1711,11 @@ const App = () => {
           setOauthClientSecret={setOauthClientSecret}
           oauthScope={oauthScope}
           setOauthScope={setOauthScope}
-          onConnect={connectMcpServer}
-          onDisconnect={disconnectMcpServer}
+          // [spring-ai-mcp-inspector PATCH] Persistent history (#218):
+          // wrappers capture/release the history bucket key at connect and
+          // disconnect time (see handleConnect/handleDisconnect above).
+          onConnect={handleConnect}
+          onDisconnect={handleDisconnect}
           logLevel={logLevel}
           sendLogLevelRequest={sendLogLevelRequest}
           loggingSupported={!!serverCapabilities?.logging || false}

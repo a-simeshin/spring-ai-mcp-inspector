@@ -85,6 +85,12 @@ import { InspectorConfig } from "../configurationTypes";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CustomHeaders } from "../types/customHeaders";
 import { resolveRefsInMessage } from "@/utils/schemaUtils";
+// [spring-ai-mcp-inspector PATCH] Persistent history (#121).
+import {
+  appendHistory,
+  clearHistory,
+  loadHistory,
+} from "../persistentHistory";
 
 interface UseConnectionOptions {
   transportType: "stdio" | "sse" | "streamable-http";
@@ -110,6 +116,8 @@ interface UseConnectionOptions {
   defaultLoggingLevel?: LoggingLevel;
   serverImplementation?: Implementation;
   metadata?: Record<string, string>;
+  // [spring-ai-mcp-inspector PATCH] Persistent history connection id (#121).
+  connectionId?: string;
 }
 
 export function useConnection({
@@ -130,6 +138,8 @@ export function useConnection({
   getRoots,
   defaultLoggingLevel,
   metadata = {},
+  // [spring-ai-mcp-inspector PATCH] Persistent history (#121).
+  connectionId = "ephemeral",
 }: UseConnectionOptions) {
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
@@ -199,6 +209,11 @@ export function useConnection({
     saveScopeToSessionStorage(sseUrl, oauthScope);
   }, [oauthScope, sseUrl]);
 
+  // [spring-ai-mcp-inspector PATCH] Load persistent history on connection change (#121).
+  useEffect(() => {
+    setRequestHistory(loadHistory(connectionId));
+  }, [connectionId]);
+
   const pushHistory = (request: object, response?: object) => {
     // [spring-ai-mcp-inspector PATCH] history-error-styling: persist isError flag
     // in history entries so the UI can render failed calls distinctly (#195).
@@ -208,14 +223,21 @@ export function useConnection({
       if ("isError" in response && (response as { isError?: boolean }).isError === true) return true;
       return false;
     })();
-    setRequestHistory((prev) => [
-      ...prev,
-      {
-        request: JSON.stringify(request),
-        response: response !== undefined ? JSON.stringify(response) : undefined,
-        isError,
-      },
-    ]);
+    const entry = {
+      request: JSON.stringify(request),
+      response: response !== undefined ? JSON.stringify(response) : undefined,
+      isError,
+    };
+    setRequestHistory((prev) => [...prev, entry]);
+    // [spring-ai-mcp-inspector PATCH] Persist to localStorage (#121). The
+    // stored entry keeps the storage-layer shape (request/response/at);
+    // the isError flag lives in the in-memory entry only, matching the
+    // storage schema the persistence layer owns.
+    appendHistory(connectionId, {
+      request: entry.request,
+      response: entry.response,
+      at: Date.now(),
+    });
   };
 
   const makeRequest = async <T extends AnySchema>(
@@ -1284,6 +1306,8 @@ export function useConnection({
   const clearRequestHistory = () => {
     setRequestHistory([]);
     setServerImplementation(null);
+    // [spring-ai-mcp-inspector PATCH] Clear persistent history (#121).
+    clearHistory(connectionId);
   };
 
   return {
