@@ -141,6 +141,60 @@ const INCOMPATIBLE_RESPONSE_EVENT: WireEvent = {
   },
 };
 
+// [spring-ai-mcp-inspector PATCH] CallToolResult isError=true fixtures (#184).
+
+const VALIDATION_ERROR_RESPONSE_EVENT: WireEvent = {
+  id: "evt-7",
+  correlationId: "corr-6",
+  sessionId: "s-5",
+  type: "MCP_JSONRPC_RESPONSE",
+  timestamp: "2026-08-30T12:00:05.000Z",
+  payload: {
+    jsonrpc: "2.0",
+    id: 5,
+    result: {
+      content: [
+        {
+          type: "text",
+          text: "Parameter 'limit' must be a positive integer",
+        },
+      ],
+      isError: true,
+    },
+  },
+};
+
+const SUCCESS_CALL_RESPONSE_EVENT: WireEvent = {
+  id: "evt-8",
+  correlationId: "corr-7",
+  sessionId: "s-5",
+  type: "MCP_JSONRPC_RESPONSE",
+  timestamp: "2026-08-30T12:00:06.000Z",
+  payload: {
+    jsonrpc: "2.0",
+    id: 6,
+    result: {
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+    },
+  },
+};
+
+const NO_ISERROR_RESPONSE_EVENT: WireEvent = {
+  id: "evt-9",
+  correlationId: "corr-8",
+  sessionId: "s-5",
+  type: "MCP_JSONRPC_RESPONSE",
+  timestamp: "2026-08-30T12:00:07.000Z",
+  payload: {
+    jsonrpc: "2.0",
+    id: 7,
+    result: {
+      content: [{ type: "text", text: "ok" }],
+    },
+  },
+};
+
 function mockFetch(events: WireEvent[]) {
   const fetchMock = jest.fn().mockResolvedValue({
     ok: true,
@@ -294,5 +348,79 @@ describe("TimelineTab", () => {
     expect(screen.getByText(/severity: INCOMPATIBLE/)).toBeInTheDocument();
     // Affected methods appear in the expanded block.
     expect(screen.getByText(/affected: initialize/)).toBeInTheDocument();
+  });
+
+  // [spring-ai-mcp-inspector PATCH] CallToolResult isError=true tests (#184).
+
+  // Each test locates the event row via its correlationId suffix and asserts the
+  // full color class list, so reverting the error color scheme (TimelineTab.tsx
+  // colorClass/bgClass) or the badge itself fails the suite.
+
+  const rowByCorrelation = (suffix: string) => {
+    const rows = screen.getAllByText(suffix).map((el) => el.closest("div.border-l-2"));
+    expect(rows).toHaveLength(1);
+    return rows[0] as HTMLElement;
+  };
+
+  it("renders an error row with tool error badge and tooltip for isError=true CallToolResult", async () => {
+    mockFetch([VALIDATION_ERROR_RESPONSE_EVENT]);
+    renderTab();
+
+    const badge = await waitFor(() =>
+      screen.getByTestId("timeline-tool-error-badge"),
+    );
+    expect(badge).toHaveTextContent("tool error");
+    expect(badge).toHaveAttribute(
+      "title",
+      "Parameter 'limit' must be a positive integer",
+    );
+
+    const row = rowByCorrelation("corr-6");
+    expect(row.className).toContain("text-red-400");
+    expect(row.className).toContain("border-l-red-500");
+    expect(row.className).toContain("bg-red-950/30");
+  });
+
+  it("shows the validator error message in the expanded row", async () => {
+    mockFetch([VALIDATION_ERROR_RESPONSE_EVENT]);
+    renderTab();
+
+    fireEvent.click(await screen.findByTestId("timeline-tool-error-badge"));
+    const message = await screen.findByTestId("timeline-tool-error-message");
+    expect(message).toHaveTextContent(
+      "Parameter 'limit' must be a positive integer",
+    );
+  });
+
+  it("renders a successful CallToolResult row with the regular response colors", async () => {
+    mockFetch([SUCCESS_CALL_RESPONSE_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("1 event")).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("timeline-tool-error-badge")).not.toBeInTheDocument();
+
+    const row = rowByCorrelation("corr-7");
+    expect(row.className).toContain("text-green-400");
+    expect(row.className).toContain("border-l-green-500");
+    expect(row.className).toContain("bg-green-950/30");
+    expect(row.className).not.toContain("red");
+  });
+
+  it("renders a response row without isError with the regular response colors", async () => {
+    mockFetch([NO_ISERROR_RESPONSE_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("1 event")).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("timeline-tool-error-badge")).not.toBeInTheDocument();
+
+    const row = rowByCorrelation("corr-8");
+    expect(row.className).toContain("text-green-400");
+    expect(row.className).toContain("border-l-green-500");
+    expect(row.className).toContain("bg-green-950/30");
+    expect(row.className).not.toContain("red");
   });
 });
