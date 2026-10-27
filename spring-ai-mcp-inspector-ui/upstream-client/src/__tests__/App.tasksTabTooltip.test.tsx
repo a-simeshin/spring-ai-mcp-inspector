@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] App-level Tasks tab capability-gate regression tests (#182).
 // Must run before react-dom loads (jsdom lacks PointerEvent; React only
 // attaches pointermove listeners when the constructor exists).
 import "../testUtils/pointerEventsPolyfill";
