@@ -124,15 +124,16 @@ class InspectorUiIT {
 	}
 
 	/**
-	 * Every demo tool advertised by {@code tools/list} (25 entries): the 22 core tools
-	 * plus the three MCP Apps fixtures from {@code DemoUiAppsProvider} (formApp,
-	 * dashboardApp, malformedAppTool).
+	 * Every demo tool advertised by {@code tools/list} (29 entries): the 22 core tools,
+	 * the four task-emulating tools from {@code DemoTaskEmulatingToolsProvider}
+	 * (generateReport, getTaskStatus, cancelTask, keepAliveTask), and the three MCP Apps
+	 * fixtures from {@code DemoUiAppsProvider} (formApp, dashboardApp, malformedAppTool).
 	 */
 	private static final String[] ALL_DEMO_TOOLS = { "echo", "sum", "currentTime", "addNumbers", "concatenate",
 			"lookupUser", "chooseColor", "toggleFlag", "optionalGreeting", "errorTool", "largeOutput",
 			"structuredOutput", "multiContent", "slowEcho", "deepJson", "blobAttachment", "askLlm", "askUser",
-			"deployService", "findFiles", "authorizeViaUrl", "listMyRoots", "formApp", "dashboardApp",
-			"malformedAppTool" };
+			"deployService", "findFiles", "authorizeViaUrl", "listMyRoots", "generateReport", "getTaskStatus",
+			"cancelTask", "keepAliveTask", "formApp", "dashboardApp", "malformedAppTool" };
 
 	/**
 	 * Connect matrix actually exposed by the upstream UI: only the three transport
@@ -716,9 +717,9 @@ class InspectorUiIT {
 		@Test
 		@Story("Tool list")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("After listing tools, every one of the 25 demo tools is present in the tool list.")
-		@DisplayName("toolsListShowsAll25Tools - every demo tool appears in the list")
-		void toolsList_afterListTools_showsAll25Tools() {
+		@Description("After listing tools, every one of the 29 demo tools is present in the tool list.")
+		@DisplayName("toolsListShowsAll29Tools - every demo tool appears in the list")
+		void toolsList_afterListTools_showsAll29Tools() {
 			// given
 			String[] expected = ALL_DEMO_TOOLS;
 

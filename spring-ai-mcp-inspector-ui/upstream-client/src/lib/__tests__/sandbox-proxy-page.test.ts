@@ -192,7 +192,7 @@ describe("sandbox proxy page guest CSP", () => {
       const name = trimmed.split(/\s+/)[0];
       counts.set(name, (counts.get(name) ?? 0) + 1);
     }
-    for (const [name, count] of counts) {
+    for (const count of counts.values()) {
       expect(count).toBe(1);
     }
   });

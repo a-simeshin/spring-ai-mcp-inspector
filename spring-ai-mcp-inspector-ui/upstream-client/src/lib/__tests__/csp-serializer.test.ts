@@ -91,7 +91,7 @@ describe("serializeCsp", () => {
 
   it("never emits a directive twice (CSP3 ignores repeats)", () => {
     const policy = serializeCsp(APP_CSP);
-    for (const [name, count] of directiveCounts(policy)) {
+    for (const count of directiveCounts(policy).values()) {
       expect(count).toBe(1);
     }
   });
