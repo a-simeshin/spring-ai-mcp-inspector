@@ -137,6 +137,59 @@ class ProxyAuthWebFilterTests {
 
 		@Test
 		@Story("Allow branches")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("filter() allow-lists the unauthenticated /sandbox proxy page (exact path match)")
+		void filter_whenSandboxEndpoint_passesThroughWithoutToken() {
+			// given
+			final MockServerWebExchange exchange = MockServerWebExchange
+				.from(MockServerHttpRequest.get("/mcp-inspector-api/sandbox").build());
+			final ChainSpy chain = new ChainSpy();
+
+			// when
+			StepVerifier.create(ProxyAuthWebFilterTests.this.filter.filter(exchange, chain)).verifyComplete();
+
+			// then
+			assertThat(chain.invoked).isTrue();
+		}
+
+		@Test
+		@Story("Deny")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("filter() rejects a path that merely ends with /sandbox (exact match only)")
+		void filter_whenPathEndsWithSandbox_requiresToken() {
+			// given
+			final MockServerWebExchange exchange = MockServerWebExchange
+				.from(MockServerHttpRequest.get("/mcp-inspector-api/mcp/sandbox").build());
+			final ChainSpy chain = new ChainSpy();
+
+			// when
+			StepVerifier.create(ProxyAuthWebFilterTests.this.filter.filter(exchange, chain)).verifyComplete();
+
+			// then
+			assertThat(chain.invoked).isFalse();
+			assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+		}
+
+		@Test
+		@Story("Deny")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("filter() rejects a path that merely ends with /health (exact match only)")
+		void filter_whenPathEndsWithHealth_requiresToken() {
+			// given
+			final MockServerWebExchange exchange = MockServerWebExchange
+				.from(MockServerHttpRequest.get("/mcp-inspector-api/mcp/health").build());
+			final ChainSpy chain = new ChainSpy();
+
+			// when
+			StepVerifier.create(ProxyAuthWebFilterTests.this.filter.filter(exchange, chain)).verifyComplete();
+
+			// then
+			assertThat(chain.invoked).isFalse();
+			assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+		}
+
+		@Test
+		@Story("Allow branches")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("filter() passes a request carrying the valid token in the X-MCP-Proxy-Auth header (Bearer prefix)")
 		void filter_withValidBearerHeader_passesThrough() {

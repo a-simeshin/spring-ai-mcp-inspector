@@ -175,6 +175,42 @@ class SandboxProxyControllerTests {
 	}
 
 	@Test
+	void parseAndSerializeCsp_separatorAndWhitespaceValues_droppedNotEchoed() {
+		// PR #199 owner review: values with ';' or whitespace must never be joined
+		// into the header; only the valid host-source entries survive.
+		final String policy = SandboxProxyController.parseAndSerializeCsp(
+				"{\"connectDomains\":[\"https://api.example.com\",\"https://evil.com; script-src 'unsafe-eval'\"]}");
+		assertThat(effectiveDirectives(policy).get("connect-src")).isEqualTo("https://api.example.com");
+		assertThat(policy).doesNotContain("unsafe-eval");
+	}
+
+	@Test
+	void parseAndSerializeCsp_quotedKeywordValue_dropped() {
+		final String policy = SandboxProxyController
+			.parseAndSerializeCsp("{\"connectDomains\":[\"'unsafe-eval'\",\"https://api.example.com\"]}");
+		assertThat(effectiveDirectives(policy).get("connect-src")).isEqualTo("https://api.example.com");
+		assertThat(policy).doesNotContain("'unsafe-eval' https");
+	}
+
+	@Test
+	void parseAndSerializeCsp_allInvalidValues_fallBackToBaseline() {
+		final String policy = SandboxProxyController
+			.parseAndSerializeCsp("{\"connectDomains\":[\"data:text/html,x\",\"*, 'unsafe-eval'\"]}");
+		assertThat(effectiveDirectives(policy).get("connect-src")).isEqualTo("'none'");
+	}
+
+	@Test
+	void parseAndSerializeCsp_validHostSourceGrammar_accepted() {
+		// Scheme, port, path, localhost, IPv4 and bracketed IPv6 literals are all
+		// valid host-source expressions.
+		final String policy = SandboxProxyController.parseAndSerializeCsp(
+				"{\"connectDomains\":[\"api.example.com\",\"https://api.example.com:8443\",\"http://api.example.com/v1/api\","
+						+ "\"localhost\",\"127.0.0.1\",\"[::1]\"]}");
+		assertThat(effectiveDirectives(policy).get("connect-src")).isEqualTo(
+				"api.example.com https://api.example.com:8443 http://api.example.com/v1/api localhost 127.0.0.1 [::1]");
+	}
+
+	@Test
 	void serveSandboxWithOversizeCspParam_returns400() throws Exception {
 		final StringBuilder sb = new StringBuilder();
 		for (int i = 0; i < 4097; i++) {

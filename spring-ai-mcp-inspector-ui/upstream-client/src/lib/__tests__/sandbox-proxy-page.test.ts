@@ -1,8 +1,13 @@
 /* [spring-ai-mcp-inspector PATCH] Sandbox proxy page tests (t_81f6d85b,
-   t_5f7281e4): the page must ignore a parent-supplied inner-iframe sandbox value,
-   must drop host messages whose event.origin differs from the page's own origin,
-   and must give the srcdoc guest ONE effective CSP policy (single connect-src with
-   the App domains, object-src 'none', no duplicated directives). */
+   t_5f7281e4, t_e6c2a15d): the page must ignore a parent-supplied inner-iframe
+   sandbox value, must drop host messages whose event.origin differs from the
+   page's own origin, must give the srcdoc guest ONE effective CSP policy (single
+   connect-src with the App domains, object-src 'none', no duplicated directives),
+   must validate App domains as strict host-source expressions, must replace (not
+   stack) the inner iframe, and must relay postMessage to exact origins. This is
+   the single home of the TypeScript CSP serializer coverage: the page's inline
+   serializer is the only production TS copy (csp-serializer.ts was deleted as a
+   test-only duplicate). */
 
 import { readFileSync } from "fs";
 import path from "path";
@@ -207,5 +212,251 @@ describe("sandbox proxy page guest CSP", () => {
     const effective = guestMetaCsp(innerIframeSrcdoc());
     expect(effective.get("connect-src")).toBe("'none'");
     expect(effective.get("object-src")).toBe("'none'");
+  });
+});
+
+describe("sandbox proxy page guest CSP domain validation", () => {
+  it("drops a domain containing a policy separator from the guest policy", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: {
+        html: "<p>x</p>",
+        csp: {
+          connectDomains: [
+            "https://api.example.com",
+            "https://evil.com; script-src 'unsafe-eval'",
+          ],
+        },
+      },
+    });
+
+    const effective = guestMetaCsp(innerIframeSrcdoc());
+    expect(effective.get("connect-src")).toBe("https://api.example.com");
+  });
+
+  it("drops a domain containing whitespace and a javascript: source", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: {
+        html: "<p>x</p>",
+        csp: {
+          connectDomains: ["https://good.example.com"],
+          resourceDomains: ["https://cdn.example.com javascript:alert(1)"],
+          frameDomains: ["javascript:alert(1)"],
+        },
+      },
+    });
+
+    const effective = guestMetaCsp(innerIframeSrcdoc());
+    expect(effective.get("connect-src")).toBe("https://good.example.com");
+    // resourceDomains had no valid entry: baseline 'none' applies
+    expect(effective.get("img-src")).toBe("'none'");
+    expect(effective.get("frame-src")).toBe("'none'");
+  });
+
+  it("rejects 'unsafe-eval' and other quoted keywords as domains", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: {
+        html: "<p>x</p>",
+        csp: { connectDomains: ["'unsafe-eval'", "https://api.example.com"] },
+      },
+    });
+
+    const effective = guestMetaCsp(innerIframeSrcdoc());
+    expect(effective.get("connect-src")).toBe("https://api.example.com");
+  });
+
+  it("drops every domain of an all-invalid list, keeping the baseline", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: {
+        html: "<p>x</p>",
+        csp: { connectDomains: ["data:text/html,x", "*, 'unsafe-eval'"] },
+      },
+    });
+
+    expect(guestMetaCsp(innerIframeSrcdoc()).get("connect-src")).toBe("'none'");
+  });
+
+  it("accepts scheme, port, path, localhost and IP-literal host sources", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: {
+        html: "<p>x</p>",
+        csp: {
+          connectDomains: [
+            "api.example.com",
+            "https://api.example.com:8443",
+            "http://api.example.com/v1/api",
+            "localhost",
+            "127.0.0.1",
+            "[::1]",
+          ],
+        },
+      },
+    });
+
+    const effective = guestMetaCsp(innerIframeSrcdoc());
+    expect(effective.get("connect-src")).toBe(
+      "api.example.com https://api.example.com:8443 http://api.example.com/v1/api localhost 127.0.0.1 [::1]",
+    );
+  });
+
+  it("maps resourceDomains into the same img/script/style/font/media directives", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: {
+        html: "<p>x</p>",
+        csp: {
+          resourceDomains: ["https://cdn.example.com"],
+          frameDomains: ["https://frames.example.com"],
+          baseUriDomains: ["https://base.example.com"],
+        },
+      },
+    });
+
+    const effective = guestMetaCsp(innerIframeSrcdoc());
+    expect(effective.get("img-src")).toBe("https://cdn.example.com");
+    expect(effective.get("script-src")).toBe(
+      "'unsafe-inline' https://cdn.example.com",
+    );
+    expect(effective.get("style-src")).toBe(
+      "'unsafe-inline' https://cdn.example.com",
+    );
+    expect(effective.get("font-src")).toBe("https://cdn.example.com");
+    expect(effective.get("media-src")).toBe("https://cdn.example.com");
+    expect(effective.get("frame-src")).toBe("https://frames.example.com");
+    expect(effective.get("base-uri")).toBe("https://base.example.com");
+  });
+
+  it("produces the baseline for an all-'none' input with multiple App domains", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: {
+        html: "<p>x</p>",
+        csp: {
+          connectDomains: ["https://api.example.com", "https://ws.example.com"],
+        },
+      },
+    });
+
+    const effective = guestMetaCsp(innerIframeSrcdoc());
+    expect(effective.get("connect-src")).toBe(
+      "https://api.example.com https://ws.example.com",
+    );
+    expect(effective.get("default-src")).toBe("'none'");
+  });
+});
+
+describe("sandbox proxy page inner iframe replacement", () => {
+  it("replaces the previous inner iframe instead of stacking another one", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: { html: "<p>first</p>" },
+    });
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: { html: "<p>second</p>" },
+    });
+
+    const iframes = document.querySelectorAll("#container iframe");
+    expect(iframes.length).toBe(1);
+    expect(innerIframeSrcdoc()).toContain("second");
+  });
+
+  it("drops non-object csp values to the baseline without throwing", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: { html: "<p>x</p>", csp: "not-json{" },
+    });
+
+    const effective = guestMetaCsp(innerIframeSrcdoc());
+    expect(effective.get("connect-src")).toBe("'none'");
+  });
+});
+
+describe("sandbox proxy page postMessage target origins", () => {
+  it("sends sandbox-proxy-ready to the parent with location.origin, not '*'", () => {
+    const calls: Array<{ data: unknown; origin: string }> = [];
+    const parentPost = window.parent.postMessage.bind(window.parent);
+    window.parent.postMessage = jest.fn((data: unknown, origin: string) => {
+      calls.push({ data, origin });
+      return parentPost(data, origin);
+    }) as unknown as typeof window.parent.postMessage;
+
+    loadPage();
+
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    for (const call of calls) {
+      expect(call.origin).toBe(window.location.origin);
+    }
+    window.parent.postMessage = parentPost;
+  });
+
+  it("relays guest frames to the parent with location.origin", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: { html: "<p>x</p>" },
+    });
+
+    const inner = document.querySelector<HTMLIFrameElement>("#container iframe");
+    expect(inner).not.toBeNull();
+
+    const calls: Array<{ data: unknown; origin: string }> = [];
+    const parentPost = window.parent.postMessage.bind(window.parent);
+    window.parent.postMessage = jest.fn((data: unknown, origin: string) => {
+      calls.push({ data, origin });
+      return parentPost(data, origin);
+    }) as unknown as typeof window.parent.postMessage;
+
+    const guestEvent = new MessageEvent("message", {
+      data: { jsonrpc: "2.0", method: "ui/initialize" },
+      origin: "null",
+      source: inner!.contentWindow,
+    });
+    window.dispatchEvent(guestEvent);
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].origin).toBe(window.location.origin);
+    window.parent.postMessage = parentPost;
+  });
+
+  it("keeps no dead forwardToHost path: a guest frame is relayed exactly once", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: { html: "<p>x</p>" },
+    });
+
+    const inner = document.querySelector<HTMLIFrameElement>("#container iframe");
+    const calls: Array<unknown> = [];
+    const parentPost = window.parent.postMessage.bind(window.parent);
+    window.parent.postMessage = jest.fn((data: unknown) => {
+      calls.push(data);
+      return parentPost(data, window.location.origin);
+    }) as unknown as typeof window.parent.postMessage;
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { jsonrpc: "2.0", method: "ui/notifications/initialized" },
+        origin: "null",
+        source: inner!.contentWindow,
+      }),
+    );
+
+    expect(calls.length).toBe(1);
+    window.parent.postMessage = parentPost;
   });
 });

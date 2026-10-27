@@ -180,6 +180,63 @@ class ProxyAuthFilterTests {
 		@Test
 		@Story("Bypass")
 		@Severity(SeverityLevel.NORMAL)
+		@Description("the sandbox proxy page is allowed through without any token (exact path match)")
+		void doFilter_forSandboxPath_passesWithoutToken() throws Exception {
+			// given
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sandbox");
+			request.setRequestURI("/mcp-inspector-api/sandbox");
+			final MockHttpServletResponse response = new MockHttpServletResponse();
+			final MockFilterChain chain = new MockFilterChain();
+
+			// when
+			ProxyAuthFilterTests.this.filter.doFilter(request, response, chain);
+
+			// then
+			assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_OK);
+			assertThat(chain.getRequest()).isNotNull();
+		}
+
+		@Test
+		@Story("Deny")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a path that merely ends with /sandbox is NOT exempt (exact match only)")
+		void doFilter_forPathEndingInSandbox_requiresToken() throws Exception {
+			// given
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/mcp/sandbox");
+			request.setRequestURI("/mcp-inspector-api/mcp/sandbox");
+			final MockHttpServletResponse response = new MockHttpServletResponse();
+			final MockFilterChain chain = new MockFilterChain();
+
+			// when
+			ProxyAuthFilterTests.this.filter.doFilter(request, response, chain);
+
+			// then
+			assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_UNAUTHORIZED);
+			assertThat(chain.getRequest()).isNull();
+		}
+
+		@Test
+		@Story("Deny")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a path that merely ends with /health is NOT exempt (exact match only)")
+		void doFilter_forPathEndingInHealth_requiresToken() throws Exception {
+			// given
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/mcp/health");
+			request.setRequestURI("/mcp-inspector-api/mcp/health");
+			final MockHttpServletResponse response = new MockHttpServletResponse();
+			final MockFilterChain chain = new MockFilterChain();
+
+			// when
+			ProxyAuthFilterTests.this.filter.doFilter(request, response, chain);
+
+			// then
+			assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_UNAUTHORIZED);
+			assertThat(chain.getRequest()).isNull();
+		}
+
+		@Test
+		@Story("Bypass")
+		@Severity(SeverityLevel.NORMAL)
 		@Description("when auth is disabled every request is forwarded without checking the token")
 		void doFilter_whenAuthDisabled_passesChain() throws Exception {
 			// given

@@ -23,9 +23,9 @@ Security fixes (t_e6c85c96):
   (JSON object) and serializes it via serializeCsp; malformed or absent param
   produces the all-'none' baseline.
 - SandboxProxyController (webmvc) and SandboxProxyHandler (webflux): parse the
-  csp query param as JSON, serialize via CspSerializer (core module), set as
-  HTTP response header. Reject javascript:/data: origins. Cap param at 4 KB
-  (400 on overflow). Malformed JSON -> all-'none' default.
+  csp query param as JSON, serialize via the shared SandboxCspSerializer (core
+  module, one copy for both stacks), set as HTTP response header. Cap param at
+  4 KB (400 on overflow). Malformed JSON -> all-'none' default.
 - AppRenderer.tsx: passes sandbox.csp (McpUiResourceCsp object from tool's
   _meta.ui.csp) to @mcp-ui/client AppRenderer; adds onCallTool handler that
   rejects tools/call for tools whose _meta.ui.visibility lacks "app"
@@ -72,3 +72,28 @@ CSP merge into one effective policy (t_5f7281e4, PR #199 owner review BLOCK 2):
   a served-header case: an App declaring api.example.com gets exactly that as
   the single effective connect-src, with object-src 'none'.
 
+Minor-findings sweep (t_e6c2a15d, PR #199 owner review):
+- src/lib/csp-serializer.ts deleted: it was imported only by its own test. The
+  single TypeScript serializer is the page's inline one (the page is served
+  standalone, without the bundle); its tests live in
+  src/lib/__tests__/sandbox-proxy-page.test.ts. On the Java side the two
+  per-starter CspSerializer inner classes are replaced by ONE shared
+  io.inspector.mcp.core.proxy.SandboxCspSerializer used by both stacks.
+- App-supplied csp domain values are now validated as strict CSP host-source
+  expressions on every side (Java serializer, page inline serializer): values
+  with ';', whitespace, scheme sources (javascript:, data:), or quoted keywords
+  ('unsafe-eval') are dropped and never reach a policy.
+- The 4 KB cap is consistent: SandboxCspSerializer.CSP_PARAM_MAX_LENGTH is the
+  single Java constant used by both stacks (4096), matching the page's inline
+  serializer limit.
+- sandbox-proxy.html: a stale inner iframe is removed before a new one is
+  appended on sandbox-resource-ready; the dead forwardToHost helper is deleted;
+  view->host and proxy-ready relays postMessage to location.origin instead of
+  '*' (host->guest keeps '*' because the opaque-origin srcdoc guest never
+  matches a tuple origin).
+- AppRenderer.tsx checkToolVisibility guards _meta.ui.visibility with
+  Array.isArray: a bare string no longer passes includes('app') and a malformed
+  object no longer throws.
+- ProxyAuthFilter/ProxyAuthWebFilter (both stacks): /health and /sandbox are
+  exempted by exact path comparison against the configured proxy prefix, not by
+  suffix match.
