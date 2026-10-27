@@ -4081,7 +4081,7 @@ class InspectorUiIT {
 	// =====================================================================
 
 	@Nested
-	@DisplayName("Mobile viewport 375x812 (connect form + history stack)")
+	@DisplayName("Mobile viewport 375x812 (history stack, no horizontal overflow)")
 	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 	class MobileViewport375x812 {
 
