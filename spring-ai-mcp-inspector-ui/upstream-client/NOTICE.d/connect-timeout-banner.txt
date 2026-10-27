@@ -1,0 +1,22 @@
+src/lib/connectErrors.ts + src/components/Sidebar.tsx +
+ src/lib/__tests__/connectErrors.test.ts +
+ src/components/__tests__/Sidebar.connectFailureAlert.test.tsx :
+show structured timeout detail in the connect error banner.
+
+When the proxy returns a connection_timeout payload with phase, elapsedMs,
+and budgetMs (added in the per-phase connection timeout budget work),
+the sidebar banner now shows which phase timed out (Transport connect /
+MCP initialize), the elapsed/budget numbers as "X.Xs of Ys", and a
+clickable hint to increase the Connection timeout in the form. The hint
+scrolls to and focuses the connection-timeout-input element.
+
+Non-structured errors (no phase field) fall through to the existing
+generic timeout banner unchanged. The connection_timeout wire code is
+mapped to reason "timeout" with the additional fields carried through
+ConnectFailedError to the sidebar.
+
+Covered by:
+- connectErrors.test.ts: parsing connection_timeout payloads,
+  humanReadablePhase(), formatBudgetBreakdown()
+- Sidebar.connectFailureAlert.test.tsx: structured timeout banner render,
+  budget display, hint interaction, fallback for unstructured errors

@@ -1,3 +1,5 @@
+// [spring-ai-mcp-inspector PATCH] Structured connect-failure contract tests
+
 import {
   ConnectFailedError,
   CONNECT_FAILED_ERROR_CODE,
@@ -6,6 +8,8 @@ import {
   isConnectFailedError,
   isHttp401Error,
   parseConnectFailureResponse,
+  humanReadablePhase,
+  formatBudgetBreakdown,
   type ConnectFailure,
 } from "../connectErrors";
 
@@ -85,6 +89,51 @@ describe("parseConnectFailureResponse", () => {
       retryable: true,
     });
   });
+
+  it("parses a connection_timeout payload with phase, elapsedMs, budgetMs", async () => {
+    const failure = await parseConnectFailureResponse(
+      responseWithBody({
+        error: {
+          code: "connection_timeout",
+          phase: "initialize",
+          elapsedMs: 15234,
+          budgetMs: 30000,
+          message: "connection initialize timed out after 15234ms of 30000ms budget",
+          retryable: true,
+        },
+      }),
+    );
+
+    expect(failure).toEqual({
+      code: "MCP_CONNECT_FAILED",
+      reason: "timeout",
+      message: "connection initialize timed out after 15234ms of 30000ms budget",
+      retryable: true,
+      phase: "initialize",
+      elapsedMs: 15234,
+      budgetMs: 30000,
+    });
+  });
+
+  it("parses connection_timeout without optional fields gracefully", async () => {
+    const failure = await parseConnectFailureResponse(
+      responseWithBody({
+        error: {
+          code: "connection_timeout",
+        },
+      }),
+    );
+
+    expect(failure).toEqual({
+      code: "MCP_CONNECT_FAILED",
+      reason: "timeout",
+      message: "Connection timed out",
+      retryable: true,
+      phase: undefined,
+      elapsedMs: undefined,
+      budgetMs: undefined,
+    });
+  });
 });
 
 describe("ConnectFailedError", () => {
@@ -98,6 +147,23 @@ describe("ConnectFailedError", () => {
     expect(error.message).toBe("Connection refused");
   });
 
+  it("carries timeout detail fields when provided", () => {
+    const timeoutFailure: ConnectFailure = {
+      code: CONNECT_FAILED_ERROR_CODE,
+      reason: "timeout",
+      message: "Timed out during initialize",
+      retryable: true,
+      phase: "initialize",
+      elapsedMs: 15234,
+      budgetMs: 30000,
+    };
+    const error = new ConnectFailedError(timeoutFailure);
+
+    expect(error.phase).toBe("initialize");
+    expect(error.elapsedMs).toBe(15234);
+    expect(error.budgetMs).toBe(30000);
+  });
+
   it("rejects cross-type errors", () => {
     expect(isConnectFailedError(new Error("Connection refused"))).toBe(false);
     expect(isConnectFailedError(null)).toBe(false);
@@ -108,6 +174,21 @@ describe("connectionFailureFromError", () => {
   it("keeps structured failures as-is", () => {
     expect(connectionFailureFromError(new ConnectFailedError(refusedFailure))).toEqual(
       refusedFailure,
+    );
+  });
+
+  it("preserves timeout phase detail from ConnectFailedError", () => {
+    const timeoutFailure: ConnectFailure = {
+      code: CONNECT_FAILED_ERROR_CODE,
+      reason: "timeout",
+      message: "Timed out",
+      retryable: true,
+      phase: "connect",
+      elapsedMs: 5432,
+      budgetMs: 10000,
+    };
+    expect(connectionFailureFromError(new ConnectFailedError(timeoutFailure))).toEqual(
+      timeoutFailure,
     );
   });
 
@@ -140,6 +221,36 @@ describe("humanReadableReason", () => {
     expect(humanReadableReason("unauthorized")).toBe("Authentication required");
     expect(humanReadableReason("not_found")).toBe("Server responded 404: check the URL path");
     expect(humanReadableReason("unknown")).toBe("");
+  });
+});
+
+describe("humanReadablePhase", () => {
+  it("maps connect phase to Transport connect", () => {
+    expect(humanReadablePhase("connect")).toBe("Transport connect");
+  });
+
+  it("maps initialize phase to MCP initialize", () => {
+    expect(humanReadablePhase("initialize")).toBe("MCP initialize");
+  });
+
+  it("falls back to the raw value for unknown phases", () => {
+    expect(humanReadablePhase("dns")).toBe("dns");
+    expect(humanReadablePhase("")).toBe("");
+  });
+});
+
+describe("formatBudgetBreakdown", () => {
+  it("formats seconds from ms values", () => {
+    expect(formatBudgetBreakdown(15234, 30000)).toBe("15.2s of 30.0s");
+  });
+
+  it("shows <1s for values under 1000", () => {
+    expect(formatBudgetBreakdown(500, 30000)).toBe("<1s of 30.0s");
+    expect(formatBudgetBreakdown(30000, 500)).toBe("30.0s of <1s");
+  });
+
+  it("shows <1s for zero ms", () => {
+    expect(formatBudgetBreakdown(0, 0)).toBe("<1s of <1s");
   });
 });
 
