@@ -1,19 +1,30 @@
+spring-ai-mcp-inspector-ui/upstream-client:
 src/App.tsx: wire up getTask() callback for per-task polling and
-pass it to TasksTab. The TasksTab component now auto-polls the
-task list every 2s when the tab is active, polls each 'working'
-task via tasks/get at its own pollInterval, shows TTL countdown,
-status transition animations, and an empty state with a SEP-1686
-spec link. Mount is gated on serverCapabilities?.tasks so the
-component and its polls are never rendered against servers that
-do not advertise MCP Tasks support. Covered by 13 behavior tests
-in src/components/__tests__/TasksTab.test.tsx (fake timers for
-list poll, per-task poll, terminal-state stop, tab-inactive poll
-suppression, cancel interaction). Mutation check disproved the
-original claim of coverage from the 622 test suite: those tests
-mocked TasksTab and could not detect broken polling logic.
-src/components/TasksTab.tsx: full rewrite with auto-polling,
-per-task polling (stable callback refs + effect keyed on active
-task ID string, not array identity), TTL countdown, details
-drawer (keepAlive/ttl/pollInterval), status animations, and
-empty/selected states. TERMINAL_STATUSES includes 'success'
-(backend #196) alongside SDK 'completed'.
+pass it to TasksTab. Mount stays gated on
+serverCapabilities?.tasks so the component and its polls are
+never rendered against servers that do not advertise MCP Tasks
+support (regression-tested at the App level: a mutated
+unconditional mount is caught by the gate tests in
+src/__tests__/App.tasksTabTooltip.test.tsx).
+src/components/TasksTab.tsx: auto-polling, per-task polling, TTL
+countdown, status animations, empty state. The list poll reads
+the callback through a ref at call time and is keyed only on
+activeTab: App passes an inline arrow, so listTasks has a new
+identity on every App render, and keying the effect on the
+callback would tear the timer down before it fires. Both polls
+use recursive timeouts with exponential backoff (capped at 30s)
+while failing and reset on success. Per-task pollers are keyed
+on the active task ID string; effect teardown is unmount-only
+(a cleanup in the keyed effect would restart surviving tasks'
+timers from zero whenever the active set changes). TTL countdown
+is measured from lastUpdatedAt (the backend TaskRegistry expires
+tasks from that timestamp, so keep-alives move the countdown)
+and renders "Invalid date" instead of NaN for unparsable
+timestamps. TERMINAL_STATUSES follows the SDK TaskStatus enum
+exactly ("completed", "failed", "cancelled"); the backend
+emits "completed" and never "success". Covered by 18 behavior
+tests in src/components/__tests__/TasksTab.test.tsx (fake
+timers for list poll, per-task poll, terminal-state stop,
+identity-churn regression, poller-survival regression, backoff,
+cancel) plus 2 App-level capability-gate tests in
+src/__tests__/App.tasksTabTooltip.test.tsx.
