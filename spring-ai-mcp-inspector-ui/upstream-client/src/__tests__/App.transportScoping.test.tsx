@@ -5,6 +5,7 @@ import { useConnection } from "../lib/hooks/useConnection";
 import { appendHistory, clearHistory, loadHistory } from "../lib/persistentHistory";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import { SESSION_KEYS } from "../lib/constants";
+import { SAVED_CONNECTIONS_KEY } from "../lib/savedConnections";
 
 // Mock auth dependencies first
 jest.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
@@ -78,6 +79,10 @@ jest.mock("../components/Sidebar", () => ({
     setSseUrl?: (u: string) => void;
     onConnect?: () => void;
     onDisconnect?: () => void;
+    savedConnections?: Array<{ id: string; name: string }>;
+    activeConnectionId?: string;
+    onSaveConnection?: (name: string) => unknown;
+    onSelectConnection?: (connection: { id: string; name: string }) => void;
   }) => (
     <div>
       Sidebar
@@ -110,6 +115,25 @@ jest.mock("../components/Sidebar", () => ({
         onClick={() => props.setSseUrl?.("http://localhost:3001/half-typed")}
       >
         Edit URL
+      </button>
+      <button
+        data-testid="mock-save-connection"
+        onClick={() => props.onSaveConnection?.("Team Server")}
+      >
+        Save
+      </button>
+      <button
+        data-testid="mock-select-connection"
+        onClick={() =>
+          props.onSelectConnection?.(
+            (props.savedConnections ?? [])[0] ?? {
+              id: "missing",
+              name: "Team Server",
+            },
+          )
+        }
+      >
+        Select
       </button>
     </div>
   ),
@@ -389,6 +413,154 @@ describe("App - history bucket key frozen while connected", () => {
 // sse:<url>) the OAuth session's entries vanish from the History panel.
 // RED on a hardcoded streamable-http: prefix.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Saved connections key the history bucket by the saved-connection id
+// (owner decision on PR #218, 2026-10-24: the history layer is keyed on
+// activeConnectionId). Two saved connections pointing at the SAME server URL
+// must get separate buckets, so editing a saved connection's URL cannot
+// orphan its history, and #150 can rebase onto this key. The form-derived
+// transport-scoped key remains only for ad-hoc (unsaved) sessions.
+// RED on the pre-fix App.tsx: the key was always derived from form fields.
+// ---------------------------------------------------------------------------
+
+describe("App - history key follows activeConnectionId for saved connections", () => {
+  const mockUseConnection = jest.mocked(useConnection);
+
+  const connectedState = {
+    ...disconnectedConnectionState,
+    connectionStatus: "connected" as const,
+  };
+
+  const seedSavedConnection = (name: string, url: string): string => {
+    // Appends to the seeded list (a second call must keep the first entry).
+    const raw = localStorage.getItem(SAVED_CONNECTIONS_KEY);
+    const existing = raw
+      ? (JSON.parse(raw) as {
+          schemaVersion: number;
+          connections: Array<Record<string, unknown>>;
+        })
+      : { schemaVersion: 1, connections: [] };
+    const nowMs = Date.now();
+    const id = `saved-${name.replace(/\s+/g, "-").toLowerCase()}`;
+    existing.connections.push({
+      id,
+      name,
+      transport: "sse",
+      connectionType: "proxy",
+      url,
+      customHeaders: [],
+      lastUsedAt: nowMs,
+      createdAt: nowMs,
+    });
+    localStorage.setItem(
+      SAVED_CONNECTIONS_KEY,
+      JSON.stringify(existing),
+    );
+    return id;
+  };
+
+  test("after save and disconnect the key follows the saved-connection id, not the URL", async () => {
+    localStorage.clear();
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    const { getByTestId } = render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+
+    // Connect ad-hoc, then save under a name: the live session keeps its
+    // captured (form-derived) bucket, but once the session is released the
+    // pending key must follow the saved entry id, so later URL edits of the
+    // saved connection never orphan its history.
+    mockUseConnection.mockReturnValue(connectedState);
+    await act(async () => {
+      getByTestId("mock-connect").click();
+    });
+    await act(async () => {
+      getByTestId("mock-save-connection").click();
+    });
+    const stored = JSON.parse(
+      localStorage.getItem(SAVED_CONNECTIONS_KEY) ?? "null",
+    ) as { connections: Array<{ id: string; name: string }> } | null;
+    expect(stored?.connections).toHaveLength(1);
+    const savedId = stored!.connections[0].id;
+
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    await act(async () => {
+      getByTestId("mock-disconnect").click();
+    });
+    await waitFor(() => {
+      const keyAfterDisconnect =
+        mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+          .connectionId;
+      expect(keyAfterDisconnect).toBe(savedId);
+    });
+    expect(
+      mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+        .connectionId,
+    ).not.toBe("sse:http://localhost:3001/sse");
+  });
+
+  test("two saved connections with the same URL get separate history buckets", async () => {
+    localStorage.clear();
+    const sharedUrl = "http://localhost:3001/sse";
+    const firstId = seedSavedConnection("Team Server", sharedUrl);
+    const secondId = seedSavedConnection("Team Server Copy", sharedUrl);
+    expect(firstId).not.toBe(secondId);
+
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    const { getByTestId } = render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+
+    // Select the first saved connection and connect: the bucket key is the
+    // saved entry id even though the URL matches the second entry's URL.
+    mockUseConnection.mockReturnValue(connectedState);
+    await act(async () => {
+      getByTestId("mock-select-connection").click();
+    });
+    await act(async () => {
+      getByTestId("mock-connect").click();
+    });
+
+    const keyAfterConnect =
+      mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+        .connectionId;
+    expect(keyAfterConnect).toBe(firstId);
+    expect(keyAfterConnect).not.toBe(secondId);
+    expect(keyAfterConnect).not.toBe(`sse:${sharedUrl}`);
+  });
+
+  test("editing a saved connection's URL keeps its history bucket reachable", async () => {
+    localStorage.clear();
+    const savedId = seedSavedConnection("Team Server", "http://localhost:3001/sse");
+
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    const { getByTestId } = render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+
+    mockUseConnection.mockReturnValue(connectedState);
+    await act(async () => {
+      getByTestId("mock-select-connection").click();
+    });
+    await act(async () => {
+      getByTestId("mock-connect").click();
+    });
+    // Mid-session URL edit must not move the bucket away from the saved id.
+    await act(async () => {
+      getByTestId("mock-edit-url").click();
+    });
+
+    const keyAfterEdit =
+      mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+        .connectionId;
+    expect(keyAfterEdit).toBe(savedId);
+    expect(keyAfterEdit).not.toBe("sse:http://localhost:3001/moved");
+  });
+});
 
 describe("App - OAuth callback captures a transport-correct bucket key", () => {
   const mockUseConnection = jest.mocked(useConnection);

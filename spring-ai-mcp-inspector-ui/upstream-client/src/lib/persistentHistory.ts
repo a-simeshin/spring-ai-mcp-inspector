@@ -256,54 +256,54 @@ export function appendHistory(
       JSON.parse(cut);
       return cut;
     } catch {
-      // Invalid JSON after truncation: parse, truncate inner content, re-stringify.
-      try {
-        const obj = JSON.parse(s);
-        // Truncate large string fields inside the parsed structure
-        const truncateField = (val: unknown): unknown => {
-          if (typeof val === "string" && val.length > MAX_BODY_LENGTH / 2) {
-            return val.slice(0, MAX_BODY_LENGTH / 2 - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
-          }
-          if (Array.isArray(val)) {
-            return val.map(truncateField);
-          }
-          if (val !== null && typeof val === "object") {
-            const result: Record<string, unknown> = {};
-            for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
-              result[k] = truncateField(v);
-            }
-            return result;
-          }
-          return val;
-        };
-        const truncated = truncateField(obj);
-        const result = JSON.stringify(truncated);
-        if (result.length <= MAX_BODY_LENGTH) return result;
-        // Still too long: keep the JSON-RPC envelope fields (jsonrpc, method,
-        // id) so the History panel can still render a label for the entry,
-        // and mark the payload as truncated. Dropping method/id outright made
-        // reloaded entries render without a label (PR #218 review).
-        const envelope: Record<string, unknown> = {
-          jsonrpc: "2.0",
-          truncated: true,
-        };
-        if (typeof obj === "object" && obj !== null && !Array.isArray(obj)) {
-          const candidate = obj as Record<string, unknown>;
-          if (typeof candidate.method === "string") {
-            envelope.method = candidate.method;
-          }
-          if (
-            typeof candidate.id === "string" ||
-            typeof candidate.id === "number"
-          ) {
-            envelope.id = candidate.id;
-          }
+      // Invalid JSON after truncation: parse the original body, truncate
+      // inner content, re-stringify. A non-JSON body cannot occur from the
+      // app path (pushHistory stores JSON.stringify output), and storing
+      // the raw cut for one would only produce an entry that isValidEntry
+      // discards on read, so there is no fallback for it (PR #218 review
+      // minor).
+      const obj = JSON.parse(s);
+      // Truncate large string fields inside the parsed structure
+      const truncateField = (val: unknown): unknown => {
+        if (typeof val === "string" && val.length > MAX_BODY_LENGTH / 2) {
+          return val.slice(0, MAX_BODY_LENGTH / 2 - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
         }
-        return JSON.stringify(envelope);
-      } catch {
-        // Not valid JSON at all; return truncated string as-is
-        return cut;
+        if (Array.isArray(val)) {
+          return val.map(truncateField);
+        }
+        if (val !== null && typeof val === "object") {
+          const result: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+            result[k] = truncateField(v);
+          }
+          return result;
+        }
+        return val;
+      };
+      const truncated = truncateField(obj);
+      const result = JSON.stringify(truncated);
+      if (result.length <= MAX_BODY_LENGTH) return result;
+      // Still too long: keep the JSON-RPC envelope fields (jsonrpc, method,
+      // id) so the History panel can still render a label for the entry,
+      // and mark the payload as truncated. Dropping method/id outright made
+      // reloaded entries render without a label (PR #218 review).
+      const envelope: Record<string, unknown> = {
+        jsonrpc: "2.0",
+        truncated: true,
+      };
+      if (typeof obj === "object" && obj !== null && !Array.isArray(obj)) {
+        const candidate = obj as Record<string, unknown>;
+        if (typeof candidate.method === "string") {
+          envelope.method = candidate.method;
+        }
+        if (
+          typeof candidate.id === "string" ||
+          typeof candidate.id === "number"
+        ) {
+          envelope.id = candidate.id;
+        }
       }
+      return JSON.stringify(envelope);
     }
   };
   const truncated: HistoryEntry = {

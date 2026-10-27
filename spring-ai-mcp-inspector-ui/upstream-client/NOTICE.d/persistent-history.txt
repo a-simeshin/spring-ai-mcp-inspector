@@ -13,11 +13,19 @@ Owner-review rework (PR #218, 2026-10-24):
 - The history bucket key is captured once when Connect is clicked
   (App.tsx handleConnect, frozen while connected, released on disconnect):
   editing the URL/transport fields mid-session no longer reshuffles buckets.
-  The OAuth-callback path (onOAuthConnect) captures with the live
-  transportType prefix, not a hardcoded "streamable-http:" (the OAuth flow is
-  reachable on the SSE transport too, which carries the same authProvider);
-  otherwise an SSE OAuth session would write into a wrong-transport bucket
-  invisible to a later manual reconnect.
+  Owner decision on the 2026-10-24 review: a saved connection keys its
+  history bucket by the saved-connection id (activeConnectionId), so two
+  saved connections pointing at the same URL never share a bucket and
+  editing a saved connection's URL cannot orphan its history; ad-hoc
+  (unsaved) connections keep the transport-scoped key derived from the form
+  fields. The OAuth-callback path (onOAuthConnect) uses the same precedence
+  and captures with the live transportType prefix, not a hardcoded
+  "streamable-http:" (the OAuth flow is reachable on the SSE transport too,
+  which carries the same authProvider); otherwise an SSE OAuth session would
+  write into a wrong-transport bucket invisible to a later manual reconnect.
+- The fallback that returned the raw cut for a body that is not JSON at all
+  was removed: the app path only stores JSON.stringify output, and a raw cut
+  would produce an entry that isValidEntry discards on read anyway.
 - A store written by an unknown (e.g. newer) schemaVersion is never rewritten:
   readStore exposes an empty view, appendHistory/clearHistory refuse to write.
 - Overlong bodies that still exceed the cap after inner-field truncation keep
