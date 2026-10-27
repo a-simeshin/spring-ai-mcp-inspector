@@ -1,7 +1,10 @@
+// [spring-ai-mcp-inspector PATCH] Regression tests for tab click navigation
+// (#200): every click must switch the Radix content pane, and tab state flows
+// through the hashchange listener (the click handler only writes the hash).
 // Must run before react-dom loads (jsdom lacks PointerEvent; React only
 // attaches pointermove listeners when the constructor exists).
 import "../testUtils/pointerEventsPolyfill";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import App from "../App";
@@ -108,54 +111,93 @@ jest.mock("../components/TasksTab", () => {
 });
 /* eslint-enable @typescript-eslint/no-require-imports */
 
-jest.mock("../components/AppsTab", () => ({
-  __esModule: true,
-  default: () => <div>AppsTab</div>,
-}));
+/* eslint-disable @typescript-eslint/no-require-imports */
+jest.mock("../components/AppsTab", () => {
+  const { TabsContent } = require("@/components/ui/tabs");
+  return {
+    __esModule: true,
+    default: () => (
+      <TabsContent value="apps" data-testid="apps-pane">
+        Apps content pane
+      </TabsContent>
+    ),
+  };
+});
 
 jest.mock("../components/ConsoleTab", () => ({
   __esModule: true,
   default: () => <div>ConsoleTab</div>,
 }));
 
-jest.mock("../components/PingTab", () => ({
-  __esModule: true,
-  default: () => <div>PingTab</div>,
-}));
+jest.mock("../components/PingTab", () => {
+  const { TabsContent } = require("@/components/ui/tabs");
+  return {
+    __esModule: true,
+    default: () => (
+      <TabsContent value="ping" data-testid="ping-pane">
+        Ping content pane
+      </TabsContent>
+    ),
+  };
+});
 
-jest.mock("../components/SamplingTab", () => ({
-  __esModule: true,
-  default: () => <div>SamplingTab</div>,
-}));
+jest.mock("../components/SamplingTab", () => {
+  const { TabsContent } = require("@/components/ui/tabs");
+  return {
+    __esModule: true,
+    default: () => (
+      <TabsContent value="sampling" data-testid="sampling-pane">
+        Sampling content pane
+      </TabsContent>
+    ),
+  };
+});
 
-jest.mock("../components/RootsTab", () => ({
-  __esModule: true,
-  default: () => <div>RootsTab</div>,
-}));
+jest.mock("../components/RootsTab", () => {
+  const { TabsContent } = require("@/components/ui/tabs");
+  return {
+    __esModule: true,
+    default: () => (
+      <TabsContent value="roots" data-testid="roots-pane">
+        Roots content pane
+      </TabsContent>
+    ),
+  };
+});
 
-jest.mock("../components/ElicitationTab", () => ({
-  __esModule: true,
-  default: () => <div>ElicitationTab</div>,
-}));
+jest.mock("../components/ElicitationTab", () => {
+  const { TabsContent } = require("@/components/ui/tabs");
+  return {
+    __esModule: true,
+    default: () => (
+      <TabsContent value="elicitations" data-testid="elicitations-pane">
+        Elicitations content pane
+      </TabsContent>
+    ),
+  };
+});
 
-jest.mock("../components/MetadataTab", () => ({
-  __esModule: true,
-  default: () => <div>MetadataTab</div>,
-}));
+jest.mock("../components/MetadataTab", () => {
+  const { TabsContent } = require("@/components/ui/tabs");
+  return {
+    __esModule: true,
+    default: () => (
+      <TabsContent value="metadata" data-testid="metadata-pane">
+        Metadata content pane
+      </TabsContent>
+    ),
+  };
+});
+/* eslint-enable @typescript-eslint/no-require-imports */
 
 jest.mock("../components/AuthDebugger", () => ({
   __esModule: true,
-  default: () => <div>AuthDebugger</div>,
+  default: () => <div data-testid="auth-pane">AuthDebugger</div>,
 }));
 
 jest.mock("../components/HistoryAndNotifications", () => ({
   __esModule: true,
   default: () => <div>HistoryAndNotifications</div>,
-}));
-
-jest.mock("../components/TimelineTab", () => ({
-  __esModule: true,
-  default: () => <div>TimelineTab</div>,
 }));
 
 global.fetch = jest.fn().mockResolvedValue({ json: () => Promise.resolve({}) });
@@ -265,6 +307,101 @@ describe("App - tab click switching content pane (regression t_c0dcfe9a)", () =>
     expect(toolsPane).toHaveAttribute("data-state", "inactive");
   });
 
+  it("switches the pane through the hashchange path (single state source)", async () => {
+    // [spring-ai-mcp-inspector PATCH] The click handler only writes
+    // window.location.hash; tab state updates exclusively from the hashchange
+    // listener. This drives that path end-to-end with a deterministic dispatch
+    // order: the location mock records the hash write and suppresses the
+    // automatic hashchange event, the test then runs the listener the way the
+    // browser task queue would, and asserts real pane switching once it runs.
+    // All window mocks are restored in finally so a failure cannot leak them
+    // into sibling tests.
+    mockUseConnection.mockReturnValue(
+      connectionState({
+        prompts: { listChanged: true },
+        tools: { listChanged: true },
+      }),
+    );
+
+    // Set the initial hash so the useState initializer picks "prompts"
+    window.location.hash = "#prompts";
+
+    const originalLocation = window.location;
+    const originalAddEventListener = window.addEventListener;
+    let mockHash = "#prompts";
+    const hashchangeHandlers: (() => void)[] = [];
+
+    try {
+      // Capture hashchange listeners added by App
+      window.addEventListener = jest.fn((event: string, handler: () => void) => {
+        if (event === "hashchange") {
+          hashchangeHandlers.push(handler);
+        }
+        return originalAddEventListener(event, handler);
+      });
+
+      // @ts-expect-error - mocking location for deterministic hashchange ordering
+      delete window.location;
+      // @ts-expect-error - mocking location for deterministic hashchange ordering
+      window.location = {
+        ...originalLocation,
+        get hash() {
+          return mockHash;
+        },
+        set hash(value: string) {
+          mockHash = value.startsWith("#") ? value : "#" + value;
+          // Intentionally NOT dispatching hashchange automatically: the test
+          // controls when the browser's hashchange task runs.
+        },
+      };
+
+      const user = userEvent.setup();
+      render(<App />);
+
+      // Wait for initial Prompts tab
+      const promptsTrigger = screen.getByRole("tab", { name: /^Prompts$/i });
+      await waitFor(() => {
+        expect(promptsTrigger).toHaveAttribute("aria-selected", "true");
+      });
+
+      const toolsTrigger = screen.getByRole("tab", { name: /^Tools$/i });
+      const toolsPane = screen.getByTestId("tools-pane");
+      const promptsPane = screen.getByTestId("prompts-pane");
+
+      // Click Tools tab
+      await user.click(toolsTrigger);
+
+      // The click handler's contract: it writes the hash; the state update
+      // itself arrives from the hashchange listener.
+      expect(window.location.hash).toBe("#tools");
+
+      // Run the hashchange listeners the way the browser task queue would
+      // after the hash write above.
+      act(() => {
+        hashchangeHandlers.forEach((handler) => handler());
+      });
+
+      // Real pane switching: Tools trigger and pane become active and
+      // visible, Prompts trigger and pane become inactive and hidden.
+      await waitFor(() => {
+        expect(toolsTrigger).toHaveAttribute("aria-selected", "true");
+        expect(toolsTrigger).toHaveAttribute("data-state", "active");
+      });
+      expect(toolsPane).toBeVisible();
+      expect(toolsPane).toHaveAttribute("data-state", "active");
+      expect(promptsTrigger).toHaveAttribute("aria-selected", "false");
+      expect(promptsPane).not.toBeVisible();
+      expect(promptsPane).toHaveAttribute("data-state", "inactive");
+    } finally {
+      window.addEventListener = originalAddEventListener;
+      // @ts-expect-error - restoring location
+      delete window.location;
+      // @ts-expect-error - restoring location
+      window.location = originalLocation;
+      window.location.hash = "";
+    }
+  });
+
   it("click-through every remaining tab (regression t_c0dcfe9a)", async () => {
     // Enable all capabilities so every tab trigger is available
     const makeRequest = jest.fn(async (request: { method: string }) => {
@@ -288,6 +425,7 @@ describe("App - tab click switching content pane (regression t_c0dcfe9a)", () =>
     } as ReturnType<typeof useConnection>);
 
     const user = userEvent.setup();
+
     render(<App />);
 
     // The default tab when resources is available is "resources"
@@ -296,21 +434,26 @@ describe("App - tab click switching content pane (regression t_c0dcfe9a)", () =>
       expect(resourcesTrigger).toHaveAttribute("aria-selected", "true");
     });
 
+    // Verify the default Resources pane is visible and active
+    const resourcesPane = screen.getByTestId("resources-pane");
+    expect(resourcesPane).toBeVisible();
+
     // Tab order in the template: Resources, Prompts, Tools, Tasks, Apps,
-    // Ping, Sampling, Elicitations, Roots, Auth, Metadata, Timeline
+    // Ping, Sampling, Elicitations, Roots, Auth, Metadata
     const tabNames = [
-      { name: /^Prompts$/i, value: "prompts" },
-      { name: /^Tools$/i, value: "tools" },
-      { name: /^Tasks$/i, value: "tasks" },
-      { name: /^Apps$/i, value: "apps" },
-      { name: /^Ping$/i, value: "ping" },
-      { name: /^Sampling$/i, value: "sampling" },
-      { name: /^Elicitations$/i, value: "elicitations" },
-      { name: /^Roots$/i, value: "roots" },
-      { name: /^Auth$/i, value: "auth" },
-      { name: /^Metadata$/i, value: "metadata" },
-      { name: /^Timeline$/i, value: "timeline" },
+      { name: /^Prompts$/i, value: "prompts", pane: "prompts-pane" },
+      { name: /^Tools$/i, value: "tools", pane: "tools-pane" },
+      { name: /^Tasks$/i, value: "tasks", pane: "tasks-pane" },
+      { name: /^Apps$/i, value: "apps", pane: "apps-pane" },
+      { name: /^Ping$/i, value: "ping", pane: "ping-pane" },
+      { name: /^Sampling$/i, value: "sampling", pane: "sampling-pane" },
+      { name: /^Elicitations$/i, value: "elicitations", pane: "elicitations-pane" },
+      { name: /^Roots$/i, value: "roots", pane: "roots-pane" },
+      { name: /^Auth$/i, value: "auth", pane: "auth-pane" },
+      { name: /^Metadata$/i, value: "metadata", pane: "metadata-pane" },
     ];
+
+    let prevPane: HTMLElement = resourcesPane;
 
     for (const tab of tabNames) {
       const trigger = screen.getByRole("tab", { name: tab.name });
@@ -320,6 +463,19 @@ describe("App - tab click switching content pane (regression t_c0dcfe9a)", () =>
         expect(trigger).toHaveAttribute("aria-selected", "true");
         expect(trigger).toHaveAttribute("data-state", "active");
       });
+
+      // Verify the new pane is visible (Radix switches content pane visibility)
+      const newPane = screen.getByTestId(tab.pane);
+      await waitFor(() => {
+        expect(newPane).toBeVisible();
+      });
+
+      // Verify the previous pane is hidden (Radix hides inactive content)
+      await waitFor(() => {
+        expect(prevPane).not.toBeVisible();
+      });
+
+      prevPane = newPane;
     }
-  });
+  }, 15000);
 });
