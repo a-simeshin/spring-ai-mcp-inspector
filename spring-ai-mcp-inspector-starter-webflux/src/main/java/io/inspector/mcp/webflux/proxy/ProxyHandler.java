@@ -50,16 +50,19 @@ import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.ConnectHint;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.proxy.SseConnectProbe;
 import io.inspector.mcp.core.task.TaskHandle;
 import io.inspector.mcp.core.task.TaskNotCancelableException;
 import io.inspector.mcp.core.task.TaskNotFoundException;
 import io.inspector.mcp.core.task.TaskService;
+import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.core.transport.TransportType;
@@ -113,6 +116,8 @@ public class ProxyHandler {
 
 	private final TaskService taskService;
 
+	private final McpTrafficRecorder trafficRecorder;
+
 	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper) {
 		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, null, null);
@@ -127,6 +132,26 @@ public class ProxyHandler {
 	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper,
 			final McpInspectorProperties properties, final TaskService taskService) {
+		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties, taskService, null);
+	}
+
+	/**
+	 * Full constructor that also accepts the optional timeline {@link McpTrafficRecorder}
+	 * (issue #250) used to record {@code MCP_CONNECT_FAILED} events. An absent recorder
+	 * simply disables connect-failure timeline recording.
+	 * @param registry the proxy session registry
+	 * @param transportFactory the proxy transport factory
+	 * @param mcpProxy the MCP proxy relay
+	 * @param transportDetector the transport detector
+	 * @param objectMapper the JSON object mapper
+	 * @param properties the inspector properties
+	 * @param taskService the optional task service, or {@code null}
+	 * @param trafficRecorder the optional traffic recorder, or {@code null}
+	 */
+	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
+			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper,
+			final McpInspectorProperties properties, final TaskService taskService,
+			final McpTrafficRecorder trafficRecorder) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
@@ -136,6 +161,7 @@ public class ProxyHandler {
 		this.timeouts = (properties != null) ? properties.getTimeouts() : new McpInspectorProperties.Timeouts();
 		this.outboundHttpClient = HttpClient.newBuilder().connectTimeout(this.timeouts.getFetchConnect()).build();
 		this.taskService = taskService;
+		this.trafficRecorder = trafficRecorder;
 	}
 
 	@EventListener
@@ -495,23 +521,27 @@ public class ProxyHandler {
 		final String sessionId = UUID.randomUUID().toString();
 		final boolean noHeaders = authorization == null && (customHeaders == null || customHeaders.isEmpty());
 		final McpClientTransport target;
+		URI resolvedTarget = null;
 		try {
 			final URI resolved = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
+			resolvedTarget = resolved;
 			target = noHeaders ? this.transportFactory.openStreamable(resolved)
 					: this.transportFactory.openStreamable(resolved, authorization, customHeaders);
 		}
 		catch (final Exception ex) {
 			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
 			LOG.warn("proxy[{}] upstream connect failed ({}): {}", sessionId, failure.reason().wire(), ex.toString());
-			final HttpStatus status = (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT)
-					? HttpStatus.GATEWAY_TIMEOUT : HttpStatus.BAD_GATEWAY;
-			return ServerResponse.status(status)
-				.bodyValue(Map.of("error", Map.of("code", "MCP_CONNECT_FAILED", "reason", failure.reason().wire(),
-						"message", failure.message(), "retryable", Boolean.TRUE)));
+			// [issue #250] The streamable POST may fail because the upstream serves the
+			// legacy SSE transport only: run the SSE probe and answer with the identical
+			// structured payload as the WebMVC stack (hint appended when found).
+			final SseConnectProbe.SseProbeVerdict verdict = new SseConnectProbe().evaluate(failure, ex, resolvedTarget);
+			recordConnectFailed(sessionId, failure, verdict, resolvedTarget);
+			return connectFailureResponse(failure, verdict.hint());
 		}
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
 		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
+		session.resolvedTarget(resolvedTarget);
 		this.registry.put(session);
 		this.mcpProxy.start(session).subscribe((ignored) -> {
 		}, (err) -> {
@@ -596,17 +626,57 @@ public class ProxyHandler {
 			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
 			LOG.warn("proxy[{}] await response failed ({}): {}", session.sessionId(), failure.reason().wire(),
 					ex.toString());
+			// [issue #250] Same probe + hint as the openSession catch: the first
+			// streamable POST failing with the 404/405 bucket may mean the upstream is
+			// SSE-only.
+			final SseConnectProbe.SseProbeVerdict verdict = new SseConnectProbe().evaluate(failure, ex,
+					session.resolvedTarget());
+			recordConnectFailed(session.sessionId(), failure, verdict, session.resolvedTarget());
 			// A failed first POST (the initialize) never returned a session id to the
 			// client, so the session is orphaned - tear it down instead of leaking it.
 			if (includeSessionHeader) {
 				this.registry.removeAndClose(session.sessionId());
 			}
-			final HttpStatus status = (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT)
-					? HttpStatus.GATEWAY_TIMEOUT : HttpStatus.BAD_GATEWAY;
-			return ServerResponse.status(status)
-				.bodyValue(Map.of("error", Map.of("code", "MCP_CONNECT_FAILED", "reason", failure.reason().wire(),
-						"message", failure.message(), "retryable", Boolean.TRUE)));
+			return connectFailureResponse(failure, verdict.hint());
 		});
+	}
+
+	/**
+	 * Maps a classified connect failure onto a non-2xx response with the identical
+	 * payload shape as the WebMVC stack: 504 Gateway Timeout for
+	 * {@link ProxyConnectFailure.Reason#TIMEOUT}, 502 otherwise, plus the optional
+	 * SSE-probe hint (issue #250).
+	 * @param failure the classified connect failure (never {@code null})
+	 * @param hint the SSE probe hint to append, or {@code null} to omit the hint key
+	 * @return the response {@link Mono} builder
+	 */
+	private static Mono<ServerResponse> connectFailureResponse(final ProxyConnectFailure failure,
+			final ConnectHint hint) {
+		final HttpStatus status = (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT) ? HttpStatus.GATEWAY_TIMEOUT
+				: HttpStatus.BAD_GATEWAY;
+		return ServerResponse.status(status)
+			.contentType(MediaType.APPLICATION_JSON)
+			.bodyValue(Map.of("error", ConnectHint.errorPayload(failure, hint, "MCP_CONNECT_FAILED")));
+	}
+
+	/**
+	 * Records a {@code MCP_CONNECT_FAILED} timeline event for a failed connect attempt
+	 * (issue #250). Skipped silently when the recorder bean is absent.
+	 * @param sessionId the proxy session id of the failed attempt (may be {@code null})
+	 * @param failure the classified connect failure
+	 * @param verdict the SSE probe verdict ({@code null} treated as {@code not_run})
+	 * @param target the resolved target URI the connect attempted (may be {@code null})
+	 */
+	private void recordConnectFailed(final String sessionId, final ProxyConnectFailure failure,
+			final SseConnectProbe.SseProbeVerdict verdict, final URI target) {
+		if (this.trafficRecorder == null) {
+			return;
+		}
+		final SseConnectProbe.SseProbeVerdict effective = (verdict != null) ? verdict
+				: SseConnectProbe.SseProbeVerdict.notRun();
+		final String hintKind = (effective.hint() != null) ? effective.hint().kind() : null;
+		this.trafficRecorder.recordConnectFailed(sessionId, failure.reason().wire(), hintKind, effective.probedPaths(),
+				effective.outcome(), (target != null) ? target.toString() : null);
 	}
 
 	/**

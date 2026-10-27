@@ -210,9 +210,10 @@ public class McpInspectorWebFluxAutoConfiguration {
 	public ProxyHandler mcpInspectorProxyHandler(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy,
 			final TransportDetector transportDetector, final JsonMapper objectMapper,
-			final McpInspectorProperties properties, final ObjectProvider<TaskService> taskServiceProvider) {
+			final McpInspectorProperties properties, final ObjectProvider<TaskService> taskServiceProvider,
+			final ObjectProvider<McpTrafficRecorder> trafficRecorder) {
 		return new ProxyHandler(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties,
-				taskServiceProvider.getIfAvailable());
+				taskServiceProvider.getIfAvailable(), trafficRecorder.getIfAvailable());
 	}
 
 	@Bean

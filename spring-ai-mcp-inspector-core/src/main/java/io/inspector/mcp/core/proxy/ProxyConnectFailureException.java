@@ -32,9 +32,33 @@ public final class ProxyConnectFailureException extends RuntimeException {
 
 	private final ProxyConnectFailure failure;
 
+	private final ConnectHint hint;
+
+	private final SseConnectProbe.SseProbeVerdict probeVerdict;
+
+	/**
+	 * Creates a connect failure carrying only the classified failure (no probe hint).
+	 * @param failure the classified connect failure
+	 * @param cause the original connect exception, for server-side logging only
+	 */
 	public ProxyConnectFailureException(final ProxyConnectFailure failure, final Throwable cause) {
+		this(failure, cause, null, null);
+	}
+
+	/**
+	 * Creates a connect failure with the optional SSE probe verdict of issue #250.
+	 * @param failure the classified connect failure
+	 * @param cause the original connect exception, for server-side logging only
+	 * @param hint the hint to attach to the {@code MCP_CONNECT_FAILED} payload, or
+	 * {@code null} when the probe found nothing
+	 * @param probeVerdict the full probe verdict for timeline recording, or {@code null}
+	 */
+	public ProxyConnectFailureException(final ProxyConnectFailure failure, final Throwable cause,
+			final ConnectHint hint, final SseConnectProbe.SseProbeVerdict probeVerdict) {
 		super(failure.message(), cause);
 		this.failure = failure;
+		this.hint = hint;
+		this.probeVerdict = probeVerdict;
 	}
 
 	/**
@@ -43,6 +67,22 @@ public final class ProxyConnectFailureException extends RuntimeException {
 	 */
 	public ProxyConnectFailure failure() {
 		return this.failure;
+	}
+
+	/**
+	 * The optional SSE-probe hint for the {@code MCP_CONNECT_FAILED} payload.
+	 * @return the hint, or {@code null} when the probe produced none
+	 */
+	public ConnectHint hint() {
+		return this.hint;
+	}
+
+	/**
+	 * The full SSE probe verdict (timeline payload), also answering "did the probe run".
+	 * @return the verdict, or {@code null} when the exception predates the probe
+	 */
+	public SseConnectProbe.SseProbeVerdict probeVerdict() {
+		return this.probeVerdict;
 	}
 
 }

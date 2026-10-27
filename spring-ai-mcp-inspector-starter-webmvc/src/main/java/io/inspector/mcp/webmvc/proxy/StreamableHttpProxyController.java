@@ -52,6 +52,7 @@ import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.ConnectHint;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
 import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
@@ -59,10 +60,12 @@ import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.proxy.SseConnectProbe;
 import io.inspector.mcp.core.task.TaskHandle;
 import io.inspector.mcp.core.task.TaskNotCancelableException;
 import io.inspector.mcp.core.task.TaskNotFoundException;
 import io.inspector.mcp.core.task.TaskService;
+import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 import io.inspector.mcp.webmvc.InspectorServerPortHolder;
 
 /**
@@ -121,27 +124,23 @@ public class StreamableHttpProxyController {
 
 	private final ObjectProvider<TaskService> taskServiceProvider;
 
+	private final McpTrafficRecorder trafficRecorder;
+
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper) {
-		this(registry, transportFactory, mcpProxy, objectMapper, null, null);
+		this(registry, transportFactory, mcpProxy, objectMapper, null, null, null);
 	}
 
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
 			final McpInspectorProperties properties) {
-		this(registry, transportFactory, mcpProxy, objectMapper, properties, null);
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, null, null);
 	}
 
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
 			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder) {
-		this.registry = registry;
-		this.transportFactory = transportFactory;
-		this.mcpProxy = mcpProxy;
-		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
-		this.properties = properties;
-		this.portHolder = portHolder;
-		this.taskServiceProvider = null;
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, null, null);
 	}
 
 	/**
@@ -156,11 +155,31 @@ public class StreamableHttpProxyController {
 	 * @param portHolder the server port holder
 	 * @param taskServiceProvider provider for an optional {@link TaskService}
 	 */
-	@Autowired
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
 			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,
 			final ObjectProvider<TaskService> taskServiceProvider) {
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, taskServiceProvider, null);
+	}
+
+	/**
+	 * Full constructor that also accepts the optional timeline {@link McpTrafficRecorder}
+	 * (issue #250) used to record {@code MCP_CONNECT_FAILED} events. Absent recorder
+	 * simply disables connect-failure timeline recording.
+	 * @param registry the proxy session registry
+	 * @param transportFactory the proxy transport factory
+	 * @param mcpProxy the MCP proxy relay
+	 * @param objectMapper the JSON object mapper
+	 * @param properties the inspector properties
+	 * @param portHolder the server port holder
+	 * @param taskServiceProvider provider for an optional {@link TaskService}
+	 * @param trafficRecorder the optional traffic recorder, or {@code null}
+	 */
+	@Autowired
+	public StreamableHttpProxyController(final ProxySessionRegistry registry,
+			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
+			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,
+			final ObjectProvider<TaskService> taskServiceProvider, final McpTrafficRecorder trafficRecorder) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
@@ -168,6 +187,7 @@ public class StreamableHttpProxyController {
 		this.properties = properties;
 		this.portHolder = portHolder;
 		this.taskServiceProvider = taskServiceProvider;
+		this.trafficRecorder = trafficRecorder;
 	}
 
 	/**
@@ -247,7 +267,7 @@ public class StreamableHttpProxyController {
 			session = openSession(url);
 		}
 		catch (final ProxyConnectFailureException ex) {
-			return connectFailureResponse(ex.failure());
+			return connectFailureResponse(ex.failure(), ex.hint());
 		}
 		return relayWithSessionHeader(session, body, true);
 	}
@@ -258,15 +278,37 @@ public class StreamableHttpProxyController {
 	 * The body carries a machine-readable {@code error} payload; stack traces and
 	 * internal details stay server-side in the log.
 	 * @param failure the classified connect failure (never {@code null})
+	 * @param hint the SSE probe hint to append, or {@code null} to omit the hint key
 	 * @return the HTTP response entity
 	 */
-	private static ResponseEntity<Object> connectFailureResponse(final ProxyConnectFailure failure) {
+	private static ResponseEntity<Object> connectFailureResponse(final ProxyConnectFailure failure,
+			final ConnectHint hint) {
 		final HttpStatus status = (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT) ? HttpStatus.GATEWAY_TIMEOUT
 				: HttpStatus.BAD_GATEWAY;
 		return ResponseEntity.status(status)
 			.contentType(MediaType.APPLICATION_JSON)
-			.body(Map.of("error", Map.of("code", ERROR_CODE_MCP_CONNECT_FAILED, "reason", failure.reason().wire(),
-					"message", failure.message(), "retryable", Boolean.TRUE)));
+			.body(Map.of("error", ConnectHint.errorPayload(failure, hint, ERROR_CODE_MCP_CONNECT_FAILED)));
+	}
+
+	/**
+	 * Records a {@code MCP_CONNECT_FAILED} timeline event for a failed connect attempt
+	 * (issue #250). Skipped silently when the recorder bean is absent, mirroring how
+	 * traffic recording degrades.
+	 * @param sessionId the proxy session id of the failed attempt (may be {@code null})
+	 * @param failure the classified connect failure
+	 * @param verdict the SSE probe verdict ({@code null} treated as {@code not_run})
+	 * @param target the resolved target URI the connect attempted (may be {@code null})
+	 */
+	private void recordConnectFailed(final String sessionId, final ProxyConnectFailure failure,
+			final SseConnectProbe.SseProbeVerdict verdict, final URI target) {
+		if (this.trafficRecorder == null) {
+			return;
+		}
+		final SseConnectProbe.SseProbeVerdict effective = (verdict != null) ? verdict
+				: SseConnectProbe.SseProbeVerdict.notRun();
+		final String hintKind = (effective.hint() != null) ? effective.hint().kind() : null;
+		this.trafficRecorder.recordConnectFailed(sessionId, failure.reason().wire(), hintKind, effective.probedPaths(),
+				effective.outcome(), (target != null) ? target.toString() : null);
 	}
 
 	/**
@@ -407,12 +449,19 @@ public class StreamableHttpProxyController {
 			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
 			LOG.warn("proxy[{}] await response failed ({}): {}", session.sessionId(), failure.reason().wire(),
 					ex.toString());
+			// [issue #250] The first streamable POST may fail (404/405 bucket) because
+			// the upstream serves the legacy SSE transport only: probe for SSE before
+			// answering. This is the path the mcp-core 2.0.0 SDK failure actually
+			// surfaces on (openSession only builds the transport).
+			final SseConnectProbe.SseProbeVerdict verdict = new SseConnectProbe().evaluate(failure, ex,
+					session.resolvedTarget());
+			recordConnectFailed(session.sessionId(), failure, verdict, session.resolvedTarget());
 			// A failed first POST (the initialize) never returned a session id to the
 			// client, so the session is orphaned — tear it down instead of leaking it.
 			if (includeSessionHeader) {
 				this.registry.removeAndClose(session.sessionId());
 			}
-			return connectFailureResponse(failure);
+			return connectFailureResponse(failure, verdict.hint());
 		}
 	}
 
@@ -427,19 +476,28 @@ public class StreamableHttpProxyController {
 		final String authorization = inboundAuthorization();
 		final Map<String, String> customHeaders = inboundCustomHeaders();
 		final McpClientTransport target;
+		URI resolvedTarget = null;
 		try {
 			final URI resolved = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
+			resolvedTarget = resolved;
 			target = (authorization == null && customHeaders.isEmpty()) ? this.transportFactory.openStreamable(resolved)
 					: this.transportFactory.openStreamable(resolved, authorization, customHeaders);
 		}
 		catch (final Exception ex) {
 			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
 			LOG.warn("proxy[{}] upstream connect failed ({}): {}", sessionId, failure.reason().wire(), ex.toString());
-			throw new ProxyConnectFailureException(failure, ex);
+			// [issue #250] The streamable POST may fail because the upstream serves
+			// the legacy SSE transport only: run the SSE probe before answering so the
+			// failure can carry a transport-switch hint. A target that could not even
+			// be resolved yields a null URI and the probe answers not_run.
+			final SseConnectProbe.SseProbeVerdict verdict = new SseConnectProbe().evaluate(failure, ex, resolvedTarget);
+			recordConnectFailed(sessionId, failure, verdict, resolvedTarget);
+			throw new ProxyConnectFailureException(failure, ex, verdict.hint(), verdict);
 		}
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(REPLAY_BUFFER);
 		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
+		session.resolvedTarget(resolvedTarget);
 		this.registry.put(session);
 		this.mcpProxy.start(session).subscribe((ignored) -> {
 		}, (err) -> {

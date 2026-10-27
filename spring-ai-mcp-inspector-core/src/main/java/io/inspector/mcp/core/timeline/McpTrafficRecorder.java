@@ -18,6 +18,7 @@ package io.inspector.mcp.core.timeline;
 
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,6 +31,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -211,6 +213,36 @@ public final class McpTrafficRecorder {
 				: UUID.randomUUID().toString();
 		final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
 				TimelineEventType.MCP_STREAM_EVENT, Instant.now(), payload);
+		appendWithMdc(correlationId, event);
+	}
+
+	/**
+	 * Records a failed connect attempt (issue #250): appended by the proxy right after
+	 * the failure was classified and the optional SSE probe ran. Recorder-absent
+	 * configurations simply never call this.
+	 * @param sessionId the proxy session identifier of the failed attempt (may be
+	 * {@code null})
+	 * @param reason the wire reason of the classified failure
+	 * @param hintKind the hint kind attached to the {@code MCP_CONNECT_FAILED} payload,
+	 * or {@code null}
+	 * @param probedPaths the request paths the SSE probe touched (empty when it did not
+	 * run)
+	 * @param probeOutcome the probe outcome ({@code alive}, {@code dead}, {@code
+	 * timeout} or {@code not_run})
+	 * @param url the target URL the connect attempted
+	 */
+	public void recordConnectFailed(final String sessionId, final String reason, final String hintKind,
+			final List<String> probedPaths, final String probeOutcome, final String url) {
+		final String correlationId = UUID.randomUUID().toString();
+		final ObjectNode payload = JsonNodeFactory.instance.objectNode();
+		payload.put("reason", reason);
+		payload.put("hintKind", hintKind);
+		final ArrayNode paths = payload.putArray("probedPaths");
+		probedPaths.forEach(paths::add);
+		payload.put("probeOutcome", probeOutcome);
+		payload.put("url", url);
+		final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
+				TimelineEventType.MCP_CONNECT_FAILED, Instant.now(), payload);
 		appendWithMdc(correlationId, event);
 	}
 
