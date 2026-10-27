@@ -204,6 +204,7 @@ export function resolveRef(
 
     for (const segment of path) {
       if (
+        segment !== null &&
         current &&
         typeof current === "object" &&
         current !== null &&
@@ -306,9 +307,16 @@ export function normalizeUnionType(schema: JsonSchemaType): JsonSchemaType {
 /**
  * Decodes a single JSON Pointer token per RFC 6901.
  * Order matters: ~1 -> / first, then ~0 -> ~.
+ * Returns null for malformed percent escapes (e.g. "a%"): server input is
+ * untrusted, an undecodable token must read as unresolvable, never throw
+ * (URIError would blank the whole UI: the scan runs in a render-phase useMemo).
  */
-function decodePointerToken(token: string): string {
-  return decodeURIComponent(token.replace(/~1/g, "/").replace(/~0/g, "~"));
+function decodePointerToken(token: string): string | null {
+  try {
+    return decodeURIComponent(token.replace(/~1/g, "/").replace(/~0/g, "~"));
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -329,6 +337,7 @@ function canResolveRef(ref: string, rootSchema: JsonSchemaType): boolean {
 
   for (const segment of path) {
     if (
+      segment !== null &&
       current &&
       typeof current === "object" &&
       current !== null &&
