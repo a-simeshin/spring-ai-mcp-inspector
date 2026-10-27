@@ -17,6 +17,9 @@
 package io.inspector.mcp.core.proxy;
 
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -29,6 +32,7 @@ import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTranspor
 import io.modelcontextprotocol.client.transport.ServerParameters;
 import io.modelcontextprotocol.client.transport.SseMessageEndpointValidator;
 import io.modelcontextprotocol.client.transport.StdioClientTransport;
+import io.modelcontextprotocol.client.transport.customizer.McpSyncHttpClientRequestCustomizer;
 import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
 
@@ -85,8 +89,28 @@ public class ProxyTransportFactory {
 		this(new ObjectMapper());
 	}
 
+	private static final Duration DEFAULT_SSE_PREFLIGHT_TIMEOUT = Duration.ofSeconds(10);
+
+	/**
+	 * Wall-clock budget for the SSE preflight probe (see {@link SsePreflightTransport}).
+	 * Bound to {@code spring.ai.mcp.inspector.timeouts.*} when the factory is wired by
+	 * the auto-configurations.
+	 */
+	private final Duration ssePreflightTimeout;
+
 	public ProxyTransportFactory(final ObjectMapper objectMapper) {
+		this(objectMapper, DEFAULT_SSE_PREFLIGHT_TIMEOUT);
+	}
+
+	/**
+	 * Creates a factory whose SSE preflight probe is bounded by
+	 * {@code ssePreflightTimeout}.
+	 * @param objectMapper the JSON mapper backing the transports (may be {@code null})
+	 * @param ssePreflightTimeout the preflight probe budget (never {@code null})
+	 */
+	public ProxyTransportFactory(final ObjectMapper objectMapper, final Duration ssePreflightTimeout) {
 		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
+		this.ssePreflightTimeout = (ssePreflightTimeout != null) ? ssePreflightTimeout : DEFAULT_SSE_PREFLIGHT_TIMEOUT;
 	}
 
 	/**
@@ -111,6 +135,65 @@ public class ProxyTransportFactory {
 			.messageEndpointValidator(noopValidator())
 			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR))
 			.build();
+	}
+
+	/**
+	 * Builds an SSE client transport wrapped in a single header-only preflight probe.
+	 *
+	 * <p>
+	 * The returned transport performs one cancelled {@code GET} probe before delegating
+	 * to the inner {@link HttpClientSseClientTransport} (see
+	 * {@link SsePreflightTransport}). The probe reuses the delegate's {@link HttpClient}
+	 * through a {@link SharedHttpClientBuilder}, so no second client (and no second
+	 * selector thread) is allocated per proxy session.
+	 * @param sseUri the full SSE endpoint URI (must not be {@code null})
+	 * @return a configured {@link McpClientTransport} for SSE with preflight
+	 * @see SsePreflightTransport
+	 */
+	public McpClientTransport buildSse(final URI sseUri) {
+		return buildSse(sseUri, null, null);
+	}
+
+	/**
+	 * Builds an SSE client transport wrapped in a single header-only preflight probe,
+	 * with the supplied {@code authorization} header and {@code customHeaders} forwarded
+	 * to the upstream MCP server on every outbound request.
+	 *
+	 * <p>
+	 * Same preflight semantics as {@link #buildSse(URI)}. Headers are injected via the
+	 * SDK's {@code httpRequestCustomizer} hook so they ride on both the preflight probe
+	 * and the real transport's requests.
+	 * @param sseUri the full SSE endpoint URI (must not be {@code null})
+	 * @param authorization the inbound {@code Authorization} header value to forward, or
+	 * {@code null} / blank to omit
+	 * @param customHeaders additional headers to forward (may be {@code null} or empty)
+	 * @return a configured {@link McpClientTransport} for SSE with preflight
+	 */
+	public McpClientTransport buildSse(final URI sseUri, final String authorization,
+			final Map<String, String> customHeaders) {
+		if (sseUri == null) {
+			throw new IllegalArgumentException("sseUri must not be null");
+		}
+		final String baseUri = stripPath(sseUri);
+		final String ssePath = (sseUri.getRawPath() == null || sseUri.getRawPath().isBlank()) ? "/sse"
+				: sseUri.getRawPath();
+		final HttpClient sharedClient = HttpClient.newBuilder()
+			.executor(SHARED_HTTP_EXECUTOR)
+			.version(HttpClient.Version.HTTP_1_1)
+			.connectTimeout(Duration.ofSeconds(10))
+			.build();
+		final HttpClientSseClientTransport.Builder builder = HttpClientSseClientTransport.builder(baseUri)
+			.sseEndpoint(ssePath)
+			.messageEndpointValidator(noopValidator())
+			.clientBuilder(new SharedHttpClientBuilder(sharedClient));
+		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(authorization, customHeaders);
+		if (customizer != null) {
+			builder.httpRequestCustomizer(customizer);
+		}
+		final McpClientTransport delegate = builder.build();
+		final HttpRequest.Builder requestTemplate = HttpRequest.newBuilder();
+		return new SsePreflightTransport(delegate, normalizeSseUri(sseUri), requestTemplate, customizer, sharedClient,
+				this.ssePreflightTimeout);
 	}
 
 	/**
@@ -154,6 +237,56 @@ public class ProxyTransportFactory {
 		}
 		final ServerParameters parameters = builder.build();
 		return new StdioClientTransport(parameters, new JacksonMcpJsonMapper(this.objectMapper));
+	}
+
+	/**
+	 * Builds an {@link McpSyncHttpClientRequestCustomizer} that sets the forwarded
+	 * {@code Authorization} header and any custom headers on every outbound request to
+	 * the upstream MCP server. Returns {@code null} when there is nothing to forward so
+	 * callers can skip installing a customizer entirely.
+	 * @param authorization the {@code Authorization} value to forward (ignored when
+	 * blank)
+	 * @param customHeaders extra headers to forward (ignored when {@code null} / empty)
+	 * @return a customizer, or {@code null} when no headers need forwarding
+	 */
+	private static McpSyncHttpClientRequestCustomizer headerCustomizer(final String authorization,
+			final Map<String, String> customHeaders) {
+		final boolean hasAuth = authorization != null && !authorization.isBlank();
+		final boolean hasCustom = customHeaders != null && !customHeaders.isEmpty();
+		if (!hasAuth && !hasCustom) {
+			return null;
+		}
+		return (builder, method, endpoint, body, context) -> {
+			if (hasAuth) {
+				builder.setHeader("Authorization", authorization);
+			}
+			if (hasCustom) {
+				customHeaders.forEach((name, value) -> {
+					if (name != null && !name.isBlank() && value != null) {
+						try {
+							builder.setHeader(name, value);
+						}
+						catch (final IllegalArgumentException ignored) {
+							// restricted header names are silently skipped
+						}
+					}
+				});
+			}
+		};
+	}
+
+	/**
+	 * Normalizes an SSE URI by ensuring the path is non-empty, defaulting to {@code /sse}
+	 * when the supplied URI has no path.
+	 * @param uri the source URI (may have an empty or null path)
+	 * @return a URI with the same scheme, host and port, but with a non-empty path
+	 */
+	private static URI normalizeSseUri(final URI uri) {
+		final String rawPath = uri.getRawPath();
+		if (rawPath != null && !rawPath.isBlank()) {
+			return uri;
+		}
+		return URI.create(stripPath(uri) + "/sse");
 	}
 
 	/**
