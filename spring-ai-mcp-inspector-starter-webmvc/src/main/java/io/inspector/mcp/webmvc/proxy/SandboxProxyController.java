@@ -86,11 +86,12 @@ public class SandboxProxyController {
 	private static final String SANDBOX_PROXY_RESOURCE = "mcp-inspector-bundle/sandbox-proxy.html";
 
 	/**
-	 * Default CSP for the sandbox proxy page itself. At page level we only need
-	 * script-src 'self' 'unsafe-inline' (for the proxy relay script) and the frame
-	 * sandbox does the heavy lifting via the inner view iframe's opaque origin.
+	 * Default CSP for the sandbox proxy page itself: the serializer's baseline with no
+	 * App domains (every network-fetch directive locked to 'none'). Kept as ONE policy:
+	 * CSP3 parsing ignores repeated directives, so a second, concatenated policy would
+	 * never broaden the baseline.
 	 */
-	private static final String DEFAULT_CSP = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'none'; frame-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'";
+	private static final String DEFAULT_CSP = CspSerializer.serialize(null);
 
 	private static final int CSP_PARAM_MAX_LENGTH = 4096;
 
@@ -125,36 +126,37 @@ public class SandboxProxyController {
 	}
 
 	/**
-	 * Parse the {@code csp} query parameter as a JSON object (McpUiResourceCsp) and
-	 * serialize to a CSP header string. Malformed JSON returns the all-'none' default. A
-	 * null or blank param returns the page-level DEFAULT_CSP.
+	 * Parse the {@code csp} query parameter as a JSON object (McpUiResourceCsp) and merge
+	 * it into ONE effective policy at the directive level. Concatenating the page
+	 * baseline with a serialized App policy cannot work: CSP3 parsing ignores repeated
+	 * directives, so the baseline occurrences (connect-src 'none', the page script-src)
+	 * would always win and the App-declared domains would never apply. Malformed JSON,
+	 * javascript:/data: origins, and a null or blank param all return the page baseline
+	 * {@link #DEFAULT_CSP} with no App domains.
 	 * @param cspParam the raw csp query param value
-	 * @return the CSP header string
+	 * @return the CSP header string: exactly one occurrence of every directive
 	 */
 	static String parseAndSerializeCsp(final String cspParam) {
 		if (cspParam == null || cspParam.isBlank()) {
 			return DEFAULT_CSP;
 		}
+		final Map<String, Object> parsed;
 		try {
 			@SuppressWarnings("unchecked")
-			final Map<String, Object> parsed = OBJECT_MAPPER.readValue(cspParam, Map.class);
-			// Reject javascript:/data: origins in any domain list
-			if (containsDangerousOrigin(parsed)) {
-				LOG.warn("Rejected csp param containing javascript:/data: origins");
-				return DEFAULT_CSP
-						+ "; default-src 'none'; connect-src 'none'; img-src 'none'; script-src 'unsafe-inline' 'none'; style-src 'unsafe-inline' 'none'; font-src 'none'; media-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'";
-			}
-			final String innerCsp = CspSerializer.serialize(parsed);
-			// Intersect with page-level CSP: keep the page's own default-src,
-			// script-src, style-src, frame-src 'self' for the proxy page itself.
-			return DEFAULT_CSP + "; " + innerCsp;
+			final Map<String, Object> map = OBJECT_MAPPER.readValue(cspParam, Map.class);
+			parsed = map;
 		}
 		catch (final Exception ex) {
-			LOG.warn("Failed to parse csp param, using all-none default: {}", ex.getMessage());
-			// Malformed JSON -> all-'none' default (do NOT echo raw value)
-			return DEFAULT_CSP
-					+ "; default-src 'none'; connect-src 'none'; img-src 'none'; script-src 'unsafe-inline' 'none'; style-src 'unsafe-inline' 'none'; font-src 'none'; media-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'";
+			LOG.warn("Failed to parse csp param, using page baseline default: {}", ex.getMessage());
+			// Malformed JSON -> page baseline (do NOT echo raw value)
+			return DEFAULT_CSP;
 		}
+		// Reject javascript:/data: origins in any domain list
+		if (containsDangerousOrigin(parsed)) {
+			LOG.warn("Rejected csp param containing javascript:/data: origins");
+			return DEFAULT_CSP;
+		}
+		return CspSerializer.serialize(parsed);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -176,58 +178,75 @@ public class SandboxProxyController {
 	// CspSerializer inner class (mirrors csp-serializer.ts)
 	static final class CspSerializer {
 
-		private static final String ALL_NONE_BASELINE = "default-src 'none'; connect-src 'none'; img-src 'none'; script-src 'unsafe-inline' 'none'; style-src 'unsafe-inline' 'none'; font-src 'none'; media-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'";
-
+		/**
+		 * Serialize a McpUiResourceCsp object into ONE effective policy for the sandbox
+		 * proxy response: the page baseline merged at the directive level with the
+		 * App-declared domains. Every directive is emitted at most once (CSP3 ignores
+		 * repeated directives, keeping only the first occurrence), so the App domains in
+		 * this policy are the ones the browser actually enforces. A null csp yields the
+		 * page baseline with every network-fetch directive locked to 'none'.
+		 * @param csp the parsed McpUiResourceCsp object, or null for the page baseline
+		 * @return the serialized policy with exactly one occurrence of every directive
+		 */
 		static String serialize(final Map<String, Object> csp) {
-			if (csp == null) {
-				return ALL_NONE_BASELINE;
-			}
+			final Map<String, Object> config = (csp != null) ? csp : Map.of();
+			final List<String> connectDomains = safeList(config.get("connectDomains"));
+			final List<String> resourceDomains = safeList(config.get("resourceDomains"));
+			final List<String> frameDomains = safeList(config.get("frameDomains"));
+			final List<String> baseUriDomains = safeList(config.get("baseUriDomains"));
 
 			final List<String> parts = new ArrayList<>();
 			parts.add("default-src 'none'");
 
-			final List<String> connectDomains = safeList(csp.get("connectDomains"));
-			if (!connectDomains.isEmpty()) {
-				parts.add("connect-src " + String.join(" ", connectDomains));
-			}
-			else {
-				parts.add("connect-src 'none'");
-			}
-
-			final List<String> resourceDomains = safeList(csp.get("resourceDomains"));
-			if (!resourceDomains.isEmpty()) {
-				final String joined = String.join(" ", resourceDomains);
-				parts.add("img-src " + joined);
-				parts.add("script-src 'unsafe-inline' " + joined);
-				parts.add("style-src 'unsafe-inline' " + joined);
-				parts.add("font-src " + joined);
-				parts.add("media-src " + joined);
-			}
-			else {
+			// The page's own relay script and style are inline, and the srcdoc guest
+			// inherits this policy, so its inline scripts need 'unsafe-inline' too. App
+			// resourceDomains broaden the SAME directive instead of a second, ignored
+			// script-src.
+			if (resourceDomains.isEmpty()) {
+				parts.add("script-src 'self' 'unsafe-inline'");
+				parts.add("style-src 'self' 'unsafe-inline'");
 				parts.add("img-src 'none'");
-				parts.add("script-src 'unsafe-inline' 'none'");
-				parts.add("style-src 'unsafe-inline' 'none'");
 				parts.add("font-src 'none'");
 				parts.add("media-src 'none'");
 			}
+			else {
+				final String joined = String.join(" ", resourceDomains);
+				parts.add("script-src 'self' 'unsafe-inline' " + joined);
+				parts.add("style-src 'self' 'unsafe-inline' " + joined);
+				parts.add("img-src " + joined);
+				parts.add("font-src " + joined);
+				parts.add("media-src " + joined);
+			}
 
-			final List<String> frameDomains = safeList(csp.get("frameDomains"));
-			if (!frameDomains.isEmpty()) {
-				parts.add("frame-src " + String.join(" ", frameDomains));
+			// connect-src: App-declared domains only, or 'none' when the App declares
+			// none (the page itself performs no fetches).
+			if (connectDomains.isEmpty()) {
+				parts.add("connect-src 'none'");
 			}
 			else {
-				parts.add("frame-src 'none'");
+				parts.add("connect-src " + String.join(" ", connectDomains));
 			}
 
-			final List<String> baseUriDomains = safeList(csp.get("baseUriDomains"));
-			if (!baseUriDomains.isEmpty()) {
+			// frame-src keeps 'self': the page must stay able to host its own srcdoc
+			// view iframe regardless of the App frameDomains.
+			if (frameDomains.isEmpty()) {
+				parts.add("frame-src 'self'");
+			}
+			else {
+				parts.add("frame-src 'self' " + String.join(" ", frameDomains));
+			}
+
+			if (baseUriDomains.isEmpty()) {
+				parts.add("base-uri 'none'");
+			}
+			else {
 				parts.add("base-uri " + String.join(" ", baseUriDomains));
 			}
-			else {
-				parts.add("base-uri 'self'");
-			}
 
+			// SEP-1865 draft, "Sandbox proxy", item 5: object-src 'none' everywhere.
+			parts.add("object-src 'none'");
 			parts.add("form-action 'none'");
+			parts.add("frame-ancestors 'self'");
 
 			return String.join("; ", parts);
 		}

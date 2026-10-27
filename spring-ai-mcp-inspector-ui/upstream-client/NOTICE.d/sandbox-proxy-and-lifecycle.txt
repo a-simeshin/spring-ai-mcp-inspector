@@ -53,4 +53,22 @@ Origin-trust hardening (t_81f6d85b, PR #199 owner review BLOCK 1):
   same-origin deviation is safe with the three fixes above.
 - New test: src/lib/__tests__/sandbox-proxy-page.test.ts (loads the page
   script into jsdom, asserts hardcoded sandbox and origin rejection).
+CSP merge into one effective policy (t_5f7281e4, PR #199 owner review BLOCK 2):
+- SandboxProxyController (webmvc) and SandboxProxyHandler (webflux) no longer
+  concatenate the page baseline with a serialized App policy: CSP3 parsing
+  ignores repeated directives, so the baseline occurrences (connect-src 'none',
+  the page script-src) always won and the App-declared domains never applied.
+  The csp query param is now merged into ONE policy at the directive level:
+  App connectDomains become the single connect-src (or 'none' when the App
+  declares none), resourceDomains broaden the same script/style/img/font/media
+  directives, frame-src keeps 'self' so the page can still host its srcdoc view
+  iframe, and malformed JSON or javascript:/data: origins return the page
+  baseline (previously a second concatenated all-'none' policy).
+- object-src 'none' added on every path and both stacks plus the page's inline
+  serializer and csp-serializer.ts (SEP-1865 draft, "Sandbox proxy", item 5).
+- csp-serializer.ts and the page's inline serializer tests now parse the policy
+  and assert the EFFECTIVE directive (first occurrence wins) and that no
+  directive appears twice, instead of substring presence. SandboxProxyIT gains
+  a served-header case: an App declaring api.example.com gets exactly that as
+  the single effective connect-src, with object-src 'none'.
 

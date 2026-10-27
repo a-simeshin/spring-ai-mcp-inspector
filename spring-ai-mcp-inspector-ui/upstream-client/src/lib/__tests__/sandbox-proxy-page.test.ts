@@ -1,6 +1,8 @@
-/* [spring-ai-mcp-inspector PATCH] Sandbox proxy page origin-trust tests (t_81f6d85b):
-   the page must ignore a parent-supplied inner-iframe sandbox value and must drop
-   host messages whose event.origin differs from the page's own origin. */
+/* [spring-ai-mcp-inspector PATCH] Sandbox proxy page tests (t_81f6d85b,
+   t_5f7281e4): the page must ignore a parent-supplied inner-iframe sandbox value,
+   must drop host messages whose event.origin differs from the page's own origin,
+   and must give the srcdoc guest ONE effective CSP policy (single connect-src with
+   the App domains, object-src 'none', no duplicated directives). */
 
 import { readFileSync } from "fs";
 import path from "path";
@@ -107,5 +109,103 @@ describe("sandbox proxy page host message origin check", () => {
     });
 
     expect(document.querySelector("#container iframe")).not.toBeNull();
+  });
+});
+
+function innerIframeSrcdoc(): string | null {
+  const iframe = document.querySelector("#container iframe");
+  return iframe ? iframe.getAttribute("srcdoc") : null;
+}
+
+function guestMetaCsp(srcdoc: string | null): Map<string, string> {
+  expect(srcdoc).not.toBeNull();
+  const match = srcdoc!.match(
+    /<meta http-equiv="Content-Security-Policy" content="([^"]*)">/
+  );
+  if (!match) {
+    throw new Error("srcdoc: no CSP meta tag found");
+  }
+  const decoded = match[1].replace(/&quot;/g, '"');
+  // CSP3 parsing: the FIRST occurrence of a repeated directive wins.
+  const directives = new Map<string, string>();
+  for (const token of decoded.split(";")) {
+    const trimmed = token.trim();
+    if (!trimmed) continue;
+    const [name, ...rest] = trimmed.split(/\s+/);
+    if (!directives.has(name)) directives.set(name, rest.join(" "));
+  }
+  return directives;
+}
+
+describe("sandbox proxy page guest CSP", () => {
+  it("gives the srcdoc guest one effective connect-src with the App domains", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: {
+        html: "<p>hello</p>",
+        csp: { connectDomains: ["https://api.example.com"] },
+      },
+    });
+
+    const effective = guestMetaCsp(innerIframeSrcdoc());
+    expect(effective.get("connect-src")).toBe("https://api.example.com");
+    expect(effective.get("default-src")).toBe("'none'");
+  });
+
+  it("adds object-src 'none' to the guest policy (SEP-1865 draft, item 5)", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: {
+        html: "<p>hello</p>",
+        csp: { connectDomains: ["https://api.example.com"] },
+      },
+    });
+
+    expect(guestMetaCsp(innerIframeSrcdoc()).get("object-src")).toBe("'none'");
+  });
+
+  it("emits no directive twice in the guest policy", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: {
+        html: "<p>hello</p>",
+        csp: {
+          connectDomains: ["https://api.example.com"],
+          resourceDomains: ["https://cdn.example.com"],
+          frameDomains: ["https://frames.example.com"],
+          baseUriDomains: ["https://base.example.com"],
+        },
+      },
+    });
+
+    const srcdoc = innerIframeSrcdoc()!;
+    const decoded = srcdoc
+      .match(/<meta http-equiv="Content-Security-Policy" content="([^"]*)">/)![1]
+      .replace(/&quot;/g, '"');
+    const counts = new Map<string, number>();
+    for (const token of decoded.split(";")) {
+      const trimmed = token.trim();
+      if (!trimmed) continue;
+      const name = trimmed.split(/\s+/)[0];
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    for (const [name, count] of counts) {
+      expect(count).toBe(1);
+    }
+  });
+
+  it("falls back to the all-'none' baseline for a guest without csp", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: { html: "<p>hello</p>" },
+    });
+
+    const effective = guestMetaCsp(innerIframeSrcdoc());
+    expect(effective.get("connect-src")).toBe("'none'");
+    expect(effective.get("object-src")).toBe("'none'");
   });
 });

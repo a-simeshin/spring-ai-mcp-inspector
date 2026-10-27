@@ -16,6 +16,11 @@
 
 package io.inspector.mcp.webflux.proxy;
 
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
@@ -30,73 +35,122 @@ import reactor.test.StepVerifier;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Unit tests for {@link SandboxProxyHandler}.
+ * Unit tests for {@link SandboxProxyHandler}. CSP assertions parse the policy and check
+ * the EFFECTIVE directive (first occurrence wins under CSP3 parsing), never substring
+ * presence: a concatenated second policy would satisfy a substring check while the
+ * browser silently ignores it (PR #199 owner review, BLOCK finding 2).
  */
 class SandboxProxyHandlerTests {
 
 	private final SandboxProxyHandler handler = new SandboxProxyHandler();
 
-	@Test
-	void serveSandboxReturnsHtmlWithDefaultCsp() {
-		final MockServerHttpRequest request = MockServerHttpRequest.get("/mcp-inspector-api/sandbox").build();
-		final MockServerWebExchange exchange = MockServerWebExchange.from(request);
-		final ServerRequest serverRequest = ServerRequest.create(exchange,
-				java.util.List.of(new org.springframework.http.codec.HttpMessageReader[0]));
+	/** App fixture declaring a connect domain and a script/image resource domain. */
+	private static final String CSP_JSON = "{\"connectDomains\":[\"https://api.example.com\"],"
+			+ "\"resourceDomains\":[\"https://cdn.example.com\"]}";
 
-		final Mono<ServerResponse> result = this.handler.serveSandbox(serverRequest);
+	/**
+	 * Parse a serialized policy into its effective directives, mirroring CSP3 parsing:
+	 * the FIRST occurrence of a repeated directive wins, later ones are ignored.
+	 */
+	private static Map<String, String> effectiveDirectives(final String policy) {
+		final Map<String, String> directives = new LinkedHashMap<>();
+		for (final String token : policy.split(";")) {
+			final String trimmed = token.trim();
+			if (trimmed.isEmpty()) {
+				continue;
+			}
+			final String[] nameAndValue = trimmed.split("\\s+", 2);
+			directives.putIfAbsent(nameAndValue[0], (nameAndValue.length > 1) ? nameAndValue[1] : "");
+		}
+		return directives;
+	}
+
+	/** Occurrence count of every directive name in the serialized policy. */
+	private static Map<String, Long> directiveCounts(final String policy) {
+		final Map<String, Long> counts = new LinkedHashMap<>();
+		for (final String token : policy.split(";")) {
+			final String trimmed = token.trim();
+			if (trimmed.isEmpty()) {
+				continue;
+			}
+			final String name = trimmed.split("\\s+", 2)[0];
+			counts.merge(name, 1L, Long::sum);
+		}
+		return counts;
+	}
+
+	private ServerRequest requestWithCsp(final String cspJson) {
+		final String query = (cspJson != null)
+				? "?csp=" + java.net.URLEncoder.encode(cspJson, java.nio.charset.StandardCharsets.UTF_8) : "";
+		final MockServerHttpRequest request = MockServerHttpRequest.get("/mcp-inspector-api/sandbox" + query).build();
+		final MockServerWebExchange exchange = MockServerWebExchange.from(request);
+		return ServerRequest.create(exchange,
+				java.util.List.of(new org.springframework.http.codec.HttpMessageReader[0]));
+	}
+
+	@Test
+	void serveSandboxReturnsHtmlWithBaselinePolicy() {
+		final Mono<ServerResponse> result = this.handler.serveSandbox(requestWithCsp(null));
 
 		StepVerifier.create(result).assertNext((response) -> {
 			assertThat(response.statusCode().is2xxSuccessful()).isTrue();
 			assertThat(response.headers().getContentType().toString()).contains(MediaType.TEXT_HTML_VALUE);
-			assertThat(response.headers().getFirst("Content-Security-Policy")).contains("default-src 'none'");
+			final Map<String, String> effective = effectiveDirectives(
+					response.headers().getFirst("Content-Security-Policy"));
+			assertThat(effective.get("default-src")).isEqualTo("'none'");
+			assertThat(effective.get("connect-src")).isEqualTo("'none'");
+			assertThat(effective.get("frame-src")).isEqualTo("'self'");
+			assertThat(effective.get("object-src")).isEqualTo("'none'");
 			assertThat(response.headers().getCacheControl()).isEqualTo(CacheControl.noStore().getHeaderValue());
 		}).verifyComplete();
 	}
 
 	@Test
-	void serveSandboxDefaultCsp_carriesFrameAncestorsSelf() {
-		final String cspHeader = this.handler.parseAndSerializeCsp(null);
-		// frame-ancestors 'self' stops any other origin from framing the sandbox
-		// endpoint; the default (no csp param) is what a plain frame load gets.
-		assertThat(cspHeader).contains("frame-ancestors 'self'");
+	void serveSandboxAppDomains_effectiveDirectivesCarryThem() {
+		final String policy = this.handler.parseAndSerializeCsp(CSP_JSON);
+		final Map<String, String> effective = effectiveDirectives(policy);
+		// connect-src equals exactly the App-declared domain set, replacing the 'none'
+		// baseline: this is the directive the browser enforces.
+		assertThat(effective.get("connect-src")).isEqualTo("https://api.example.com");
+		// resourceDomains broaden the SAME script-src/img-src, not a second copy.
+		assertThat(effective.get("script-src")).isEqualTo("'self' 'unsafe-inline' https://cdn.example.com");
+		assertThat(effective.get("img-src")).isEqualTo("https://cdn.example.com");
 	}
 
 	@Test
-	void serveSandboxWithValidCspParam_serializesJsonToHeader() {
-		final String cspJson = "{\"connectDomains\":[\"https://api.example.com\"],\"resourceDomains\":[\"https://cdn.example.com\"]}";
-		final MockServerHttpRequest request = MockServerHttpRequest
-			.get("/mcp-inspector-api/sandbox?csp="
-					+ java.net.URLEncoder.encode(cspJson, java.nio.charset.StandardCharsets.UTF_8))
-			.build();
-		final MockServerWebExchange exchange = MockServerWebExchange.from(request);
-		final ServerRequest serverRequest = ServerRequest.create(exchange,
-				java.util.List.of(new org.springframework.http.codec.HttpMessageReader[0]));
-
-		// Parse csp directly and verify handler's serialization
-		final String cspHeader = this.handler.parseAndSerializeCsp(cspJson);
-		assertThat(cspHeader).contains("connect-src https://api.example.com");
-		assertThat(cspHeader).contains("img-src https://cdn.example.com");
+	void serveSandboxAppDomains_noDirectiveAppearsTwice() {
+		final Map<String, Long> counts = directiveCounts(this.handler.parseAndSerializeCsp(CSP_JSON));
+		assertThat(counts).allSatisfy((name, count) -> assertThat(count).as("directive %s", name).isEqualTo(1L));
+		assertThat(counts.keySet()).contains("connect-src", "script-src", "style-src", "img-src", "font-src",
+				"media-src", "frame-src", "base-uri", "object-src", "form-action", "frame-ancestors");
 	}
 
 	@Test
-	void serveSandboxWithMalformedCspParam_returnsSafeDefault() {
-		final String malformed = "not-json{";
-		final String cspHeader = this.handler.parseAndSerializeCsp(malformed);
-		// Should not echo raw value; should return safe default
-		assertThat(cspHeader).doesNotContain("not-json{");
-		assertThat(cspHeader).contains("default-src 'none'");
+	void serveSandboxEveryPolicyPath_objectSrcNoneAndNoDuplicates() {
+		final List<String> params = Arrays.asList(null, "", "not-json{",
+				"{\"connectDomains\":[\"javascript:alert(1)\"]}",
+				"{\"frameDomains\":[\"data:text/html,<script>alert(1)</script>\"]}", CSP_JSON);
+		for (final String param : params) {
+			final String policy = this.handler.parseAndSerializeCsp(param);
+			final Map<String, String> effective = effectiveDirectives(policy);
+			assertThat(effective.get("object-src")).as("object-src for param %s", param).isEqualTo("'none'");
+			assertThat(effective.get("frame-ancestors")).as("frame-ancestors for param %s", param).isEqualTo("'self'");
+			assertThat(directiveCounts(policy)).as("directive counts for param %s", param)
+				.allSatisfy((name, count) -> assertThat(count).as("directive %s", name).isEqualTo(1L));
+		}
+	}
+
+	@Test
+	void serveSandboxWithMalformedCspParam_returnsBaselineWithoutEcho() {
+		final String policy = this.handler.parseAndSerializeCsp("not-json{");
+		assertThat(policy).doesNotContain("not-json{");
+		assertThat(effectiveDirectives(policy).get("default-src")).isEqualTo("'none'");
 	}
 
 	@Test
 	void serveSandboxWithOversizeCspParam_returns400() {
 		final String oversized = "x".repeat(4097);
-		final MockServerHttpRequest request = MockServerHttpRequest.get("/mcp-inspector-api/sandbox?csp=" + oversized)
-			.build();
-		final MockServerWebExchange exchange = MockServerWebExchange.from(request);
-		final ServerRequest serverRequest = ServerRequest.create(exchange,
-				java.util.List.of(new org.springframework.http.codec.HttpMessageReader[0]));
-
-		final Mono<ServerResponse> result = this.handler.serveSandbox(serverRequest);
+		final Mono<ServerResponse> result = this.handler.serveSandbox(requestWithCsp(oversized));
 
 		StepVerifier.create(result)
 			.assertNext((response) -> assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST))
@@ -104,11 +158,10 @@ class SandboxProxyHandlerTests {
 	}
 
 	@Test
-	void serveSandboxWithJavascriptOrigin_rejectsWithSafeDefault() {
-		final String cspJson = "{\"connectDomains\":[\"javascript:alert(1)\"]}";
-		final String cspHeader = this.handler.parseAndSerializeCsp(cspJson);
-		assertThat(cspHeader).doesNotContain("javascript:alert");
-		assertThat(cspHeader).contains("default-src 'none'");
+	void serveSandboxWithJavascriptOrigin_rejectsWithBaseline() {
+		final String policy = this.handler.parseAndSerializeCsp("{\"connectDomains\":[\"javascript:alert(1)\"]}");
+		assertThat(policy).doesNotContain("javascript:alert");
+		assertThat(effectiveDirectives(policy).get("connect-src")).isEqualTo("'none'");
 	}
 
 }

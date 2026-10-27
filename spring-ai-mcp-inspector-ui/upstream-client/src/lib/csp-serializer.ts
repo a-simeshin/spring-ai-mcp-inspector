@@ -60,6 +60,8 @@ export function serializeCsp(csp?: McpUiResourceCsp | null): string {
     parts.push("base-uri 'self'");
   }
 
+  // SEP-1865 draft, "Sandbox proxy", item 5: object-src 'none' everywhere.
+  parts.push("object-src 'none'");
   parts.push("form-action 'none'");
 
   return parts.join("; ");

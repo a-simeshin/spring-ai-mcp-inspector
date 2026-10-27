@@ -16,72 +16,162 @@
 
 package io.inspector.mcp.webmvc.proxy;
 
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Unit tests for {@link SandboxProxyController}. */
+/**
+ * Unit tests for {@link SandboxProxyController}. CSP assertions parse the policy and
+ * check the EFFECTIVE directive (first occurrence wins under CSP3 parsing), never
+ * substring presence: a concatenated second policy would satisfy a substring check while
+ * the browser silently ignores it (PR #199 owner review, BLOCK finding 2).
+ */
 class SandboxProxyControllerTests {
 
-	@Test
-	void parseAndSerializeCsp_null_returnsDefault() {
-		final String result = SandboxProxyController.parseAndSerializeCsp(null);
-		assertThat(result).contains("default-src 'none'");
-		assertThat(result).contains("connect-src 'none'");
+	/**
+	 * App fixture declaring a connect domain, script/image resource domain, and frames.
+	 */
+	private static final String CSP_JSON = "{\"connectDomains\":[\"https://api.example.com\",\"https://ws.example.com\"],"
+			+ "\"resourceDomains\":[\"https://cdn.example.com\"],\"frameDomains\":[\"https://frames.example.com\"],"
+			+ "\"baseUriDomains\":[\"https://base.example.com\"]}";
+
+	/**
+	 * Parse a serialized policy into its effective directives, mirroring CSP3 parsing:
+	 * the FIRST occurrence of a repeated directive wins, later ones are ignored.
+	 */
+	private static Map<String, String> effectiveDirectives(final String policy) {
+		final Map<String, String> directives = new LinkedHashMap<>();
+		for (final String token : policy.split(";")) {
+			final String trimmed = token.trim();
+			if (trimmed.isEmpty()) {
+				continue;
+			}
+			final String[] nameAndValue = trimmed.split("\\s+", 2);
+			directives.putIfAbsent(nameAndValue[0], (nameAndValue.length > 1) ? nameAndValue[1] : "");
+		}
+		return directives;
+	}
+
+	/** Occurrence count of every directive name in the serialized policy. */
+	private static Map<String, Long> directiveCounts(final String policy) {
+		final Map<String, Long> counts = new LinkedHashMap<>();
+		for (final String token : policy.split(";")) {
+			final String trimmed = token.trim();
+			if (trimmed.isEmpty()) {
+				continue;
+			}
+			final String name = trimmed.split("\\s+", 2)[0];
+			counts.merge(name, 1L, Long::sum);
+		}
+		return counts;
 	}
 
 	@Test
-	void parseAndSerializeCsp_blank_returnsDefault() {
-		final String result = SandboxProxyController.parseAndSerializeCsp("");
-		assertThat(result).contains("default-src 'none'");
+	void parseAndSerializeCsp_null_returnsBaselinePolicy() {
+		final Map<String, String> effective = effectiveDirectives(SandboxProxyController.parseAndSerializeCsp(null));
+		assertThat(effective.get("default-src")).isEqualTo("'none'");
+		assertThat(effective.get("script-src")).isEqualTo("'self' 'unsafe-inline'");
+		assertThat(effective.get("style-src")).isEqualTo("'self' 'unsafe-inline'");
+		assertThat(effective.get("connect-src")).isEqualTo("'none'");
+		assertThat(effective.get("img-src")).isEqualTo("'none'");
+		assertThat(effective.get("font-src")).isEqualTo("'none'");
+		assertThat(effective.get("media-src")).isEqualTo("'none'");
+		assertThat(effective.get("frame-src")).isEqualTo("'self'");
+	}
+
+	@Test
+	void parseAndSerializeCsp_blank_returnsBaselinePolicy() {
+		final Map<String, String> effective = effectiveDirectives(SandboxProxyController.parseAndSerializeCsp(""));
+		assertThat(effective.get("connect-src")).isEqualTo("'none'");
+	}
+
+	@Test
+	void parseAndSerializeCsp_appDomains_effectiveDirectivesCarryThem() {
+		final String policy = SandboxProxyController.parseAndSerializeCsp(CSP_JSON);
+		final Map<String, String> effective = effectiveDirectives(policy);
+		// connect-src equals exactly the App-declared domain set, replacing the 'none'
+		// baseline: this is the directive the browser enforces.
+		assertThat(effective.get("connect-src")).isEqualTo("https://api.example.com https://ws.example.com");
+		// resourceDomains broaden the SAME
+		// script-src/style-src/img-src/font-src/media-src.
+		assertThat(effective.get("script-src")).isEqualTo("'self' 'unsafe-inline' https://cdn.example.com");
+		assertThat(effective.get("style-src")).isEqualTo("'self' 'unsafe-inline' https://cdn.example.com");
+		assertThat(effective.get("img-src")).isEqualTo("https://cdn.example.com");
+		assertThat(effective.get("font-src")).isEqualTo("https://cdn.example.com");
+		assertThat(effective.get("media-src")).isEqualTo("https://cdn.example.com");
+		assertThat(effective.get("frame-src")).isEqualTo("'self' https://frames.example.com");
+		assertThat(effective.get("base-uri")).isEqualTo("https://base.example.com");
+	}
+
+	@Test
+	void parseAndSerializeCsp_appDomains_noDirectiveAppearsTwice() {
+		// A second, concatenated policy would be ignored by CSP3 repeated-directive
+		// parsing, so the merged policy must emit every directive exactly once.
+		final Map<String, Long> counts = directiveCounts(SandboxProxyController.parseAndSerializeCsp(CSP_JSON));
+		assertThat(counts).allSatisfy((name, count) -> assertThat(count).as("directive %s", name).isEqualTo(1L));
+		assertThat(counts.keySet()).contains("connect-src", "script-src", "style-src", "img-src", "font-src",
+				"media-src", "frame-src", "base-uri", "object-src", "form-action", "frame-ancestors");
+	}
+
+	@Test
+	void parseAndSerializeCsp_everyPolicyPath_objectSrcNoneAndNoDuplicates() {
+		// SEP-1865 draft, "Sandbox proxy", item 5: object-src 'none' everywhere. Every
+		// code path (baseline, malformed JSON, dangerous origin, merged App policy)
+		// must emit it once and duplicate no directive.
+		final List<String> params = Arrays.asList(null, "", "not-json{",
+				"{\"connectDomains\":[\"javascript:alert(1)\"]}",
+				"{\"frameDomains\":[\"data:text/html,<script>alert(1)</script>\"]}", CSP_JSON);
+		for (final String param : params) {
+			final String policy = SandboxProxyController.parseAndSerializeCsp(param);
+			final Map<String, String> effective = effectiveDirectives(policy);
+			assertThat(effective.get("object-src")).as("object-src for param %s", param).isEqualTo("'none'");
+			assertThat(directiveCounts(policy)).as("directive counts for param %s", param)
+				.allSatisfy((name, count) -> assertThat(count).as("directive %s", name).isEqualTo(1L));
+		}
 	}
 
 	@Test
 	void parseAndSerializeCsp_defaultAndErrorPaths_carryFrameAncestorsSelf() {
 		// frame-ancestors 'self' stops any other origin from framing the sandbox
-		// endpoint; required on every path that returns the page-level DEFAULT_CSP.
-		final String nullParam = SandboxProxyController.parseAndSerializeCsp(null);
-		assertThat(nullParam).contains("frame-ancestors 'self'");
-		final String malformed = SandboxProxyController.parseAndSerializeCsp("not-json{");
-		assertThat(malformed).contains("frame-ancestors 'self'");
-		final String dangerous = SandboxProxyController
-			.parseAndSerializeCsp("{\"connectDomains\":[\"javascript:alert(1)\"]}");
-		assertThat(dangerous).contains("frame-ancestors 'self'");
+		// endpoint; required on every path that returns the page baseline.
+		final List<String> params = Arrays.asList(null, "not-json{", "{\"connectDomains\":[\"javascript:alert(1)\"]}",
+				CSP_JSON);
+		for (final String param : params) {
+			final Map<String, String> effective = effectiveDirectives(
+					SandboxProxyController.parseAndSerializeCsp(param));
+			assertThat(effective.get("frame-ancestors")).as("frame-ancestors for param %s", param).isEqualTo("'self'");
+		}
 	}
 
 	@Test
-	void parseAndSerializeCsp_validJson_serializesCorrectly() {
-		final String cspJson = "{\"connectDomains\":[\"https://api.example.com\"],\"resourceDomains\":[\"https://cdn.example.com\"]}";
-		final String result = SandboxProxyController.parseAndSerializeCsp(cspJson);
-		assertThat(result).contains("connect-src https://api.example.com");
-		assertThat(result).contains("img-src https://cdn.example.com");
-	}
-
-	@Test
-	void parseAndSerializeCsp_malformedJson_returnsDefault() {
-		final String malformed = "not-json{";
-		final String result = SandboxProxyController.parseAndSerializeCsp(malformed);
-		// Should not echo raw value; should return safe default
-		assertThat(result).doesNotContain("not-json{");
-		assertThat(result).contains("default-src 'none'");
+	void parseAndSerializeCsp_malformedJson_returnsBaselineWithoutEcho() {
+		final String policy = SandboxProxyController.parseAndSerializeCsp("not-json{");
+		// Should not echo raw value; should return the page baseline
+		assertThat(policy).doesNotContain("not-json{");
+		assertThat(effectiveDirectives(policy).get("default-src")).isEqualTo("'none'");
 	}
 
 	@Test
 	void parseAndSerializeCsp_javascriptOrigin_rejected() {
-		final String cspJson = "{\"connectDomains\":[\"javascript:alert(1)\"]}";
-		final String result = SandboxProxyController.parseAndSerializeCsp(cspJson);
-		assertThat(result).doesNotContain("javascript:alert");
-		assertThat(result).contains("default-src 'none'");
+		final String policy = SandboxProxyController
+			.parseAndSerializeCsp("{\"connectDomains\":[\"javascript:alert(1)\"]}");
+		assertThat(policy).doesNotContain("javascript:alert");
+		assertThat(effectiveDirectives(policy).get("connect-src")).isEqualTo("'none'");
 	}
 
 	@Test
 	void parseAndSerializeCsp_dataOrigin_rejected() {
-		final String cspJson = "{\"frameDomains\":[\"data:text/html,<script>alert(1)</script>\"]}";
-		final String result = SandboxProxyController.parseAndSerializeCsp(cspJson);
-		assertThat(result).doesNotContain("data:text/html");
-		assertThat(result).contains("default-src 'none'");
+		final String policy = SandboxProxyController
+			.parseAndSerializeCsp("{\"frameDomains\":[\"data:text/html,<script>alert(1)</script>\"]}");
+		assertThat(policy).doesNotContain("data:text/html");
+		assertThat(effectiveDirectives(policy).get("frame-src")).isEqualTo("'self'");
 	}
 
 	@Test

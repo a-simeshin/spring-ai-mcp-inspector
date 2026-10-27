@@ -43,7 +43,7 @@
   // Serialize a McpUiResourceCsp JSON object to a CSP header string
   function serializeCsp(cspObj) {
     if (!cspObj || typeof cspObj !== 'object') {
-      return "default-src 'none'; connect-src 'none'; img-src 'none'; script-src 'unsafe-inline' 'none'; style-src 'unsafe-inline' 'none'; font-src 'none'; media-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'";
+      return "default-src 'none'; connect-src 'none'; img-src 'none'; script-src 'unsafe-inline' 'none'; style-src 'unsafe-inline' 'none'; font-src 'none'; media-src 'none'; frame-src 'none'; base-uri 'self'; object-src 'none'; form-action 'none'";
     }
     var parts = ["default-src 'none'"];
     var cd = cspObj.connectDomains;
@@ -79,6 +79,8 @@
     } else {
       parts.push("base-uri 'self'");
     }
+    // SEP-1865 draft, "Sandbox proxy", item 5: object-src 'none' everywhere.
+    parts.push("object-src 'none'");
     parts.push("form-action 'none'");
     return parts.join("; ");
   }
