@@ -112,7 +112,7 @@ class ProxyTaskProtocolIT {
 		String sessionId = initializeSession(proxyBase, targetUrl);
 
 		// Start a long-running task via tools/call (generateReport with 30s duration)
-		String taskId = startReportTask(proxyBase, sessionId);
+		String taskId = startReportTask(proxyBase, sessionId, 100);
 
 		// when: tasks/get on the running task
 		JsonNode getBody = buildJsonRpcRequest("tasks/get", 10, taskId);
@@ -191,7 +191,7 @@ class ProxyTaskProtocolIT {
 		String sessionId = initializeSession(proxyBase, targetUrl);
 
 		// Start and immediately cancel a task (double-cancel)
-		String taskId = startReportTask(proxyBase, sessionId);
+		String taskId = startReportTask(proxyBase, sessionId, 100);
 		JsonNode cancelBody = buildJsonRpcRequest("tasks/cancel", 30, taskId);
 		HttpResponse<String> firstCancel = postMcp(proxyBase, sessionId, cancelBody);
 		assertThat(firstCancel.statusCode()).as("first cancel HTTP status").isEqualTo(200);
@@ -274,8 +274,14 @@ class ProxyTaskProtocolIT {
 		String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
 		String sessionId = initializeSession(proxyBase, targetUrl);
-		String firstTaskId = startReportTask(proxyBase, sessionId);
-		String secondTaskId = startReportTask(proxyBase, sessionId);
+		String firstTaskId = startReportTask(proxyBase, sessionId, 100);
+		String secondTaskId = startReportTask(proxyBase, sessionId, 101);
+		// Distinct request ids are load-bearing: the proxy's awaiter matches upstream
+		// answers by JSON-RPC id over a replay buffer, so a repeated id would return the
+		// first call's stale answer for the second call, the test would race ahead of the
+		// real second task creation, and the first tasks/list page could miss it (issue
+		// #260: the "extra" working task on the cursor page was this very second task).
+		assertThat(secondTaskId).as("each tools/call must start its own task").isNotEqualTo(firstTaskId);
 
 		// when: tasks/list without a cursor
 		ObjectNode listBody = MAPPER.createObjectNode();
@@ -284,8 +290,7 @@ class ProxyTaskProtocolIT {
 		listBody.put("id", 15);
 		HttpResponse<String> listResponse = postMcp(proxyBase, sessionId, listBody);
 
-		// then: 200, our two tasks are present (this app instance is fresh, so exactly
-		// two)
+		// then: 200, exactly our two tasks are present (this app instance is fresh)
 		assertThat(listResponse.statusCode()).as("tasks/list status").isEqualTo(200);
 		JsonNode listResult = MAPPER.readTree(listResponse.body());
 		JsonNode tasks = listResult.get("result").get("tasks");
@@ -295,6 +300,7 @@ class ProxyTaskProtocolIT {
 			ids.add(task.get("taskId").asText());
 		}
 		assertThat(ids).as("both started tasks must be listed").contains(firstTaskId, secondTaskId);
+		assertThat(tasks).as("fresh app: exactly the two tasks just started, full list: %s", tasks).hasSize(2);
 		// the full list fits one page: no nextCursor is emitted
 		assertThat(listResult.get("result").has("nextCursor")).as("full list fits one page").isFalse();
 
@@ -404,13 +410,16 @@ class ProxyTaskProtocolIT {
 
 	/**
 	 * Start a long-running generateReport task via tools/call through the proxy, and
-	 * return the taskId from the response.
+	 * return the taskId from the response. Each caller must pass a distinct JSON-RPC
+	 * request id: the proxy's awaiter matches upstream answers by id over a replay
+	 * buffer, so a repeated id would hand back the stale answer of an earlier call
+	 * instead of waiting for this one.
 	 */
-	private static String startReportTask(String proxyBase, String sessionId) throws Exception {
+	private static String startReportTask(String proxyBase, String sessionId, final int requestId) throws Exception {
 		ObjectNode body = MAPPER.createObjectNode();
 		body.put("jsonrpc", "2.0");
 		body.put("method", "tools/call");
-		body.put("id", 100);
+		body.put("id", requestId);
 		ObjectNode params = body.putObject("params");
 		params.put("name", "generateReport");
 		ObjectNode args = params.putObject("arguments");
