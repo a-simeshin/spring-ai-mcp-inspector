@@ -2053,6 +2053,29 @@ class ProxyHandlerTests {
 		@Test
 		@Story("Header forwarding")
 		@Severity(SeverityLevel.NORMAL)
+		@Description("openStdio() with a malformed x-custom-auth-headers payload returns 400 and builds no transport")
+		void openStdio_withMalformedCustomHeaderList_returns400() {
+			// given
+			// the legacy comma-separated shape the UI never sent
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/stdio?command=node")
+						.header("x-custom-auth-headers", "X-Tenant, X-Trace")
+						.header("X-Tenant", "acme")
+						.build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openStdio(request).block();
+
+			// then
+			// explicit 400, no transport built
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			verify(ProxyHandlerTests.this.transportFactory, never()).openStdio(any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() opening a new session forwards the inbound Authorization header into the header-aware openStreamable overload")
 		void postMcp_newSessionWithAuthorizationHeader_usesHeaderAwareStreamableFactory() {
 			// given

@@ -515,6 +515,27 @@ class SseProxyControllerTests {
 		@Test
 		@Story("Header forwarding")
 		@Severity(SeverityLevel.NORMAL)
+		@Description("openStdio() with a malformed x-custom-auth-headers payload throws 400 before any session is opened")
+		void openStdio_withMalformedCustomHeaderList_throws400() {
+			// given
+			// the legacy comma-separated shape the UI never sent
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/stdio");
+			request.addHeader("x-custom-auth-headers", "X-Tenant, X-Trace");
+			request.addHeader("X-Tenant", "acme");
+
+			// when & then
+			// explicit 400, no stdio transport built, no session registered
+			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openStdio("python", null, null, request))
+				.isInstanceOf(ResponseStatusException.class)
+				.hasMessageContaining("400")
+				.hasMessageContaining("x-custom-auth-headers must be a JSON array of header names");
+			verify(SseProxyControllerTests.this.transportFactory, never()).openStdio(any(), any());
+			verify(SseProxyControllerTests.this.registry, never()).put(any(ProxySession.class));
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() with no request attributes uses the single-arg SSE factory overload")
 		void openSse_withoutRequestAttributes_usesSingleArgOverload() {
 			// given — no RequestContextHolder bound (tearDown clears it)
