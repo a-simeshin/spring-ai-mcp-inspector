@@ -1,9 +1,13 @@
 import { renderHook, act } from "@testing-library/react";
 import { useConnection } from "../useConnection";
 import { z } from "zod/v3";
+
+// [spring-ai-mcp-inspector PATCH] history-error-styling: hook-level tests for
+// isError producer-path in requestHistory (#195).
 import {
   ClientRequest,
   CreateTaskResultSchema,
+  ErrorCode,
   JSONRPCMessage,
   McpError,
   ServerCapabilities,
@@ -1914,6 +1918,124 @@ describe("useConnection", () => {
           variant: "destructive",
         }),
       );
+    });
+  });
+
+  describe("requestHistory isError flag", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockRequest.mockResolvedValue({ test: "response" });
+    });
+
+    const setupAndConnect = async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+      await act(async () => {
+        await result.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      return result;
+    };
+
+    const pingRequest: ClientRequest = {
+      method: "ping",
+      params: {},
+    };
+
+    const pingSchema = z.object({
+      test: z.string(),
+    });
+    const pingSchemaAny: AnySchema = pingSchema as unknown as AnySchema;
+
+    it("sets isError=true when response contains isError: true", async () => {
+      mockRequest.mockResolvedValueOnce({ isError: true });
+      const result = await setupAndConnect();
+
+      await act(async () => {
+        await result.current.makeRequest(pingRequest, pingSchemaAny);
+      });
+
+      const history = result.current.requestHistory;
+      expect(history.length).toBeGreaterThan(0);
+      const lastEntry = history[history.length - 1];
+      expect(lastEntry.isError).toBe(true);
+      expect(JSON.parse(lastEntry.request)).toEqual({
+        method: "ping",
+        params: {},
+      });
+      expect(JSON.parse(lastEntry.response!)).toEqual({ isError: true });
+    });
+
+    it("sets isError=true when response contains error property (JSON-RPC error)", async () => {
+      const errorResponse = {
+        error: { code: ErrorCode.MethodNotFound, message: "Method not found" },
+      };
+      mockRequest.mockResolvedValueOnce(errorResponse);
+      const result = await setupAndConnect();
+
+      await act(async () => {
+        await result.current.makeRequest(pingRequest, pingSchemaAny);
+      });
+
+      const history = result.current.requestHistory;
+      const lastEntry = history[history.length - 1];
+      expect(lastEntry.isError).toBe(true);
+      expect(JSON.parse(lastEntry.response!)).toEqual(errorResponse);
+    });
+
+    it("sets isError=true when request throws (transport/protocol error)", async () => {
+      const error = new McpError(ErrorCode.InternalError, "transport failure");
+      mockRequest.mockRejectedValueOnce(error);
+      const result = await setupAndConnect();
+
+      await act(async () => {
+        try {
+          await result.current.makeRequest(pingRequest, pingSchemaAny);
+        } catch {
+          // expected
+        }
+      });
+
+      const history = result.current.requestHistory;
+      const lastEntry = history[history.length - 1];
+      expect(lastEntry.isError).toBe(true);
+      expect(JSON.parse(lastEntry.response!)).toEqual({
+        error: "MCP error -32603: transport failure",
+      });
+    });
+
+    it("sets isError=false on successful response", async () => {
+      const successResponse = { test: "response" };
+      mockRequest.mockResolvedValueOnce(successResponse);
+      const result = await setupAndConnect();
+
+      await act(async () => {
+        await result.current.makeRequest(pingRequest, pingSchemaAny);
+      });
+
+      const history = result.current.requestHistory;
+      const lastEntry = history[history.length - 1];
+      expect(lastEntry.isError).toBe(false);
+      expect(JSON.parse(lastEntry.response!)).toEqual(successResponse);
+    });
+
+    it("sets isError=false for notifications without response", async () => {
+      const result = await setupAndConnect();
+
+      await act(async () => {
+        await result.current.sendNotification({
+          method: "notifications/initialized",
+        });
+      });
+
+      const history = result.current.requestHistory;
+      const lastEntry = history[history.length - 1];
+      expect(lastEntry.isError).toBe(false);
+      expect(JSON.parse(lastEntry.request)).toEqual({
+        method: "notifications/initialized",
+      });
+      expect(lastEntry.response).toBeUndefined();
     });
   });
 });
