@@ -18,6 +18,7 @@ package io.inspector.mcp.webmvc.proxy;
 
 import java.net.URI;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -51,6 +52,10 @@ import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.task.TaskHandle;
+import io.inspector.mcp.core.task.TaskNotCancelableException;
+import io.inspector.mcp.core.task.TaskNotFoundException;
+import io.inspector.mcp.core.task.TaskService;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -808,6 +813,787 @@ class StreamableHttpProxyControllerTests {
 			// then
 			assertThat(c).isNotNull();
 			verify(StreamableHttpProxyControllerTests.this.mcpProxy, never()).start(any());
+		}
+
+	}
+
+	@Nested
+	@DisplayName("task method interception")
+	class TaskMethodInterception {
+
+		private TaskService taskService;
+
+		private StreamableHttpProxyController controllerWithTasks;
+
+		@BeforeEach
+		void setUpTaskController() {
+			this.taskService = mock(TaskService.class);
+			this.controllerWithTasks = new StreamableHttpProxyController(
+					StreamableHttpProxyControllerTests.this.registry,
+					StreamableHttpProxyControllerTests.this.transportFactory,
+					StreamableHttpProxyControllerTests.this.mcpProxy,
+					StreamableHttpProxyControllerTests.this.objectMapper, null, null,
+					new org.springframework.beans.factory.ObjectProvider<TaskService>() {
+						@Override
+						public TaskService getObject() {
+							return TaskMethodInterception.this.taskService;
+						}
+					});
+		}
+
+		/**
+		 * Session whose {@code capabilities.tasks} was proxy-injected, i.e. one that the
+		 * proxy may intercept task methods for.
+		 */
+		private ProxySession newSession(final String id) {
+			final McpClientTransport target = mock(McpClientTransport.class);
+			final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
+			final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
+			final ProxySession session = new ProxySession(id, target, browserToTarget, targetToBrowser);
+			session.enableTasksInterception();
+			return session;
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("tasks/get is intercepted locally when a TaskService bean is available, and returns the task handle")
+		void tasksGet_interceptedLocally_returnsTaskHandle() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
+			final TaskHandle handle = new TaskHandle("t-123", "working", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000);
+			given(this.taskService.getTask("t-123")).willReturn(handle);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("result").get("taskId").asText()).isEqualTo("t-123");
+			assertThat(responseBody.get("result").get("status").asText()).isEqualTo("working");
+			verify(this.taskService).getTask("t-123");
+			// The upstream is never consulted for task methods
+			verify(session.targetTransport(), never()).sendMessage(any());
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/get with an unknown taskId returns a JSON-RPC -32602 error")
+		void tasksGet_unknownTask_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"missing\"}}");
+			given(this.taskService.getTask("missing")).willThrow(new TaskNotFoundException("missing"));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(responseBody.get("error").get("message").asText()).containsIgnoringCase("not found");
+		}
+
+		@Test
+		@Story("tasks/cancel interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("tasks/cancel is intercepted locally and returns the cancelled task handle")
+		void tasksCancel_interceptedLocally_returnsCancelledHandle() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"t-456\"}}");
+			final TaskHandle handle = new TaskHandle("t-456", "cancelled", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000);
+			given(this.taskService.cancelTask("t-456")).willReturn(handle);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("result").get("status").asText()).isEqualTo("cancelled");
+			verify(this.taskService).cancelTask("t-456");
+		}
+
+		@Test
+		@Story("tasks/cancel interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/cancel on an already-terminal task returns a JSON-RPC -32602 error")
+		void tasksCancel_terminalTask_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"t-789\"}}");
+			given(this.taskService.cancelTask("t-789")).willThrow(new TaskNotCancelableException("t-789", "completed"));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(responseBody.get("error").get("message").asText()).containsIgnoringCase("terminal");
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.MINOR)
+		@Description("tasks/get without a taskId returns a JSON-RPC -32602 error")
+		void tasksGet_missingTaskId_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tasks/get\",\"params\":{}}");
+
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("error").get("code").asInt()).isEqualTo(-32602);
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/get with a task that has a statusMessage includes it in the response")
+		void tasksGet_withStatusMessage_includesIt() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-msg\"}}");
+			final TaskHandle handle = new TaskHandle("t-msg", "failed", "Tool execution failed: timeout",
+					"2025-01-01T00:00:00Z", "2025-01-01T00:01:00Z", 60000, 5000);
+			given(this.taskService.getTask("t-msg")).willReturn(handle);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("result").get("statusMessage").asText())
+				.isEqualTo("Tool execution failed: timeout");
+		}
+
+		@Test
+		@Story("no interception without TaskService")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("when no TaskService bean is available, tasks/get falls through to the regular relay path")
+		void tasksGet_withoutTaskService_relaysToUpstream() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}");
+			// Default controller has no TaskService
+			final StreamableHttpProxyController noTaskController = new StreamableHttpProxyController(
+					StreamableHttpProxyControllerTests.this.registry,
+					StreamableHttpProxyControllerTests.this.transportFactory,
+					StreamableHttpProxyControllerTests.this.mcpProxy,
+					StreamableHttpProxyControllerTests.this.objectMapper);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willReturn(Mono.empty());
+
+			// when
+			final ResponseEntity<Object> response = noTaskController.postMcp("s1", null, body);
+
+			// then - the frame is relayed, not intercepted locally
+			assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+			verify(StreamableHttpProxyControllerTests.this.registry).get("s1");
+		}
+
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/list is intercepted locally when a TaskService is available, returns a list of task handles")
+		void tasksList_interceptedLocally_returnsTaskList() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tasks/list\"}");
+			final TaskHandle handle = new TaskHandle("t-1", "working", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000);
+			given(this.taskService.listTasks()).willReturn(java.util.List.of(handle));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("result").get("tasks")).isNotNull();
+			assertThat(responseBody.get("result").get("tasks").isArray()).isTrue();
+			assertThat(responseBody.get("result").get("tasks").get(0).get("taskId").asText()).isEqualTo("t-1");
+			verify(this.taskService).listTasks();
+		}
+
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.MINOR)
+		@Description("tasks/list returns an empty array when no tasks are tracked")
+		void tasksList_whenNoTasks_returnsEmptyArray() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tasks/list\"}");
+			given(this.taskService.listTasks()).willReturn(java.util.List.of());
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("result").get("tasks")).isNotNull();
+			assertThat(responseBody.get("result").get("tasks").isArray()).isTrue();
+			assertThat(responseBody.get("result").get("tasks")).isEmpty();
+		}
+
+		@Test
+		@Story("tasks/cancel interception")
+		@Severity(SeverityLevel.MINOR)
+		@Description("tasks/cancel without a taskId returns a JSON-RPC -32602 error")
+		void tasksCancel_missingTaskId_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"tasks/cancel\",\"params\":{}}");
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("error").get("code").asInt()).isEqualTo(-32602);
+			verify(this.taskService, never()).cancelTask(any());
+		}
+
+		@Test
+		@Story("tasks/cancel interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/cancel with an unknown taskId returns a JSON-RPC -32602 error")
+		void tasksCancel_unknownTask_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"missing\"}}");
+			given(this.taskService.cancelTask("missing")).willThrow(new TaskNotFoundException("missing"));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(responseBody.get("error").get("message").asText()).containsIgnoringCase("not found");
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.MINOR)
+		@Description("tasks/get without a params object returns a JSON-RPC -32602 error")
+		void tasksGet_missingParams_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"tasks/get\"}");
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("error").get("code").asInt()).isEqualTo(-32602);
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.MINOR)
+		@Description("tasks/get with a non-string taskId returns a JSON-RPC -32602 error")
+		void tasksGet_nonStringTaskId_returnsError() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"tasks/get\",\"params\":{\"taskId\":123}}");
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("error").get("code").asInt()).isEqualTo(-32602);
+		}
+
+		@Test
+		@Story("task method on new session")
+		@Severity(SeverityLevel.MINOR)
+		@Description("a task method on a brand-new uninitialized session is relayed: interception requires the injection, which only an initialize response sets")
+		void tasksGet_onNewSession_isRelayedNotIntercepted() throws Exception {
+			// given: a new session request (no session id, no initialize yet) carrying a
+			// tasks/get; the interception flag can only be set by a proxy-injected
+			// initialize response, which this session never had
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}");
+			final JsonNode upstreamAnswer = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":20,\"result\":{\"taskId\":\"t-1\",\"status\":\"upstream-says\"}}");
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(upstreamAnswer);
+				return Mono.empty();
+			});
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
+
+			// then: the frame is relayed (upstream answer returned verbatim), the session
+			// header is present, and the TaskService was never consulted
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(response.getBody()).isEqualTo(upstreamAnswer);
+			assertThat(response.getHeaders().getFirst(ProxyConstants.MCP_SESSION_ID_HEADER))
+				.as("session-id header must be present on first POST response")
+				.isNotBlank();
+			verify(this.taskService, never()).getTask(any());
+		}
+
+		@Test
+		@Story("task method relay")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("tasks/get on a session whose upstream advertised capabilities.tasks is relayed, not answered from the local TaskRegistry")
+		void tasksGet_upstreamAdvertisedTasks_isRelayed() throws Exception {
+			// given: a session whose initialize response carried an upstream-advertised
+			// capabilities.tasks; injectTasksCapability backs off (no injection) and the
+			// interception flag is never set, so task methods must take the plain relay
+			final McpClientTransport target = mock(McpClientTransport.class);
+			final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
+			final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
+			final ProxySession upstreamTasksSession = new ProxySession("s-upstream", target, browserToTarget,
+					targetToBrowser);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}");
+			final JsonNode upstreamAnswer = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":40,\"result\":{\"taskId\":\"t-1\",\"status\":\"vendor-implementation\"}}");
+			targetToBrowser.tryEmitNext(upstreamAnswer);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s-upstream")).willReturn(upstreamTasksSession);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s-upstream", null, body);
+
+			// then: the upstream answer is returned verbatim and the local TaskService
+			// was never consulted
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(response.getBody()).isEqualTo(upstreamAnswer);
+			verify(this.taskService, never()).getTask(any());
+		}
+
+		@Test
+		@Story("task method interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("an intercepted tasks/get refreshes the session activity timestamp so the idle reaper keeps the session")
+		void tasksGet_interceptedLocally_touchesSession() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final Instant before = session.lastActivity();
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
+			final TaskHandle handle = new TaskHandle("t-123", "working", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000);
+			given(this.taskService.getTask("t-123")).willReturn(handle);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			Thread.sleep(5);
+
+			// when
+			this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then: lastActivity advanced past the pre-call value
+			assertThat(session.lastActivity()).isAfter(before);
+		}
+
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/list honors params.cursor and emits nextCursor while more tasks remain")
+		void tasksList_withCursor_returnsNextPageAndCursor() throws Exception {
+			// given: more tasks than one page (page size 100), cursor skips the first
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"1\"}}");
+			final java.util.List<TaskHandle> handles = new java.util.ArrayList<>(102);
+			for (int i = 1; i <= 102; i++) {
+				handles.add(new TaskHandle("t-" + i, "working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z",
+						60000, 5000));
+			}
+			given(this.taskService.listTasks()).willReturn(handles);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then: a full page is returned past the cursor and a nextCursor is emitted
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			final JsonNode tasks = responseBody.get("result").get("tasks");
+			assertThat(tasks).hasSize(100);
+			assertThat(tasks.get(0).get("taskId").asText()).isEqualTo("t-2");
+			assertThat(responseBody.get("result").get("nextCursor").asText()).isEqualTo("101");
+		}
+
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.MINOR)
+		@Description("tasks/list emits no nextCursor when the cursor already consumed every task")
+		void tasksList_lastPage_hasNoNextCursor() throws Exception {
+			// given: two tasks, cursor already consumed the first
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":43,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"1\"}}");
+			final TaskHandle first = new TaskHandle("t-1", "working", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000);
+			final TaskHandle second = new TaskHandle("t-2", "working", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000);
+			given(this.taskService.listTasks()).willReturn(java.util.List.of(first, second));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+
+			// then: the remaining task is returned and the page reaches the list end, so
+			// no nextCursor
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("result").get("tasks")).hasSize(1);
+			assertThat(responseBody.get("result").get("tasks").get(0).get("taskId").asText()).isEqualTo("t-2");
+			assertThat(responseBody.get("result").has("nextCursor")).as("last page has no nextCursor").isFalse();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("Initialize capability injection")
+	class InitializeCapabilityInjection {
+
+		private TaskService taskService;
+
+		private StreamableHttpProxyController controllerWithTasks;
+
+		@BeforeEach
+		void setUpCapabilityInjection() {
+			this.taskService = mock(TaskService.class);
+			this.controllerWithTasks = new StreamableHttpProxyController(
+					StreamableHttpProxyControllerTests.this.registry,
+					StreamableHttpProxyControllerTests.this.transportFactory,
+					StreamableHttpProxyControllerTests.this.mcpProxy,
+					StreamableHttpProxyControllerTests.this.objectMapper, null, null,
+					new org.springframework.beans.factory.ObjectProvider<TaskService>() {
+						@Override
+						public TaskService getObject() {
+							return InitializeCapabilityInjection.this.taskService;
+						}
+					});
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() with an initialize request injects capabilities.tasks when a TaskService is available and the upstream does not advertise it")
+		void postMcp_initializeRequest_injectsTasksCapability() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode response = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"logging\":{}}}}");
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
+
+			// then
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = StreamableHttpProxyControllerTests.this.objectMapper
+				.valueToTree(entity.getBody());
+			final JsonNode tasks = responseBody.path("result").path("capabilities").path("tasks");
+			assertThat(tasks.isObject()).as("capabilities.tasks must be injected").isTrue();
+			assertThat(tasks.has("list")).as("tasks must contain list").isTrue();
+			assertThat(tasks.has("cancel")).as("tasks must contain cancel").isTrue();
+			assertThat(tasks.has("requests"))
+				.as("no tasks.requests.tools.call is advertised: no task-augmented call path exists")
+				.isFalse();
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with an initialize request does not overwrite capabilities.tasks when the upstream already advertises it")
+		void postMcp_initializeRequest_whenTasksAlreadyPresent_doesNotOverwrite() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode response = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":{\"tasks\":{\"custom\":true}}}}");
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", body);
+
+			// then
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = StreamableHttpProxyControllerTests.this.objectMapper
+				.valueToTree(entity.getBody());
+			assertThat(responseBody.path("result").path("capabilities").path("tasks").path("custom").asBoolean())
+				.as("upstream tasks must be preserved")
+				.isTrue();
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with an initialize request does not inject tasks when no TaskService bean is available")
+		void postMcp_initializeRequest_withoutTaskService_doesNotInjectTasks() throws Exception {
+			// given: default controller has no TaskService
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode response = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"logging\":{}}}}");
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when: using the default controller without TaskService
+			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", body);
+
+			// then: no tasks capability is injected
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = StreamableHttpProxyControllerTests.this.objectMapper
+				.valueToTree(entity.getBody());
+			assertThat(responseBody.path("result").path("capabilities").has("tasks"))
+				.as("tasks must not be injected without a TaskService")
+				.isFalse();
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.MINOR)
+		@Description("an initialize response without a result object passes through without injection")
+		void postMcp_initializeRequest_withoutResult_passesThroughUnchanged() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode response = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1}");
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
+
+			// then
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = StreamableHttpProxyControllerTests.this.objectMapper
+				.valueToTree(entity.getBody());
+			assertThat(responseBody.has("result")).as("no result is synthesised").isFalse();
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.MINOR)
+		@Description("an initialize response whose result is not an object passes through without injection")
+		void postMcp_initializeRequest_nonObjectResult_passesThroughUnchanged() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode response = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"ok\"}");
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
+
+			// then
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = StreamableHttpProxyControllerTests.this.objectMapper
+				.valueToTree(entity.getBody());
+			assertThat(responseBody.path("result").asText()).as("non-object result is preserved").isEqualTo("ok");
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.MINOR)
+		@Description("an initialize response whose result lacks a capabilities object gets no tasks injection")
+		void postMcp_initializeRequest_withoutCapabilities_doesNotInjectTasks() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode response = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\"}}");
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
+
+			// then
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = StreamableHttpProxyControllerTests.this.objectMapper
+				.valueToTree(entity.getBody());
+			assertThat(responseBody.path("result").has("capabilities")).as("no capabilities object is synthesised")
+				.isFalse();
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.MINOR)
+		@Description("an initialize response with a non-object capabilities value passes through without injection")
+		void postMcp_initializeRequest_nonObjectCapabilities_doesNotInjectTasks() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode response = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":\"legacy\"}}");
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
+
+			// then
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = StreamableHttpProxyControllerTests.this.objectMapper
+				.valueToTree(entity.getBody());
+			assertThat(responseBody.path("result").path("capabilities").asText())
+				.as("non-object capabilities value is preserved")
+				.isEqualTo("legacy");
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.MINOR)
+		@Description("an initialize request whose upstream completes without a response returns an empty body and injects nothing")
+		void postMcp_initializeRequest_emptyUpstream_noInjection() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitComplete();
+				return Mono.empty();
+			});
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
+
+			// then - a null upstream response passes through without injection or crash
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(entity.getBody()).isNull();
+		}
+
+		@Test
+		@Story("Initialize capability injection")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with an initialize request passes through malformed responses unchanged")
+		void postMcp_initializeRequest_whenMalformedResponse_passesThroughUnchanged() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode response = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32603,\"message\":\"Internal error\"}}");
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(response);
+				return Mono.empty();
+			});
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", body);
+
+			// then - no injection happens, no crash
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = StreamableHttpProxyControllerTests.this.objectMapper
+				.valueToTree(entity.getBody());
+			assertThat(responseBody.has("error")).as("error response must pass through").isTrue();
+			assertThat(responseBody.path("error").path("code").asInt()).isEqualTo(-32603);
 		}
 
 	}

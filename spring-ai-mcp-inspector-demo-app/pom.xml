@@ -81,7 +81,6 @@
             <groupId>io.github.a-simeshin</groupId>
             <artifactId>spring-ai-mcp-inspector-core</artifactId>
             <version>${project.version}</version>
-            <scope>test</scope>
         </dependency>
         <!--
             ProxyAppHarness reads the random port off WebServerApplicationContext. Boot 4

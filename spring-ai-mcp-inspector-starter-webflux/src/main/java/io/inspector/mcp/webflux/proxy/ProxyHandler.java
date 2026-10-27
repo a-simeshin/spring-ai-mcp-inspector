@@ -45,6 +45,9 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
@@ -53,6 +56,10 @@ import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.task.TaskHandle;
+import io.inspector.mcp.core.task.TaskNotCancelableException;
+import io.inspector.mcp.core.task.TaskNotFoundException;
+import io.inspector.mcp.core.task.TaskService;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.core.transport.TransportType;
@@ -101,14 +108,25 @@ public class ProxyHandler {
 
 	private final AtomicInteger listeningPort = new AtomicInteger(-1);
 
+	/** Page size for intercepted {@code tasks/list} responses (SEP-1686 pagination). */
+	private static final int TASKS_LIST_PAGE_SIZE = 100;
+
+	private final TaskService taskService;
+
 	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper) {
-		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, null);
+		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, null, null);
 	}
 
 	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper,
 			final McpInspectorProperties properties) {
+		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties, null);
+	}
+
+	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
+			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper,
+			final McpInspectorProperties properties, final TaskService taskService) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
@@ -117,6 +135,7 @@ public class ProxyHandler {
 		this.properties = properties;
 		this.timeouts = (properties != null) ? properties.getTimeouts() : new McpInspectorProperties.Timeouts();
 		this.outboundHttpClient = HttpClient.newBuilder().connectTimeout(this.timeouts.getFetchConnect()).build();
+		this.taskService = taskService;
 	}
 
 	@EventListener
@@ -528,6 +547,21 @@ public class ProxyHandler {
 			}
 			return accepted.build();
 		}
+		// Intercept tasks/get, tasks/list and tasks/cancel only for sessions whose
+		// capabilities.tasks was injected by this proxy (see injectTasksCapability):
+		// a third-party upstream that advertises its own tasks capability keeps the
+		// plain relay, so its tasks are never answered from the local TaskRegistry.
+		if (this.taskService != null && session.isTasksInterceptionEnabled()) {
+			final String sessionIdHeader = includeSessionHeader ? session.sessionId() : null;
+			final Mono<ServerResponse> taskResponse = tryHandleTaskMethod(idNode, body, sessionIdHeader);
+			if (taskResponse != null) {
+				// Still a routed frame from the browser: refresh the idle-reaper
+				// timestamp, otherwise a session only polled via the Tasks tab is
+				// evicted.
+				session.touch();
+				return taskResponse;
+			}
+		}
 		// Eagerly subscribe to targetToBrowser via Sinks.One so the upstream
 		// transport's connect() error (ECONNREFUSED/DNS/timeout) is captured
 		// even when the relay Mono is subscribed to later by the WebFlux
@@ -550,6 +584,9 @@ public class ProxyHandler {
 		}
 		session.touch();
 		return awaiter.flatMap((node) -> {
+			if (ProxyHandler.this.taskService != null) {
+				injectTasksCapability(session, node, body, includeSessionHeader);
+			}
 			final ServerResponse.BodyBuilder ok = ServerResponse.ok().contentType(MediaType.APPLICATION_JSON);
 			if (includeSessionHeader) {
 				ok.header(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
@@ -598,6 +635,245 @@ public class ProxyHandler {
 			return null;
 		}
 		return id;
+	}
+
+	// ---------------------------------------------------------------------
+	// Task method interception (tasks/get, tasks/list, tasks/cancel)
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Checks whether {@code body} is a {@code tasks/get}, {@code tasks/list}, or
+	 * {@code tasks/cancel} JSON-RPC request and handles it locally via the
+	 * {@link #taskService}.
+	 * @param idNode the JSON-RPC request id
+	 * @param body the full JSON-RPC request body
+	 * @param sessionIdHeader session id to attach as the mcp-session-id response header
+	 * on the first POST of a session, or {@code null} to omit the header
+	 * @return a response Mono if the method was handled, or {@code null} to fall through
+	 * to the regular relay path
+	 */
+	private Mono<ServerResponse> tryHandleTaskMethod(final JsonNode idNode, final JsonNode body,
+			final String sessionIdHeader) {
+		final JsonNode methodNode = body.get("method");
+		if (methodNode == null || !methodNode.isTextual()) {
+			return null;
+		}
+		final String method = methodNode.asText();
+		if ("tasks/get".equals(method)) {
+			return handleTaskGet(idNode, body, sessionIdHeader);
+		}
+		if ("tasks/list".equals(method)) {
+			return handleTaskList(idNode, body, sessionIdHeader);
+		}
+		if ("tasks/cancel".equals(method)) {
+			return handleTaskCancel(idNode, body, sessionIdHeader);
+		}
+		return null;
+	}
+
+	/**
+	 * Handle a {@code tasks/get} request: look up the task and return its handle.
+	 * @param idNode the JSON-RPC request id
+	 * @param body the full request body
+	 * @param sessionIdHeader session id to attach as the mcp-session-id response header,
+	 * or {@code null} to omit it
+	 * @return a JSON-RPC response with the task handle, or a JSON-RPC error
+	 */
+	private Mono<ServerResponse> handleTaskGet(final JsonNode idNode, final JsonNode body,
+			final String sessionIdHeader) {
+		final String taskId = extractTaskId(body);
+		if (taskId == null) {
+			return jsonRpcError(idNode, -32602, "Invalid params: missing or invalid taskId", sessionIdHeader);
+		}
+		// TaskService is a blocking core interface: hop off the calling (possibly
+		// event-loop) thread while it runs, and map the outcome onto the JSON-RPC
+		// envelope only once it completes.
+		return Mono.fromCallable(() -> this.taskService.getTask(taskId))
+			.subscribeOn(Schedulers.boundedElastic())
+			.flatMap((handle) -> jsonRpcResult(idNode, taskHandleToNode(handle), sessionIdHeader))
+			.onErrorResume(TaskNotFoundException.class, (ex) -> jsonRpcError(idNode, -32602,
+					"Failed to retrieve task: " + ex.getMessage(), sessionIdHeader));
+	}
+
+	/**
+	 * Handle a {@code tasks/list} request: return the requested page of tracked tasks,
+	 * honoring {@code params.cursor} and emitting {@code nextCursor} while more tasks
+	 * remain (see {@link #buildTaskListResult}).
+	 * @param idNode the JSON-RPC request id
+	 * @param body the full JSON-RPC request body (carries the optional cursor)
+	 * @param sessionIdHeader session id to attach as the mcp-session-id response header,
+	 * or {@code null} to omit it
+	 * @return a JSON-RPC response with a {@code tasks} array
+	 */
+	private Mono<ServerResponse> handleTaskList(final JsonNode idNode, final JsonNode body,
+			final String sessionIdHeader) {
+		// TaskService is a blocking core interface: hop off the calling (possibly
+		// event-loop) thread while it runs.
+		return Mono.fromCallable(this.taskService::listTasks)
+			.subscribeOn(Schedulers.boundedElastic())
+			.flatMap((handles) -> buildTaskListResult(handles, body, idNode, sessionIdHeader));
+	}
+
+	/**
+	 * Assemble the {@code tasks/list} result page from the full handle list: honor
+	 * {@code params.cursor} (an opaque offset into the ordered task list) and emit
+	 * {@code nextCursor} while more tasks remain past the page.
+	 * @param handles all currently tracked task handles, in stable order
+	 * @param body the full JSON-RPC request body (carries the optional cursor)
+	 * @param idNode the JSON-RPC request id
+	 * @param sessionIdHeader session id to attach as the mcp-session-id response header,
+	 * or {@code null} to omit it
+	 * @return a JSON-RPC response with a {@code tasks} page and optional
+	 * {@code nextCursor}
+	 */
+	private static Mono<ServerResponse> buildTaskListResult(final java.util.List<TaskHandle> handles,
+			final JsonNode body, final JsonNode idNode, final String sessionIdHeader) {
+		final int offset = parseTaskListCursor(handles.size(), body);
+		final int end = Math.min(offset + TASKS_LIST_PAGE_SIZE, handles.size());
+		final java.util.List<TaskHandle> page = handles.subList(offset, end);
+		final ArrayNode tasksArray = JsonNodeFactory.instance.arrayNode(page.size());
+		for (final TaskHandle handle : page) {
+			tasksArray.add(taskHandleToNode(handle));
+		}
+		final ObjectNode result = JsonNodeFactory.instance.objectNode();
+		result.set("tasks", tasksArray);
+		if (end < handles.size()) {
+			result.put("nextCursor", String.valueOf(end));
+		}
+		return jsonRpcResult(idNode, result, sessionIdHeader);
+	}
+
+	/**
+	 * Parse the opaque {@code params.cursor} (a decimal list offset previously emitted as
+	 * {@code nextCursor}) into an offset into the ordered task list. An absent,
+	 * non-numeric or out-of-range cursor yields an offset past the end, which produces an
+	 * empty page and terminates client pagination.
+	 * @param listSize the size of the full ordered handle list
+	 * @param body the JSON-RPC request body carrying the optional cursor
+	 * @return the offset the requested page starts at
+	 */
+	private static int parseTaskListCursor(final int listSize, final JsonNode body) {
+		final JsonNode params = (body != null) ? body.get("params") : null;
+		final JsonNode cursorNode = (params != null && params.isObject()) ? params.get("cursor") : null;
+		if (cursorNode != null && cursorNode.isTextual()) {
+			try {
+				return Math.max(0, Math.min(Integer.parseInt(cursorNode.asText()), listSize));
+			}
+			catch (final NumberFormatException ex) {
+				return listSize;
+			}
+		}
+		return 0;
+	}
+
+	/**
+	 * Handle a {@code tasks/cancel} request: cancel the task and return the updated
+	 * handle.
+	 * @param idNode the JSON-RPC request id
+	 * @param body the full request body
+	 * @param sessionIdHeader session id to attach as the mcp-session-id response header,
+	 * or {@code null} to omit it
+	 * @return a JSON-RPC response with the cancelled task handle, or a JSON-RPC error
+	 */
+	private Mono<ServerResponse> handleTaskCancel(final JsonNode idNode, final JsonNode body,
+			final String sessionIdHeader) {
+		final String taskId = extractTaskId(body);
+		if (taskId == null) {
+			return jsonRpcError(idNode, -32602, "Invalid params: missing or invalid taskId", sessionIdHeader);
+		}
+		// TaskService is a blocking core interface: hop off the calling (possibly
+		// event-loop) thread while it runs.
+		return Mono.fromCallable(() -> this.taskService.cancelTask(taskId))
+			.subscribeOn(Schedulers.boundedElastic())
+			.flatMap((handle) -> jsonRpcResult(idNode, taskHandleToNode(handle), sessionIdHeader))
+			.onErrorResume(TaskNotCancelableException.class,
+					(ex) -> jsonRpcError(idNode, -32602, ex.getMessage(), sessionIdHeader))
+			.onErrorResume(TaskNotFoundException.class, (ex) -> jsonRpcError(idNode, -32602,
+					"Failed to retrieve task: " + ex.getMessage(), sessionIdHeader));
+	}
+
+	/**
+	 * Extract {@code taskId} from the {@code params} object of a task method call.
+	 * @param body the JSON-RPC request body
+	 * @return the task id string, or {@code null} if missing or invalid
+	 */
+	private static String extractTaskId(final JsonNode body) {
+		final JsonNode params = body.get("params");
+		if (params == null || !params.isObject()) {
+			return null;
+		}
+		final JsonNode taskIdNode = params.get("taskId");
+		if (taskIdNode == null || !taskIdNode.isTextual()) {
+			return null;
+		}
+		return taskIdNode.asText();
+	}
+
+	/**
+	 * Build a successful JSON-RPC response with a result object.
+	 * @param idNode the request id
+	 * @param resultNode the result object to include
+	 * @param sessionIdHeader session id to attach as the mcp-session-id response header,
+	 * or {@code null} to omit it
+	 * @return a 200 OK Mono with the JSON-RPC envelope
+	 */
+	private static Mono<ServerResponse> jsonRpcResult(final JsonNode idNode, final JsonNode resultNode,
+			final String sessionIdHeader) {
+		final ObjectNode response = JsonNodeFactory.instance.objectNode();
+		response.put("jsonrpc", "2.0");
+		response.set("id", idNode);
+		response.set("result", resultNode);
+		final ServerResponse.BodyBuilder ok = ServerResponse.ok().contentType(MediaType.APPLICATION_JSON);
+		if (sessionIdHeader != null) {
+			ok.header(ProxyConstants.MCP_SESSION_ID_HEADER, sessionIdHeader);
+		}
+		return ok.bodyValue(response);
+	}
+
+	/**
+	 * Build a JSON-RPC error response with the given error code and message.
+	 * @param idNode the request id
+	 * @param code the JSON-RPC error code
+	 * @param message the error message
+	 * @param sessionIdHeader session id to attach as the mcp-session-id response header,
+	 * or {@code null} to omit it
+	 * @return a 200 OK Mono with the JSON-RPC error envelope (per spec, errors are
+	 * returned with HTTP 200)
+	 */
+	private static Mono<ServerResponse> jsonRpcError(final JsonNode idNode, final int code, final String message,
+			final String sessionIdHeader) {
+		final ObjectNode response = JsonNodeFactory.instance.objectNode();
+		response.put("jsonrpc", "2.0");
+		response.set("id", idNode);
+		final ObjectNode error = JsonNodeFactory.instance.objectNode();
+		error.put("code", code);
+		error.put("message", message);
+		response.set("error", error);
+		final ServerResponse.BodyBuilder ok = ServerResponse.ok().contentType(MediaType.APPLICATION_JSON);
+		if (sessionIdHeader != null) {
+			ok.header(ProxyConstants.MCP_SESSION_ID_HEADER, sessionIdHeader);
+		}
+		return ok.bodyValue(response);
+	}
+
+	/**
+	 * Convert a {@link TaskHandle} to a JSON object node matching the SEP-1686 Task
+	 * schema.
+	 * @param handle the task handle to serialize
+	 * @return a JSON object node with all task fields
+	 */
+	private static ObjectNode taskHandleToNode(final TaskHandle handle) {
+		final ObjectNode node = JsonNodeFactory.instance.objectNode();
+		node.put("taskId", handle.taskId());
+		node.put("status", handle.status());
+		if (handle.statusMessage() != null) {
+			node.put("statusMessage", handle.statusMessage());
+		}
+		node.put("createdAt", handle.createdAt());
+		node.put("lastUpdatedAt", handle.lastUpdatedAt());
+		node.put("ttl", handle.ttl());
+		node.put("pollInterval", handle.pollInterval());
+		return node;
 	}
 
 	/**
@@ -673,6 +949,66 @@ public class ProxyHandler {
 		// — keeps the proxy ?url= WAF-safe; the proxy resolves it to loopback
 		// server-side.
 		return path;
+	}
+
+	// ---------------------------------------------------------------------
+	// Initialize response capability injection
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Injects {@code capabilities.tasks} into an initialize response when absent.
+	 *
+	 * <p>
+	 * The UI Tasks tab is gated by a top-level {@code serverCapabilities.tasks} field in
+	 * the initialize response. The demo server's MCP Java SDK does not know about
+	 * {@code tasks}, so the proxy adds the field at the JSON level: only when the
+	 * response is a successful initialize reply ({@code includeSessionHeader} signals the
+	 * first POST of a session, and {@code body.method} equals {@code initialize}) and the
+	 * upstream did not already advertise {@code tasks}. Malformed or error responses pass
+	 * through untouched. The injected capability advertises only what the proxy serves
+	 * itself: {@code list} and {@code cancel}; there is no
+	 * {@code tasks.requests.tools.call} because no task-augmented call path and no
+	 * {@code tasks/result} serving path exist yet.
+	 *
+	 * <p>
+	 * A successful injection also marks the session for task-method interception via
+	 * {@link ProxySession#enableTasksInterception()}: only sessions whose tasks
+	 * capability came from this proxy get their {@code tasks/get}, {@code tasks/list} and
+	 * {@code tasks/cancel} answered locally by the proxy instead of relayed.
+	 * @param session the proxy session being initialized
+	 * @param response the upstream initialize response JSON tree
+	 * @param body the original JSON-RPC request body
+	 * @param includeSessionHeader whether this is the first POST of a session
+	 */
+	private void injectTasksCapability(final ProxySession session, final JsonNode response, final JsonNode body,
+			final boolean includeSessionHeader) {
+		if (!includeSessionHeader || body == null) {
+			return;
+		}
+		final JsonNode methodNode = body.get("method");
+		if (methodNode == null || !"initialize".equals(methodNode.asText())) {
+			return;
+		}
+		if (response == null || !response.isObject()) {
+			return;
+		}
+		final JsonNode resultNode = response.get("result");
+		if (resultNode == null || !resultNode.isObject()) {
+			return;
+		}
+		final JsonNode capabilitiesNode = resultNode.get("capabilities");
+		if (capabilitiesNode == null || !capabilitiesNode.isObject()) {
+			return;
+		}
+		final ObjectNode capabilities = (ObjectNode) capabilitiesNode;
+		if (capabilities.has("tasks")) {
+			return;
+		}
+		final ObjectNode tasks = JsonNodeFactory.instance.objectNode();
+		tasks.set("list", JsonNodeFactory.instance.objectNode());
+		tasks.set("cancel", JsonNodeFactory.instance.objectNode());
+		capabilities.set("tasks", tasks);
+		session.enableTasksInterception();
 	}
 
 }
