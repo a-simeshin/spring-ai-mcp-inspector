@@ -1,8 +1,9 @@
-src/lib/hooks/useConnection.ts: reconnect after silent SSE drop (1.x twin of
-PR #166).  When an SSE connection silently drops, the old MCP session ID
-remains in the closure variable and is sent as the mcp-session-id header on the
-next connect, causing the server to reject the handshake with -32001.  Local
-fix: do not send the stale mcp-session-id header from the fetch wrapper; the
-server assigns a new session ID in its response headers.  Also wrap
-terminateSession() and mcpClient.close() in try/catch so a broken transport
-does not abort the disconnect flow.  Refs #157.
+src/lib/hooks/useConnection.ts: reconnect after silent drop (1.x twin of
+PR #166).  When a connection silently drops, the old MCP session ID remains in
+the closure variable and was sent as the mcp-session-id header on every HTTP
+transport (the fetch wrapper attached it before the transport switch, so both
+SSE and Streamable HTTP carried it), causing the server to reject the next
+handshake with -32001.  Local fix: do not send the stale mcp-session-id header
+from the fetch wrapper; the server assigns a new session ID in its response
+headers.  Also wrap terminateSession() and mcpClient.close() in try/catch so a
+broken transport does not abort the disconnect flow.  Refs #157.
