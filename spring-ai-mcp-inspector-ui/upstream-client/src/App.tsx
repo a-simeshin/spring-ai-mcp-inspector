@@ -114,8 +114,9 @@ const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
 // [spring-ai-mcp-inspector PATCH] MCP Tasks are an experimental/extension
 // capability (SEP-1686). When the server advertises the 'tasks' capability the
 // tab is enabled; otherwise a tooltip explains why and links to the proposal.
-// (title + aria-label), NOT to the disabled trigger: tabs.tsx applies
-// `disabled:pointer-events-none`, which blocks hover on the trigger itself.
+// The hint lives on the wrapper (title + aria-label), NOT on the disabled
+// trigger: tabs.tsx applies `disabled:pointer-events-none`, which blocks hover
+// on the trigger itself.
 const MCP_TASKS_DOCS_URL = "https://modelcontextprotocol.io/seps/1686-tasks";
 const MCP_TASKS_DISABLED_HINT =
   "This server does not support MCP Tasks. See the SEP-1686 proposal.";
@@ -1757,6 +1758,13 @@ const App = () => {
                         }}
                         error={errors.tasks}
                         nextCursor={nextTaskCursor}
+                        updateTask={(task) => {
+                          setTasks((prev) =>
+                            prev.map((t) =>
+                              t.taskId === task.taskId ? task : t,
+                            ),
+                          );
+                        }}
                       />
                     )}
                     <AppsTab

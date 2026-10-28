@@ -1,5 +1,5 @@
 // [spring-ai-mcp-inspector PATCH] TasksTab behavior tests: list poll, per-task poll, terminal-state stop (#182).
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Task } from "@modelcontextprotocol/sdk/types.js";
 import TasksTab from "../TasksTab";
@@ -477,6 +477,211 @@ describe("TasksTab behavior tests", () => {
       expect(getTask).toHaveBeenCalledTimes(4);
       await jest.advanceTimersByTimeAsync(1000);
       expect(getTask).toHaveBeenCalledTimes(5);
+    });
+
+    it("propagates a polled task update into the tasks list, not only the selected task", async () => {
+      // Regression (owner review BLOCK on 1c0a8d7): the poll result went only
+      // to setSelectedTask, so a task that finished between two list polls
+      // stayed "working" in the list and kept its poller alive.
+      const finished = makeTask({ taskId: "t1", status: "completed" });
+      const getTask = jest.fn().mockResolvedValue(finished);
+      const updateTask = jest.fn();
+
+      render(
+        <TasksTab
+          {...defaultProps}
+          tasks={[makeTask({ taskId: "t1", status: "working", pollInterval: 1000 })]}
+          getTask={getTask}
+          updateTask={updateTask}
+        />,
+      );
+
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(updateTask).toHaveBeenCalledWith(finished);
+    });
+  });
+
+  describe("per-task poll gating", () => {
+    it("does not start tasks/get polling when the tasks tab is not active", () => {
+      // Regression (owner review BLOCK on 1c0a8d7): the per-task poller had
+      // no activeTab gate, so a working task was polled every 2 s forever
+      // while the user was on another tab (60 s on Tools: 30 getTask).
+      const getTask = jest.fn().mockResolvedValue(makeTask({ taskId: "t1" }));
+
+      render(
+        <TasksTab
+          {...defaultProps}
+          tasks={[makeTask({ taskId: "t1", status: "working", pollInterval: 1000 })]}
+          getTask={getTask}
+          activeTab="tools"
+        />,
+      );
+
+      jest.advanceTimersByTime(60000);
+      expect(getTask).not.toHaveBeenCalled();
+    });
+
+    it("stops all per-task pollers when the tab changes away and resumes them when it returns", () => {
+      const getTask = jest.fn().mockResolvedValue(
+        makeTask({ taskId: "t1", status: "working" }),
+      );
+      const tasks = [makeTask({ taskId: "t1", status: "working", pollInterval: 2000 })];
+
+      const { rerender } = render(
+        <TasksTab {...defaultProps} tasks={tasks} getTask={getTask} />,
+      );
+
+      jest.advanceTimersByTime(2000);
+      expect(getTask).toHaveBeenCalledTimes(1);
+
+      rerender(
+        <TasksTab {...defaultProps} tasks={tasks} getTask={getTask} activeTab="tools" />,
+      );
+
+      jest.advanceTimersByTime(60000);
+      expect(getTask).toHaveBeenCalledTimes(1); // pollers stopped on leave
+
+      rerender(
+        <TasksTab {...defaultProps} tasks={tasks} getTask={getTask} />,
+      );
+
+      jest.advanceTimersByTime(2000);
+      expect(getTask).toHaveBeenCalledTimes(2); // resumed from the base interval
+    });
+  });
+
+  describe("TTL formatting", () => {
+    it("renders 'Invalid date' instead of NaN for an unparsable lastUpdatedAt", () => {
+      const tasks = [
+        makeTask({ taskId: "t1", status: "working", lastUpdatedAt: "not-a-date" }),
+      ];
+
+      render(<TasksTab {...defaultProps} tasks={tasks} />);
+
+      expect(screen.getByText("TTL: Invalid date")).toBeInTheDocument();
+      expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
+    });
+
+    it("measures the countdown from lastUpdatedAt, so a keep-alive moves it", () => {
+      // createdAt is 10 s old, lastUpdatedAt 1 s old, ttl 5 s: the countdown
+      // must show 4 s from the last update. Measuring from createdAt instead
+      // would show the terminal "Expired" although the task was just kept
+      // alive by the backend.
+      const tasks = [
+        makeTask({
+          taskId: "t1",
+          status: "working",
+          ttl: 5000,
+          createdAt: new Date(Date.now() - 10000).toISOString(),
+          lastUpdatedAt: new Date(Date.now() - 1000).toISOString(),
+        }),
+      ];
+
+      render(<TasksTab {...defaultProps} tasks={tasks} />);
+
+      expect(screen.getByText("TTL: 4s")).toBeInTheDocument();
+      expect(screen.queryByText("Expired")).not.toBeInTheDocument();
+    });
+
+    it("shows '2m 30s' for 150 seconds remaining", () => {
+      const now = new Date().toISOString();
+      const tasks = [
+        makeTask({
+          taskId: "t1",
+          status: "working",
+          ttl: 150000,
+          createdAt: now,
+          lastUpdatedAt: now,
+        }),
+      ];
+
+      render(<TasksTab {...defaultProps} tasks={tasks} />);
+
+      // Math.round on the minutes produced a bogus "3m 30s"
+      expect(screen.getByText("TTL: 2m 30s")).toBeInTheDocument();
+    });
+
+    it("shows 'Past TTL' for an active task whose TTL elapsed and 'Expired' only for a terminal one", () => {
+      // The backend (#196 TaskRegistry) never evicts working tasks, so an
+      // active task past its TTL is still alive; "Expired" is reserved for
+      // terminal tasks, which the sweeper removes after their TTL.
+      const old = new Date(Date.now() - 10000).toISOString();
+      const active = [
+        makeTask({
+          taskId: "t1",
+          status: "working",
+          ttl: 5000,
+          createdAt: old,
+          lastUpdatedAt: old,
+        }),
+      ];
+
+      const { rerender } = render(
+        <TasksTab {...defaultProps} tasks={active} />,
+      );
+      expect(screen.getByText("TTL: Past TTL")).toBeInTheDocument();
+
+      rerender(
+        <TasksTab
+          {...defaultProps}
+          tasks={[
+            makeTask({
+              taskId: "t1",
+              status: "completed",
+              ttl: 5000,
+              createdAt: old,
+              lastUpdatedAt: old,
+            }),
+          ]}
+          selectedTask={active[0]}
+        />,
+      );
+      expect(screen.getByText("Expired")).toBeInTheDocument();
+      expect(screen.queryByText("Past TTL")).not.toBeInTheDocument();
+    });
+
+    it("advances the TTL countdown once per second while the tasks tab is active", () => {
+      const tasks = [
+        makeTask({
+          taskId: "t1",
+          status: "working",
+          ttl: 5000,
+          createdAt: new Date(Date.now() - 1000).toISOString(),
+          lastUpdatedAt: new Date(Date.now() - 1000).toISOString(),
+        }),
+      ];
+
+      render(<TasksTab {...defaultProps} tasks={tasks} />);
+      expect(screen.getByText("TTL: 4s")).toBeInTheDocument();
+
+      act(() => {
+        jest.advanceTimersByTime(1000);
+      });
+      expect(screen.getByText("TTL: 3s")).toBeInTheDocument();
+    });
+
+    it("does not tick the TTL countdown while another tab is active", () => {
+      const tasks = [
+        makeTask({
+          taskId: "t1",
+          status: "working",
+          ttl: 5000,
+          createdAt: new Date(Date.now() - 1000).toISOString(),
+          lastUpdatedAt: new Date(Date.now() - 1000).toISOString(),
+        }),
+      ];
+
+      render(
+        <TasksTab {...defaultProps} tasks={tasks} activeTab="tools" />,
+      );
+      expect(screen.getByText("TTL: 4s")).toBeInTheDocument();
+
+      act(() => {
+        jest.advanceTimersByTime(3000);
+      });
+      // No 1 Hz ticker off the tasks tab: the shown value stays stale on
+      // purpose instead of re-rendering the hidden tab every second.
+      expect(screen.getByText("TTL: 4s")).toBeInTheDocument();
     });
   });
 

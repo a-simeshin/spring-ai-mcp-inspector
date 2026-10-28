@@ -20,11 +20,19 @@ timers from zero whenever the active set changes). TTL countdown
 is measured from lastUpdatedAt (the backend TaskRegistry expires
 tasks from that timestamp, so keep-alives move the countdown)
 and renders "Invalid date" instead of NaN for unparsable
-timestamps. TERMINAL_STATUSES follows the SDK TaskStatus enum
-exactly ("completed", "failed", "cancelled"); the backend
-emits "completed" and never "success". Covered by 18 behavior
-tests in src/components/__tests__/TasksTab.test.tsx (fake
-timers for list poll, per-task poll, terminal-state stop,
-identity-churn regression, poller-survival regression, backoff,
-cancel) plus 2 App-level capability-gate tests in
+timestamps. An active task whose TTL has elapsed shows "Past
+TTL", not "Expired": the backend never evicts working tasks,
+"Expired" is reserved for terminal tasks that the sweeper
+removes. Both pollers (list and per-task) are gated on
+activeTab === "tasks": leaving the tab stops every poller,
+returning restarts them. A polled tasks/get result is propagated
+into the tasks list through the updateTask callback, not only
+into the selected task. TERMINAL_STATUSES follows the SDK
+TaskStatus enum exactly ("completed", "failed", "cancelled");
+the backend emits "completed" and never "success". Covered by 27
+behavior tests in src/components/__tests__/TasksTab.test.tsx
+(fake timers for list poll, per-task poll, per-task poll gating,
+terminal-state stop, identity-churn regression,
+poller-survival regression, backoff, TTL formatting, cancel)
+plus 2 App-level capability-gate tests in
 src/__tests__/App.tasksTabTooltip.test.tsx.

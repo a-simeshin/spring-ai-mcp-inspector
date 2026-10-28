@@ -61,17 +61,27 @@ const TaskStatusIcon = ({
   }
 };
 
-const formatTtl = (referenceTimestamp: string, ttl: number | null): string => {
+const formatTtl = (
+  referenceTimestamp: string,
+  ttl: number | null,
+  isActive: boolean,
+): string => {
   if (ttl === null) return "Infinite";
   const reference = new Date(referenceTimestamp).getTime();
   // An unparsable timestamp must not leak "NaNm NaNs" into the UI.
   if (Number.isNaN(reference)) return "Invalid date";
   const elapsed = Date.now() - reference;
   const remaining = Math.max(0, ttl - elapsed);
-  if (remaining <= 0) return "Expired";
+  if (remaining <= 0) {
+    // The backend (#196 TaskRegistry) never evicts a working task, so an
+    // active task whose TTL has elapsed is still alive: "Past TTL", not the
+    // terminal "Expired" (reserved for terminal tasks, which the sweeper
+    // removes after their TTL).
+    return isActive ? "Past TTL" : "Expired";
+  }
   if (remaining < 1000) return `${remaining}ms`;
   if (remaining < 60000) return `${Math.round(remaining / 1000)}s`;
-  return `${Math.round(remaining / 60000)}m ${Math.round((remaining % 60000) / 1000)}s`;
+  return `${Math.floor(remaining / 60000)}m ${Math.round((remaining % 60000) / 1000)}s`;
 };
 
 type TaskRowState = {
@@ -90,6 +100,7 @@ const TasksTab = ({
   error,
   nextCursor,
   activeTab,
+  updateTask,
 }: {
   tasks: Task[];
   listTasks: () => void;
@@ -101,6 +112,7 @@ const TasksTab = ({
   error: string | null;
   nextCursor?: string;
   activeTab: string;
+  updateTask?: (task: Task) => void;
 }) => {
   const [isCancelling, setIsCancelling] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
@@ -129,6 +141,10 @@ const TasksTab = ({
   useEffect(() => {
     setSelectedTaskRef.current = setSelectedTask;
   }, [setSelectedTask]);
+  const updateTaskRef = useRef(updateTask);
+  useEffect(() => {
+    updateTaskRef.current = updateTask;
+  }, [updateTask]);
 
   // Stable ref for the list callback: App passes an inline arrow, so
   // listTasks gets a new identity on every App render (every MCP call pushes
@@ -187,6 +203,7 @@ const TasksTab = ({
       newCountdowns[task.taskId] = formatTtl(
         task.lastUpdatedAt || task.createdAt,
         task.ttl,
+        !TERMINAL_STATUSES.includes(task.status),
       );
     }
     setTtlCountdowns(newCountdowns);
@@ -240,6 +257,19 @@ const TasksTab = ({
     .join(",");
   useEffect(() => {
     const pollers = taskPollersRef.current;
+
+    // Same activeTab gate as the list poll above: no tasks/get may run while
+    // another tab is shown. Leaving the tasks tab stops every poller;
+    // returning re-runs this effect (activeTab is a dependency) and restarts
+    // them from their base intervals.
+    if (activeTab !== "tasks") {
+      for (const [taskId, poller] of [...pollers]) {
+        poller.stop();
+        pollers.delete(taskId);
+      }
+      return;
+    }
+
     const activeIds = activeTaskIdString
       ? new Set(activeTaskIdString.split(","))
       : new Set<string>();
@@ -274,17 +304,19 @@ const TasksTab = ({
           .current(task.taskId)
           .then((updated) => {
             delay = baseInterval;
+            // A polled task update must reach the tasks list, not only the
+            // details pane: otherwise a task that finished between two list
+            // polls stays "working" in the list until the next tasks/list.
+            if (updateTaskRef.current) {
+              updateTaskRef.current(updated);
+            }
             // Update selectedTask if this is the currently selected task
             if (selectedTaskRef.current?.taskId === task.taskId) {
               setSelectedTaskRef.current(updated);
             }
           })
-          .catch((e) => {
+          .catch(() => {
             delay = Math.min(delay * 2, MAX_POLL_BACKOFF_MS);
-            console.debug(
-              `[TasksTab] Poll error for ${task.taskId}:`,
-              e instanceof Error ? e.message : String(e),
-            );
           });
       };
       timeoutId = setTimeout(tick, delay);
@@ -300,7 +332,7 @@ const TasksTab = ({
     // their timers from zero. Removals are handled above; unmount is handled
     // by the dedicated effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTaskIdString]);
+  }, [activeTaskIdString, activeTab]);
 
   // Unmount-only cleanup for the per-task pollers
   useEffect(() => {
