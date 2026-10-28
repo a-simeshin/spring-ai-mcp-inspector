@@ -1458,7 +1458,20 @@ const App = () => {
           rects to fit the viewport at scrollY=0, and a 50vh sidebar leaves
           less than 200px for the stacked Tools panes below the wrapped tab
           bar — too little for the list and detail to both be usable with
-          their internal scrolling. */}
+          their internal scrolling. [spring-ai-mcp-inspector PATCH] Mobile
+          pre-connect sidebar (issue #230): before the first connect BOTH
+          compact caps are dropped (h-[30vh] and sm:h-[50vh]), so the sidebar
+          grows to its natural height and the URL input and the Connect
+          button sit in normal flow instead of a capped inner scroll area
+          (at 375x812 the 30vh scroll area showed 113px of a 500px column:
+          URL top 193 and Connect top 481 were out of view and a real click
+          at Connect's centre hit the floating theme bar; at 812x375
+          landscape the sm:h-[50vh] cap squashed the pane to about 187px and
+          trapped the same controls inside its inner scroll). Once connected
+          the caps return (h-[30vh] sm:h-[50vh]) so the #58 contract
+          (config/list/detail rects inside the first 667px viewport at
+          scrollY=0) keeps holding; the caps only matter with tab content
+          mounted, which never happens pre-connect. */}
       <div
         style={
           isCompactLayout
@@ -1470,7 +1483,9 @@ const App = () => {
                 transition: isSidebarDragging ? "none" : "width 0.15s",
               }
         }
-        className="bg-card border-border flex flex-col relative w-full lg:w-auto lg:border-r border-b lg:border-b-0 h-[30vh] sm:h-[50vh] lg:h-auto overflow-y-auto lg:overflow-y-visible"
+        className={`bg-card border-border flex flex-col relative w-full lg:w-auto lg:border-r border-b lg:border-b-0 ${
+          mcpClient ? "h-[30vh] sm:h-[50vh]" : ""
+        } lg:h-auto overflow-y-auto lg:overflow-y-visible`}
         data-testid="config-pane"
       >
         <Sidebar
