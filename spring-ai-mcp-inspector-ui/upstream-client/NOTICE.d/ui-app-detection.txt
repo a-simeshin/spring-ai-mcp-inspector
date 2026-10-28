@@ -9,6 +9,10 @@ Files changed:
 - src/components/__tests__/ui-resource-detection.test.ts: unit tests for
   hasUIMetadata with malformed resourceUri values (null, number, object)
   guarded by try/catch returning false without throwing.
+- src/components/__tests__/AppsTab.test.tsx: component regression test
+  rendering AppsTab with a tool whose _meta.ui.resourceUri is malformed;
+  the malformed tool is filtered out, the valid app tool still renders,
+  and no render-phase console error fires. PATCH marker header added.
 
 Reason: the bare hasUIMetadata in AppsTab.tsx called getToolUiResourceUri
 without try/catch, causing a crash when a server sends malformed
@@ -16,4 +20,5 @@ _meta.ui.resourceUri (e.g. null, number, or object). The shared guard
 catches the upstream exception and returns false with a bounded console
 warning.
 
-Covered by: unit tests in ui-resource-detection.test.ts.
+Covered by: unit tests in ui-resource-detection.test.ts and the
+component regression test in AppsTab.test.tsx.
