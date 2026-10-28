@@ -602,7 +602,7 @@ describe("TasksTab behavior tests", () => {
     });
 
     it("shows 'Past TTL' for an active task whose TTL elapsed and 'Expired' only for a terminal one", () => {
-      // The backend (#196 TaskRegistry) never evicts working tasks, so an
+      // The backend never evicts working tasks, so an
       // active task past its TTL is still alive; "Expired" is reserved for
       // terminal tasks, which the sweeper removes after their TTL.
       const old = new Date(Date.now() - 10000).toISOString();
@@ -726,7 +726,7 @@ describe("TasksTab behavior tests", () => {
       expect(getTask).toHaveBeenCalledTimes(1);
 
       // Task transitions to completed (terminal in the SDK enum; the backend
-      // of #196 emits this status)
+      // emits this status)
       const doneTasks = [makeTask({ taskId: "t1", status: "completed" })];
       rerender(
         <TasksTab

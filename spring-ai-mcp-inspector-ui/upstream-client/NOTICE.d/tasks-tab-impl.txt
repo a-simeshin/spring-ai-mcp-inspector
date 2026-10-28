@@ -17,7 +17,7 @@ while failing and reset on success. Per-task pollers are keyed
 on the active task ID string; effect teardown is unmount-only
 (a cleanup in the keyed effect would restart surviving tasks'
 timers from zero whenever the active set changes). TTL countdown
-is measured from lastUpdatedAt (the backend TaskRegistry expires
+is measured from lastUpdatedAt (the backend expires
 tasks from that timestamp, so keep-alives move the countdown)
 and renders "Invalid date" instead of NaN for unparsable
 timestamps. An active task whose TTL has elapsed shows "Past

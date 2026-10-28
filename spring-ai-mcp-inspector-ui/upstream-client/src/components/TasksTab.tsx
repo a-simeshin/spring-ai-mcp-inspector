@@ -22,7 +22,7 @@ const LIST_POLL_INTERVAL_MS = 2000;
 const DEFAULT_TASK_POLL_INTERVAL_MS = 2000;
 const MAX_POLL_BACKOFF_MS = 30000;
 const TTL_COUNTDOWN_INTERVAL_MS = 1000;
-// Aligned with the SDK TaskStatus enum: the backend (#196 TaskRegistry) emits
+// Aligned with the SDK TaskStatus enum: the backend emits
 // "completed" for finished tasks and never "success".
 const TERMINAL_STATUSES: readonly Task["status"][] = [
   "completed",
@@ -73,7 +73,7 @@ const formatTtl = (
   const elapsed = Date.now() - reference;
   const remaining = Math.max(0, ttl - elapsed);
   if (remaining <= 0) {
-    // The backend (#196 TaskRegistry) never evicts a working task, so an
+    // The backend never evicts a working task, so an
     // active task whose TTL has elapsed is still alive: "Past TTL", not the
     // terminal "Expired" (reserved for terminal tasks, which the sweeper
     // removes after their TTL).
@@ -193,7 +193,7 @@ const TasksTab = ({
     return () => clearInterval(interval);
   }, [activeTab, hasTtlTasks]);
 
-  // Update TTL countdowns reactively. The backend (#196 TaskRegistry) expires
+  // Update TTL countdowns reactively. The backend expires
   // a task from its last update timestamp (creation, transitions and
   // keep-alives all refresh it), so the countdown is measured from
   // lastUpdatedAt, not createdAt: a keep-alive moves the countdown.
