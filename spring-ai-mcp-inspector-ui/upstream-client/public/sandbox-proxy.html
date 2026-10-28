@@ -41,12 +41,17 @@
   }
 
   // [spring-ai-mcp-inspector PATCH] Strict CSP host-source grammar for
-  // App-supplied domains: an optional https:// or http:// scheme, a dotted host
-  // name, localhost, or an IP literal, an optional port, and an optional path.
-  // Everything else is rejected (scheme sources like javascript:/data:, quoted
-  // keywords like 'unsafe-eval', values with ';' or whitespace). Mirrors the
-  // Java-side SandboxCspSerializer.isAllowedSourceExpression.
-  var HOST_SOURCE = /^(?:(?:https|http):\/\/)?(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}|localhost|(?:\d{1,3}\.){3}\d{1,3}|\[[0-9a-fA-F:]+\])(?::\d{1,5})?(?:\/[\w\-.~/!$&'()*+,;=:@%]*)?$/;
+  // App-supplied domains: an optional https://, http://, wss:// or ws:// scheme,
+  // a dotted host name (optionally behind a leading *. wildcard label),
+  // localhost, or an IP literal, an optional port (:8443 or :*), and an optional
+  // path. The path character set deliberately excludes the policy separators
+  // ';', ',' and "'": a value like example.com/;frame-ancestors (no whitespace)
+  // must never pass, it would split the serialized policy and inject a directive
+  // (owner review PR #199, round 2, BLOCK 1). Everything else is rejected
+  // (scheme sources like javascript:/data:, quoted keywords like 'unsafe-eval',
+  // values with whitespace). Mirrors the Java-side
+  // SandboxCspSerializer.isAllowedSourceExpression.
+  var HOST_SOURCE = /^(?:(?:https|http|wss|ws):\/\/)?(?:(?:\*\.)?(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}|localhost|(?:\d{1,3}\.){3}\d{1,3}|\[[0-9a-fA-F:]+\])(?::(?:\d{1,5}|\*))?(?:\/[\w\-.~/!$&()*+=:@%]*)?$/;
 
   function isAllowedSourceExpression(value) {
     return typeof value === 'string' && value.length > 0 && HOST_SOURCE.test(value);
@@ -124,15 +129,21 @@
     // Set sandbox attribute; allow-same-origin is never granted
     iframe.setAttribute('sandbox', VIEW_IFRAME_SANDBOX);
 
-    // Parse csp param (JSON object or string) and serialize to CSP meta tag
+    // Parse the csp param (JSON object or string) and serialize it to the CSP
+    // meta tag. Same 4 KB cap the server stacks enforce on the csp query
+    // parameter (SandboxCspSerializer.CSP_PARAM_MAX_LENGTH = 4096): the page
+    // cannot answer 400 to a postMessage, so an oversized csp falls back to the
+    // page baseline instead of entering a multi-kilobyte inline meta policy.
+    var CSP_PARAM_MAX_LENGTH = 4096;
     var cspStr;
-    if (typeof csp === 'string' && csp.length > 0) {
+    if (typeof csp === 'string' && csp.length > 0 && csp.length <= CSP_PARAM_MAX_LENGTH) {
       try {
         cspStr = serializeCsp(JSON.parse(csp));
       } catch (_) {
         cspStr = serializeCsp(null);
       }
-    } else if (typeof csp === 'object' && csp !== null) {
+    } else if (typeof csp === 'object' && csp !== null
+        && JSON.stringify(csp).length <= CSP_PARAM_MAX_LENGTH) {
       cspStr = serializeCsp(csp);
     } else {
       cspStr = serializeCsp(null);

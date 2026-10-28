@@ -24,9 +24,9 @@ import java.util.regex.Pattern;
 
 /**
  * Single serializer for sandbox-proxy Content-Security-Policy values, shared by the
- * WebMVC controller and the WebFlux handler. The TypeScript counterpart is
- * {@code upstream-client/src/lib/csp-serializer.ts}; the sandbox page embeds the same
- * logic inline because it is served standalone, without the bundle.
+ * WebMVC controller and the WebFlux handler. The TypeScript counterpart is the sandbox
+ * page's inline serializer ({@code upstream-client/public/sandbox-proxy.html}): the page
+ * is served standalone, without the bundle, so it cannot import a shared module.
  *
  * <p>
  * Serializes a McpUiResourceCsp object into ONE effective policy: the page baseline
@@ -49,23 +49,30 @@ import java.util.regex.Pattern;
 public final class SandboxCspSerializer {
 
 	/**
-	 * Maximum accepted length of the {@code csp} query parameter. Enforced identically on
-	 * both stacks and in the page's inline serializer counterpart.
+	 * Maximum accepted length of the {@code csp} query parameter (4 KB), enforced by both
+	 * stacks (400 on overflow). The page's inline serializer enforces the same cap on the
+	 * {@code params.csp} value of the sandbox-resource-ready message (page baseline on
+	 * overflow), so the limit is identical everywhere a policy can enter the page.
 	 */
 	public static final int CSP_PARAM_MAX_LENGTH = 4096;
 
 	/**
-	 * Strict CSP host-source grammar: an optional scheme ({@code https://} or
-	 * {@code http://}), a host that is a dotted host name, {@code localhost}, or an IP
-	 * literal, an optional port, and an optional path. Everything else is rejected:
-	 * quoted keywords ({@code 'self'}, {@code 'unsafe-eval'}), nonce/hash sources,
-	 * {@code data:}/{@code javascript:} and any other bare scheme, and values with policy
-	 * separators or whitespace.
+	 * Strict CSP host-source grammar: an optional scheme ({@code https://},
+	 * {@code http://}, {@code wss://} or {@code ws://}), a host that is a dotted host
+	 * name (optionally behind a leading {@code *.} wildcard label), {@code localhost}, or
+	 * an IP literal, an optional port ({@code :8443} or {@code :*}), and an optional
+	 * path. The path character set deliberately excludes the policy separators
+	 * {@code ';'}, {@code ','} and {@code '''}: a value like
+	 * {@code example.com/;frame-ancestors} (no whitespace anywhere) must never pass, it
+	 * would split the serialized policy and inject a directive (owner review PR #199,
+	 * round 2, BLOCK 1). Everything else is rejected: quoted keywords ({@code 'self'},
+	 * {@code 'unsafe-eval'}), nonce/hash sources, {@code data:}/{@code javascript:} and
+	 * any other bare scheme, and values with whitespace.
 	 */
-	private static final Pattern HOST_SOURCE = Pattern
-		.compile("^(?:(?:https|http)://)?(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,}" + "|localhost"
-				+ "|(?:\\d{1,3}\\.){3}\\d{1,3}" + "|\\[[0-9a-fA-F:]+\\])"
-				+ "(?::\\d{1,5})?(?:/[\\w\\-.~/!$&'()*+,;=:@%]*)?$");
+	private static final Pattern HOST_SOURCE = Pattern.compile(
+			"^(?:(?:https|http|wss|ws)://)?(?:(?:\\*\\.)?(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,}"
+					+ "|localhost" + "|(?:\\d{1,3}\\.){3}\\d{1,3}" + "|\\[[0-9a-fA-F:]+\\])"
+					+ "(?::(?:\\d{1,5}|\\*))?(?:/[\\w\\-.~/!$&()*+=:@%]*)?$");
 
 	private SandboxCspSerializer() {
 	}

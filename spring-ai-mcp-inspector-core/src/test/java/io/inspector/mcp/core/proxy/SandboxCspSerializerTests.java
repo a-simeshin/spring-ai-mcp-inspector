@@ -33,8 +33,9 @@ class SandboxCspSerializerTests {
 	@Test
 	void isAllowedSourceExpression_acceptsHostSourceGrammar() {
 		for (final String valid : List.of("example.com", "sub.example.com", "https://example.com", "http://example.com",
-				"https://example.com:8443", "https://example.com/path", "example.com/path/deep/x.js", "localhost",
-				"127.0.0.1", "[::1]", "[2001:db8::1]")) {
+				"wss://realtime.service.com", "ws://api.example.com", "https://*.cloudflare.com", "*.cloudflare.com",
+				"example.com:*", "https://example.com:8443", "https://example.com/path", "example.com/path/deep/x.js",
+				"wss://example.com:8080/socket", "localhost", "127.0.0.1", "[::1]", "[2001:db8::1]")) {
 			assertThat(SandboxCspSerializer.isAllowedSourceExpression(valid)).as("valid: %s", valid).isTrue();
 		}
 	}
@@ -43,7 +44,13 @@ class SandboxCspSerializerTests {
 	void isAllowedSourceExpression_rejectsNonHostGrammar() {
 		for (final String invalid : java.util.Arrays.asList("javascript:alert(1)", "data:text/html,x", "'self'",
 				"'unsafe-eval'", "'unsafe-inline'", "'none'", "*", "https://evil.com; script-src 'unsafe-eval'",
-				"https://evil.com javascript:alert(1)", "https://evil.com ", " https://evil.com", "", null)) {
+				"https://evil.com javascript:alert(1)", "https://evil.com ", " https://evil.com", "", null,
+				// Owner review PR #199 round 2 BLOCK 1: path-embedded separators WITHOUT
+				// any
+				// whitespace must be rejected by the grammar itself, not by the
+				// whitespace rule.
+				"example.com/;frame-ancestors", "cdn.example.com/;connect-src", "example.com/,x",
+				"example.com/'unsafe-eval'", "wss://example.com/;frame-ancestors", "*.example.com/;connect-src")) {
 			assertThat(SandboxCspSerializer.isAllowedSourceExpression(invalid)).as("invalid: %s", invalid).isFalse();
 		}
 	}
@@ -77,6 +84,37 @@ class SandboxCspSerializerTests {
 	void serialize_nonStringItemsIgnored() {
 		final Map<String, Object> csp = Map.of("connectDomains", List.of(42, true, "https://api.example.com"));
 		assertThat(SandboxCspSerializer.serialize(csp)).contains("connect-src https://api.example.com");
+	}
+
+	@Test
+	void serialize_rejectsDirectiveInjectionViaPathWithoutWhitespace() {
+		// Owner review PR #199 round 2 BLOCK 1, exact payloads. Sources are joined with a
+		// space, so a domain like "example.com/;frame-ancestors" used to split the
+		// serialized
+		// policy: the first frame-ancestors occurrence won and became "evil.com", letting
+		// any
+		// site frame /sandbox?csp=... Now the path grammar forbids ';', ',' and "'": the
+		// injected source is dropped, the baseline frame-ancestors 'self' stands, and the
+		// only
+		// surviving occurrence of the second domain is the declared connect source.
+		final Map<String, Object> framePayload = Map.of("connectDomains",
+				List.of("example.com/;frame-ancestors", "evil.com"));
+		final String framePolicy = SandboxCspSerializer.serialize(framePayload);
+		assertThat(framePolicy).doesNotContain("frame-ancestors evil.com");
+		assertThat(framePolicy).doesNotContain("example.com/;frame-ancestors");
+		assertThat(framePolicy).contains("frame-ancestors 'self'");
+		assertThat(framePolicy).contains("connect-src evil.com");
+
+		// Second payload: resourceDomains feed script/style/img/font/media-src, so an
+		// injected ";connect-src" used to land BEFORE the real "connect-src 'none'" and
+		// win.
+		final Map<String, Object> connectPayload = Map.of("resourceDomains",
+				List.of("cdn.example.com/;connect-src", "evil.com"));
+		final String connectPolicy = SandboxCspSerializer.serialize(connectPayload);
+		assertThat(connectPolicy).doesNotContain("connect-src evil.com");
+		assertThat(connectPolicy).doesNotContain("cdn.example.com/;connect-src");
+		assertThat(connectPolicy).contains("connect-src 'none'");
+		assertThat(connectPolicy).contains("img-src evil.com");
 	}
 
 	@Test

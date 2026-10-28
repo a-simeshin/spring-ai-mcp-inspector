@@ -19,15 +19,19 @@ Security fixes (t_e6c85c96):
 - Added csp-serializer.ts (src/lib/csp-serializer.ts): serializes
   McpUiResourceCsp JSON objects to Content-Security-Policy header strings with
   restrictive defaults (all-'none' baseline when absent).
-- sandbox-proxy.html: always emits a CSP meta tag. Parses the csp query param
-  (JSON object) and serializes it via serializeCsp; malformed or absent param
-  produces the all-'none' baseline.
+- sandbox-proxy.html: always emits a CSP meta tag. The page reads the csp object
+  from the sandbox-resource-ready postMessage params (not from the URL: the
+  ?csp= query param is consumed server-side for the HTTP response header) and
+  serializes it with the inline serializer; a malformed, absent or oversized
+  param produces the all-'none' baseline.
 - SandboxProxyController (webmvc) and SandboxProxyHandler (webflux): parse the
   csp query param as JSON, serialize via the shared SandboxCspSerializer (core
   module, one copy for both stacks), set as HTTP response header. Cap param at
   4 KB (400 on overflow). Malformed JSON -> all-'none' default.
-- AppRenderer.tsx: passes sandbox.csp (McpUiResourceCsp object from tool's
-  _meta.ui.csp) to @mcp-ui/client AppRenderer; adds onCallTool handler that
+- AppRenderer.tsx: passes sandbox.csp (McpUiResourceCsp object read from the UI
+  resource meta: resources/read content _meta first, resources/list entry as
+  fallback; never from tool _meta.ui.csp, which ext-apps types as `never`) to
+  @mcp-ui/client AppRenderer; adds onCallTool handler that
   rejects tools/call for tools whose _meta.ui.visibility lacks "app"
   (default: ["model","app"]).
 - AppsTab.tsx: bounds the traffic ingress queue (max 500 pending entries,
@@ -83,9 +87,10 @@ Minor-findings sweep (t_e6c2a15d, PR #199 owner review):
   expressions on every side (Java serializer, page inline serializer): values
   with ';', whitespace, scheme sources (javascript:, data:), or quoted keywords
   ('unsafe-eval') are dropped and never reach a policy.
-- The 4 KB cap is consistent: SandboxCspSerializer.CSP_PARAM_MAX_LENGTH is the
-  single Java constant used by both stacks (4096), matching the page's inline
-  serializer limit.
+- The 4 KB cap is consistent: SandboxCspSerializer.CSP_PARAM_MAX_LENGTH (4096)
+  is the single Java constant used by both stacks (400 on overflow), and the
+  page enforces the same 4096 limit on the postMessage csp param; a page cannot
+  answer 400 to a postMessage, so an oversized csp falls back to the baseline.
 - sandbox-proxy.html: a stale inner iframe is removed before a new one is
   appended on sandbox-resource-ready; the dead forwardToHost helper is deleted;
   view->host and proxy-ready relays postMessage to location.origin instead of
@@ -97,3 +102,24 @@ Minor-findings sweep (t_e6c2a15d, PR #199 owner review):
 - ProxyAuthFilter/ProxyAuthWebFilter (both stacks): /health and /sandbox are
   exempted by exact path comparison against the configured proxy prefix, not by
   suffix match.
+
+Round 2 owner review rework (PR #199, review 5663651002):
+- Host-source grammar hardened on both sides (SandboxCspSerializer.HOST_SOURCE
+  and the page's mirror): path segments may no longer contain ';', ',' or "'"
+  (the CSP source-list separators), closing directive injection through joined
+  policies: connectDomains=["example.com/;frame-ancestors","evil.com"] used to
+  yield an effective `frame-ancestors evil.com`. Payload regressions without any
+  whitespace are covered in SandboxCspSerializerTests and
+  sandbox-proxy-page.test.ts.
+- The same grammar now accepts the spec's own host-source examples it used to
+  reject: wss:// and ws:// schemes, wildcard hosts (https://*.cloudflare.com)
+  and the any-port form (example.com:*).
+- AppRenderer.tsx reads the App CSP from the UI resource meta (resources/read
+  content _meta, resources/list entry as fallback), not from tool
+  _meta.ui.csp: McpUiToolMeta.csp is `never` in @modelcontextprotocol/ext-apps
+  1.7.2, so an App declaring CSP per the spec used to get connect-src 'none'.
+- WebMVC ProxyAuthFilter strips the servlet context path before the exact
+  /health and /sandbox comparison (both used to 401 under
+  server.servlet.context-path with auth enabled, which an LB reads as a dead
+  instance), mirroring WebFlux's pathWithinApplication; covered by
+  WebMvcContextPathAuthIT with auth-enabled=true.

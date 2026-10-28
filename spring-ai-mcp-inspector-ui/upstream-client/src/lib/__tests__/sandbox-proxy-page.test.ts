@@ -235,6 +235,88 @@ describe("sandbox proxy page guest CSP domain validation", () => {
     expect(effective.get("connect-src")).toBe("https://api.example.com");
   });
 
+  it("rejects path-embedded policy separators without any whitespace (PR #199 round 2 BLOCK 1)", () => {
+    // Exact owner payload: "example.com/;frame-ancestors" carries no whitespace, so
+    // only the path grammar (which must forbid ';', ',' and "'") can stop it from
+    // splitting the joined policy and turning evil.com into the effective
+    // frame-ancestors. The injected source is dropped, the baseline frame-ancestors
+    // 'self' stands, and evil.com survives only as the declared connect source.
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: {
+        html: "<p>x</p>",
+        csp: {
+          connectDomains: ["example.com/;frame-ancestors", "evil.com"],
+        },
+      },
+    });
+
+    // The guest meta policy never carries frame-ancestors (that is the HTTP
+    // response header's job), so the injection must not materialize one at all.
+    const framePolicy = guestMetaCsp(innerIframeSrcdoc());
+    expect(framePolicy.get("frame-ancestors")).toBeUndefined();
+    expect(innerIframeSrcdoc()).not.toContain("frame-ancestors");
+    expect(framePolicy.get("connect-src")).toBe("evil.com");
+
+    // Second owner payload: an injected ";connect-src" in resourceDomains used to
+    // land before the real connect-src and win, giving the guest a writable
+    // connect-src. It is dropped, connect-src stays 'none'.
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: {
+        html: "<p>y</p>",
+        csp: {
+          resourceDomains: ["cdn.example.com/;connect-src", "evil.com"],
+        },
+      },
+    });
+
+    const connectPolicy = guestMetaCsp(innerIframeSrcdoc());
+    expect(connectPolicy.get("connect-src")).toBe("'none'");
+    expect(connectPolicy.get("img-src")).toBe("evil.com");
+  });
+
+  it("caps the postMessage csp param at 4 KB like the server stacks (baseline on overflow)", () => {
+    // 200 valid domains serialize to well over 4096 chars of JSON: the page cannot
+    // answer 400 to a postMessage, so the whole csp falls back to the baseline.
+    const many = Array.from({ length: 200 }, (_, i) => `https://sub${i}.example.com`);
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: {
+        html: "<p>x</p>",
+        csp: {
+          connectDomains: many,
+        },
+      },
+    });
+
+    const effective = guestMetaCsp(innerIframeSrcdoc());
+    expect(effective.get("connect-src")).toBe("'none'");
+  });
+
+  it("accepts the spec's own host-source examples (wss scheme, wildcard host, port :*)", () => {
+    postHostMessage(window.location.origin, {
+      jsonrpc: "2.0",
+      method: RESOURCE_READY,
+      params: {
+        html: "<p>x</p>",
+        csp: {
+          connectDomains: ["wss://realtime.service.com", "example.com:*"],
+          resourceDomains: ["https://*.cloudflare.com"],
+        },
+      },
+    });
+
+    const effective = guestMetaCsp(innerIframeSrcdoc());
+    expect(effective.get("connect-src")).toBe(
+      "wss://realtime.service.com example.com:*",
+    );
+    expect(effective.get("img-src")).toBe("https://*.cloudflare.com");
+  });
+
   it("drops a domain containing whitespace and a javascript: source", () => {
     postHostMessage(window.location.origin, {
       jsonrpc: "2.0",
