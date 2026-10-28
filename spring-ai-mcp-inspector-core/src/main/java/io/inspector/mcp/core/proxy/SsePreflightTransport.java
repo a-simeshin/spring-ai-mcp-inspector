@@ -55,26 +55,34 @@ import reactor.util.context.ContextView;
  * contract.
  *
  * <p>
- * This wrapper sends the same {@code GET} the SDK's {@code connect()} would (same URI,
- * same auth headers via the request customizer) with a body handler that completes on the
- * response headers and immediately cancels the subscription, so the probe exchange is
- * closed before the delegate opens the real stream. A status the probe cannot interpret
- * as a verdict on the SSE endpoint (anything other than a clean 2xx, or the definitive
- * {@code 404 Not Found}) is <strong>passed through</strong>: the wrapper lets the
- * delegate try and keeps whatever error or behaviour the SDK transport produces. Only a
- * definitive {@code 404} (the endpoint does not exist) fails fast. This is deliberately
- * conservative: the probe runs on the connect path of every proxy session, and a false
- * negative here would reject upstreams that connect fine today. HTTP HEAD is not used:
- * Starlette and Spring MVC auto-map HEAD onto the GET handler, so a HEAD probe creates
- * the very server-side SSE session it is meant to avoid.
+ * This wrapper sends a {@code GET} to the same SSE endpoint URI the delegate connects to
+ * (including any query string), but it does not reproduce the SDK request byte for byte:
+ * the SDK's own connect adds {@code Cache-Control} and {@code MCP-Protocol-Version}
+ * headers this probe omits, and the delegate receives the endpoint path only, without the
+ * query. The probe checks reachability, not identity: on a server that answers the probe
+ * differently from the real handshake (for example {@code /sse?token=x} probing 200 while
+ * the path-only connect gets 401), the probe stands down in favour of the delegate's own
+ * semantics. The body handler completes on the response headers and immediately cancels
+ * the subscription, so the probe exchange is closed; that close is asynchronous and is
+ * observed by the server some time after the headers arrive, not necessarily before the
+ * delegate opens the real stream. A status the probe cannot interpret as a verdict on the
+ * SSE endpoint (anything other than a clean 2xx or the definitive {@code 404 Not Found})
+ * is <strong>passed through</strong>: the wrapper lets the delegate try and keeps
+ * whatever error or behaviour the SDK transport produces. Only a definitive {@code 404}
+ * (the endpoint does not exist) fails fast. This is deliberately conservative: the probe
+ * runs on the connect path of every proxy session, and a false negative here would reject
+ * upstreams that connect fine today. HTTP HEAD is not used: Starlette and Spring MVC
+ * auto-map HEAD onto the GET handler, so a HEAD probe creates the very server-side SSE
+ * session it is meant to avoid.
  *
  * <p>
  * The probe reuses the delegate's {@link HttpClient} (see
  * {@link SharedHttpClientBuilder}) instead of allocating its own: each extra
  * {@code HttpClient} costs a selector thread that survives
- * {@link HttpClientSseClientTransport#closeGracefully()}, and a per-session probe client
- * doubles that cost (measured on this codebase: 10 sessions with a dedicated probe client
- * spawn 20 selector threads that outlive the sessions).
+ * {@link io.modelcontextprotocol.client.transport.HttpClientSseClientTransport#closeGracefully()},
+ * and a per-session probe client doubles that cost (measured on this codebase: 10
+ * sessions with a dedicated probe client spawn 20 selector threads that outlive the
+ * sessions).
  *
  * <p>
  * The probe uses the shared HTTP executor and HTTP/1.1, matching the SDK's own client
@@ -173,8 +181,8 @@ final class SsePreflightTransport implements McpClientTransport {
 	 * the real reason instead of the SDK hanging on a non-SSE body.</li>
 	 * <li>anything else (401, 403, 405, 5xx, 3xx, ...): not a verdict this probe can
 	 * defend. The status is passed through to the delegate, which performs the real
-	 * handshake with its own (auth-retry, redirect) semantics. Hard-failing here would
-	 * regress upstreams that connect today: develop/2.x had no preflight, so a server
+	 * handshake with its own (redirect, server-error) semantics. Hard-failing here would
+	 * regress upstreams that connect today: develop/1.x had no preflight, so a server
 	 * answering 501 to a probe while its GET works would stop connecting.</li>
 	 * </ul>
 	 * @return a {@link Mono} completing when the endpoint is confirmed reachable, or

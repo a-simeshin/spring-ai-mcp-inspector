@@ -22,8 +22,8 @@ import java.lang.management.ThreadMXBean;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BooleanSupplier;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
@@ -68,6 +68,29 @@ class SsePreflightStreamCountTests {
 	private SseStreamCountingStub stub;
 
 	private McpClientTransport transport;
+
+	/**
+	 * Awaits an asynchronously reached stub state with a bounded deadline. The stub
+	 * counters are updated on the stub's connection threads, which lag behind the
+	 * client-side dispose()/timeout that triggered the close.
+	 * @param what human-readable condition name used in the failure message
+	 * @param condition exit condition; polled every 50 ms until the deadline
+	 */
+	private static void awaitUntil(final String what, final BooleanSupplier condition) {
+		final long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+		while (!condition.getAsBoolean()) {
+			if (System.nanoTime() > deadline) {
+				throw new IllegalStateException("Timed out waiting for: " + what);
+			}
+			try {
+				Thread.sleep(50);
+			}
+			catch (final InterruptedException ex) {
+				Thread.currentThread().interrupt();
+				throw new IllegalStateException("Interrupted waiting for: " + what, ex);
+			}
+		}
+	}
 
 	@AfterEach
 	void tearDown() {
@@ -219,7 +242,10 @@ class SsePreflightStreamCountTests {
 			.isInstanceOf(McpTransportException.class)
 			.hasMessageContaining("timed out");
 
-		// then
+		// then : exchange teardown is asynchronous on the server side; await the
+		// settled state with a bounded deadline before reading the counters.
+		awaitUntil("server observed the timed-out probe close", () -> this.stub.serverClosedExchangeCount() >= 1
+				&& this.stub.activeExchangeCount() == 0 && this.stub.pendingExchangeCount() == 0);
 		assertThat(this.stub.sseStreamCount()).as("No SSE stream opened on timeout").isEqualTo(0);
 		assertThat(this.stub.activeExchangeCount()).as("No leaked exchanges after timeout").isEqualTo(0);
 		assertThat(this.stub.serverClosedExchangeCount()).as("Server observed close after timeout").isEqualTo(1);
@@ -239,7 +265,11 @@ class SsePreflightStreamCountTests {
 		final ProxyTransportFactory factory = new ProxyTransportFactory(new ObjectMapper());
 		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()));
 
-		// when : cancel the connect Mono after 1 second
+		// when : cancel the connect Mono after 1 second. dispose() cancels
+		// asynchronously: the HTTP client tears the probe exchange down on its
+		// selector thread and the stub's connection thread observes the close
+		// later, so the counters are awaited with a bounded deadline, not read
+		// immediately (owner review round 8, BLOCK 1).
 		final CompletableFuture<Void> cancelled = new CompletableFuture<>();
 		final Mono<Void> connect = this.transport.connect((inbound) -> inbound);
 		final var disposable = connect.subscribe((value) -> cancelled.complete(null),
@@ -248,7 +278,10 @@ class SsePreflightStreamCountTests {
 		disposable.dispose();
 		cancelled.complete(null);
 
-		// then
+		// then : await the settled state (close observed, no leaks) with a
+		// bounded deadline instead of asserting the counter immediately.
+		awaitUntil("server observed the cancelled probe close", () -> this.stub.serverClosedExchangeCount() >= 1
+				&& this.stub.activeExchangeCount() == 0 && this.stub.pendingExchangeCount() == 0);
 		assertThat(this.stub.sseStreamCount()).as("No SSE stream opened on cancellation").isEqualTo(0);
 		assertThat(this.stub.activeExchangeCount()).as("No leaked exchanges after cancellation").isEqualTo(0);
 		assertThat(this.stub.serverClosedExchangeCount()).as("Server observed close after cancellation").isEqualTo(1);
@@ -360,44 +393,35 @@ class SsePreflightStreamCountTests {
 	}
 
 	@Test
-	@Story("Post 401 retry with refreshed token")
+	@Story("Post 401 retry with a second transport")
 	@Severity(SeverityLevel.CRITICAL)
-	@Description("A client-side refresh-retry: the first transport's POST is rejected with 401, credentials "
-			+ "are refreshed, and the retry through a second transport succeeds and consumes an enqueued "
-			+ "response. Proves the transport participates in a refresh-retry flow without leaking exchanges.")
-	@DisplayName("Post 401 retry: refreshed token accepted, response consumed, zero leaks")
-	void post401Retry_whenRefreshedToken_retrySucceedsAndResponseConsumed() throws Exception {
+	@Description("A client-side retry: the first transport's POST is rejected with 401, the client opens "
+			+ "a second transport, and the retry succeeds and consumes an enqueued response. Proves no "
+			+ "leaked exchanges across the sequence on a line without header forwarding.")
+	@DisplayName("Post 401 retry: second transport succeeds, response consumed, zero leaks")
+	void post401Retry_whenClientRetriesWithSecondTransport_retrySucceedsAndResponseConsumed() throws Exception {
 		// given
 		this.stub = new SseStreamCountingStub();
 		this.stub.rejectPosts(1);
 		final ProxyTransportFactory factory = new ProxyTransportFactory(new ObjectMapper());
 
-		// First attempt: stale credentials
-		final McpClientTransport firstAttempt = factory.buildSse(URI.create(this.stub.sseUrl()), "Bearer stale-token",
-				null);
+		// when : the first attempt connects and its POST is rejected with 401
+		final McpClientTransport firstAttempt = factory.buildSse(URI.create(this.stub.sseUrl()));
 		this.transport = firstAttempt;
-
-		// when : connect succeeds (probe 200, delegate SSE stream opens)
 		connectAndHold();
-
-		// then : first POST is rejected with 401
 		final McpSchema.JSONRPCNotification firstMessage = new McpSchema.JSONRPCNotification(McpSchema.JSONRPC_VERSION,
-				"test", null);
+				"notifications/initialized", null);
 		assertThatThrownBy(() -> firstAttempt.sendMessage(firstMessage).block(Duration.ofSeconds(5)))
 			.isInstanceOf(Exception.class);
 
-		// Close the first attempt: the client discards the stale session.
+		// and : the client discards the failed session
 		firstAttempt.closeGracefully().block(Duration.ofSeconds(2));
 		this.transport = null;
-
-		// Allow a short delay for the server to process the close.
 		Thread.sleep(500);
 
-		// when : retry with refreshed credentials through a new transport
-		final McpClientTransport retryAttempt = factory.buildSse(URI.create(this.stub.sseUrl()),
-				"Bearer refreshed-token", null);
+		// when : the retry goes through a second transport
+		final McpClientTransport retryAttempt = factory.buildSse(URI.create(this.stub.sseUrl()));
 		this.transport = retryAttempt;
-
 		retryAttempt.connect((inbound) -> inbound).then(Mono.fromRunnable(() -> {
 			try {
 				Thread.sleep(500);
@@ -406,21 +430,16 @@ class SsePreflightStreamCountTests {
 				Thread.currentThread().interrupt();
 			}
 		})).block(Duration.ofSeconds(10));
-
-		// then : the retry POST succeeds (rejectPosts was already consumed by the first
-		// attempt)
 		final McpSchema.JSONRPCRequest retryMessage = new McpSchema.JSONRPCRequest(McpSchema.JSONRPC_VERSION,
-				"test-retry", "1", null);
+				"tools/list", "1", null);
 		retryAttempt.sendMessage(retryMessage).block(Duration.ofSeconds(5));
-
-		// Allow a short delay for the stub to deliver any queued response.
 		Thread.sleep(300);
 
-		// The retry POST carried an id, so the stub auto-queued an InitializeResult
+		// then : the retry POST carried an id, so the stub auto-queued an
+		// InitializeResult
 		// response for it. The SSE loop must have consumed it.
 		assertThat(this.stub.responseDeliveryCount()).as("Response consumed from SSE queue").isEqualTo(1);
 
-		// then : assertions
 		// SSE streams: each transport opens a cancelled probe plus a real delegate
 		// stream, so 2 transports = 4 GET /sse streams total.
 		assertThat(this.stub.sseStreamCount()).as("SSE streams opened (probe+delegate, first + retry)").isEqualTo(4);
@@ -428,12 +447,6 @@ class SsePreflightStreamCountTests {
 		assertThat(this.stub.activeExchangeCount()).as("Active exchanges (only the retry SSE stream)").isEqualTo(1);
 		// Both POST attempts observed by the stub.
 		assertThat(this.stub.postCount()).as("POST requests received (1 rejected + 1 accepted)").isEqualTo(2);
-		// The Authorization values differ: the first attempt used the stale token, the
-		// retry used the refreshed one.
-		final List<String> authValues = this.stub.postAuthorizationValues();
-		assertThat(authValues).as("Authorization values from POST attempts").hasSize(2);
-		assertThat(authValues.get(0)).as("First POST Authorization").isEqualTo("Bearer stale-token");
-		assertThat(authValues.get(1)).as("Retry POST Authorization").isEqualTo("Bearer refreshed-token");
 		// Close the retry attempt before asserting zero leaks.
 		retryAttempt.closeGracefully().block(Duration.ofSeconds(2));
 		this.transport = null;
@@ -477,31 +490,6 @@ class SsePreflightStreamCountTests {
 	}
 
 	@Test
-	@Story("Forwarded headers ride on the probe")
-	@Severity(SeverityLevel.NORMAL)
-	@Description("The factory-built transport forwards the Authorization header on the probe GET as well as "
-			+ "on the real connect, so an auth-protected upstream answers the probe the same way it answers "
-			+ "the handshake.")
-	@DisplayName("Probe carries the forwarded Authorization header")
-	void probeCarriesForwardedAuthorizationHeader() throws Exception {
-		// given
-		this.stub = new SseStreamCountingStub();
-		final ProxyTransportFactory factory = new ProxyTransportFactory(new ObjectMapper());
-		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()), "Bearer probe-token", null);
-
-		// when : connect and hold so the probe and the delegate stream both happen
-		connectAndHold();
-
-		// then : the stub observed the probe's Authorization (recorded per GET).
-		// The stub records GET Authorization headers in order: probe first, delegate
-		// second.
-		assertThat(this.stub.getAuthorizationValues()).as("Authorization on GET requests")
-			.first()
-			.as("Probe GET carried the forwarded Authorization header")
-			.isEqualTo("Bearer probe-token");
-	}
-
-	@Test
 	@Story("Configurable probe timeout through the factory")
 	@Severity(SeverityLevel.NORMAL)
 	@Description("The factory constructor's timeout parameter bounds the probe: a hanging server fails after "
@@ -523,24 +511,6 @@ class SsePreflightStreamCountTests {
 		// then : failed near the configured 1s budget, well below the old hardcoded 10s
 		final long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 		assertThat(elapsedMs).as("Probe failed near the configured 1s budget").isLessThan(5000);
-	}
-
-	@Test
-	@Story("Custom headers forwarded on the probe")
-	@Severity(SeverityLevel.MINOR)
-	@Description("Custom headers are forwarded on the probe GET like on the real connect.")
-	@DisplayName("Probe carries the forwarded custom headers")
-	void probeCarriesForwardedCustomHeaders() throws Exception {
-		// given
-		this.stub = new SseStreamCountingStub();
-		final ProxyTransportFactory factory = new ProxyTransportFactory(new ObjectMapper());
-		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()), null, Map.of("X-Tenant", "acme"));
-
-		// when
-		connectAndHold();
-
-		// then
-		assertThat(this.stub.getTenantValues()).as("X-Tenant on GET requests").first().isEqualTo("acme");
 	}
 
 }

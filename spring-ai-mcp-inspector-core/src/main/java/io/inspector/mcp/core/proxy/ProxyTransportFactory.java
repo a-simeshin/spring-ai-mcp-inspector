@@ -32,7 +32,6 @@ import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTranspor
 import io.modelcontextprotocol.client.transport.ServerParameters;
 import io.modelcontextprotocol.client.transport.SseMessageEndpointValidator;
 import io.modelcontextprotocol.client.transport.StdioClientTransport;
-import io.modelcontextprotocol.client.transport.customizer.McpSyncHttpClientRequestCustomizer;
 import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.spec.McpClientTransport;
 
@@ -114,63 +113,21 @@ public class ProxyTransportFactory {
 	}
 
 	/**
-	 * Builds an SSE client transport that targets the supplied {@code sseUri}.
-	 *
-	 * <p>
-	 * The URI's scheme/host/port form the transport's base URI; the URI's path is the SSE
-	 * endpoint. Example: {@code http://127.0.0.1:8080/sse} → base
-	 * {@code http://127.0.0.1:8080}, SSE endpoint {@code /sse}.
-	 * @param sseUri the full SSE endpoint URI (must not be {@code null})
-	 * @return a configured {@link McpClientTransport} for SSE
-	 */
-	public McpClientTransport openSse(final URI sseUri) {
-		if (sseUri == null) {
-			throw new IllegalArgumentException("sseUri must not be null");
-		}
-		final String baseUri = stripPath(sseUri);
-		final String ssePath = (sseUri.getRawPath() == null || sseUri.getRawPath().isBlank()) ? "/sse"
-				: sseUri.getRawPath();
-		return HttpClientSseClientTransport.builder(baseUri)
-			.sseEndpoint(ssePath)
-			.messageEndpointValidator(noopValidator())
-			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR))
-			.build();
-	}
-
-	/**
 	 * Builds an SSE client transport wrapped in a single header-only preflight probe.
 	 *
 	 * <p>
-	 * The returned transport performs one cancelled {@code GET} probe before delegating
-	 * to the inner {@link HttpClientSseClientTransport} (see
-	 * {@link SsePreflightTransport}). The probe reuses the delegate's {@link HttpClient}
-	 * through a {@link SharedHttpClientBuilder}, so no second client (and no second
-	 * selector thread) is allocated per proxy session.
+	 * The URI's scheme/host/port form the transport's base URI; the URI's path is the SSE
+	 * endpoint. Example: {@code http://127.0.0.1:8080/sse} means base
+	 * {@code http://127.0.0.1:8080}, SSE endpoint {@code /sse}. The returned transport
+	 * performs one cancelled {@code GET} probe before delegating to the inner
+	 * {@link HttpClientSseClientTransport} (see {@link SsePreflightTransport}). The probe
+	 * reuses the delegate's {@link HttpClient} through a {@link SharedHttpClientBuilder},
+	 * so no second client (and no second selector thread) is allocated per proxy session.
 	 * @param sseUri the full SSE endpoint URI (must not be {@code null})
 	 * @return a configured {@link McpClientTransport} for SSE with preflight
 	 * @see SsePreflightTransport
 	 */
 	public McpClientTransport buildSse(final URI sseUri) {
-		return buildSse(sseUri, null, null);
-	}
-
-	/**
-	 * Builds an SSE client transport wrapped in a single header-only preflight probe,
-	 * with the supplied {@code authorization} header and {@code customHeaders} forwarded
-	 * to the upstream MCP server on every outbound request.
-	 *
-	 * <p>
-	 * Same preflight semantics as {@link #buildSse(URI)}. Headers are injected via the
-	 * SDK's {@code httpRequestCustomizer} hook so they ride on both the preflight probe
-	 * and the real transport's requests.
-	 * @param sseUri the full SSE endpoint URI (must not be {@code null})
-	 * @param authorization the inbound {@code Authorization} header value to forward, or
-	 * {@code null} / blank to omit
-	 * @param customHeaders additional headers to forward (may be {@code null} or empty)
-	 * @return a configured {@link McpClientTransport} for SSE with preflight
-	 */
-	public McpClientTransport buildSse(final URI sseUri, final String authorization,
-			final Map<String, String> customHeaders) {
 		if (sseUri == null) {
 			throw new IllegalArgumentException("sseUri must not be null");
 		}
@@ -186,13 +143,9 @@ public class ProxyTransportFactory {
 			.sseEndpoint(ssePath)
 			.messageEndpointValidator(noopValidator())
 			.clientBuilder(new SharedHttpClientBuilder(sharedClient));
-		final McpSyncHttpClientRequestCustomizer customizer = headerCustomizer(authorization, customHeaders);
-		if (customizer != null) {
-			builder.httpRequestCustomizer(customizer);
-		}
 		final McpClientTransport delegate = builder.build();
 		final HttpRequest.Builder requestTemplate = HttpRequest.newBuilder();
-		return new SsePreflightTransport(delegate, normalizeSseUri(sseUri), requestTemplate, customizer, sharedClient,
+		return new SsePreflightTransport(delegate, normalizeSseUri(sseUri), requestTemplate, null, sharedClient,
 				this.ssePreflightTimeout);
 	}
 
@@ -200,7 +153,7 @@ public class ProxyTransportFactory {
 	 * Builds a streamable-HTTP transport that targets the supplied {@code mcpUri}.
 	 *
 	 * <p>
-	 * Same URI breakdown semantics as {@link #openSse(URI)}.
+	 * Same URI breakdown semantics as {@link #buildSse(URI)}.
 	 * @param mcpUri the full MCP endpoint URI (must not be {@code null})
 	 * @return a configured {@link McpClientTransport} for streamable-HTTP
 	 */
@@ -237,42 +190,6 @@ public class ProxyTransportFactory {
 		}
 		final ServerParameters parameters = builder.build();
 		return new StdioClientTransport(parameters, new JacksonMcpJsonMapper(this.objectMapper));
-	}
-
-	/**
-	 * Builds an {@link McpSyncHttpClientRequestCustomizer} that sets the forwarded
-	 * {@code Authorization} header and any custom headers on every outbound request to
-	 * the upstream MCP server. Returns {@code null} when there is nothing to forward so
-	 * callers can skip installing a customizer entirely.
-	 * @param authorization the {@code Authorization} value to forward (ignored when
-	 * blank)
-	 * @param customHeaders extra headers to forward (ignored when {@code null} / empty)
-	 * @return a customizer, or {@code null} when no headers need forwarding
-	 */
-	private static McpSyncHttpClientRequestCustomizer headerCustomizer(final String authorization,
-			final Map<String, String> customHeaders) {
-		final boolean hasAuth = authorization != null && !authorization.isBlank();
-		final boolean hasCustom = customHeaders != null && !customHeaders.isEmpty();
-		if (!hasAuth && !hasCustom) {
-			return null;
-		}
-		return (builder, method, endpoint, body, context) -> {
-			if (hasAuth) {
-				builder.setHeader("Authorization", authorization);
-			}
-			if (hasCustom) {
-				customHeaders.forEach((name, value) -> {
-					if (name != null && !name.isBlank() && value != null) {
-						try {
-							builder.setHeader(name, value);
-						}
-						catch (final IllegalArgumentException ignored) {
-							// restricted header names are silently skipped
-						}
-					}
-				});
-			}
-		};
 	}
 
 	/**
