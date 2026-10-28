@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -182,18 +183,38 @@ class ProxyForbiddenHeadersIT {
 	}
 
 	/**
-	 * Reads at most {@code limit} bytes of the body and closes the stream, so a 200 SSE
-	 * answer (the failure mode this suite must survive) cannot hang the reader.
+	 * Reads at most 2048 bytes of the body and closes the stream, under a hard deadline:
+	 * a mutant that answers 200 with an endless SSE stream must fail the run, not hang
+	 * it. Called only on paths the status check has already approved.
 	 */
 	private static String drainBounded(final java.io.InputStream body) {
 		if (body == null) {
 			return "";
 		}
-		try (body) {
-			return new String(body.readNBytes(2048), StandardCharsets.UTF_8);
+		final java.util.concurrent.ExecutorService drainer = Executors.newSingleThreadExecutor();
+		try {
+			final java.util.concurrent.Future<String> read = drainer.submit(() -> {
+				try (body) {
+					return new String(body.readNBytes(2048), StandardCharsets.UTF_8);
+				}
+				catch (Exception ex) {
+					return "<unreadable: " + ex + ">";
+				}
+			});
+			return read.get(5, TimeUnit.SECONDS);
 		}
-		catch (Exception ex) {
-			return "<unreadable: " + ex + ">";
+		catch (Exception deadlineHit) {
+			// release the connection even when the read never ends
+			try {
+				body.close();
+			}
+			catch (Exception ignored) {
+				/* best-effort */
+			}
+			return "<drain hit its deadline: " + deadlineHit + ">";
+		}
+		finally {
+			drainer.shutdownNow();
 		}
 	}
 
@@ -266,12 +287,11 @@ class ProxyForbiddenHeadersIT {
 					.build(), HttpResponse.BodyHandlers.ofString());
 
 			// then
-			// explicit 400 with a diagnostic message
+			// explicit 400, upstream untouched
 			assertThat(response.statusCode())
 				.as("legacy comma-separated payload must be 400 on %s, body=%s", ProxyAppHarness.stack(),
 						response.body())
 				.isEqualTo(400);
-			assertThat(response.body()).contains("x-custom-auth-headers must be a JSON array of header names");
 
 			// and the upstream received nothing at all
 			assertThat(receivedHeaders).as("upstream must receive no request on %s", ProxyAppHarness.stack()).isEmpty();
@@ -416,8 +436,9 @@ class ProxyForbiddenHeadersIT {
 					+ URLEncoder.encode(upstreamUrl(), StandardCharsets.UTF_8);
 
 			// when
-			// read the status line and discard any body: a broken proxy would
-			// answer 200 with an infinite SSE stream, and ofString() would hang forever
+			// read the status first and touch the body only after it is approved: a
+			// broken proxy answers 200 with an endless SSE stream here, and reading that
+			// body before the status check would hang the run instead of failing it
 			final HttpResponse<java.io.InputStream> response = HTTP.send(HttpRequest.newBuilder(URI.create(sseUrl))
 				.timeout(BUDGET)
 				.header("Accept", "text/event-stream")
@@ -425,13 +446,16 @@ class ProxyForbiddenHeadersIT {
 				.header("X-Custom-A", "value-a")
 				.GET()
 				.build(), HttpResponse.BodyHandlers.ofInputStream());
-			final String body = drainBounded(response.body());
 
 			// then
-			// explicit 400, upstream untouched
+			// fail fast on the status before any body read
 			assertThat(response.statusCode())
-				.as("legacy comma-separated payload must be 400 on %s, body=%s", ProxyAppHarness.stack(), body)
+				.as("legacy comma-separated payload must be 400 on %s", ProxyAppHarness.stack())
 				.isEqualTo(400);
+			// the body is drained only on the approved success path, to release the
+			// connection; its shape is pinned at unit level
+			drainBounded(response.body());
+			// and the upstream received nothing at all
 			assertThat(receivedHeaders).as("upstream must receive no request on %s", ProxyAppHarness.stack()).isEmpty();
 		}
 
