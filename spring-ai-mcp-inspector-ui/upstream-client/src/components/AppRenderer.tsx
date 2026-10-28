@@ -95,7 +95,7 @@ function cspFromMeta(meta: unknown): Record<string, unknown> | undefined {
  * is ignored, and a resource without csp gets the sandbox baseline policy
  * (owner review PR #199, round 2, BLOCK 2).
  */
-export async function readResourceCsp(
+async function readResourceCsp(
   client: Client,
   resourceUri: string,
 ): Promise<Record<string, unknown> | undefined> {
