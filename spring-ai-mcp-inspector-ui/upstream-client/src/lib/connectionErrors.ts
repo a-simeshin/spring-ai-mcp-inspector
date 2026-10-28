@@ -8,7 +8,7 @@
 // POST /mcp-inspector-api/mcp handler answers with a non-2xx status and a
 // JSON body of the shape:
 //
-//   {"error":{"code":"MCP_CONNECT_FAILED","reason":"<timeout|connection_refused|dns|unauthorized|not_found|unknown>","message":"<human-readable>","retryable":true}}
+//   {"error":{"code":"MCP_CONNECT_FAILED","reason":"<timeout|connection_refused|dns|invalid_request|unauthorized|not_found|unknown>","message":"<human-readable>","retryable":true}}
 //
 // This module parses that body out of transport responses, carries it as an
 // error through the SDK transport layer, and maps arbitrary connect failures
@@ -157,6 +157,7 @@ export type ConnectFailureReason =
   | "timeout"
   | "connection_refused"
   | "dns"
+  | "invalid_request"
   | "unauthorized"
   | "not_found"
   | "unknown";
@@ -174,6 +175,10 @@ const CONNECT_FAILURE_REASONS: readonly ConnectFailureReason[] = [
   "timeout",
   "connection_refused",
   "dns",
+  // [spring-ai-mcp-inspector PATCH] invalid_request: the proxy rejects the
+  // request before any network I/O (restricted custom header name, illegal
+  // header value) - added with the restricted-header fail-fast in the proxy.
+  "invalid_request",
   "unauthorized",
   "not_found",
   "unknown",
@@ -316,6 +321,8 @@ export function humanReadableReason(reason: ConnectFailureReason): string {
       return "Connection refused";
     case "dns":
       return "Cannot resolve host";
+    case "invalid_request":
+      return "Server rejected the request: check the custom headers";
     case "unauthorized":
       return "Authentication required";
     case "not_found":
