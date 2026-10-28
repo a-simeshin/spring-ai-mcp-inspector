@@ -6,283 +6,435 @@
  * You may obtain a copy of the License at
  *
  *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package io.inspector.mcp.demo.proxy;
 
 import java.io.OutputStream;
-import java.io.PrintWriter;
-import java.io.StringWriter;
+import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.Executors;
 
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
-import io.inspector.mcp.core.proxy.ProxyTransportFactory;
-import io.modelcontextprotocol.spec.McpSchema;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
+import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ConfigurableApplicationContext;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
- * Integration tests verifying that restricted custom header names are blocked at
- * {@link ProxyTransportFactory} build time: the upstream server receives no request when
- * a restricted header is configured, and allowed headers reach it on the first HTTP call.
+ * Starter-level integration tests for the {@code x-custom-auth-headers} wire contract,
+ * driven through the real proxy endpoints ({@code POST /mcp-inspector-api/mcp} and
+ * {@code GET /mcp-inspector-api/sse}) against a real JDK {@code HttpServer} upstream, on
+ * both webmvc and webflux stacks (this test-jar runs once per stack).
  *
  * <p>
- * Unlike the unit tests in {@code ProxyTransportFactoryTests}, these tests use a real
- * HTTP server (JDK {@code HttpServer}) as the upstream target, so they prove that the
- * validation prevents any network I/O when a restricted header is present, and that
- * allowed headers survive the customizer pipeline end-to-end.
+ * The wire contract is a JSON array of header names, exactly as the inspector UI sends it
+ * ({@code JSON.stringify(names)} in the vendored client). The proxy used to split the raw
+ * value on commas, so every UI-sent name arrived wrapped in JSON brackets and quotes, the
+ * value lookups found nothing, and custom headers were silently dropped.
+ *
+ * <p>
+ * Proves, per stack:
+ *
+ * <ol>
+ * <li>custom header values containing commas and spaces reach the upstream verbatim (they
+ * were silently dropped or corrupted before);</li>
+ * <li>a malformed payload (the legacy comma-separated shape, or non-array JSON) is an
+ * explicit 400, not a silent drop;</li>
+ * <li>a restricted header name (e.g. {@code host}) fails at transport build time with a
+ * diagnostic response, and the upstream receives no request at all.</li>
+ * </ol>
  */
 @Epic("Inspector Proxy")
-@Feature("Forbidden headers: integration")
+@Feature("Custom header forwarding: integration")
 class ProxyForbiddenHeadersIT {
 
-	private static final ProxyTransportFactory FACTORY = new ProxyTransportFactory();
+	private static final JsonMapper MAPPER = new JsonMapper();
 
-	private HttpServer server;
+	private static final HttpClient HTTP = ProxyAppHarness.httpClient(Duration.ofSeconds(5));
 
-	private int serverPort;
+	/** Per-request wall-clock budget. */
+	private static final Duration BUDGET = Duration.ofSeconds(30);
 
-	/**
-	 * Thread-safe list of header maps received by the mock server, one entry per request.
-	 */
+	/** MCP protocol version. Must match the client's initialize frame. */
+	private static final String PROTOCOL_VERSION = "2025-11-25";
+
+	private ConfigurableApplicationContext app;
+
+	/** Mock upstream: records every request's headers. */
+	private HttpServer upstream;
+
+	private int upstreamPort;
+
+	/** Header maps received by the mock upstream, one entry per request. */
 	private final List<Map<String, List<String>>> receivedHeaders = new CopyOnWriteArrayList<>();
-
-	/** Request counter shared with the mock handler. */
-	private final AtomicInteger requestCount = new AtomicInteger(0);
 
 	@AfterEach
 	void tearDown() {
-		if (server != null) {
-			server.stop(0);
+		if (app != null) {
+			try {
+				app.close();
+			}
+			catch (Exception ignored) {
+				/* best-effort */
+			}
+			app = null;
+		}
+		if (upstream != null) {
+			upstream.stop(0);
 		}
 	}
 
 	/**
-	 * Starts a mock HTTP server that records every request's headers and returns a
-	 * minimal valid MCP initialization response.
+	 * Starts the app and a mock upstream MCP server that answers every POST with a valid
+	 * JSON-RPC initialize response (enough for the proxy to relay a full round trip).
 	 */
-	private void startMockServer() throws Exception {
-		server = HttpServer.create(new InetSocketAddress(0), 0);
-		server.createContext("/mcp", (HttpExchange exchange) -> {
-			// Record the headers from this request
+	private int startAppAndUpstream() throws Exception {
+		upstream = HttpServer.create(new InetSocketAddress(0), 0);
+		upstream.createContext("/mcp", (exchange) -> {
 			final Map<String, List<String>> headers = new HashMap<>();
 			for (final Map.Entry<String, List<String>> entry : exchange.getRequestHeaders().entrySet()) {
 				headers.put(entry.getKey(), new ArrayList<>(entry.getValue()));
 			}
 			receivedHeaders.add(headers);
-			requestCount.incrementAndGet();
-
-			// Return a minimal valid JSON-RPC initialize response so the MCP SDK
-			// transport does not error on the first HTTP exchange.
-			final String response = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{"
-					+ "\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"serverInfo\":{"
+			if ("GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+				// The streamable transport's listening GET: keep it open and empty.
+				exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+				exchange.sendResponseHeaders(200, 0);
+				return;
+			}
+			final String response = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{" + "\"protocolVersion\":\""
+					+ PROTOCOL_VERSION + "\",\"capabilities\":{},\"serverInfo\":{"
 					+ "\"name\":\"mock\",\"version\":\"1.0.0\"}}}";
 			exchange.getResponseHeaders().set("Content-Type", "application/json");
-			exchange.sendResponseHeaders(200, response.length());
+			exchange.sendResponseHeaders(200, response.getBytes(StandardCharsets.UTF_8).length);
 			try (OutputStream os = exchange.getResponseBody()) {
-				os.write(response.getBytes());
+				os.write(response.getBytes(StandardCharsets.UTF_8));
 			}
 		});
-		server.setExecutor(java.util.concurrent.Executors.newSingleThreadExecutor());
-		server.start();
-		serverPort = server.getAddress().getPort();
+		upstream.setExecutor(Executors.newSingleThreadExecutor());
+		upstream.start();
+		upstreamPort = upstream.getAddress().getPort();
+
+		app = ProxyAppHarness.start("STREAMABLE", false, null);
+		return ProxyAppHarness.port(app);
 	}
 
-	// -------------------------------------------------------------------------
-	// Negative tests: restricted header blocks transport build
-	// -------------------------------------------------------------------------
-
-	@Test
-	@DisplayName("restricted header blocks transport build: upstream receives no request")
-	@Story("Restricted header prevention")
-	@Severity(SeverityLevel.CRITICAL)
-	@Description("When a restricted header name (e.g. \"host\") is passed to openStreamable(), "
-			+ "the transport build throws IllegalArgumentException and the mock upstream server "
-			+ "receives no request at all: proving the validation fires before any network I/O")
-	void restrictedHeader_blocksTransportBuild_andUpstreamReceivesNoRequest() throws Exception {
-		// given
-		startMockServer();
-		final URI mcpUri = URI.create("http://127.0.0.1:" + serverPort + "/mcp");
-
-		// when & then: build fails with diagnostic message
-		assertThatThrownBy(() -> FACTORY.openStreamable(mcpUri, null, Map.of("host", "evil.example.com")))
-			.isInstanceOf(IllegalArgumentException.class)
-			.hasMessageContaining("custom header 'host' is not allowed by the JDK HTTP client: restricted header name")
-			.hasMessageNotContaining("evil.example.com");
-
-		// then: no request reached the upstream
-		assertThat(requestCount.get())
-			.as("upstream must not receive any request when a restricted header name is configured")
-			.isZero();
+	private String upstreamUrl() {
+		return "http://127.0.0.1:" + upstreamPort + "/mcp";
 	}
 
-	@Test
-	@DisplayName("restricted header: exception message never leaks the header value")
-	@Story("Restricted header prevention: secrecy")
-	@Severity(SeverityLevel.CRITICAL)
-	@Description("The exception message for a restricted header contains the header name "
-			+ "and the JDK reason, but NEVER the header value (even a secret-looking one)")
-	void restrictedHeader_exceptionMessage_neverLeaksSecretValue() throws Exception {
-		// given
-		startMockServer();
-		final URI mcpUri = URI.create("http://127.0.0.1:" + serverPort + "/mcp");
-
-		// when
-		final Throwable thrown = catchThrowable(
-				() -> FACTORY.openStreamable(mcpUri, null, Map.of("host", "super-secret-value")));
-
-		// then: the exception is the right type
-		assertThat(thrown).isInstanceOf(IllegalArgumentException.class);
-
-		// then: the message always contains the header name
-		assertThat(thrown.getMessage()).as("exception message must contain header name").contains("host");
-
-		// then: the full stack trace NEVER contains the secret value
-		final StringWriter sw = new StringWriter();
-		thrown.printStackTrace(new PrintWriter(sw));
-		final String fullTrace = sw.toString();
-		assertThat(fullTrace).as("full stack trace must not leak the header value")
-			.doesNotContain("super-secret-value");
+	/** Builds a JSON-RPC initialize frame. */
+	private static String buildInit() {
+		final ObjectNode init = MAPPER.createObjectNode();
+		init.put("jsonrpc", "2.0");
+		init.put("method", "initialize");
+		init.put("id", 1);
+		final ObjectNode params = init.putObject("params");
+		params.put("protocolVersion", PROTOCOL_VERSION);
+		params.putObject("capabilities");
+		final ObjectNode info = params.putObject("clientInfo");
+		info.put("name", "forbidden-headers-it");
+		info.put("version", "0.1.0");
+		return MAPPER.writeValueAsString(init);
 	}
 
-	@Test
-	@DisplayName("restricted header: case-insensitive matching works end-to-end")
-	@Story("Restricted header prevention: case-insensitive")
-	@Severity(SeverityLevel.NORMAL)
-	@Description("\"Host\" (capitalized) is the same restricted header as \"host\": "
-			+ "the validation is case-insensitive, proven by the upstream receiving no request")
-	void restrictedHeader_caseInsensitiveMatching_blocksTransportBuild() throws Exception {
-		// given
-		startMockServer();
-		final URI mcpUri = URI.create("http://127.0.0.1:" + serverPort + "/mcp");
-
-		// when & then
-		assertThatThrownBy(() -> FACTORY.openStreamable(mcpUri, null, Map.of("Host", "evil.example.com")))
-			.isInstanceOf(IllegalArgumentException.class)
-			.hasMessageContaining("custom header 'Host' is not allowed by the JDK HTTP client: restricted header name")
-			.hasMessageNotContaining("evil.example.com");
-
-		// then: no request reached the upstream
-		assertThat(requestCount.get())
-			.as("upstream must not receive any request when \"Host\" (capitalized) is configured")
-			.isZero();
+	private HttpRequest.Builder postToProxy(final int port, final String... headers) {
+		final HttpRequest.Builder builder = HttpRequest
+			.newBuilder(URI.create("http://127.0.0.1:" + port + "/mcp-inspector-api/mcp?url="
+					+ URLEncoder.encode(upstreamUrl(), StandardCharsets.UTF_8)))
+			.timeout(BUDGET)
+			.header("Content-Type", "application/json")
+			.header("Accept", "application/json, text/event-stream")
+			.POST(HttpRequest.BodyPublishers.ofString(buildInit()));
+		for (int i = 0; i + 1 < headers.length; i += 2) {
+			builder.header(headers[i], headers[i + 1]);
+		}
+		return builder;
 	}
 
-	@Test
-	@DisplayName("restricted header: multiple offenders, all listed, upstream receives no request")
-	@Story("Restricted header prevention: multiple offenders")
-	@Severity(SeverityLevel.NORMAL)
-	@Description("When multiple restricted headers are configured, one exception lists all of them "
-			+ "and the upstream receives no request")
-	void restrictedHeader_multipleOffenders_allOffendersListed_upstreamReceivesNoRequest() throws Exception {
-		// given
-		startMockServer();
-		final URI mcpUri = URI.create("http://127.0.0.1:" + serverPort + "/mcp");
-
-		// when & then
-		assertThatThrownBy(
-				() -> FACTORY.openStreamable(mcpUri, null, Map.of("host", "evil.com", "connection", "close")))
-			.isInstanceOf(IllegalArgumentException.class)
-			.hasMessageContaining("host")
-			.hasMessageContaining("connection");
-
-		// then: no request reached the upstream
-		assertThat(requestCount.get())
-			.as("upstream must not receive any request when multiple restricted headers are configured")
-			.isZero();
+	/**
+	 * Reads at most {@code limit} bytes of the body and closes the stream, so a 200 SSE
+	 * answer (the failure mode this suite must survive) cannot hang the reader.
+	 */
+	private static String drainBounded(final java.io.InputStream body) {
+		if (body == null) {
+			return "";
+		}
+		try (body) {
+			return new String(body.readNBytes(2048), StandardCharsets.UTF_8);
+		}
+		catch (Exception ex) {
+			return "<unreadable: " + ex + ">";
+		}
 	}
 
-	// -------------------------------------------------------------------------
-	// Positive scenario: allowed custom header reaches upstream
-	// -------------------------------------------------------------------------
-
-	@Test
-	@DisplayName("allowed custom header reaches the upstream server")
-	@Story("Allowed header forwarding")
-	@Severity(SeverityLevel.CRITICAL)
-	@Description("A non-restricted custom header (e.g. \"X-Custom-Header\") passes validation "
-			+ "and is forwarded to the upstream MCP server on the first HTTP request")
-	void allowedCustomHeader_reachesUpstream() throws Exception {
-		// given
-		startMockServer();
-		final URI mcpUri = URI.create("http://127.0.0.1:" + serverPort + "/mcp");
-		final String headerName = "X-Custom-Header";
-		final String headerValue = "custom-value";
-
-		// when: build the transport with an allowed custom header
-		final var transport = FACTORY.openStreamable(mcpUri, null, Map.of(headerName, headerValue));
-
-		// then: the transport builds successfully (no exception)
-		assertThat(transport).as("transport must build successfully with an allowed custom header").isNotNull();
-
-		// Connect the transport: sets up the internal session. The transport has
-		// openConnectionOnStartup=false by default, so no HTTP request is made yet.
-		transport.connect((inbound) -> inbound).block();
-
-		// Send a ping notification to trigger the actual HTTP request to the mock
-		// server. The customizer injects the allowed header into this request.
-		transport.sendMessage(new McpSchema.JSONRPCNotification("2.0", "ping", null)).block();
-
-		// then: the mock server received the request(s) with our custom headers
-		assertThat(requestCount.get()).as("upstream must receive at least one request").isGreaterThanOrEqualTo(1);
-
-		// then: the allowed header is present in the first request received by the mock
-		final Map<String, List<String>> upstreamHeaders = receivedHeaders.get(0);
-		assertThat(upstreamHeaders).as("mock server must have received the request headers").isNotNull();
-		assertThat(upstreamHeaders.entrySet()).as("X-Custom-Header must carry the configured value at the upstream")
-			.anyMatch(e -> e.getKey().equalsIgnoreCase(headerName) && e.getValue().contains(headerValue));
+	private static String firstValue(final Map<String, List<String>> headers, final String name) {
+		for (final Map.Entry<String, List<String>> entry : headers.entrySet()) {
+			if (entry.getKey().equalsIgnoreCase(name) && !entry.getValue().isEmpty()) {
+				return entry.getValue().get(0);
+			}
+		}
+		return null;
 	}
 
-	@Test
-	@DisplayName("allowed custom header: multiple headers all reach upstream")
-	@Story("Allowed header forwarding: multiple")
-	@Severity(SeverityLevel.NORMAL)
-	@Description("When multiple non-restricted custom headers are configured, all of them "
-			+ "pass validation and reach the upstream server")
-	void allowedCustomHeader_multipleHeaders_reachUpstream() throws Exception {
-		// given
-		startMockServer();
-		final URI mcpUri = URI.create("http://127.0.0.1:" + serverPort + "/mcp");
+	@Nested
+	@DisplayName("Streamable-HTTP proxy endpoint (POST /mcp)")
+	class StreamableEndpoint {
 
-		// when: build the transport with multiple allowed custom headers
-		final var transport = FACTORY.openStreamable(mcpUri, null,
-				Map.of("X-Custom-A", "value-a", "X-Custom-B", "value-b"));
+		@Test
+		@DisplayName("JSON array payload: custom header values with commas and spaces reach the upstream verbatim")
+		@Story("Allowed header forwarding")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("x-custom-auth-headers carries [\"X-Custom-A\",\"X-Custom-B\"] exactly as the UI sends it; "
+				+ "values containing commas and spaces are forwarded to the upstream untouched on " + "both stacks")
+		void jsonArrayCustomHeaders_reachUpstreamVerbatim() throws Exception {
+			// given
+			final int port = startAppAndUpstream();
 
-		// then: the transport builds successfully
-		assertThat(transport).as("transport must build successfully with multiple allowed headers").isNotNull();
+			// when
+			// the exact wire shape the UI produces (JSON.stringify of the names)
+			final HttpResponse<String> response = HTTP.send(
+					postToProxy(port, "x-custom-auth-headers", "[\"X-Custom-A\", \"X-Custom-B\"]", "X-Custom-A",
+							"comma, separated , value", "X-Custom-B", "space separated value")
+						.build(),
+					HttpResponse.BodyHandlers.ofString());
 
-		// Connect the transport, then send a ping to trigger the HTTP request.
-		transport.connect((inbound) -> inbound).block();
-		transport.sendMessage(new McpSchema.JSONRPCNotification("2.0", "ping", null)).block();
+			// then
+			// the session opens and the initialize response comes back
+			assertThat(response.statusCode())
+				.as("JSON-array custom headers must open a session on %s, body=%s", ProxyAppHarness.stack(),
+						response.body())
+				.isEqualTo(200);
+			assertThat(response.headers().firstValue("mcp-session-id").orElse(null))
+				.as("session id must be issued on %s", ProxyAppHarness.stack())
+				.isNotBlank();
 
-		// then: the mock server received the request(s) with our custom headers
-		assertThat(requestCount.get()).as("upstream must receive at least one request").isGreaterThanOrEqualTo(1);
+			// and the upstream saw both custom headers verbatim
+			Awaitility.await("upstream receives the custom headers on " + ProxyAppHarness.stack())
+				.atMost(Duration.ofSeconds(20))
+				.pollInterval(Duration.ofMillis(100))
+				.until(() -> receivedHeaders.stream()
+					.anyMatch((h) -> "comma, separated , value".equals(firstValue(h, "X-Custom-A"))));
+			assertThat(receivedHeaders.stream()
+				.anyMatch((h) -> "space separated value".equals(firstValue(h, "X-Custom-B"))))
+				.as("X-Custom-B must carry its value verbatim on %s", ProxyAppHarness.stack())
+				.isTrue();
+		}
 
-		// then: both headers reached the upstream with their actual values
-		final Map<String, List<String>> upstreamHeaders = receivedHeaders.get(0);
-		assertThat(upstreamHeaders).as("mock server must have received request headers").isNotNull();
-		assertThat(upstreamHeaders.entrySet()).as("X-Custom-A must carry value-a")
-			.anyMatch(e -> e.getKey().equalsIgnoreCase("X-Custom-A") && e.getValue().contains("value-a"));
-		assertThat(upstreamHeaders.entrySet()).as("X-Custom-B must carry value-b")
-			.anyMatch(e -> e.getKey().equalsIgnoreCase("X-Custom-B") && e.getValue().contains("value-b"));
+		@Test
+		@DisplayName("legacy comma-separated payload is an explicit 400, upstream untouched")
+		@Story("Malformed payload rejection")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("The old split(',')" + "-era shape (bare comma-separated names) is rejected with 400 on both "
+				+ "stacks: a client bug must be visible, not a session that silently forwards no custom headers")
+		void legacyCommaSeparatedPayload_rejectedWith400() throws Exception {
+			// given
+			final int port = startAppAndUpstream();
+
+			// when
+			final HttpResponse<String> response = HTTP
+				.send(postToProxy(port, "x-custom-auth-headers", "X-Custom-A, X-Custom-B", "X-Custom-A", "value-a")
+					.build(), HttpResponse.BodyHandlers.ofString());
+
+			// then
+			// explicit 400 with a diagnostic message
+			assertThat(response.statusCode())
+				.as("legacy comma-separated payload must be 400 on %s, body=%s", ProxyAppHarness.stack(),
+						response.body())
+				.isEqualTo(400);
+			assertThat(response.body()).contains("x-custom-auth-headers must be a JSON array of header names");
+
+			// and the upstream received nothing at all
+			assertThat(receivedHeaders).as("upstream must receive no request on %s", ProxyAppHarness.stack()).isEmpty();
+		}
+
+		@Test
+		@DisplayName("non-array JSON payload is an explicit 400")
+		@Story("Malformed payload rejection")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("A JSON object instead of the array is rejected with 400 on both stacks")
+		void nonArrayJsonPayload_rejectedWith400() throws Exception {
+			// given
+			final int port = startAppAndUpstream();
+
+			// when
+			final HttpResponse<String> response = HTTP.send(
+					postToProxy(port, "x-custom-auth-headers", "{\"names\":[\"X-Custom-A\"]}").build(),
+					HttpResponse.BodyHandlers.ofString());
+
+			// then
+			assertThat(response.statusCode()).as("non-array payload on %s", ProxyAppHarness.stack()).isEqualTo(400);
+			assertThat(receivedHeaders).isEmpty();
+		}
+
+		@Test
+		@DisplayName("restricted header name fails before any upstream I/O")
+		@Story("Restricted header prevention")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Naming the restricted 'host' header (present on every request, so its inbound value always "
+				+ "resolves) fails at transport build time with a diagnostic non-2xx response; the upstream "
+				+ "receives no request")
+		void restrictedHeaderName_failsBeforeAnyUpstreamIo() throws Exception {
+			// given
+			final int port = startAppAndUpstream();
+
+			// when
+			final HttpResponse<String> response = HTTP.send(
+					postToProxy(port, "x-custom-auth-headers", "[\"host\"]").build(),
+					HttpResponse.BodyHandlers.ofString());
+
+			// then
+			// a classified connect failure (502), never a silent drop
+			assertThat(response.statusCode())
+				.as("restricted header name must fail loudly on %s, body=%s", ProxyAppHarness.stack(), response.body())
+				.isEqualTo(502);
+
+			// and the upstream received nothing at all
+			assertThat(receivedHeaders).as("upstream must receive no request on %s", ProxyAppHarness.stack()).isEmpty();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("SSE proxy endpoint (GET /sse)")
+	class SseEndpoint {
+
+		@Test
+		@DisplayName("JSON array payload: custom headers reach the upstream through the SSE session")
+		@Story("Allowed header forwarding")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("GET /sse?transportType=streamable-http with a JSON-array x-custom-auth-headers opens the "
+				+ "session and forwards the named custom headers to the upstream on both stacks")
+		void jsonArrayCustomHeaders_reachUpstreamThroughSseSession() throws Exception {
+			// given
+			final int port = startAppAndUpstream();
+			final String sseUrl = "http://127.0.0.1:" + port
+					+ "/mcp-inspector-api/sse?transportType=streamable-http&url="
+					+ URLEncoder.encode(upstreamUrl(), StandardCharsets.UTF_8);
+
+			// when
+			// open the SSE session with the UI's exact wire shape, reading frames
+			// in the background; then push an initialize frame into the session
+			final CopyOnWriteArrayList<String> frames = new CopyOnWriteArrayList<>();
+			final Thread sseReader = new Thread(() -> {
+				try {
+					final HttpRequest request = HttpRequest.newBuilder(URI.create(sseUrl))
+						.timeout(BUDGET)
+						.header("Accept", "text/event-stream")
+						.header("x-custom-auth-headers", "[\"X-Custom-A\"]")
+						.header("X-Custom-A", "sse, comma , value")
+						.GET()
+						.build();
+					final HttpResponse<java.io.InputStream> response = HTTP.send(request,
+							HttpResponse.BodyHandlers.ofInputStream());
+					try (var reader = new java.io.BufferedReader(
+							new java.io.InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+						String line;
+						while ((line = reader.readLine()) != null) {
+							if (line.startsWith("data:")) {
+								frames.add(line.substring(5).trim());
+							}
+						}
+					}
+				}
+				catch (Exception ignored) {
+					/* stream teardown ends up here; assertions poll the buffers */
+				}
+			}, "sse-reader-" + ProxyAppHarness.stack());
+			sseReader.setDaemon(true);
+			sseReader.start();
+
+			// the endpoint prologue carries the message endpoint with the session id
+			Awaitility.await("endpoint prologue frame on " + ProxyAppHarness.stack())
+				.atMost(Duration.ofSeconds(15))
+				.pollInterval(Duration.ofMillis(50))
+				.until(() -> frames.stream().anyMatch((d) -> d.startsWith("/mcp-inspector-api/message?sessionId=")));
+			final String endpoint = frames.stream()
+				.filter((d) -> d.startsWith("/mcp-inspector-api/message?sessionId="))
+				.findFirst()
+				.orElseThrow();
+			final String sessionId = endpoint.substring(endpoint.indexOf("sessionId=") + "sessionId=".length());
+
+			// push the initialize frame: this makes the proxy POST to the upstream with
+			// the custom headers attached at transport build time
+			final HttpRequest initialize = HttpRequest
+				.newBuilder(
+						URI.create("http://127.0.0.1:" + port + "/mcp-inspector-api/message?sessionId=" + sessionId))
+				.timeout(BUDGET)
+				.header("Content-Type", "application/json")
+				.POST(HttpRequest.BodyPublishers.ofString(buildInit()))
+				.build();
+			HTTP.send(initialize, HttpResponse.BodyHandlers.ofString());
+
+			// then
+			// the upstream received the custom header verbatim
+			Awaitility.await("upstream receives the custom header on " + ProxyAppHarness.stack())
+				.atMost(Duration.ofSeconds(20))
+				.pollInterval(Duration.ofMillis(100))
+				.until(() -> receivedHeaders.stream()
+					.anyMatch((h) -> "sse, comma , value".equals(firstValue(h, "X-Custom-A"))));
+		}
+
+		@Test
+		@DisplayName("legacy comma-separated payload is an explicit 400 before any stream opens")
+		@Story("Malformed payload rejection")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("The old split(',')-era shape on GET /sse is rejected with 400 on both stacks")
+		void legacyCommaSeparatedPayload_rejectedWith400() throws Exception {
+			// given
+			final int port = startAppAndUpstream();
+			final String sseUrl = "http://127.0.0.1:" + port + "/mcp-inspector-api/sse?transportType=sse&url="
+					+ URLEncoder.encode(upstreamUrl(), StandardCharsets.UTF_8);
+
+			// when
+			// read the status line and discard any body: a broken proxy would
+			// answer 200 with an infinite SSE stream, and ofString() would hang forever
+			final HttpResponse<java.io.InputStream> response = HTTP.send(HttpRequest.newBuilder(URI.create(sseUrl))
+				.timeout(BUDGET)
+				.header("Accept", "text/event-stream")
+				.header("x-custom-auth-headers", "X-Custom-A, X-Custom-B")
+				.header("X-Custom-A", "value-a")
+				.GET()
+				.build(), HttpResponse.BodyHandlers.ofInputStream());
+			final String body = drainBounded(response.body());
+
+			// then
+			// explicit 400, upstream untouched
+			assertThat(response.statusCode())
+				.as("legacy comma-separated payload must be 400 on %s, body=%s", ProxyAppHarness.stack(), body)
+				.isEqualTo(400);
+			assertThat(receivedHeaders).as("upstream must receive no request on %s", ProxyAppHarness.stack()).isEmpty();
+		}
+
 	}
 
 }
