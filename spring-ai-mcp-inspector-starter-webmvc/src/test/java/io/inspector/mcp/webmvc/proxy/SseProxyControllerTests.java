@@ -38,6 +38,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Mono;
@@ -491,6 +492,29 @@ class SseProxyControllerTests {
 		@Test
 		@Story("Header forwarding")
 		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with a malformed x-custom-auth-headers payload throws 400 before any session is opened")
+		void openSse_withMalformedCustomHeaderList_throws400() {
+			// given
+			// the legacy comma-separated shape the UI never sent
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
+			request.addHeader("x-custom-auth-headers", "X-Tenant, X-Trace");
+			request.addHeader("X-Tenant", "acme");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+
+			// when & then
+			// explicit 400, no transport built, no session registered
+			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, request))
+				.isInstanceOf(ResponseStatusException.class)
+				.hasMessageContaining("400")
+				.hasMessageContaining("x-custom-auth-headers must be a JSON array of header names");
+			verify(SseProxyControllerTests.this.transportFactory, never()).openSse(any(URI.class));
+			verify(SseProxyControllerTests.this.transportFactory, never()).openSse(any(URI.class), any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() with no request attributes uses the single-arg SSE factory overload")
 		void openSse_withoutRequestAttributes_usesSingleArgOverload() {
 			// given — no RequestContextHolder bound (tearDown clears it)
@@ -512,14 +536,15 @@ class SseProxyControllerTests {
 			// given
 			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
 			request.addHeader("Authorization", "Bearer tok");
-			request.addHeader("x-custom-auth-headers", "X-Tenant");
+			request.addHeader("x-custom-auth-headers", "[\"X-Tenant\"]");
 			request.addHeader("X-Tenant", "acme");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
 			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class), any(), any()))
 				.willReturn(mock(McpClientTransport.class));
 
 			// when
-			SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null, null, null, REQUEST);
+			// the headers ride on the servlet request the endpoint reads
+			SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null, null, null, request);
 
 			// then
 			verify(SseProxyControllerTests.this.transportFactory).buildSse(eq(URI.create("http://target/sse")),
@@ -540,7 +565,7 @@ class SseProxyControllerTests {
 
 			// when
 			SseProxyControllerTests.this.controller.openSse("streamable-http", "http://target/mcp", null, null, null,
-					REQUEST);
+					request);
 
 			// then
 			verify(SseProxyControllerTests.this.transportFactory).openStreamable(eq(URI.create("http://target/mcp")),

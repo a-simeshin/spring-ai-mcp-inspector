@@ -716,7 +716,7 @@ class StreamableHttpProxyControllerTests {
 			// given
 			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
 			request.addHeader("Authorization", "Bearer tok");
-			request.addHeader("x-custom-auth-headers", "X-Tenant, X-Trace");
+			request.addHeader("x-custom-auth-headers", "[\"X-Tenant\", \"X-Trace\"]");
 			request.addHeader("X-Tenant", "acme");
 			request.addHeader("X-Trace", "abc123");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
@@ -762,6 +762,33 @@ class StreamableHttpProxyControllerTests {
 
 		@Test
 		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSession() with a malformed x-custom-auth-headers payload returns 400 and opens no session")
+		void openSession_withMalformedCustomHeaderList_returns400() throws Exception {
+			// given
+			// the legacy comma-separated shape the UI never sent
+			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
+			request.addHeader("x-custom-auth-headers", "X-Tenant, X-Trace");
+			request.addHeader("X-Tenant", "acme");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"method\":\"notify\"}");
+
+			// when
+			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", body);
+
+			// then
+			// explicit 400, no session opened, no transport built
+			assertThat(response).isNotNull();
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			verify(StreamableHttpProxyControllerTests.this.transportFactory, never()).openStreamable(any(URI.class));
+			verify(StreamableHttpProxyControllerTests.this.transportFactory, never()).openStreamable(any(URI.class),
+					any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
 		@Severity(SeverityLevel.MINOR)
 		@Description("openSession() with a blank x-custom-auth-headers list forwards only the Authorization header")
 		void openSession_withBlankCustomHeaderList_forwardsAuthorizationOnly() throws Exception {
@@ -791,7 +818,7 @@ class StreamableHttpProxyControllerTests {
 		void openSession_skipsBlankAndAbsentCustomHeaderNames() throws Exception {
 			// given — empty token, a present header and a named-but-absent header
 			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
-			request.addHeader("x-custom-auth-headers", "X-Present, , X-Missing");
+			request.addHeader("x-custom-auth-headers", "[\"X-Present\", \" \", \"X-Missing\"]");
 			request.addHeader("X-Present", "yes");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
 			final McpClientTransport target = mock(McpClientTransport.class);

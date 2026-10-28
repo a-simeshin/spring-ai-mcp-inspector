@@ -58,6 +58,7 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.CustomHeaderNames;
 import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
@@ -342,8 +343,8 @@ public class ProxyHandler {
 		final String args = request.queryParam("args").orElse(null);
 		final String env = request.queryParam("env").orElse(null);
 		final String profileId = request.queryParam("profileId").orElse(null);
-		return openProxiedSession(transportType, url, command, args, env, profileId, inboundAuthorization(request),
-				inboundCustomHeaders(request), request);
+		return withCustomHeaders(request, (customHeaders) -> openProxiedSession(transportType, url, command, args, env,
+				profileId, inboundAuthorization(request), customHeaders, request));
 	}
 
 	public Mono<ServerResponse> openStdio(final ServerRequest request) {
@@ -351,8 +352,8 @@ public class ProxyHandler {
 		final String args = request.queryParam("args").orElse(null);
 		final String env = request.queryParam("env").orElse(null);
 		final String profileId = request.queryParam("profileId").orElse(null);
-		return openProxiedSession("stdio", null, command, args, env, profileId, inboundAuthorization(request),
-				inboundCustomHeaders(request), request);
+		return withCustomHeaders(request, (customHeaders) -> openProxiedSession("stdio", null, command, args, env,
+				profileId, inboundAuthorization(request), customHeaders, request));
 	}
 
 	/**
@@ -377,28 +378,37 @@ public class ProxyHandler {
 
 	/**
 	 * Reads the custom headers named by the {@code x-custom-auth-headers} request header
-	 * (comma-separated header names) and returns their inbound values, so they can be
-	 * forwarded verbatim to the upstream MCP server.
+	 * (a JSON array of header names, see {@link CustomHeaderNames}) and returns their
+	 * inbound values, so they can be forwarded verbatim to the upstream MCP server.
 	 * @param request the incoming request
 	 * @return a map of custom header name → value (never {@code null})
+	 * @throws IllegalArgumentException when the payload is present but malformed
 	 */
 	private static Map<String, String> inboundCustomHeaders(final ServerRequest request) {
-		final String named = request.headers().firstHeader("x-custom-auth-headers");
-		if (named == null || named.isBlank()) {
-			return Map.of();
+		return CustomHeaderNames.resolve(request.headers().firstHeader(CustomHeaderNames.HEADER),
+				request.headers()::firstHeader);
+	}
+
+	/**
+	 * Runs the session opener with the parsed custom headers, translating a malformed
+	 * {@code x-custom-auth-headers} payload into an explicit 400 instead of a session
+	 * that silently forwards no custom headers.
+	 * @param request the incoming request
+	 * @param opener opens the session with the parsed (never {@code null}) custom headers
+	 * @return the opener's response, or a 400 when the payload is malformed
+	 */
+	private static Mono<ServerResponse> withCustomHeaders(final ServerRequest request,
+			final java.util.function.Function<Map<String, String>, Mono<ServerResponse>> opener) {
+		final Map<String, String> customHeaders;
+		try {
+			customHeaders = inboundCustomHeaders(request);
 		}
-		final Map<String, String> out = new LinkedHashMap<>();
-		for (final String raw : named.split(",")) {
-			final String name = raw.trim();
-			if (name.isEmpty()) {
-				continue;
-			}
-			final String value = request.headers().firstHeader(name);
-			if (value != null) {
-				out.put(name, value);
-			}
+		catch (final IllegalArgumentException ex) {
+			return ServerResponse.badRequest()
+				.contentType(MediaType.APPLICATION_JSON)
+				.bodyValue(Map.of("error", ex.getMessage()));
 		}
-		return out;
+		return opener.apply(customHeaders);
 	}
 
 	public Mono<ServerResponse> postMessage(final ServerRequest request) {
@@ -668,10 +678,10 @@ public class ProxyHandler {
 	public Mono<ServerResponse> postMcp(final ServerRequest request) {
 		final String mcpSessionId = request.headers().firstHeader(ProxyConstants.MCP_SESSION_ID_HEADER);
 		final String authorization = inboundAuthorization(request);
-		final Map<String, String> customHeaders = inboundCustomHeaders(request);
 		final String profileId = request.queryParam("profileId").orElse(null);
-		return readJsonBody(request).flatMap((body) -> handlePostMcp(mcpSessionId,
-				request.queryParam("url").orElse(null), body, authorization, customHeaders, profileId, request));
+		return withCustomHeaders(request,
+				(parsed) -> readJsonBody(request).flatMap((body) -> handlePostMcp(mcpSessionId,
+						request.queryParam("url").orElse(null), body, authorization, parsed, profileId, request)));
 	}
 
 	/**

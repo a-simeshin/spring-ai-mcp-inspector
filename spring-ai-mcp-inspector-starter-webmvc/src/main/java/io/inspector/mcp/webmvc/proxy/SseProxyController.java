@@ -45,6 +45,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
@@ -56,6 +57,7 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.CustomHeaderNames;
 import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
@@ -241,7 +243,17 @@ public class SseProxyController {
 			@RequestParam(value = "env", required = false) final String env,
 			@RequestParam(value = "profileId", required = false) final String profileId,
 			final HttpServletRequest request) {
-		return openProxiedSession(transportType, url, command, args, env, profileId, contextPath(request));
+		final Map<String, String> customHeaders;
+		try {
+			customHeaders = inboundCustomHeaders(request);
+		}
+		catch (final IllegalArgumentException ex) {
+			// 400 before any SSE stream is opened: a malformed payload must be a visible
+			// client error, not a session that silently forwards no custom headers.
+			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+		}
+		return openProxiedSession(transportType, url, command, args, env, profileId, customHeaders,
+				contextPath(request));
 	}
 
 	/**
@@ -256,7 +268,14 @@ public class SseProxyController {
 	public SseEmitter openStdio(@RequestParam("command") final String command,
 			@RequestParam(value = "args", required = false) final String args,
 			@RequestParam(value = "env", required = false) final String env, final HttpServletRequest request) {
-		return openProxiedSession("stdio", null, command, args, env, null, contextPath(request));
+		final Map<String, String> customHeaders;
+		try {
+			customHeaders = inboundCustomHeaders(request);
+		}
+		catch (final IllegalArgumentException ex) {
+			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+		}
+		return openProxiedSession("stdio", null, command, args, env, null, customHeaders, contextPath(request));
 	}
 
 	/**
@@ -274,7 +293,14 @@ public class SseProxyController {
 			@RequestParam(value = "env", required = false) final String env,
 			@RequestParam(value = "profileId", required = false) final String profileId,
 			final HttpServletRequest request) {
-		return openProxiedSession("stdio", null, command, args, env, profileId, contextPath(request));
+		final Map<String, String> customHeaders;
+		try {
+			customHeaders = inboundCustomHeaders(request);
+		}
+		catch (final IllegalArgumentException ex) {
+			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+		}
+		return openProxiedSession("stdio", null, command, args, env, profileId, customHeaders, contextPath(request));
 	}
 
 	/**
@@ -312,7 +338,8 @@ public class SseProxyController {
 	}
 
 	private SseEmitter openProxiedSession(final String transportType, final String url, final String command,
-			final String args, final String env, final String profileId, final String contextPath) {
+			final String args, final String env, final String profileId, final Map<String, String> customHeaders,
+			final String contextPath) {
 		final String sessionId = UUID.randomUUID().toString();
 		final SseEmitter emitter = new SseEmitter(resolveTimeouts().getSseSession().toMillis());
 
@@ -341,7 +368,8 @@ public class SseProxyController {
 				(headers != null) ? headers.authorization() : null);
 		final McpClientTransport target;
 		try {
-			target = buildTargetTransport(transportType, url, command, args, env, headers, authorizationRef);
+			target = buildTargetTransport(transportType, url, command, args, env, headers, customHeaders,
+					authorizationRef);
 		}
 		catch (final Exception ex) {
 			// classify() maps transport-build rejections onto a message the browser
@@ -526,20 +554,20 @@ public class SseProxyController {
 	}
 
 	private McpClientTransport buildTargetTransport(final String transportType, final String url, final String command,
-			final String args, final String env, final AuthHeaders headers,
+			final String args, final String env, final AuthHeaders headers, final Map<String, String> customHeaders,
 			final AtomicReference<String> authorizationRef) throws Exception {
 		final String type = (transportType != null) ? transportType.toLowerCase() : "sse";
 		return switch (type) {
 			case "sse" -> {
 				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/sse");
-				yield (headers != null) ? this.transportFactory.buildSseWithAuth(target, headers, authorizationRef)
-						: openSseWithInboundHeaders(target);
+	 yard (headers != null) ? this.transportFactory.buildSseWithAuth(target, headers, authorizationRef)
+						: openSseWithInboundHeaders(target, customHeaders);
 			}
 			case "streamable-http" -> {
 				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
-				yield (headers != null)
+				yield (headers != null) ? this.transportFactory.buildSseWithAuth(target, headers, authorizationRef)
 						? this.transportFactory.openStreamableWithAuth(target, headers, authorizationRef)
-						: openStreamableWithInboundHeaders(target);
+						: openStreamableWithInboundHeaders(target, customHeaders);
 			}
 			case "stdio" -> {
 				if (command == null || command.isBlank()) {
@@ -583,11 +611,12 @@ public class SseProxyController {
 	 * headers named by {@code x-custom-auth-headers} (legacy no-profile path); falls back
 	 * to the single-arg overload when nothing needs forwarding.
 	 * @param target the resolved target URI
+	 * @param customHeaders the custom headers (named by {@code x-custom-auth-headers}) to
+	 * forward upstream, may be empty
 	 * @return a configured SSE transport
 	 */
-	private McpClientTransport openSseWithInboundHeaders(final URI target) {
+	private McpClientTransport openSseWithInboundHeaders(final URI target, final Map<String, String> customHeaders) {
 		final String authorization = inboundAuthorization();
-		final Map<String, String> customHeaders = inboundCustomHeaders();
 		final boolean noHeaders = authorization == null && customHeaders.isEmpty();
 		return noHeaders ? this.transportFactory.buildSse(target)
 				: this.transportFactory.buildSse(target, authorization, customHeaders);
@@ -598,11 +627,13 @@ public class SseProxyController {
 	 * and the headers named by {@code x-custom-auth-headers} (legacy no-profile path);
 	 * falls back to the single-arg overload when nothing needs forwarding.
 	 * @param target the resolved target URI
+	 * @param customHeaders the custom headers (named by {@code x-custom-auth-headers}) to
+	 * forward upstream, may be empty
 	 * @return a configured streamable transport
 	 */
-	private McpClientTransport openStreamableWithInboundHeaders(final URI target) {
+	private McpClientTransport openStreamableWithInboundHeaders(final URI target,
+			final Map<String, String> customHeaders) {
 		final String authorization = inboundAuthorization();
-		final Map<String, String> customHeaders = inboundCustomHeaders();
 		final boolean noHeaders = authorization == null && customHeaders.isEmpty();
 		return noHeaders ? this.transportFactory.openStreamable(target)
 				: this.transportFactory.openStreamable(target, authorization, customHeaders);
@@ -619,31 +650,16 @@ public class SseProxyController {
 
 	/**
 	 * Reads the custom headers named by the {@code x-custom-auth-headers} request header
-	 * (comma-separated header names) and returns their inbound values, so they can be
-	 * forwarded verbatim to the upstream MCP server.
+	 * (a JSON array of header names, see {@link CustomHeaderNames}) and returns their
+	 * inbound values, so they can be forwarded verbatim to the upstream MCP server.
+	 * @param request the incoming request
 	 * @return a map of custom header name → value (never {@code null})
+	 * @throws IllegalArgumentException when the payload is present but malformed; the
+	 * endpoints translate it into a 400 before any stream is opened
 	 */
-	private static Map<String, String> inboundCustomHeaders() {
-		final HttpServletRequest request = currentRequest();
-		if (request == null) {
-			return Map.of();
-		}
-		final String named = request.getHeader("x-custom-auth-headers");
-		if (named == null || named.isBlank()) {
-			return Map.of();
-		}
-		final Map<String, String> out = new LinkedHashMap<>();
-		for (final String raw : named.split(",")) {
-			final String name = raw.trim();
-			if (name.isEmpty()) {
-				continue;
-			}
-			final String value = request.getHeader(name);
-			if (value != null) {
-				out.put(name, value);
-			}
-		}
-		return out;
+	private static Map<String, String> inboundCustomHeaders(final HttpServletRequest request) {
+		return CustomHeaderNames.resolve((request != null) ? request.getHeader(CustomHeaderNames.HEADER) : null,
+				(name) -> (request != null) ? request.getHeader(name) : null);
 	}
 
 	private static HttpServletRequest currentRequest() {
