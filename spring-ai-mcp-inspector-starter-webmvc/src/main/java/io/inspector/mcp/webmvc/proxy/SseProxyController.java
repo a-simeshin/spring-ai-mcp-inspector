@@ -100,7 +100,11 @@ import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
  * it onto the same structured {@code MCP_CONNECT_FAILED} JSON body the streamable
  * controller serves. A plain {@code ResponseStatusException} would delegate to Boot's
  * {@code /error} dispatch, whose default {@code include-message=never} drops the message
- * from both the status line and the body - exactly what this advice exists to avoid.
+ * from both the status line and the body - exactly what this advice exists to avoid. A
+ * malformed {@code x-custom-auth-headers} payload is answered the same way: the handler
+ * throws {@code ResponseStatusException(400)} and the {@link #statusException} advice
+ * maps it onto the same explicit {@code error} JSON body the streamable controller serves
+ * for the same client bug.
  *
  * @author Artem Simeshin
  */
@@ -637,6 +641,19 @@ public class SseProxyController {
 		final boolean noHeaders = authorization == null && customHeaders.isEmpty();
 		return noHeaders ? this.transportFactory.openStreamable(target)
 				: this.transportFactory.openStreamable(target, authorization, customHeaders);
+	}
+
+	/**
+	 * Maps the malformed-payload {@code 400}s onto the same explicit {@code error} JSON
+	 * body the streamable and webflux endpoints serve. Without this advice Boot's
+	 * {@code /error} dispatch answers with an empty body and the offending header shape
+	 * never reaches the browser.
+	 */
+	@ExceptionHandler(ResponseStatusException.class)
+	private ResponseEntity<Object> statusException(final ResponseStatusException ex) {
+		return ResponseEntity.status(ex.getStatusCode())
+			.contentType(MediaType.APPLICATION_JSON)
+			.body(Map.of("error", String.valueOf(ex.getReason())));
 	}
 
 	/**
