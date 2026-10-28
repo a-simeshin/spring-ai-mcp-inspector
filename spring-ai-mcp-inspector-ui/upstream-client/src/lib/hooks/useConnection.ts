@@ -572,7 +572,6 @@ export function useConnection({
       // Observation is best-effort; the transport still surfaces the failure.
     }
   };
-
   /** Wraps the SSE EventSource fetch: observe named `error` events, pass the stream through. */
   const sseFetchWithErrorObservation = (
     url: string | URL | globalThis.Request,
@@ -616,8 +615,13 @@ export function useConnection({
   ) => {
     // [spring-ai-mcp-inspector PATCH] Both failure banners reset on every attempt:
     // the transport one (issue #56) and the authorization one (issue #54).
+    // Also clear the previous session's server info, so a failed attempt
+    // (including the proxy health and proxy auth early returns below) leaves
+    // no stale serverImplementation/serverCapabilities behind in React state.
     setConnectionError(null);
     setAuthError(null);
+    setServerImplementation(null);
+    setServerCapabilities(null);
     const clientCapabilities = {
       capabilities: {
         sampling: {},
@@ -1079,6 +1083,7 @@ export function useConnection({
           // See NOTICE.d/connect-401-banner.txt.
           setConnectionError(connectionFailureFromError(error));
           setConnectionStatus("error");
+          setServerImplementation(null);
           return;
         }
         // [spring-ai-mcp-inspector PATCH] Surface connection failures in the
@@ -1090,8 +1095,16 @@ export function useConnection({
         // about. Before this patch the rethrow reached the outer catch, which
         // set the same "error" status; only the toast is dropped, since the
         // alert now carries the reason in place.
+        // [spring-ai-mcp-inspector PATCH] Also clear serverImplementation
+        // (this attempt may have set it at the setServerImplementation call
+        // above before the late failure). serverCapabilities needs no clear
+        // here: it is set only AFTER this try block, and the start-of-connect
+        // clear already removed the previous session's value, so it is always
+        // null at this point; the outer catch below still clears it for
+        // failures after the handshake.
         setConnectionError(connectionFailureFromError(error));
         setConnectionStatus("error");
+        setServerImplementation(null);
         return;
       }
       setServerCapabilities(capabilities ?? null);
@@ -1416,7 +1429,12 @@ export function useConnection({
         });
       }
       console.error(e);
+      // [spring-ai-mcp-inspector PATCH] Also clear the server info (whatever
+      // this attempt set or what survived from a previous session) so none of
+      // it lingers in state after a failed attempt.
       setConnectionStatus("error");
+      setServerImplementation(null);
+      setServerCapabilities(null);
     }
   };
 
@@ -1463,8 +1481,15 @@ export function useConnection({
     setMcpClient(null);
     setClientTransport(null);
     setConnectionStatus("disconnected");
+    // [spring-ai-mcp-inspector PATCH] Clear the session-scoped server info on
+    // disconnect. connectionError is deliberately NOT cleared here: the banner
+    // reset at the top of disconnect() already ran synchronously, and the
+    // sidebar Reconnect button calls onDisconnect(); onConnect() without
+    // awaiting, so a second clear after these awaits would land after a
+    // fast-failing new connect and wipe that attempt's failure.
     setCompletionsSupported(false);
     setServerCapabilities(null);
+    setServerImplementation(null);
     setMcpSessionId(null);
     setMcpProtocolVersion(null);
   };
