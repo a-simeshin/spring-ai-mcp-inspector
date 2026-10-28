@@ -420,7 +420,7 @@ public class ProxyTransportFactory {
 					builder.setHeader("Authorization", authorization);
 				}
 				catch (final IllegalArgumentException ex) {
-					throw new IllegalArgumentException("Authorization header rejected: invalid value", null);
+					throw new InvalidProxyRequestException("Authorization header rejected: invalid value", null);
 				}
 			}
 			if (hasCustom) {
@@ -430,8 +430,8 @@ public class ProxyTransportFactory {
 							builder.setHeader(name, value);
 						}
 						catch (final IllegalArgumentException ex) {
-							throw new IllegalArgumentException("custom header '" + name + "' rejected: invalid value",
-									null);
+							throw new InvalidProxyRequestException(
+									"custom header '" + name + "' rejected: invalid value", null);
 						}
 					}
 				});
@@ -441,9 +441,9 @@ public class ProxyTransportFactory {
 
 	/**
 	 * Validates that all custom header names are allowed by the JDK's
-	 * {@link HttpRequest.Builder} - throws {@link IllegalArgumentException} at transport
-	 * build time for any restricted name. The message contains every offending header
-	 * name and the JDK's reason, but NEVER any header value.
+	 * {@link HttpRequest.Builder} - throws {@link InvalidProxyRequestException} at
+	 * transport build time for any restricted name. The message contains every offending
+	 * header name and the JDK's reason, but NEVER any header value.
 	 * <p>
 	 * Null and blank header names are silently skipped (they are guarded by the caller's
 	 * null/blank check in the customizer lambda). Null header values are also skipped
@@ -470,11 +470,11 @@ public class ProxyTransportFactory {
 			final String names = String.join(", ", offenders.keySet());
 			final String reasons = offenders.values().stream().collect(Collectors.joining("; "));
 			if (offenders.size() == 1) {
-				throw new IllegalArgumentException(
+				throw new InvalidProxyRequestException(
 						"custom header '" + names + "' is not allowed by the JDK HTTP client: " + reasons);
 			}
 			else {
-				throw new IllegalArgumentException(
+				throw new InvalidProxyRequestException(
 						"custom headers [" + names + "] are not allowed by the JDK HTTP client: " + reasons);
 			}
 		}
@@ -510,7 +510,7 @@ public class ProxyTransportFactory {
 					builder.setHeader("Authorization", authorization);
 				}
 				catch (final IllegalArgumentException ex) {
-					throw new IllegalArgumentException("Authorization header rejected: invalid value", null);
+					throw new InvalidProxyRequestException("Authorization header rejected: invalid value", null);
 				}
 			}
 			if (hasCustom) {
@@ -518,10 +518,10 @@ public class ProxyTransportFactory {
 					if (name != null && !name.isBlank() && value != null) {
 						try {
 							builder.setHeader(name, value);
-					}
+						}
 						catch (final IllegalArgumentException ex) {
-							throw new IllegalArgumentException("custom header '" + name + "' rejected: invalid value",
-									null);
+							throw new InvalidProxyRequestException(
+									"custom header '" + name + "' rejected: invalid value", null);
 						}
 					}
 				});
@@ -539,7 +539,7 @@ public class ProxyTransportFactory {
 	private static McpHttpClientTransportAuthorizationErrorHandler noAuthRetryHandler() {
 		return new McpHttpClientTransportAuthorizationErrorHandler() {
 			@Override
-		public Publisher<Boolean> handle(final HttpRequestSnapshot snapshot,
+			public Publisher<Boolean> handle(final HttpRequestSnapshot snapshot,
 					final java.net.http.HttpResponse.ResponseInfo responseInfo, final McpTransportContext context) {
 				return Mono.just(false);
 			}
@@ -574,7 +574,7 @@ public class ProxyTransportFactory {
 				.append(URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8));
 		}
 		return sb.toString();
-	}	}
+	}
 
 	/**
 	 * Returns {@code scheme://host[:port]} with no path.
