@@ -9,7 +9,8 @@ const HistoryAndNotifications = ({
   onClearHistory,
   onClearNotifications,
 }: {
-  requestHistory: Array<{ request: string; response?: string }>;
+  // [spring-ai-mcp-inspector PATCH] history-error-styling: isError flag on entries
+  requestHistory: Array<{ request: string; response?: string; isError?: boolean }>;
   serverNotifications: ServerNotification[];
   onClearHistory?: () => void;
   onClearNotifications?: () => void;
@@ -30,8 +31,11 @@ const HistoryAndNotifications = ({
   };
 
   return (
-    <div className="bg-card overflow-hidden flex h-full">
-      <div className="flex-1 overflow-y-auto p-4 border-r">
+    <div className="bg-card overflow-hidden flex flex-col md:flex-row h-full">
+      {/* [spring-ai-mcp-inspector PATCH] History/Notifications split stacks
+          vertically below the md breakpoint instead of sharing one narrow row
+          on a mobile viewport; registered in NOTICE.d/history-notifications-mobile-stack.txt */}
+      <div className="flex-1 overflow-y-auto p-4 border-b md:border-r md:border-b-0">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">History</h2>
           <Button
@@ -55,7 +59,7 @@ const HistoryAndNotifications = ({
               .map((request, index) => (
                 <li
                   key={index}
-                  className="text-sm text-foreground bg-secondary py-2 px-3 rounded"
+                  className={`text-sm text-foreground bg-secondary py-2 px-3 rounded border-l-4 ${request.isError ? "border-red-500" : "border-transparent"}`}
                 >
                   <div
                     className="flex justify-between items-center cursor-pointer"
@@ -63,7 +67,8 @@ const HistoryAndNotifications = ({
                       toggleRequestExpansion(requestHistory.length - 1 - index)
                     }
                   >
-                    <span className="font-mono">
+                    {/* [spring-ai-mcp-inspector PATCH] history-error-styling: red text for failed entries (#195). */}
+                    <span className={`font-mono ${request.isError ? "text-red-600 dark:text-red-400" : ""}`}>
                       {requestHistory.length - index}.{" "}
                       {JSON.parse(request.request).method}
                     </span>

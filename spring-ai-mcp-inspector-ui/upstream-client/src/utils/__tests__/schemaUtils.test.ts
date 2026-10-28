@@ -607,6 +607,7 @@ describe("Output Schema Validation", () => {
 import {
   findUnresolvedRefs,
   findToolSchemaWarnings,
+  resolveRef,
 } from "../schemaUtils";
 
 describe("findUnresolvedRefs", () => {
@@ -1162,5 +1163,69 @@ describe("findUnresolvedRefs - $ref sibling, legacy, and JSON Pointer fixes", ()
     expect(findUnresolvedRefs(schema)).toEqual([
       "#/$defs/MissingAdditionalItems",
     ]);
+  });
+});
+
+// Regression tests for the URIError crash on malformed percent escapes
+// (PR #211 owner review): decodePointerToken called decodeURIComponent
+// without a guard, so a property named "a%" with {"$ref": "#/properties/a%"}
+// threw URIError: URI malformed from the render-phase scan and blanked
+// the whole UI. An undecodable token must read as unresolvable instead.
+describe("findUnresolvedRefs - malformed percent escapes", () => {
+  test('reports ref with malformed escape ("a%", "#/properties/a%") as unresolvable instead of throwing', () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a%": { type: "string" },
+        broken: { $ref: "#/properties/a%" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual(["#/properties/a%"]);
+  });
+
+  test("reports malformed escape in a nested/escaped-path ref as unresolvable instead of throwing", () => {
+    const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
+      type: "object",
+      properties: {
+        child: {
+          type: "object",
+          properties: {
+            "tilde~100%": { $ref: "#/properties/child/properties/a~1b%zz" },
+          },
+        },
+      },
+      $defs: {
+        "%zz": { type: "string" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([
+      "#/properties/child/properties/a~1b%zz",
+    ]);
+  });
+
+  test("a valid percent-escaped ref still resolves (no false positive from the guard)", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a b": { type: "string" },
+        ok: { $ref: "#/properties/a%20b" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("resolveRef returns the original schema for a malformed-escape $ref instead of throwing", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a%": { type: "string" },
+        broken: { $ref: "#/properties/a%" },
+      },
+    };
+    const refSchema = (schema.properties as Record<string, JsonSchemaType>)[
+      "broken"
+    ];
+    expect(() => resolveRef(refSchema, schema)).not.toThrow();
+    expect(resolveRef(refSchema, schema)).toBe(refSchema);
   });
 });

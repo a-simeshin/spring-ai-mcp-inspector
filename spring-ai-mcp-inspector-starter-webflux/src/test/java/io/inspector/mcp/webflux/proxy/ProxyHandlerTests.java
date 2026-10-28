@@ -51,14 +51,19 @@ import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyErrorDto;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.core.transport.TransportType;
+import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -156,6 +161,14 @@ class ProxyHandlerTests {
 		final WebServerInitializedEvent event = webServerStartedEvent(port);
 		final WebServerApplicationContext context = mock(WebServerApplicationContext.class);
 		given(context.getServerNamespace()).willReturn("management");
+		given(event.getApplicationContext()).willReturn(context);
+		return event;
+	}
+
+	private static WebServerInitializedEvent mainServerStartedEvent(final int port) {
+		final WebServerInitializedEvent event = webServerStartedEvent(port);
+		final WebServerApplicationContext context = mock(WebServerApplicationContext.class);
+		given(context.getServerNamespace()).willReturn("server");
 		given(event.getApplicationContext()).willReturn(context);
 		return event;
 	}
@@ -424,7 +437,7 @@ class ProxyHandlerTests {
 
 	@Nested
 	@DisplayName("openSse() / openStdio()")
-	class OpenSse {
+	class BuildSse {
 
 		@Test
 		@Story("SSE proxy open")
@@ -433,7 +446,7 @@ class ProxyHandlerTests {
 		void openSse_withSseUrl_registersSessionAndReturnsEventStream() {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
 
@@ -499,7 +512,7 @@ class ProxyHandlerTests {
 				return null;
 			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
 
@@ -535,7 +548,7 @@ class ProxyHandlerTests {
 				return null;
 			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/app/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
 						.contextPath("/app")
@@ -561,7 +574,7 @@ class ProxyHandlerTests {
 		void onWebServerStarted_withManagementNamespace_isIgnored() {
 			// given — the actuator's own server reports port 9999
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			ProxyHandlerTests.this.handler.onWebServerStarted(managementServerStartedEvent(9999));
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse").build());
@@ -570,7 +583,26 @@ class ProxyHandlerTests {
 			ProxyHandlerTests.this.handler.openSse(request).block();
 
 			// then — the port is still unset, so the resolver falls back to 8080
-			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(URI.create("http://127.0.0.1:8080/sse"));
+		}
+
+		@Test
+		@Story("Management server guard")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("A WebServerInitializedEvent from the main server context updates the loopback port")
+		void onWebServerStarted_withMainNamespace_updatesLoopbackPort() {
+			// given: a non-management context event reports port 7373
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			ProxyHandlerTests.this.handler.onWebServerStarted(mainServerStartedEvent(7373));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse").build());
+
+			// when
+			ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then: loopbackPort() returns the reported port (port > 0 branch)
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(URI.create("http://127.0.0.1:7373/sse"));
 		}
 
 		@Test
@@ -582,7 +614,7 @@ class ProxyHandlerTests {
 			// http://127.0.0.1:8080/sse (loopback port defaults to 8080 before server
 			// start)
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse").build());
 
@@ -593,7 +625,7 @@ class ProxyHandlerTests {
 			// opened
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(URI.create("http://127.0.0.1:8080/sse"));
 			verify(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 		}
 
@@ -744,6 +776,48 @@ class ProxyHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
 			assertThat(entityBody(response).get("error").toString()).contains("emit failed");
+		}
+
+	}
+
+	@Nested
+	@DisplayName("D8 legacy-session WARN")
+	class LegacySessionWarn {
+
+		@Test
+		@Story("Legacy session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("repeat access to the same owner-less session logs the legacy WARN exactly once")
+		void legacySession_repeatAccess_logsWarnOnce() {
+			// given - an unbound (legacy) session
+			final ProxySession session = newSession("s-legacy");
+			given(ProxyHandlerTests.this.registry.get("s-legacy")).willReturn(session);
+			final ch.qos.logback.classic.Logger warnerLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
+				.getLogger(io.inspector.mcp.core.proxy.LegacySessionAccessWarner.class);
+			final ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender = new ch.qos.logback.core.read.ListAppender<>();
+			appender.start();
+			warnerLogger.addAppender(appender);
+			try {
+				final ServerRequest request = toServerRequest(
+						MockServerHttpRequest.post("/mcp-inspector-api/message?sessionId=s-legacy")
+							.contentType(MediaType.APPLICATION_JSON)
+							.body("{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}"));
+
+				// when - the same legacy session is touched repeatedly
+				ProxyHandlerTests.this.handler.postMessage(request).block();
+				ProxyHandlerTests.this.handler.postMessage(request).block();
+				ProxyHandlerTests.this.handler.postMessage(request).block();
+
+				// then - exactly one WARN was emitted for the session
+				final long warns = appender.list.stream()
+					.filter((e) -> e.getFormattedMessage() != null
+							&& e.getFormattedMessage().contains("legacy session without owner binding"))
+					.count();
+				assertThat(warns).isEqualTo(1);
+			}
+			finally {
+				warnerLogger.detachAppender(appender);
+			}
 		}
 
 	}
@@ -1020,6 +1094,8 @@ class ProxyHandlerTests {
 		@Description("deleteMcp() removing a known session returns 200 ok")
 		void deleteMcp_whenSessionRemoved_returnsOk() {
 			// given
+			final ProxySession session = newSession("s4");
+			given(ProxyHandlerTests.this.registry.get("s4")).willReturn(session);
 			given(ProxyHandlerTests.this.registry.removeAndClose("s4")).willReturn(true);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.delete("/mcp-inspector-api/mcp")
 				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s4")
@@ -1054,6 +1130,118 @@ class ProxyHandlerTests {
 	}
 
 	@Nested
+	@DisplayName("D8 owner-check on existing session")
+	class OwnerCheck {
+
+		private ProxyHandler wiredHandler(final ReactiveSessionOwnerResolver resolver) {
+			return new ProxyHandler(ProxyHandlerTests.this.registry, ProxyHandlerTests.this.transportFactory,
+					ProxyHandlerTests.this.mcpProxy, ProxyHandlerTests.this.transportDetector,
+					ProxyHandlerTests.this.objectMapper, ProxyHandlerTests.this.properties, resolver,
+					mock(AuthProfileStore.class), mock(OAuth2ClientCredentialsTokenManager.class),
+					mock(OAuth2AuthCodeTokenExchanger.class));
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMessage() returns 404 when the session owner differs from the caller")
+		void postMessage_foreignOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s1");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn("owner-B");
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/message")
+				.queryParam("sessionId", "s1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+
+			// when
+			final ServerResponse response = wired.postMessage(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMessage() returns 404 when the caller owner cannot be resolved")
+		void postMessage_nullCallerOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s1");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn(null);
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/message")
+				.queryParam("sessionId", "s1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+
+			// when
+			final ServerResponse response = wired.postMessage(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("deleteMcp() returns 404 when the session owner differs from the caller")
+		void deleteMcp_foreignOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s4");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s4")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn("owner-B");
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.delete("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s4")
+				.build());
+
+			// when
+			final ServerResponse response = wired.deleteMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("deleteMcp() returns 404 when the caller owner cannot be resolved")
+		void deleteMcp_nullCallerOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s4");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s4")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn(null);
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.delete("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s4")
+				.build());
+
+			// when
+			final ServerResponse response = wired.deleteMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+	}
+
+	@Nested
 	@DisplayName("constructor / config edge branches")
 	class ConstructorAndConfigEdges {
 
@@ -1073,7 +1261,7 @@ class ProxyHandlerTests {
 				return null;
 			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
 
@@ -1308,7 +1496,7 @@ class ProxyHandlerTests {
 			// ProxyTargetResolver
 			// and resolved to http://127.0.0.1:8080/sse (default path for sse transport)
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url= ").build());
 
@@ -1318,7 +1506,7 @@ class ProxyHandlerTests {
 			// then — resolver handles blank url as loopback default, session IS opened
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(URI.create("http://127.0.0.1:8080/sse"));
 		}
 
 	}
@@ -1582,6 +1770,45 @@ class ProxyHandlerTests {
 			verify(ProxyHandlerTests.this.registry).removeAndClose(captured[0].sessionId());
 		}
 
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() new-session handshake failing with 401 returns the structured DTO with a redacted url and tears down the orphaned session")
+		void postMcp_newSessionAuthFailure_returnsRedacted401AndRemovesSession() {
+			// given — a new session whose upstream immediately fails the handshake with
+			// 401 (includeSessionHeader == true, so the session is registered/bound and
+			// must be removed on the failed initial handshake)
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitError(new RuntimeException("401 Unauthorized"));
+				return Mono.empty();
+			});
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp?api_key=SECRET")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then — structured 401 DTO with the D5-redacted url (scheme/host/path only,
+			// the api_key secret stripped from the query) and the never-returned session
+			// is removed (D3 cleanup).
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+			final ProxyErrorDto dto = (ProxyErrorDto) ((EntityResponse<Object>) response).entity();
+			assertThat(dto.code()).isEqualTo("unauthorized");
+			assertThat(dto.url()).isEqualTo("http://target/mcp");
+			verify(ProxyHandlerTests.this.registry).removeAndClose(captured[0].sessionId());
+		}
+
 	}
 
 	@Nested
@@ -1595,7 +1822,7 @@ class ProxyHandlerTests {
 		void openSse_withAuthorizationHeader_usesHeaderAwareSseFactory() {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class), any(), any())).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class), any(), any())).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
 						.header("Authorization", "Bearer abc")
@@ -1607,7 +1834,7 @@ class ProxyHandlerTests {
 			// then — the 3-arg header-aware overload is used, not the bare single-arg one
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(ProxyHandlerTests.this.transportFactory).openSse(any(URI.class),
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(any(URI.class),
 					org.mockito.ArgumentMatchers.eq("Bearer abc"), org.mockito.ArgumentMatchers.eq(Map.of()));
 		}
 
@@ -1621,7 +1848,7 @@ class ProxyHandlerTests {
 			// and inboundCustomHeaders empty, so the noHeaders branch picks the 1-arg
 			// overload
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
 
@@ -1631,7 +1858,7 @@ class ProxyHandlerTests {
 			// then
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(ProxyHandlerTests.this.transportFactory).openSse(any(URI.class));
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(any(URI.class));
 		}
 
 		@Test
@@ -1645,7 +1872,7 @@ class ProxyHandlerTests {
 			// /
 			// isEmpty / null-value branches
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class), any(), any())).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class), any(), any())).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
 						.header("x-custom-auth-headers", " X-Tenant , , X-Absent ,X-Trace")
@@ -1661,7 +1888,7 @@ class ProxyHandlerTests {
 			// unset X-Absent name are dropped; no Authorization is present
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(ProxyHandlerTests.this.transportFactory).openSse(any(URI.class),
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(any(URI.class),
 					org.mockito.ArgumentMatchers.isNull(),
 					org.mockito.ArgumentMatchers.eq(Map.of("X-Tenant", "acme", "X-Trace", "t-1")));
 		}
@@ -1677,7 +1904,7 @@ class ProxyHandlerTests {
 			// header-aware
 			// overload selected
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class), any(), any())).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class), any(), any())).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
 						.header("Authorization", "Bearer z")
@@ -1690,7 +1917,7 @@ class ProxyHandlerTests {
 			// then
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(ProxyHandlerTests.this.transportFactory).openSse(any(URI.class),
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(any(URI.class),
 					org.mockito.ArgumentMatchers.eq("Bearer z"), org.mockito.ArgumentMatchers.eq(Map.of()));
 		}
 

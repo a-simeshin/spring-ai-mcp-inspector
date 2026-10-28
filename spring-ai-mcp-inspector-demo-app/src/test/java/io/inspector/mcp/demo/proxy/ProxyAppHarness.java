@@ -72,6 +72,25 @@ public final class ProxyAppHarness {
 	 */
 	public static ConfigurableApplicationContext start(String protocol, boolean authEnabled, String authToken,
 			String... extraArgs) {
+		return startWithSources(protocol, authEnabled, authToken, new Class<?>[0], extraArgs);
+	}
+
+	/**
+	 * Boots the demo app with additional configuration sources registered alongside
+	 * {@link DemoApplication} (lite-mode fixture classes, per the board's config-fixture
+	 * convention: no {@code @Configuration} stereotype, so sibling contexts never pick
+	 * them up through component scanning).
+	 * @param protocol one of {@code SSE}, {@code STREAMABLE}, {@code STATELESS}
+	 * @param authEnabled whether to leave the proxy auth filter active
+	 * @param authToken fixed token to use (only honored when {@code authEnabled})
+	 * @param additionalSources extra configuration classes to register
+	 * @param extraArgs additional command-line args, appended last so they beat both
+	 * {@code application.yml} and the build's system properties
+	 * @return live context; caller is responsible for
+	 * {@link ConfigurableApplicationContext#close()}
+	 */
+	public static ConfigurableApplicationContext startWithSources(String protocol, boolean authEnabled,
+			String authToken, Class<?>[] additionalSources, String... extraArgs) {
 		// No web(...) call and no spring.main.web-application-type: Boot deduces the
 		// application type from the classpath, and after the split the classpath holds
 		// exactly one server. Forcing the type here would only restate what the module
@@ -85,7 +104,8 @@ public final class ProxyAppHarness {
 		}
 		java.util.Collections.addAll(args, extraArgs);
 
-		return new SpringApplicationBuilder(DemoApplication.class).run(args.toArray(new String[0]));
+		return new SpringApplicationBuilder(DemoApplication.class).sources(additionalSources)
+			.run(args.toArray(new String[0]));
 	}
 
 	/** Extracts the dynamically allocated server port. */

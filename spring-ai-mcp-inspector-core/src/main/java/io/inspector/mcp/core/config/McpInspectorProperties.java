@@ -249,6 +249,15 @@ public class McpInspectorProperties {
 		 */
 		private Duration streamableRequest = Duration.ofSeconds(30);
 
+		/**
+		 * Wall-clock budget for a single outbound SSE transport call (the handshake
+		 * {@code GET} response and the acceptance of a message {@code POST}). The SDK
+		 * never times out a silent upstream on its own, so without this a relayed frame
+		 * to a dead-but-connected server would pin the browser stream open until the
+		 * session timeout. Default 10s.
+		 */
+		private Duration sseRequest = Duration.ofSeconds(10);
+
 		/** Connect timeout for the outbound {@code /fetch} HTTP client. Default 10s. */
 		private Duration fetchConnect = Duration.ofSeconds(10);
 
@@ -269,6 +278,13 @@ public class McpInspectorProperties {
 		 */
 		private Duration sessionReaper = Duration.ofMinutes(30);
 
+		/**
+		 * Wall-clock budget for the SSE preflight probe the proxy sends before the real
+		 * SSE handshake connect. Generous servers that take a moment to answer the probe
+		 * still connect; only a probe that never answers fails. Default 10s.
+		 */
+		private Duration ssePreflight = Duration.ofSeconds(10);
+
 		public Duration getSseSession() {
 			return this.sseSession;
 		}
@@ -283,6 +299,14 @@ public class McpInspectorProperties {
 
 		public void setStreamableRequest(final Duration streamableRequest) {
 			this.streamableRequest = streamableRequest;
+		}
+
+		public Duration getSseRequest() {
+			return this.sseRequest;
+		}
+
+		public void setSseRequest(final Duration sseRequest) {
+			this.sseRequest = sseRequest;
 		}
 
 		public Duration getFetchConnect() {
@@ -315,6 +339,14 @@ public class McpInspectorProperties {
 
 		public void setSessionReaper(final Duration sessionReaper) {
 			this.sessionReaper = sessionReaper;
+		}
+
+		public Duration getSsePreflight() {
+			return this.ssePreflight;
+		}
+
+		public void setSsePreflight(final Duration ssePreflight) {
+			this.ssePreflight = ssePreflight;
 		}
 
 	}

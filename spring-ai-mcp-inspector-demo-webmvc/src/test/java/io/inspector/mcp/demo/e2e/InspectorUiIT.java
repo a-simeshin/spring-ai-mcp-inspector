@@ -18,6 +18,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.stream.Stream;
 
@@ -441,12 +442,13 @@ class InspectorUiIT {
 	/**
 	 * History column inside the bottom {@code HistoryAndNotifications} panel. The
 	 * upstream component renders the left column as
-	 * {@code <div class="flex-1 overflow-y-auto p-4 border-r">} — the {@code border-r} is
-	 * unique to the left (History) side; the right (Server Notifications) side has no
-	 * right border. Use {@code .flex-1.border-r} as a stable anchor.
+	 * {@code <div class="flex-1 overflow-y-auto p-4 border-b md:border-r md:border-b-0">}
+	 * -- the {@code border-b} with {@code md:border-r} distinguishes it from the right
+	 * (Server Notifications) side which has neither. Use
+	 * {@code .flex-1.border-b.md\:border-r} as a stable anchor.
 	 */
 	private static SelenideElement historyColumn() {
-		return $(".flex-1.overflow-y-auto.p-4.border-r");
+		return $(".flex-1.overflow-y-auto.p-4.border-b.md\\:border-r");
 	}
 
 	/**
@@ -466,6 +468,9 @@ class InspectorUiIT {
 		// Confirm the trigger is now the active one (Radix sets data-state=active on
 		// click).
 		$("[role=tab][data-state=active][id$='-trigger-" + value + "']").shouldBe(visible, Duration.ofSeconds(5));
+		// Confirm the corresponding content pane is active. Radix TabsContent
+		// renders [role=tabpanel] with data-state=active and id suffix -content-{value}.
+		$("[role=tabpanel][data-state=active][id$='-content-" + value + "']").shouldBe(visible, Duration.ofSeconds(5));
 	}
 
 	/**
@@ -480,6 +485,35 @@ class InspectorUiIT {
 		// Sidebar must finish first render before we click anything.
 		connectButton().shouldBe(visible, Duration.ofSeconds(15));
 		connectButton().click();
+		// Restart/Reconnect button is only mounted when connectionStatus === "connected".
+		$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+	}
+
+	/**
+	 * New connect helper for the auth profiles flow (issue #54). Opens the page, ensures
+	 * an auth profile is selected/created, then connects. Uses a simple BEARER token
+	 * profile (no OAuth flow) for tests that don't specifically exercise OAuth2
+	 * client-credentials.
+	 */
+	private static void openAndConnectWithProfile() {
+		open("/mcp-inspector/index.html");
+		// Auth profile panel must render first (issue #54).
+		$("[data-testid=auth-profiles-panel]").shouldBe(visible, Duration.ofSeconds(15));
+		// The auth-profile editor must render before we touch it (race condition).
+		$("[data-testid=auth-profile-type]").shouldBe(visible, Duration.ofSeconds(15));
+		// If no profiles exist, create a simple Bearer token profile.
+		// Check if the profiles list is empty (no auth-profile-row-* elements).
+		if ($$("[data-testid^=auth-profile-row-]").isEmpty()) {
+			// Type select defaults to BEARER.
+			setReactInputValue("[data-testid=auth-profile-name]", "e2e-default");
+			setReactInputValue("[data-testid=auth-profile-bearer-token]", "e2e-token");
+			$("[data-testid=auth-profile-save]").shouldBe(visible).click();
+			// Wait for the saved row to appear and be auto-selected.
+			$("[data-testid=auth-profiles-list]").shouldBe(visible, Duration.ofSeconds(15))
+				.shouldHave(text("e2e-default"));
+		}
+		// Now connect.
+		connectButton().shouldBe(visible, Duration.ofSeconds(15)).click();
 		// Restart/Reconnect button is only mounted when connectionStatus === "connected".
 		$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
 	}
@@ -3564,6 +3598,169 @@ class InspectorUiIT {
 
 	}
 
+	// =====================================================================
+	// X. OAuth2 client-credentials (real UI against a stub token server).
+	// Scenario 1 (D9A happy path): the proxy refreshes the CC token once
+	// on a 401 and the UI reaches Connected. Scenario 2 (D3): a second
+	// 401 surfaces the exact structured error banner.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("OAuth2 client-credentials (real UI → proxy → stub token server)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class OAuth2ClientCredentials {
+
+		/** D3 exact literals ({@code ProxyErrorMapper}). */
+		private static final String REASON_401 = "The MCP server rejected the request as unauthenticated.";
+
+		private static final String GUIDANCE_401 = "Verify the token/API key. OAuth2 profiles refresh and retry once automatically.";
+
+		@AfterEach
+		void tearDown() {
+			stopApp();
+		}
+
+		@Test
+		@Story("OAuth2 client-credentials 401 refresh + retry (D9A)")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Drives the real UI: create + select a CLIENT_CREDENTIALS profile, connect to an SSE stub whose first message POST answers 401 — the proxy refreshes the token once and the retried initialize succeeds, so the sidebar reaches Connected and the token server saw exactly two client_credentials exchanges (never a refresh_token grant).")
+		@DisplayName("ccProfile_401_refresh_retry_connected — one refresh + retry reaches Connected")
+		void ccProfile_401_refresh_retry_connected() throws Exception {
+			// given — a registered CC profile and an SSE upstream that rejects
+			// the first message POST.
+			try (final E2eTokenServer tokenServer = new E2eTokenServer();
+					final E2eSseMcpStub stub = new E2eSseMcpStub()) {
+				stub.rejectPosts(1);
+
+				// when — the user saves the profile and connects to the stub.
+				bootAndCreateProfile(tokenServer);
+				connectTo(stub);
+
+				// and - cheap assertions first: failing here means the retry
+				// mechanism didn't work as expected, and the 30s UI wait below
+				// would have masked the real cause. We await the async proxy
+				// flow (token refresh + retry) with a timeout instead of
+				// asserting synchronously, which would race the retry (issue #89).
+				awaitRequestCount(tokenServer, 2, Duration.ofSeconds(30));
+				Assertions.assertEquals(2, tokenServer.requestCount(), "token exchanges");
+				Assertions.assertFalse(tokenServer.anyRequestWithField("refresh_token"), "no refresh_token grant");
+				// The first two Authorization values prove the one-retry:
+				// 1. Bearer tok-1 on the initial POST (rejected 401)
+				// 2. Bearer tok-2 on the retry POST after refresh (accepted)
+				// Subsequent POSTs (e.g. tools/list, notifications/initialized)
+				// are normal MCP protocol frames and carry the same refreshed token.
+				Assertions.assertTrue(stub.authorizations().size() >= 2,
+						"expected at least 2 upstream Authorization values");
+				Assertions.assertEquals("Bearer " + E2eTokenServer.tokenValue(1), stub.authorizations().get(0),
+						"first Authorization: initial token");
+				Assertions.assertEquals("Bearer " + E2eTokenServer.tokenValue(2), stub.authorizations().get(1),
+						"second Authorization: refreshed token");
+				stub.authorizations()
+					.stream()
+					.skip(2)
+					.forEach((auth) -> Assertions.assertEquals("Bearer " + E2eTokenServer.tokenValue(2), auth,
+							"subsequent Authorization: must use refreshed token"));
+
+				// then - the retried round-trip reached Connected.
+				$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			}
+		}
+
+		@Test
+		@Story("OAuth2 client-credentials second 401 → D3 error banner")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Same setup, but the SSE upstream answers 401 forever: after one refresh + retry the second 401 surfaces the exact D3 unauthorized DTO (status/code/reason/guidance) in the explicit connection-error banner, and the token server saw exactly two exchanges (no retry loop).")
+		@DisplayName("ccProfile_second401_showsExplicitErrorBanner — second 401 renders the D3 banner")
+		void ccProfile_second401_showsExplicitErrorBanner() throws Exception {
+			// given — an SSE upstream that always rejects.
+			try (final E2eTokenServer tokenServer = new E2eTokenServer();
+					final E2eSseMcpStub stub = new E2eSseMcpStub()) {
+				stub.rejectPosts(Integer.MAX_VALUE);
+
+				// when — the user connects.
+				bootAndCreateProfile(tokenServer);
+				connectTo(stub);
+
+				// then — the explicit error banner renders the exact D3 contract.
+				$("[data-testid=connection-error-dto]").shouldBe(visible, Duration.ofSeconds(30))
+					.shouldHave(text("401 unauthorized"))
+					.shouldHave(text(REASON_401))
+					.shouldHave(text(GUIDANCE_401));
+
+				// and — exactly one refresh (registration + the single 401
+				// refresh), no retry loop, and the upstream saw two 401 POSTs.
+				Assertions.assertEquals(2, tokenServer.requestCount(), "token exchanges");
+				Assertions.assertFalse(tokenServer.anyRequestWithField("refresh_token"), "no refresh_token grant");
+				Assertions.assertEquals(
+						List.of("Bearer " + E2eTokenServer.tokenValue(1), "Bearer " + E2eTokenServer.tokenValue(2)),
+						stub.authorizations(), "Authorization per upstream message POST");
+			}
+		}
+
+		/**
+		 * Boots the app, opens the page, forces SSE transport and creates + selects a
+		 * {@code CLIENT_CREDENTIALS} profile via the real editor.
+		 */
+		private void bootAndCreateProfile(final E2eTokenServer tokenServer) {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+
+			// Auth profile panel must render first (issue #54).
+			$("[data-testid=auth-profiles-panel]").shouldBe(visible, Duration.ofSeconds(15));
+			// The auth-profile editor must render before we touch it.
+			$("[data-testid=auth-profile-type]").shouldBe(visible, Duration.ofSeconds(15));
+
+			// Force SSE — the proxy branch whose SSE error event drives the D3
+			// banner (the demo config already defaults to SSE, but be explicit).
+			$("#transport-type-select").shouldBe(visible).click();
+			$$("[role=option]").findBy(text("SSE")).shouldBe(visible).click();
+
+			// Create the CLIENT_CREDENTIALS profile (registration performs the
+			// initial token exchange server-side; the profile auto-selects on save).
+			$("[data-testid=auth-profile-type]").shouldBe(visible).click();
+			$$("[role=option]").findBy(text("OAuth2")).shouldBe(visible).click();
+			$("[data-testid=auth-profile-grant-mode]").shouldBe(visible).click();
+			$$("[role=option]").findBy(text("Client credentials")).shouldBe(visible).click();
+			setReactInputValue("[data-testid=auth-profile-name]", "e2e-cc");
+			setReactInputValue("[data-testid=auth-profile-token-url]", tokenServer.tokenUrl());
+			setReactInputValue("[data-testid=auth-profile-client-id]", "e2e-cid");
+			setReactInputValue("[data-testid=auth-profile-client-secret]", "e2e-secret");
+			$("[data-testid=auth-profile-save]").shouldBe(visible).click();
+
+			// The saved row appears in the list (auto-selected active profile).
+			$("[data-testid=auth-profiles-list]").shouldBe(visible, Duration.ofSeconds(15)).shouldHave(text("e2e-cc"));
+		}
+
+		/** Points the server-URL input at the SSE stub and clicks Connect. */
+		private void connectTo(final E2eSseMcpStub stub) {
+			setReactInputValue("#sse-url-input", stub.sseUrl());
+			connectButton().shouldBe(visible).click();
+		}
+
+		/**
+		 * Awaits the token server's request count to reach {@code expected} within the
+		 * given timeout, polling every 100ms. Fails with a clear message when the count
+		 * never reaches the expected value, so the caller can assert the exact count
+		 * without racing the async proxy flow (the token refresh + retry completes
+		 * asynchronously).
+		 * @param server the token server to poll
+		 * @param expected the expected request count
+		 * @param timeout the maximum wait duration
+		 */
+		private static void awaitRequestCount(final E2eTokenServer server, final int expected, final Duration timeout)
+				throws InterruptedException {
+			final long deadline = System.nanoTime() + timeout.toNanos();
+			while (server.requestCount() < expected) {
+				if (System.nanoTime() > deadline) {
+					Assertions.fail("timed out waiting for token server request count to reach " + expected + ", was "
+							+ server.requestCount() + " after " + timeout.toMillis() + "ms");
+				}
+				TimeUnit.MILLISECONDS.sleep(100);
+			}
+		}
+
+	}
+
 	/** Keep imports we may need in future paths warning-free. */
 	@SuppressWarnings("unused")
 	private static Class<?> keepImports() {
@@ -4062,6 +4259,105 @@ class InspectorUiIT {
 			// URL field still shows the user-entered value
 			$("#sse-url-input").shouldBe(visible);
 			$("#sse-url-input").shouldHave(Condition.value("http://localhost:" + port + "/sse"));
+		}
+
+	}
+
+	// =====================================================================
+	// Mobile viewport (375x812) regression test: issue #230 companion.
+	// Proves the part of the mobile contract that is fixed today: after
+	// connect, History and Server Notifications stack vertically at 375px
+	// and the document does not overflow horizontally.
+	//
+	// Deliberately NOT asserted: URL input / Connect button reachability.
+	// At 375px the sidebar IS in compact mode (matchMedia max-width
+	// 1023.98px, no UA sniffing involved), but in compact mode the config
+	// pane is capped at 30vh with an inner scroll area, and on the live
+	// head both the URL input (top ~193) and the Connect button (top
+	// ~481) sit inside that scroll area (clientHeight 113 vs scrollHeight
+	// 500), out of view at scrollY=0. Verified live on this head with a
+	// full device-metrics override (375x812, DPR 2, mobile=true, iPhone
+	// UA): geometry identical to a plain resize, so no emulation makes
+	// them reachable. Selenide scrolls elements into view before a
+	// visibility probe or click, so an "URL/Connect visible" assertion
+	// here would be a false guarantee. Fixing their visibility is a
+	// product change (compact sidebar layout) tracked as the open
+	// remainder of issue #230.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Mobile viewport 375x812 (history stack, no horizontal overflow)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class MobileViewport375x812 {
+
+		/** Each scenario boots a fresh app: clean up after every method. */
+		@AfterEach
+		void tearDown() {
+			stopApp();
+		}
+
+		/**
+		 * True when the History and Server Notifications sections are stacked vertically:
+		 * the top of Server Notifications >= the bottom of History. This is the <768px
+		 * (md breakpoint) stacked layout.
+		 */
+		private static boolean historyAboveNotifications() {
+			Object result = Selenide
+				.executeJavaScript("const all = Array.from(document.querySelectorAll('.flex-1.overflow-y-auto.p-4'));"
+						+ "const h = all.find(el => el.textContent.includes('History'));"
+						+ "const n = all.find(el => el.textContent.includes('Server Notifications'));"
+						+ "if (!h || !n) { return 'pane-not-found: ' + all.length + ' panes, h=' + !!h + ', n=' + !!n; }"
+						+ "const hr = h.getBoundingClientRect();" + "const nr = n.getBoundingClientRect();"
+						+ "if (nr.top < hr.bottom) { return 'not-stacked: history=' + Math.round(hr.top) + '..' + Math.round(hr.bottom)"
+						+ "+ ', notifications=' + Math.round(nr.top) + '..' + Math.round(nr.bottom)"
+						+ "+ ', scrollY=' + window.scrollY + ', panes=' + all.length; }" + "return true;");
+			if (result instanceof String) {
+				Assertions.fail((String) result);
+			}
+			return Boolean.TRUE.equals(result);
+		}
+
+		@Test
+		@Story("Mobile viewport")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At 375x812 the History and Server Notifications panes stack vertically (top of Notifications >= bottom of History) and the document has no horizontal overflow. Connect-form reachability at this viewport is intentionally NOT asserted: see the group comment above and the open remainder of issue #230.")
+		@DisplayName("historyAndNotificationsStack_375x812: panes stack vertically, no horizontal overflow")
+		void historyAndNotificationsStack_375x812() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+
+			// Set the exact mobile viewport right after opening. Note: reachability
+			// of the URL input / Connect button is NOT asserted at this viewport.
+			// In compact mode the config pane is capped at 30vh with an inner
+			// scroll area and both controls sit inside it out of view (see the
+			// group comment above); Selenide would scroll them into view before
+			// any probe, making a visibility assertion a false guarantee. That
+			// part of the mobile contract (issue #230) is tracked separately.
+			ResponsiveTestHelpers.setViewportExactly(375, 812);
+
+			// Wait for the sidebar to render at mobile viewport
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+
+			// Connect (History/Notifications pane mounts after connect).
+			// Selenide scrolls the button into the sidebar's inner scroll
+			// area before clicking: this is a layout drill-down, not a
+			// tap-reachability proof.
+			connectButton().click();
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			ResponsiveTestHelpers.scrollToTop();
+
+			// 1) No horizontal document overflow
+			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 375px");
+
+			// 2) History and Server Notifications stack vertically
+			// (both panes are rendered after connect)
+			SelenideElement historyCol = $$(".flex-1.overflow-y-auto.p-4").first();
+			historyCol.shouldBe(visible);
+			SelenideElement notificationsCol = $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications"));
+			notificationsCol.shouldBe(visible);
+			Assertions.assertTrue(historyAboveNotifications(),
+					"History section must be above Server Notifications at 375px (stacked, not side-by-side)");
 		}
 
 	}

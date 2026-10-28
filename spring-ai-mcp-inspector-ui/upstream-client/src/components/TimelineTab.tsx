@@ -5,6 +5,9 @@ import { useEffect, useState, useCallback, useRef } from "react";
 // [spring-ai-mcp-inspector PATCH] Protocol-version negotiation badge on initialize
 // response rows (#129, #130). Renders _protocolNegotiation enrichment from
 // McpTrafficRecorder as a severity-colored badge and expanded detail block.
+// [spring-ai-mcp-inspector PATCH] Error highlighting for CallToolResult frames
+// with isError=true (#184). Renders the row with a distinct error color, a
+// "tool error" badge, and the server error text in the tooltip and expanded row.
 
 type TimelineEventType =
   | "MCP_JSONRPC_REQUEST"
@@ -51,6 +54,10 @@ const EVENT_BG: Record<TimelineEventType, string> = {
   APP_LOG: "bg-gray-950/30",
 };
 
+// Error colors for CallToolResult frames with isError=true (#184).
+const ERROR_COLOR = "text-red-400 border-l-red-500";
+const ERROR_BG = "bg-red-950/30";
+
 // Badge color per severity, per the decision record (t_9315a78c).
 const SEVERITY_BADGE: Record<ProtocolNegotiation["severity"], { text: string; color: string }> = {
   OK: { text: "", color: "bg-gray-700 text-gray-300" },
@@ -87,6 +94,34 @@ function protocolNegotiationOf(payload: Record<string, unknown>): ProtocolNegoti
     affectedMethods,
     summary,
   };
+}
+
+// Detects whether a JSON-RPC response payload is a CallToolResult with isError=true.
+// The shape is { jsonrpc, id, result: { content: [...], isError: true } }.
+function isCallToolError(payload: Record<string, unknown>): boolean {
+  const result = payload["result"];
+  if (!result || typeof result !== "object") return false;
+  const obj = result as Record<string, unknown>;
+  return obj["isError"] === true;
+}
+
+// Extracts the first text content block from a CallToolResult error payload,
+// for use as the badge tooltip.
+function errorTextOf(payload: Record<string, unknown>): string | null {
+  const result = payload["result"];
+  if (!result || typeof result !== "object") return null;
+  const obj = result as Record<string, unknown>;
+  const content = obj["content"];
+  if (!Array.isArray(content)) return null;
+  for (const block of content) {
+    if (block && typeof block === "object") {
+      const b = block as Record<string, unknown>;
+      if (b["type"] === "text" && typeof b["text"] === "string") {
+        return b["text"];
+      }
+    }
+  }
+  return null;
 }
 
 function ProtocolBadge({ negotiation }: { negotiation: ProtocolNegotiation }) {
@@ -129,22 +164,41 @@ function ProtocolNegotiationBlock({ negotiation }: { negotiation: ProtocolNegoti
   );
 }
 
+// [spring-ai-mcp-inspector PATCH] Expanded error detail for CallToolResult
+// isError=true rows (#184): the server-side error message rendered prominently
+// above the raw JSON dump, so the validator text is visible without hovering.
+function ToolErrorBlock({ text }: { text: string | null }) {
+  return (
+    <div className="mb-1 p-2 border border-red-800 rounded bg-red-950/40 text-red-300">
+      <div className="font-semibold text-red-200 mb-1">Tool error:</div>
+      <div data-testid="timeline-tool-error-message">
+        {text ?? "CallToolResult returned isError=true"}
+      </div>
+    </div>
+  );
+}
+
 function TimelineEventRow({ event }: { event: TimelineEvent }) {
   const [expanded, setExpanded] = useState(false);
   const type = event.type;
-  const colorClass = EVENT_COLORS[type] || "text-gray-400";
-  const bgClass = EVENT_BG[type] || "bg-gray-950/30";
-
   const payload = event.payload ?? {};
+
+  // [spring-ai-mcp-inspector PATCH] Protocol negotiation badge on initialize response rows.
+  const negotiation = type === "MCP_JSONRPC_RESPONSE" ? protocolNegotiationOf(payload) : null;
+
+  // [spring-ai-mcp-inspector PATCH] Error highlighting for CallToolResult isError=true (#184).
+  const isError = type === "MCP_JSONRPC_RESPONSE" && isCallToolError(payload);
+  const errorText = isError ? errorTextOf(payload) : null;
+
+  const colorClass = isError ? ERROR_COLOR : (EVENT_COLORS[type] || "text-gray-400");
+  const bgClass = isError ? ERROR_BG : (EVENT_BG[type] || "bg-gray-950/30");
+
   const typeLabel = (type || "").replace("MCP_", "").replace("_", " ");
   const label =
     (typeof payload.method === "string" && payload.method) ||
     (typeof payload.message === "string" && payload.message) ||
     (typeof payload.logLevel === "string" && payload.logLevel) ||
     typeLabel;
-
-  // [spring-ai-mcp-inspector PATCH] Protocol negotiation badge on initialize response rows.
-  const negotiation = type === "MCP_JSONRPC_RESPONSE" ? protocolNegotiationOf(payload) : null;
 
   return (
     <div
@@ -156,6 +210,15 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
         <span className="font-semibold shrink-0 w-20">{typeLabel}</span>
         <span className="truncate min-w-0 flex-1">{label}</span>
         {negotiation && <ProtocolBadge negotiation={negotiation} />}
+        {isError && (
+          <span
+            data-testid="timeline-tool-error-badge"
+            className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-red-800 text-red-200"
+            title={errorText ?? "CallToolResult returned isError=true"}
+          >
+            tool error
+          </span>
+        )}
         {event.correlationId && (
           <span className="opacity-50 ml-auto shrink-0 font-mono text-[10px]">
             {event.correlationId.substring(0, 8)}
@@ -165,6 +228,7 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
       {expanded ? (
         <div className="mt-1 text-[11px] font-mono opacity-80 overflow-x-auto whitespace-pre-wrap max-h-40 overflow-y-auto">
           {negotiation && <ProtocolNegotiationBlock negotiation={negotiation} />}
+          {isError && <ToolErrorBlock text={errorText} />}
           {Object.keys(payload).length > 0 ? (
             <div className="mb-1">{JSON.stringify(payload, null, 2)}</div>
           ) : (
