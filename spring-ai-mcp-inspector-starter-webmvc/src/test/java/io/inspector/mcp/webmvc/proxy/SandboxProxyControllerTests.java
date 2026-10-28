@@ -221,4 +221,26 @@ class SandboxProxyControllerTests {
 		assertThat(response.getBody()).contains("CSP parameter exceeds maximum length");
 	}
 
+	@Test
+	void serveSandbox_withValidCspParam_returnsPageWithMergedCspHeader() throws Exception {
+		final ResponseEntity<String> response = new SandboxProxyController().serveSandbox(CSP_JSON);
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+		// The App-declared domain must reach the header of the served page
+		// (effective directive, not substring: see class javadoc).
+		assertThat(effectiveDirectives(response.getHeaders().getFirst("Content-Security-Policy")).get("connect-src"))
+			.contains("https://api.example.com");
+		assertThat(String.valueOf(response.getHeaders().getContentType())).startsWith("text/html");
+		assertThat(response.getHeaders().getCacheControl()).isEqualTo("no-store");
+		assertThat(response.getBody()).contains("<html");
+	}
+
+	@Test
+	void serveSandbox_withoutCspParam_returnsPageWithBaselineCspHeader() throws Exception {
+		final ResponseEntity<String> response = new SandboxProxyController().serveSandbox(null);
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+		assertThat(effectiveDirectives(response.getHeaders().getFirst("Content-Security-Policy")).get("connect-src"))
+			.isEqualTo("'none'");
+		assertThat(response.getBody()).contains("<html");
+	}
+
 }
