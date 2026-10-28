@@ -452,6 +452,21 @@ class InspectorUiIT {
 	}
 
 	/**
+	 * Counts non-overlapping occurrences of {@code needle} in {@code haystack}. Used by
+	 * the doubled-error-message regression checks that must assert EXACTLY ONE occurrence
+	 * rather than mere presence.
+	 */
+	private static int countOccurrences(String haystack, String needle) {
+		int count = 0;
+		int index = 0;
+		while ((index = haystack.indexOf(needle, index)) >= 0) {
+			count++;
+			index += needle.length();
+		}
+		return count;
+	}
+
+	/**
 	 * Click the tab trigger with the given Radix value. Waits up to 15 s for the Tabs
 	 * container to materialise — it isn't mounted until {@code mcpClient} resolves after
 	 * a successful connect.
@@ -992,7 +1007,7 @@ class InspectorUiIT {
 		@Test
 		@Story("Tool call")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("Running the errorTool surfaces an error state in the ToolResults block.")
+		@Description("Running the errorTool surfaces an error state in the ToolResults block, and the failure text appears exactly once both in the rendered pane and in the raw JSON-RPC response carried by the failed call's History entry (regression guard against a doubled error message).")
 		@DisplayName("callsErrorToolShowsErrorBadge — ToolResults surfaces an error state")
 		void callTool_errorTool_surfacesErrorState() {
 			// given
@@ -1008,6 +1023,31 @@ class InspectorUiIT {
 			activePanel().shouldHave(
 					Condition.or("error indicator", text("Error"), text("isError"), text("intentional demo failure")),
 					Duration.ofSeconds(15));
+
+			// Wire-level check: expand the FAILED tools/call History entry (failed
+			// entries carry the red left border) and count the message inside its
+			// Response payload. Asserting mere presence stays green while the SDK ships
+			// the text twice in content[0].text, so count the occurrences.
+			SelenideElement errorCall = historyColumn().$$("li")
+				.findBy(Condition.and("failed tools/call entry", text("tools/call"),
+						attributeMatching("class", ".*border-red-500.*")))
+				.shouldBe(visible, Duration.ofSeconds(15));
+			errorCall.$("div.cursor-pointer").click();
+			SelenideElement responseBlock = errorCall.$(byText("Response:")).closest(".mt-2").shouldBe(visible);
+			responseBlock.shouldHave(text("intentional demo failure"), Duration.ofSeconds(10));
+			int wireOccurrences = countOccurrences(responseBlock.innerText(), "intentional demo failure");
+			Assertions.assertEquals(1, wireOccurrences,
+					"History Response must carry the failure text exactly once but carried it " + wireOccurrences
+							+ " times");
+
+			// Pane-level check: the Tool Result pane must render the thrown text EXACTLY
+			// ONCE as well, so a duplicated wire message cannot slip through as a "green"
+			// rendering either.
+			activePanel().shouldHave(text("intentional demo failure"), Duration.ofSeconds(15));
+			int paneOccurrences = countOccurrences(activePanel().innerText(), "intentional demo failure");
+			Assertions.assertEquals(1, paneOccurrences,
+					"Tool Result pane must render the failure text exactly once but rendered it " + paneOccurrences
+							+ " times");
 		}
 
 		@Test
