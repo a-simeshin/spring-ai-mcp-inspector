@@ -56,6 +56,12 @@ public record ProxyConnectFailure(Reason reason, String message) {
 		/** The upstream host name could not be resolved. */
 		DNS("dns"),
 
+		/**
+		 * The request was rejected before any network I/O (restricted custom header name,
+		 * illegal header value).
+		 */
+		INVALID_REQUEST("invalid_request"),
+
 		/** The upstream server responded with 404 Not Found. */
 		NOT_FOUND("not_found"),
 
@@ -89,6 +95,15 @@ public record ProxyConnectFailure(Reason reason, String message) {
 	public static ProxyConnectFailure classify(final Throwable error) {
 		Throwable current = error;
 		while (current != null) {
+			if (current instanceof IllegalArgumentException) {
+				// Transport-build-time rejection (restricted custom header name, illegal
+				// value). The message was built value-safe, so it can travel to the
+				// browser; without this branch every webmvc controller would collapse
+				// it into the generic "failed to connect" message.
+				final String message = (current.getMessage() != null) ? current.getMessage()
+						: "the MCP server request was rejected: " + current.getClass().getSimpleName();
+				return new ProxyConnectFailure(Reason.INVALID_REQUEST, message);
+			}
 			if (current instanceof UnknownHostException || current instanceof UnresolvedAddressException) {
 				return new ProxyConnectFailure(Reason.DNS, "could not resolve the MCP server host name");
 			}

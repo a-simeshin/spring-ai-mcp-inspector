@@ -51,6 +51,8 @@ import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyConnectFailure;
+import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
@@ -279,15 +281,62 @@ class SseProxyControllerTests {
 
 		@Test
 		@Story("Open SSE session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() fails with a classified connect failure carrying the header name and "
+				+ "JDK reason when a restricted custom header name is rejected at transport build time; the "
+				+ "@ExceptionHandler maps it onto the structured 502 body (see SseProxyControllerWireTests)")
+		void openSse_whenRestrictedCustomHeaderRejected_failsWithHeaderName() {
+			// given - inbound custom headers route the controller onto the header-aware
+			// overload, whose build-time rejection carries the offending header name
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
+			request.addHeader("x-custom-auth-headers", "X-Tenant");
+			request.addHeader("X-Tenant", "acme");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class), any(), any()))
+				.willThrow(new IllegalArgumentException(
+						"custom header 'host' is not allowed by the JDK HTTP client: restricted header name"));
+
+			// when & then - a classified connect failure carrying the header name;
+			// the @ExceptionHandler maps it onto the MCP_CONNECT_FAILED wire body
+			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, request))
+				.isInstanceOf(ProxyConnectFailureException.class)
+				.hasMessageContaining("custom header 'host' is not allowed by the JDK HTTP client");
+			verify(SseProxyControllerTests.this.registry, never()).put(any());
+		}
+
+		@Test
+		@Story("Open SSE session")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() classifies a timeout build failure as Reason.TIMEOUT, which the "
+				+ "@ExceptionHandler maps onto 504 (not 502)")
+		void openSse_whenBuildTimesOut_failsAsTimeout() {
+			// given - headers bound so the header-aware overload fires
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
+			request.addHeader("x-custom-auth-headers", "X-Tenant");
+			request.addHeader("X-Tenant", "acme");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class), any(), any()))
+				.willThrow(new RuntimeException(new java.net.SocketTimeoutException("connect timed out")));
+
+			// when & then
+			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, request))
+				.isInstanceOf(ProxyConnectFailureException.class)
+				.extracting((ex) -> ((ProxyConnectFailureException) ex).failure().reason())
+				.isEqualTo(ProxyConnectFailure.Reason.TIMEOUT);
+		}
+
+		@Test
+		@Story("Open SSE session")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() with an unsupported transportType fails to build a transport and skips registration")
 		void openSse_withUnsupportedType_doesNotRegisterSession() {
-			// when
-			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("carrier-pigeon", "x", null,
-					null, null, REQUEST);
-
-			// then
-			assertThat(emitter).isNotNull();
+			// when & then - the classified build failure now surfaces as an immediate
+			// 502 instead of an SSE stream that dies with a bodyless 500
+			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openSse("carrier-pigeon", "x", null, null,
+					null, REQUEST))
+				.isInstanceOf(ProxyConnectFailureException.class);
 			verify(SseProxyControllerTests.this.registry, never()).put(any());
 		}
 
@@ -388,11 +437,10 @@ class SseProxyControllerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("openStdio() with a blank command fails to build a transport and skips registration")
 		void openStdio_withBlankCommand_doesNotRegisterSession() {
-			// when
-			final SseEmitter emitter = SseProxyControllerTests.this.controller.openStdio("   ", null, null, REQUEST);
-
-			// then
-			assertThat(emitter).isNotNull();
+			// when & then - the missing-command rejection surfaces as an immediate 502
+			// instead of an SSE stream that dies with a bodyless 500
+			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openStdio("   ", null, null, REQUEST))
+				.isInstanceOf(ProxyConnectFailureException.class);
 			verify(SseProxyControllerTests.this.registry, never()).put(any());
 		}
 
