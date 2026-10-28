@@ -97,6 +97,9 @@ public class ProxyTransportFactory {
 	/** Fallback per-request SSE timeout when no explicit value is supplied. */
 	private static final Duration DEFAULT_SSE_REQUEST_TIMEOUT = Duration.ofSeconds(10);
 
+	/** Fallback preflight probe timeout when no explicit value is supplied. */
+	private static final Duration DEFAULT_SSE_PREFLIGHT_TIMEOUT = Duration.ofSeconds(10);
+
 	private final JsonMapper objectMapper;
 
 	/**
@@ -108,12 +111,19 @@ public class ProxyTransportFactory {
 	 */
 	private final Duration sseRequestTimeout;
 
+	/**
+	 * Wall-clock budget for the SSE preflight probe (see {@link SsePreflightTransport}).
+	 * Bound to {@code spring.ai.mcp.inspector.timeouts.sse-preflight} when the factory is
+	 * wired by the auto-configurations.
+	 */
+	private final Duration ssePreflightTimeout;
+
 	public ProxyTransportFactory() {
-		this(new JsonMapper(), DEFAULT_SSE_REQUEST_TIMEOUT);
+		this(new JsonMapper(), DEFAULT_SSE_REQUEST_TIMEOUT, DEFAULT_SSE_PREFLIGHT_TIMEOUT);
 	}
 
 	public ProxyTransportFactory(final JsonMapper objectMapper) {
-		this(objectMapper, DEFAULT_SSE_REQUEST_TIMEOUT);
+		this(objectMapper, DEFAULT_SSE_REQUEST_TIMEOUT, DEFAULT_SSE_PREFLIGHT_TIMEOUT);
 	}
 
 	/**
@@ -123,40 +133,57 @@ public class ProxyTransportFactory {
 	 * @param sseRequestTimeout the per-request SSE timeout (never {@code null})
 	 */
 	public ProxyTransportFactory(final JsonMapper objectMapper, final Duration sseRequestTimeout) {
-		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
-		this.sseRequestTimeout = (sseRequestTimeout != null) ? sseRequestTimeout : DEFAULT_SSE_REQUEST_TIMEOUT;
+		this(objectMapper, sseRequestTimeout, DEFAULT_SSE_PREFLIGHT_TIMEOUT);
 	}
 
 	/**
-	 * Builds an SSE client transport that targets the supplied {@code sseUri}.
+	 * Creates a factory whose SSE transports apply {@code sseRequestTimeout} to every
+	 * outbound call and whose SSE preflight probe is bounded by
+	 * {@code ssePreflightTimeout}.
+	 * @param objectMapper the JSON mapper backing the transports (may be {@code null})
+	 * @param sseRequestTimeout the per-request SSE timeout (never {@code null})
+	 * @param ssePreflightTimeout the preflight probe budget (never {@code null})
+	 */
+	public ProxyTransportFactory(final JsonMapper objectMapper, final Duration sseRequestTimeout,
+			final Duration ssePreflightTimeout) {
+		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
+		this.sseRequestTimeout = (sseRequestTimeout != null) ? sseRequestTimeout : DEFAULT_SSE_REQUEST_TIMEOUT;
+		this.ssePreflightTimeout = (ssePreflightTimeout != null) ? ssePreflightTimeout : DEFAULT_SSE_PREFLIGHT_TIMEOUT;
+	}
+
+	/**
+	 * Builds an SSE client transport wrapped in a single header-only preflight probe.
 	 *
 	 * <p>
 	 * The URI's scheme/host/port form the transport's base URI; the URI's path is the SSE
 	 * endpoint. Example: {@code http://127.0.0.1:8080/sse} → base
-	 * {@code http://127.0.0.1:8080}, SSE endpoint {@code /sse}.
+	 * {@code http://127.0.0.1:8080}, SSE endpoint {@code /sse}. The returned transport
+	 * performs one cancelled {@code GET} probe before delegating to the inner
+	 * {@link HttpClientSseClientTransport} (see {@link SsePreflightTransport}).
 	 * @param sseUri the full SSE endpoint URI (must not be {@code null})
-	 * @return a configured {@link McpClientTransport} for SSE
+	 * @return a configured {@link McpClientTransport} for SSE with preflight
+	 * @see SsePreflightTransport
 	 */
-	public McpClientTransport openSse(final URI sseUri) {
-		return openSse(sseUri, (String) null, (Map<String, String>) null);
+	public McpClientTransport buildSse(final URI sseUri) {
+		return buildSse(sseUri, (String) null, (Map<String, String>) null);
 	}
 
 	/**
-	 * Builds an SSE client transport that targets {@code sseUri} and forwards the
-	 * supplied {@code authorization} header plus any {@code customHeaders} to the
-	 * upstream MCP server on every outbound request.
+	 * Builds an SSE client transport wrapped in a single header-only preflight probe,
+	 * with the supplied {@code authorization} header plus any {@code customHeaders}
+	 * forwarded to the upstream MCP server on every outbound request.
 	 *
 	 * <p>
-	 * Same URI breakdown semantics as {@link #openSse(URI)}. Headers are injected via the
-	 * SDK's {@code httpRequestCustomizer} hook so they ride on both the SSE connect and
-	 * the message POSTs.
+	 * Same preflight semantics as {@link #buildSse(URI)}. Headers are injected via the
+	 * SDK's {@code httpRequestCustomizer} hook so they ride on the preflight probe, the
+	 * SSE connect and the message POSTs.
 	 * @param sseUri the full SSE endpoint URI (must not be {@code null})
 	 * @param authorization the inbound {@code Authorization} header value to forward, or
 	 * {@code null} / blank to omit
 	 * @param customHeaders additional headers to forward (may be {@code null} or empty)
-	 * @return a configured {@link McpClientTransport} for SSE
+	 * @return a configured {@link McpClientTransport} for SSE with preflight
 	 */
-	public McpClientTransport openSse(final URI sseUri, final String authorization,
+	public McpClientTransport buildSse(final URI sseUri, final String authorization,
 			final Map<String, String> customHeaders) {
 		if (sseUri == null) {
 			throw new IllegalArgumentException("sseUri must not be null");
@@ -170,8 +197,15 @@ public class ProxyTransportFactory {
 
 	/**
 	 * Builds the SSE transport for a resolved base URI, endpoint path and request
-	 * customizer, wrapping it in a handshake preflight check (see
+	 * customizer, wrapping it in a single header-only preflight probe (see
 	 * {@link SsePreflightTransport}).
+	 *
+	 * <p>
+	 * The delegate and the probe share one {@link HttpClient} (see
+	 * {@link SharedHttpClientBuilder}), so no second client (and no second selector
+	 * thread) is allocated per proxy session. The probe is bounded by
+	 * {@code ssePreflightTimeout} and carries the same forwarded headers as the
+	 * delegate's requests.
 	 * @param baseUri the {@code scheme://host[:port]} transport base
 	 * @param ssePath the SSE endpoint path (with any query parameters)
 	 * @param customizer the request customizer applying forwarded headers, or
@@ -180,24 +214,28 @@ public class ProxyTransportFactory {
 	 */
 	private McpClientTransport buildSse(final String baseUri, final String ssePath,
 			final McpSyncHttpClientRequestCustomizer customizer) {
+		final HttpClient sharedClient = HttpClient.newBuilder()
+			.executor(SHARED_HTTP_EXECUTOR)
+			.version(HttpClient.Version.HTTP_1_1)
+			.connectTimeout(Duration.ofSeconds(10))
+			.build();
 		final HttpClientSseClientTransport.Builder builder = HttpClientSseClientTransport.builder(baseUri)
 			.sseEndpoint(ssePath)
 			.messageEndpointValidator(noopValidator())
-			.requestBuilder(HttpRequest.newBuilder())
-			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR));
+			.clientBuilder(new SharedHttpClientBuilder(sharedClient));
 		// The SDK's requestBuilder template applies the timeout to ALL requests the
 		// transport makes (the SSE GET stream AND every message POST). For the POST
 		// the SDK's BodyHandlers.ofString() waits for the response body to complete,
 		// but the MCP protocol delivers the response as an SSE event on the stream,
-		// not in the POST body — so a healthy POST would time out. The customizer
+		// not in the POST body, so a healthy POST would time out. The customizer
 		// removes the timeout for POST requests, keeping it only for the SSE GET
 		// (where it detects silent upstream disconnects, closing ConnectFailureIT).
 		builder.httpRequestCustomizer(noPostTimeoutCustomizer(customizer, this.sseRequestTimeout));
-		final HttpRequest.Builder requestTemplate = HttpRequest.newBuilder().timeout(this.sseRequestTimeout);
-		final HttpClient preflightClient = HttpClient.newBuilder().executor(SHARED_HTTP_EXECUTOR).build();
+		final McpClientTransport delegate = builder.build();
+		final HttpRequest.Builder requestTemplate = HttpRequest.newBuilder();
 		final URI target = URI.create(baseUri).resolve(ssePath);
-		return new SsePreflightTransport(builder.build(), target, requestTemplate,
-				noPostTimeoutCustomizer(customizer, this.sseRequestTimeout), preflightClient);
+		return new SsePreflightTransport(delegate, target, requestTemplate, customizer, sharedClient,
+				this.ssePreflightTimeout);
 	}
 
 	/**
@@ -229,16 +267,16 @@ public class ProxyTransportFactory {
 	 * provided, so the OAuth2 one-retry path can refresh the token without rebuilding the
 	 * transport.
 	 * <p>
-	 * Named {@code openSseWithAuth} (not an {@code openSse} overload) so callers passing
+	 * Named {@code buildSseWithAuth} (not a {@code buildSse} overload) so callers passing
 	 * literal {@code null}s cannot hit an ambiguous overload against the legacy
-	 * {@code openSse(URI, String, Map)}.
+	 * {@code buildSse(URI, String, Map)}.
 	 * @param sseUri the full SSE endpoint URI (must not be {@code null})
 	 * @param headers the resolved auth headers (never {@code null})
 	 * @param authorizationRef live authorization value source, or {@code null} to use the
 	 * static value from {@code headers}
 	 * @return a configured {@link McpClientTransport} for SSE
 	 */
-	public McpClientTransport openSseWithAuth(final URI sseUri, final AuthHeaders headers,
+	public McpClientTransport buildSseWithAuth(final URI sseUri, final AuthHeaders headers,
 			final AtomicReference<String> authorizationRef) {
 		if (sseUri == null) {
 			throw new IllegalArgumentException("sseUri must not be null");
@@ -254,7 +292,7 @@ public class ProxyTransportFactory {
 	 * Builds a streamable-HTTP transport that targets the supplied {@code mcpUri}.
 	 *
 	 * <p>
-	 * Same URI breakdown semantics as {@link #openSse(URI)}.
+	 * Same URI breakdown semantics as {@link #buildSse(URI)}.
 	 * @param mcpUri the full MCP endpoint URI (must not be {@code null})
 	 * @return a configured {@link McpClientTransport} for streamable-HTTP
 	 */

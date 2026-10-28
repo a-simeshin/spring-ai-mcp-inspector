@@ -263,7 +263,8 @@ public class McpInspectorWebFluxAutoConfiguration {
 	@ConditionalOnMissingBean
 	public ProxyTransportFactory mcpInspectorProxyTransportFactory(final JsonMapper objectMapper,
 			final McpInspectorProperties properties) {
-		return new ProxyTransportFactory(objectMapper, properties.getTimeouts().getSseRequest());
+		return new ProxyTransportFactory(objectMapper, properties.getTimeouts().getSseRequest(),
+				properties.getTimeouts().getSsePreflight());
 	}
 
 	@Bean
