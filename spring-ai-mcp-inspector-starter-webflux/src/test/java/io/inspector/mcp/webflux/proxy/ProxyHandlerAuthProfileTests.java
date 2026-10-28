@@ -129,7 +129,7 @@ class ProxyHandlerAuthProfileTests {
 
 	@Nested
 	@DisplayName("openSse() with an auth profile")
-	class OpenSseWithProfile {
+	class BuildSseWithProfile {
 
 		@Test
 		@Story("SSE proxy open with profile")
@@ -143,7 +143,7 @@ class ProxyHandlerAuthProfileTests {
 			given(ProxyHandlerAuthProfileTests.this.authProfileStore.bind(eq(OWNER), eq(PROFILE_ID), any()))
 				.willReturn(true);
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerAuthProfileTests.this.transportFactory.openSseWithAuth(any(URI.class),
+			given(ProxyHandlerAuthProfileTests.this.transportFactory.buildSseWithAuth(any(URI.class),
 					any(AuthHeaders.class), any()))
 				.willReturn(target);
 
@@ -158,7 +158,7 @@ class ProxyHandlerAuthProfileTests {
 			assertThat(response.headers().getContentType()).isEqualTo(MediaType.TEXT_EVENT_STREAM);
 			verify(ProxyHandlerAuthProfileTests.this.authProfileStore).resolve(OWNER, PROFILE_ID);
 			verify(ProxyHandlerAuthProfileTests.this.authProfileStore).bind(eq(OWNER), eq(PROFILE_ID), any());
-			verify(ProxyHandlerAuthProfileTests.this.transportFactory).openSseWithAuth(any(URI.class),
+			verify(ProxyHandlerAuthProfileTests.this.transportFactory).buildSseWithAuth(any(URI.class),
 					any(AuthHeaders.class), any());
 			verify(ProxyHandlerAuthProfileTests.this.registry).put(any(ProxySession.class));
 		}

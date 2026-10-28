@@ -21,10 +21,13 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow.Subscription;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -35,14 +38,16 @@ import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
 import io.modelcontextprotocol.spec.McpTransportException;
 import reactor.core.publisher.Mono;
+import reactor.util.context.ContextView;
 
 /**
- * Decorates an SSE {@link McpClientTransport} with a handshake preflight status check.
+ * Decorates an SSE {@link McpClientTransport} with a single header-only handshake
+ * preflight.
  *
  * <p>
  * The MCP SDK's {@code HttpClientSseClientTransport.connect()} only maps a 2xx answer to
  * readiness. On a non-2xx handshake whose body produces no SSE event (empty, whitespace
- * or comment-only — e.g. a bare {@code 401} from a misconfigured server) the SDK parses
+ * or comment-only, e.g. a bare {@code 401} from a misconfigured server) the SDK parses
  * the body as an SSE stream, never emits an {@code endpoint} event, and the
  * {@code connect()} {@link Mono} never completes: {@code sendMessage(initialize)} then
  * hangs until the request timeout instead of surfacing the real reason. A non-SSE line
@@ -50,14 +55,46 @@ import reactor.core.publisher.Mono;
  * contract.
  *
  * <p>
- * This wrapper makes the contract explicit: before delegating to the inner transport, it
- * sends the same {@code GET} the SDK's {@code connect()} would (same URI, same auth
- * headers via the request customizer) with a body handler that reads only the response
- * headers and cancels — so a held-open successful SSE stream answers instantly, and a
- * non-2xx answer surfaces immediately. A non-2xx status is turned into a
- * {@link McpTransportException} whose message carries the status, which the D3
- * {@link ProxyErrorMapper} maps to the structured DTO and the D9 one-retry recognises as
- * a refreshable 401.
+ * This wrapper sends a {@code GET} to the same SSE endpoint URI the delegate connects to
+ * (including any query string) with the same auth headers via the request customizer, but
+ * it does not reproduce the SDK request byte for byte: the SDK's own connect adds
+ * {@code Cache-Control} and {@code MCP-Protocol-Version} headers this probe omits, and
+ * the delegate receives the endpoint path only, without the query. The probe checks
+ * reachability, not identity: on a server that answers the probe differently from the
+ * real handshake (for example {@code /sse?token=x} probing 200 while the path-only
+ * connect gets 401), the probe stands down in favour of the delegate's own semantics. The
+ * body handler completes on the response headers and immediately cancels the
+ * subscription, so the probe exchange is closed; that close is asynchronous and is
+ * observed by the server some time after the headers arrive, not necessarily before the
+ * delegate opens the real stream. A status the probe cannot interpret as a verdict on the
+ * SSE endpoint (anything other than a clean 2xx, the definitive {@code 404 Not Found}, or
+ * an auth rejection) is <strong>passed through</strong>: the wrapper lets the delegate
+ * try and keeps whatever error or behaviour the SDK transport produces. Two statuses do
+ * fail fast, each with a message that carries the status: a definitive {@code 404} (the
+ * endpoint does not exist), and a {@code 401}/{@code 403} (the upstream rejected the
+ * credentials on the probe), which preserves the auth contract of the merged #89
+ * preflight: the {@link McpTransportException} is mapped by the D3
+ * {@link ProxyErrorMapper} to the structured DTO and the D9 one-retry recognises it as a
+ * refreshable 401. Failing anything else here is deliberately avoided: the probe runs on
+ * the connect path of every proxy session, and a false negative here would reject
+ * upstreams that connect fine today. HTTP HEAD is not used: Starlette and Spring MVC
+ * auto-map HEAD onto the GET handler, so a HEAD probe creates the very server-side SSE
+ * session it is meant to avoid.
+ *
+ * <p>
+ * The probe reuses the delegate's {@link HttpClient} (see
+ * {@link SharedHttpClientBuilder}) instead of allocating its own: each extra
+ * {@code HttpClient} costs a selector thread that survives
+ * {@link io.modelcontextprotocol.client.transport.HttpClientSseClientTransport#closeGracefully()},
+ * and a per-session probe client doubles that cost (measured on this codebase: 10
+ * sessions with a dedicated probe client spawn 20 selector threads that outlive the
+ * sessions).
+ *
+ * <p>
+ * The probe uses the shared HTTP executor and HTTP/1.1, matching the SDK's own client
+ * configuration, so the probe and the real connect negotiate the same protocol. The probe
+ * timeout is supplied by the factory (bound to {@code spring.ai.mcp.inspector.timeouts.*}
+ * when the factory is wired by the auto-configuration) instead of a hardcoded constant.
  *
  * @author Artem Simeshin
  */
@@ -73,21 +110,34 @@ final class SsePreflightTransport implements McpClientTransport {
 
 	private final McpSyncHttpClientRequestCustomizer requestCustomizer;
 
-	private final HttpClient preflightClient;
+	private final HttpClient sharedClient;
+
+	/**
+	 * Wall-clock budget for the preflight probe. On expiry the in-flight exchange is
+	 * cancelled and the connect fails with an {@link McpTransportException}.
+	 */
+	private final Duration probeTimeout;
+
+	/**
+	 * Tracks the in-flight preflight HTTP exchange so it can be cancelled on timeout,
+	 * downstream cancellation, or {@link #closeGracefully()}.
+	 */
+	private volatile CompletableFuture<?> pendingProbe;
 
 	SsePreflightTransport(final McpClientTransport delegate, final URI targetUri,
 			final HttpRequest.Builder requestTemplate, final McpSyncHttpClientRequestCustomizer requestCustomizer,
-			final HttpClient preflightClient) {
+			final HttpClient sharedClient, final Duration probeTimeout) {
 		this.delegate = delegate;
 		this.targetUri = targetUri;
 		this.requestTemplate = requestTemplate;
 		this.requestCustomizer = requestCustomizer;
-		this.preflightClient = preflightClient;
+		this.sharedClient = sharedClient;
+		this.probeTimeout = probeTimeout;
 	}
 
 	@Override
 	public Mono<Void> connect(final Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>> handler) {
-		return preflight().then(this.delegate.connect(handler));
+		return preflight().then(Mono.defer(() -> this.delegate.connect(handler)));
 	}
 
 	@Override
@@ -110,7 +160,7 @@ final class SsePreflightTransport implements McpClientTransport {
 
 	@Override
 	public Mono<Void> closeGracefully() {
-		return this.delegate.closeGracefully();
+		return Mono.fromRunnable(this::cancelPendingProbe).then(this.delegate.closeGracefully());
 	}
 
 	@Override
@@ -118,34 +168,105 @@ final class SsePreflightTransport implements McpClientTransport {
 		return this.delegate.unmarshalFrom(data, typeRef);
 	}
 
+	private void cancelPendingProbe() {
+		final CompletableFuture<?> pending = this.pendingProbe;
+		if (pending != null && !pending.isDone()) {
+			pending.cancel(true);
+		}
+		this.pendingProbe = null;
+	}
+
 	/**
-	 * Sends the handshake {@code GET} with the same URI and auth headers the SDK would
-	 * and completes when the status is 2xx, or errors with the status embedded in the
-	 * message otherwise.
-	 * @return a {@link Mono} completing on a 2xx preflight, erroring on any other status
+	 * Sends the header-only {@code GET} probe and interprets the status.
+	 *
+	 * <p>
+	 * Status handling is intentionally minimal:
+	 * <ul>
+	 * <li>2xx: the endpoint answers, the delegate may connect.</li>
+	 * <li>404: the endpoint does not exist on this server. Fails fast so the user sees
+	 * the real reason instead of the SDK hanging on a non-SSE body.</li>
+	 * <li>401/403: the upstream rejected the probe's credentials. Fails fast with the #89
+	 * auth contract so the error is mapped to the structured DTO and the
+	 * client-credentials one-retry can refresh and reconnect.</li>
+	 * <li>anything else (405, 5xx, 3xx, ...): not a verdict this probe can defend. The
+	 * status is passed through to the delegate, which performs the real handshake with
+	 * its own (redirect, server-error) semantics. Hard-failing here would regress
+	 * upstreams that connect today: develop/2.x had no preflight, so a server answering
+	 * 501 to a probe while its GET works would stop connecting.</li>
+	 * </ul>
+	 * @return a {@link Mono} completing when the endpoint is confirmed reachable, or
+	 * erroring with {@link McpTransportException} on a definitive rejection or timeout
 	 */
 	private Mono<Void> preflight() {
 		return Mono.deferContextual((context) -> {
-			final HttpRequest.Builder builder = this.requestTemplate.copy()
-				.uri(this.targetUri)
-				.header("Accept", ACCEPT_EVENT_STREAM)
-				.GET();
-			if (this.requestCustomizer != null) {
-				final McpTransportContext transportContext = context.getOrDefault(McpTransportContext.KEY,
-						McpTransportContext.EMPTY);
-				this.requestCustomizer.customize(builder, "GET", this.targetUri, null, transportContext);
-			}
-			final HttpRequest request = builder.build();
-			return Mono.fromFuture(this.preflightClient.sendAsync(request, headerOnlyBodyHandler()))
-				.map((response) -> response.statusCode())
-				.flatMap((status) -> {
-					if (status >= 200 && status < 300) {
-						return Mono.empty();
-					}
-					return Mono.error(
-							new McpTransportException("SSE handshake rejected by upstream with HTTP status " + status));
+			final HttpRequest probeRequest = buildProbeRequest(context);
+			final CompletableFuture<HttpResponse<Void>> future = this.sharedClient.sendAsync(probeRequest,
+					headerOnlyBodyHandler());
+			this.pendingProbe = future;
+			final AtomicBoolean cancelled = new AtomicBoolean();
+			return Mono.<HttpResponse<Void>>create((sink) -> {
+				sink.onCancel(() -> {
+					cancelled.set(true);
+					SsePreflightTransport.this.cancelPendingProbe();
 				});
+				future.whenComplete((result, error) -> {
+					if (cancelled.get()) {
+						return;
+					}
+					if (error != null) {
+						sink.error(error);
+					}
+					else {
+						sink.success(result);
+					}
+				});
+			}).timeout(this.probeTimeout).flatMap((response) -> {
+				this.pendingProbe = null;
+				final int status = response.statusCode();
+				if (status >= 200 && status < 300) {
+					return Mono.<Void>empty();
+				}
+				if (status == 404) {
+					return Mono.<Void>error(new McpTransportException(
+							"SSE endpoint not found on upstream (HTTP status " + status + ")"));
+				}
+				if (status == 401 || status == 403) {
+					// #89 auth contract: the message carries the status so
+					// ProxyErrorMapper
+					// maps it to the structured DTO and the D9 one-retry treats it as a
+					// refreshable 401.
+					return Mono.<Void>error(
+							new McpTransportException("SSE handshake rejected by upstream with HTTP status " + status));
+				}
+				// Not a definitive verdict on the endpoint: let the delegate try with
+				// its own semantics. The probe exchange has already been
+				// closed by the header-only body handler.
+				return Mono.<Void>empty();
+			}).onErrorResume(TimeoutException.class, (e) -> {
+				SsePreflightTransport.this.cancelPendingProbe();
+				return Mono
+					.error(new McpTransportException("SSE preflight probe timed out after " + this.probeTimeout));
+			});
 		});
+	}
+
+	/**
+	 * Builds the header-only GET probe, applying the same auth headers and customizers
+	 * the SDK transport uses on the real connect.
+	 * @param context the reactor context carrying the transport context
+	 * @return the built probe {@link HttpRequest}
+	 */
+	private HttpRequest buildProbeRequest(final ContextView context) {
+		final HttpRequest.Builder builder = this.requestTemplate.copy()
+			.uri(this.targetUri)
+			.header("Accept", ACCEPT_EVENT_STREAM)
+			.GET();
+		if (this.requestCustomizer != null) {
+			final McpTransportContext transportContext = context.getOrDefault(McpTransportContext.KEY,
+					McpTransportContext.EMPTY);
+			this.requestCustomizer.customize(builder, "GET", this.targetUri, null, transportContext);
+		}
+		return builder.build();
 	}
 
 	/**
