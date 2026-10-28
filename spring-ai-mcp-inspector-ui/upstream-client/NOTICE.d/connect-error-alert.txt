@@ -10,7 +10,9 @@ src/lib/connectErrors.ts + src/lib/hooks/useConnection.ts +
  (non-contract bodies pass through untouched); the connect() catch
  stores the failure instead of throwing into an unhandled rejection;
  the sidebar renders it as a `role=alert` with a human-readable
- reason and a Retry button that repeats connect. Covered by
+ reason and a Retry button that repeats connect. The alert is rendered
+at the top of the config pane, above the URL/command inputs, so it is
+immediately visible without scrolling. Covered by
  src/lib/__tests__/connectErrors.test.ts and
  src/components/__tests__/Sidebar.connectFailureAlert.test.tsx.
 
