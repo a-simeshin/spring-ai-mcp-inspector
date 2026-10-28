@@ -91,7 +91,16 @@ public class ProxyAuthFilter extends OncePerRequestFilter {
 			return;
 		}
 
-		final String path = request.getRequestURI();
+		// Application-relative path, never the raw request URI: getRequestURI()
+		// carries the servlet context path, so under server.servlet.context-path=/app
+		// the raw /app/mcp-inspector-api/health never equals the unprefixed healthPath
+		// and the open health probe and sandbox page would 401 (owner review PR #199,
+		// round 2, BLOCK 3: an LB would mark the instance dead). Mirrors the WebFlux
+		// filter, which compares pathWithinApplication().
+		final String requestUri = request.getRequestURI();
+		final String contextPath = request.getContextPath();
+		final String path = (contextPath != null && !contextPath.isEmpty() && requestUri.startsWith(contextPath))
+				? requestUri.substring(contextPath.length()) : requestUri;
 		if (this.healthPath.equals(path) || this.sandboxPath.equals(path)) {
 			chain.doFilter(request, response);
 			return;
