@@ -870,7 +870,7 @@ class InspectorUiIT {
 		@Story("Tool call validation")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Sum tool with empty required fields: submit button disabled, hint shown.")
-		@DisplayName("sumToolEmptyRequired — submit disabled, hint shown")
+		@DisplayName("sumToolEmptyRequired: submit disabled, hint shown")
 		void sumToolEmptyRequired_submitDisabled_hintShown() {
 			// given
 			selectRow("sum");
@@ -880,7 +880,7 @@ class InspectorUiIT {
 			SelenideElement runButton = activePanel().$("[data-testid='run-tool-button']");
 			runButton.shouldBe(disabled);
 
-			// Blurring a required field should show a hint — focus then tab out
+			// Blurring a required field should show a hint: focus then tab out
 			$("#a").shouldBe(visible).click();
 			$("#b").shouldBe(visible).click();
 			activePanel().shouldHave(text("This field is required"));

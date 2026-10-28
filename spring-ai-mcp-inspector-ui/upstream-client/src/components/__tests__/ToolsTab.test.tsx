@@ -1714,4 +1714,142 @@ describe("ToolsTab", () => {
       expect(errorEl).toHaveTextContent("This field is required");
     });
   });
+  describe("seeded shown values and strict numeric parse", () => {
+    it("seeds false for a required boolean without default and submits it", async () => {
+      const toggleTool = {
+        name: "toggleFlag",
+        description: "Tool with required boolean",
+        inputSchema: {
+          type: "object" as const,
+          properties: { flag: { type: "boolean" as const } },
+          required: ["flag"],
+        },
+      } as unknown as Tool;
+
+      const mockCallTool = jest.fn();
+      renderToolsTab({
+        tools: [toggleTool],
+        selectedTool: toggleTool,
+        callTool: mockCallTool,
+      });
+
+      // The unchecked checkbox IS the value: submit is enabled and sends false
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      expect(runButton).not.toBeDisabled();
+      expect(screen.getByRole("checkbox", { name: /flag/i })).not.toBeChecked();
+
+      await act(async () => {
+        fireEvent.click(runButton);
+      });
+      expect(mockCallTool).toHaveBeenCalledWith(
+        toggleTool.name,
+        { flag: false },
+        undefined,
+        false,
+      );
+    });
+
+    it("seeds the generated default for a required object without default and submits it", async () => {
+      const objTool = {
+        name: "takeObject",
+        description: "Tool with required object",
+        inputSchema: {
+          type: "object" as const,
+          properties: { obj: { type: "object" as const } },
+          required: ["obj"],
+        },
+      } as unknown as Tool;
+
+      const mockCallTool = jest.fn();
+      renderToolsTab({
+        tools: [objTool],
+        selectedTool: objTool,
+        callTool: mockCallTool,
+      });
+
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+      expect(runButton).not.toBeDisabled();
+
+      await act(async () => {
+        fireEvent.click(runButton);
+      });
+      expect(mockCallTool).toHaveBeenCalledWith(
+        objTool.name,
+        { obj: {} },
+        undefined,
+        false,
+      );
+    });
+
+    it("never parses whitespace, hex or Infinity as numbers, but accepts scientific notation", async () => {
+      const numTool = {
+        name: "numTool",
+        description: "Tool with required number",
+        inputSchema: {
+          type: "object" as const,
+          properties: { n: { type: "number" as const } },
+          required: ["n"],
+        },
+      } as unknown as Tool;
+
+      const mockCallTool = jest.fn();
+      renderToolsTab({
+        tools: [numTool],
+        selectedTool: numTool,
+        callTool: mockCallTool,
+      });
+
+      const input = screen.getByRole("textbox", { name: /n/i });
+      const runButton = screen.getByRole("button", { name: /run tool/i });
+
+      // " " is not 0: the field stays invalid
+      await act(async () => {
+        fireEvent.change(input, { target: { value: " " } });
+      });
+      await act(async () => {
+        fireEvent.blur(input);
+      });
+      expect(screen.getByText("must be a number")).toBeInTheDocument();
+      expect(runButton).toBeDisabled();
+
+      // "0x1F" is not 31: blur re-raises the hint
+      await act(async () => {
+        fireEvent.change(input, { target: { value: "0x1F" } });
+      });
+      await act(async () => {
+        fireEvent.blur(input);
+      });
+      expect(screen.getByText("must be a number")).toBeInTheDocument();
+
+      // "Infinity" would serialize to null in JSON: rejected too
+      await act(async () => {
+        fireEvent.change(input, { target: { value: "Infinity" } });
+      });
+      await act(async () => {
+        fireEvent.blur(input);
+      });
+      expect(screen.getByText("must be a number")).toBeInTheDocument();
+      expect(runButton).toBeDisabled();
+
+      // Plain decimal and scientific notation still parse
+      await act(async () => {
+        fireEvent.change(input, { target: { value: "1.5e2" } });
+      });
+      expect(
+        screen.queryByText("must be a number"),
+      ).not.toBeInTheDocument();
+      expect(runButton).not.toBeDisabled();
+
+      await act(async () => {
+        fireEvent.click(runButton);
+      });
+      expect(mockCallTool).toHaveBeenCalledWith(
+        numTool.name,
+        { n: 150 },
+        undefined,
+        false,
+      );
+    });
+  });
+
 });

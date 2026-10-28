@@ -256,7 +256,7 @@ const PromptsTab = ({
                         This field is required
                       </p>
                     )}
-                    {!fieldErrors[arg.name] && arg.description && (
+                    {arg.description && (
                       <p className="text-xs text-gray-500 mt-1">
                         {arg.description}
                         {arg.required && (

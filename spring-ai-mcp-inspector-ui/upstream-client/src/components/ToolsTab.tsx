@@ -293,21 +293,6 @@ const ToolsTab = ({
     [selectedTool, params],
   );
 
-  // [spring-ai-mcp-inspector PATCH] Validate all fields against the tool's
-  // inputSchema. Accepts an optional currentParams parameter to avoid stale
-  // closure issues when called after DynamicJsonForm's validateJson updates params
-  const validateAll = useCallback((currentParams?: Record<string, unknown>) => {
-    if (!selectedTool?.inputSchema) return true;
-    const schema = selectedTool.inputSchema as JsonSchemaType;
-    const result = validateToolParams(schema, currentParams ?? params);
-    const errors: Record<string, string> = {};
-    for (const e of result) {
-      errors[e.field] = e.message;
-    }
-    setFieldErrors(errors);
-    return errors;
-  }, [selectedTool, params]);
-
   useEffect(() => {
     const params = Object.entries(
       selectedTool?.inputSchema.properties ?? [],
@@ -317,14 +302,42 @@ const ToolsTab = ({
         value as JsonSchemaType,
         selectedTool?.inputSchema as JsonSchemaType,
       );
-      // [spring-ai-mcp-inspector PATCH] Only initialize fields that have a schema.default.
-      // Required fields without a default stay undefined so that:
-      // 1. Derived validation sees them as empty and disables the button
-      // 2. They don't appear in the submit payload
+      // [spring-ai-mcp-inspector PATCH] Seed the shown value into state for
+      // required fields without a schema default whose rendered widget already
+      // displays a value: a required boolean renders as an unchecked checkbox
+      // (i.e. false) and object/array fields render generateDefaultValue()
+      // (e.g. {}). Previously state stayed undefined, so Run Tool was disabled
+      // with no hint (hints appear on blur/submit) and the payload disagreed
+      // with what the form showed. Optional fields and required primitives
+      // (string/number/enum) still stay undefined so they are absent from the
+      // payload until filled in.
       const hasDefault =
         "default" in resolvedValue &&
         resolvedValue.default !== undefined;
       if (!hasDefault) {
+        const resolved = resolvedValue as JsonSchemaType;
+        const propType = Array.isArray(resolved.type)
+          ? resolved.type.find((t) => t !== "null")
+          : resolved.type;
+        const isRequired = (selectedTool?.inputSchema.required ?? []).includes(
+          key,
+        );
+        if (isRequired && propType === "boolean") {
+          return [key, false];
+        }
+        if (
+          isRequired &&
+          (propType === "object" || propType === "array")
+        ) {
+          return [
+            key,
+            generateDefaultValue(
+              resolvedValue,
+              key,
+              selectedTool?.inputSchema as JsonSchemaType,
+            ),
+          ];
+        }
         return [key, undefined];
       }
       return [
@@ -345,6 +358,9 @@ const ToolsTab = ({
     // Reset validation errors when switching tools
     setHasValidationErrors(false);
     setFieldErrors({});
+
+    // Clear form refs for the previous tool
+    formRefs.current = {};
   }, [selectedTool, serverSupportsTaskRequests]);
 
   const hasReservedMetadataEntry = metadataEntries.some(({ key }) => {
@@ -784,15 +800,25 @@ const ToolsTab = ({
                                     [key]: undefined,
                                   });
                                 } else {
-                                  // Field has value - try to convert to number, but store input either way
-                                  const num = Number(value);
-                                  if (!isNaN(num)) {
+                                  // [spring-ai-mcp-inspector PATCH] Strict
+                                  // numeric parse: only plain decimal /
+                                  // scientific notation becomes a number.
+                                  // Number() alone maps " " to 0 and "0x1F"
+                                  // to 31, and Infinity serializes to null
+                                  // in the JSON payload; anything else stays
+                                  // a string for the server to validate.
+                                  const trimmed = value.trim();
+                                  if (
+                                    /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(
+                                      trimmed,
+                                    )
+                                  ) {
                                     setParams({
                                       ...params,
-                                      [key]: num,
+                                      [key]: Number(trimmed),
                                     });
                                   } else {
-                                    // Store invalid input as string - let server validate
+                                    // Not a valid numeric literal - store input as string
                                     setParams({
                                       ...params,
                                       [key]: value,
@@ -1082,21 +1108,20 @@ const ToolsTab = ({
                 {/* [spring-ai-mcp-inspector PATCH] Run Tool button (#58):
                     data-testid anchor for the Selenide critical-path click.
                     Also covers client-side parameter validation (see
-                    NOTICE.d/param-validation.txt): validateField, validateAll,
+                    NOTICE.d/param-validation.txt): validateField,
                     derivedFieldErrors, fieldErrors state for blur/submit hints,
                     paramsRef for stale-closure fixes, button disabled state
                     derived from validateToolParams on every render, and the
-                    initialization effect that only seeds fields with a schema
-                    default (required fields without default stay absent). */}
+                    initialization effect that seeds the shown value for
+                    required boolean and object/array fields without a default. */}
                 <Button
                   data-testid="run-tool-button"
                   onClick={async () => {
-                    // Validate JSON inputs before calling tool
+                    // Validate JSON inputs before calling tool. Field-level
+                    // required/type validation is already derived on every
+                    // render (derivedFieldErrors) and keeps the button
+                    // disabled, so no imperative pass is needed here.
                     if (checkValidationErrors(true)) return;
-
-                    // Validate required fields and types using latest params
-                    const fieldErrors = validateAll(paramsRef.current);
-                    if (Object.keys(fieldErrors).length > 0) return;
 
                     try {
                       setIsToolRunning(true);
