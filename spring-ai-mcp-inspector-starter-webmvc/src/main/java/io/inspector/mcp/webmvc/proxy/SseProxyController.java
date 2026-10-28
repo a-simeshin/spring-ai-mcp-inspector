@@ -280,7 +280,7 @@ public class SseProxyController {
 			final String args, final String env) throws Exception {
 		final String type = (transportType != null) ? transportType.toLowerCase() : "sse";
 		return switch (type) {
-			case "sse" -> this.transportFactory.openSse(ProxyTargetResolver.resolve(url, loopbackPort(), "/sse"));
+			case "sse" -> this.transportFactory.buildSse(ProxyTargetResolver.resolve(url, loopbackPort(), "/sse"));
 			case "streamable-http" ->
 				this.transportFactory.openStreamable(ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp"));
 			case "stdio" -> {

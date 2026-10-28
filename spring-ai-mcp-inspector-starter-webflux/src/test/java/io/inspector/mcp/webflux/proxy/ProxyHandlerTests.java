@@ -428,7 +428,7 @@ class ProxyHandlerTests {
 		void openSse_withSseUrl_registersSessionAndReturnsEventStream() {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
 
@@ -494,7 +494,7 @@ class ProxyHandlerTests {
 				return null;
 			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
 
@@ -530,7 +530,7 @@ class ProxyHandlerTests {
 				return null;
 			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/app/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
 						.contextPath("/app")
@@ -556,7 +556,7 @@ class ProxyHandlerTests {
 		void onWebServerStarted_withManagementNamespace_isIgnored() {
 			// given — the actuator's own server reports port 9999
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			ProxyHandlerTests.this.handler.onWebServerStarted(managementServerStartedEvent(9999));
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse").build());
@@ -565,7 +565,7 @@ class ProxyHandlerTests {
 			ProxyHandlerTests.this.handler.openSse(request).block();
 
 			// then — the port is still unset, so the resolver falls back to 8080
-			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(URI.create("http://127.0.0.1:8080/sse"));
 		}
 
 		@Test
@@ -577,7 +577,7 @@ class ProxyHandlerTests {
 			// http://127.0.0.1:8080/sse (loopback port defaults to 8080 before server
 			// start)
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse").build());
 
@@ -588,7 +588,7 @@ class ProxyHandlerTests {
 			// opened
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(URI.create("http://127.0.0.1:8080/sse"));
 			verify(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 		}
 
@@ -1071,7 +1071,7 @@ class ProxyHandlerTests {
 				return null;
 			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
 
@@ -1306,7 +1306,7 @@ class ProxyHandlerTests {
 			// ProxyTargetResolver
 			// and resolved to http://127.0.0.1:8080/sse (default path for sse transport)
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url= ").build());
 
@@ -1316,7 +1316,7 @@ class ProxyHandlerTests {
 			// then — resolver handles blank url as loopback default, session IS opened
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(URI.create("http://127.0.0.1:8080/sse"));
 		}
 
 	}
