@@ -107,7 +107,7 @@ class SseProxyControllerWireTests {
 		this.mockMvc
 			.perform(get(SSE_PATH).queryParam("transportType", "sse")
 				.queryParam("url", DEAD_TARGET)
-				.header("x-custom-auth-headers", "host")
+				.header("x-custom-auth-headers", "[\"host\"]")
 				.header("host", "secret-value-that-must-leak-nowhere")
 				.accept(MediaType.TEXT_EVENT_STREAM))
 			.andExpect(status().isBadGateway())
@@ -131,7 +131,7 @@ class SseProxyControllerWireTests {
 		this.mockMvc
 			.perform(get(SSE_PATH).queryParam("transportType", "sse")
 				.queryParam("url", DEAD_TARGET)
-				.header("x-custom-auth-headers", "X-Cu:stom")
+				.header("x-custom-auth-headers", "[\"X-Cu:stom\"]")
 				.header("X-Cu:stom", "v")
 				.accept(MediaType.ALL))
 			.andExpect(status().isBadGateway())

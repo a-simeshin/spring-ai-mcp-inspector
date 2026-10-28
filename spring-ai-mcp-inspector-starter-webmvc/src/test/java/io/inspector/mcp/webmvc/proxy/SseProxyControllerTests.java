@@ -336,7 +336,7 @@ class SseProxyControllerTests {
 			// given - inbound custom headers route the controller onto the header-aware
 			// overload, whose build-time rejection carries the offending header name
 			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
-			request.addHeader("x-custom-auth-headers", "X-Tenant");
+			request.addHeader("x-custom-auth-headers", "[\"X-Tenant\"]");
 			request.addHeader("X-Tenant", "acme");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
 			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class), any(), any()))
@@ -360,7 +360,7 @@ class SseProxyControllerTests {
 		void openSse_whenBuildTimesOut_failsAsTimeout() {
 			// given - headers bound so the header-aware overload fires
 			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
-			request.addHeader("x-custom-auth-headers", "X-Tenant");
+			request.addHeader("x-custom-auth-headers", "[\"X-Tenant\"]");
 			request.addHeader("X-Tenant", "acme");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
 			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class), any(), any()))
