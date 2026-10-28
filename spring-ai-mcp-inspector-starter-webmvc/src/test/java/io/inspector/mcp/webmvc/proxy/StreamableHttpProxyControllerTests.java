@@ -244,7 +244,7 @@ class StreamableHttpProxyControllerTests {
 			// by validateHeaderNames(), which the controller must not collapse into the
 			// generic "failed to connect" message
 			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
-			request.addHeader("x-custom-auth-headers", "X-Tenant");
+			request.addHeader("x-custom-auth-headers", "[\"X-Tenant\"]");
 			request.addHeader("X-Tenant", "acme");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
 			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class), any(), any()))
