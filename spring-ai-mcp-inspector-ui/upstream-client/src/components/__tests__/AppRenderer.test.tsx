@@ -30,6 +30,7 @@ type MockMcpUiRendererProps = {
   toolName: string;
   toolInput?: Record<string, unknown>;
   toolResult?: CompatibilityCallToolResult;
+  sandbox?: { url: URL; csp?: Record<string, unknown> };
   onMessage?: (
     params: { role: "user"; content: { type: "text"; text: string }[] },
     extra: RequestHandlerExtra,
@@ -38,6 +39,10 @@ type MockMcpUiRendererProps = {
 };
 
 const mockBridgeEvents: BridgeEvent[] = [];
+
+// Sandbox probe: every sandbox prop the real AppRenderer passed down (PR #199
+// round 2 BLOCK 2 coverage: csp must come from the UI resource meta).
+const mockSandboxProps: MockMcpUiRendererProps["sandbox"][] = [];
 
 // Wiring probe: the latest onCallTool handler the real AppRenderer passed down.
 let capturedOnCallTool: OnCallToolHandler | undefined;
@@ -70,7 +75,9 @@ jest.mock("@mcp-ui/client", () => {
       toolResult,
       onMessage,
       onCallTool,
+      sandbox,
     }: MockMcpUiRendererProps) => {
+      mockSandboxProps.push(sandbox);
       const [isInitialized, setIsInitialized] = React.useState(false);
 
       capturedOnCallTool = onCallTool;
@@ -151,6 +158,8 @@ describe("AppRenderer", () => {
     getServerCapabilities: jest.fn().mockReturnValue({}),
     setNotificationHandler: jest.fn(),
     request: requestMock,
+    readResource: jest.fn().mockResolvedValue({ contents: [] }),
+    listResources: jest.fn().mockResolvedValue({ resources: [] }),
   } as unknown as Client;
 
   const defaultProps = {
@@ -164,6 +173,7 @@ describe("AppRenderer", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockBridgeEvents.length = 0;
+    mockSandboxProps.length = 0;
     capturedOnCallTool = undefined;
   });
 
@@ -344,5 +354,152 @@ describe("AppRenderer", () => {
       expect.anything(),
       expect.anything(),
     );
+  });
+});
+
+describe("AppRenderer sandbox csp from the UI resource meta (PR #199 round 2 BLOCK 2)", () => {
+  // Spec-shaped tool meta: McpUiToolMeta carries resourceUri and visibility ONLY
+  // (McpUiToolMeta.csp is `never` in @modelcontextprotocol/ext-apps 1.7.2), so an
+  // App declaring CSP per the spec puts it on McpUiResourceMeta.csp instead.
+  const specTool = {
+    name: "weatherApp",
+    description: "Weather app with UI",
+    inputSchema: { type: "object" as const, properties: {} },
+    _meta: {
+      ui: {
+        resourceUri: "ui://weather/view.html",
+        visibility: ["model", "app"],
+      },
+    },
+  } as unknown as Tool;
+
+  // Local client: the outer describe's mockMcpClient is out of scope here, and
+  // these tests need their own readResource/listResources stubs anyway.
+  const client = {
+    getServerCapabilities: jest.fn().mockReturnValue({}),
+    setNotificationHandler: jest.fn(),
+    request: jest.fn(),
+    readResource: jest.fn().mockResolvedValue({ contents: [] }),
+    listResources: jest.fn().mockResolvedValue({ resources: [] }),
+  } as unknown as Client;
+
+  const renderSpecApp = () =>
+    render(
+      <AppRenderer
+        sandboxPath="/sandbox"
+        tool={specTool}
+        tools={[specTool] as Tool[]}
+        mcpClient={client}
+        toolResult={null}
+      />,
+    );
+
+  it("reads csp from the resources/read content item (spec-shaped fixture)", async () => {
+    (client.readResource as jest.Mock).mockResolvedValue({
+      contents: [
+        {
+          uri: "ui://weather/view.html",
+          mimeType: "text/html",
+          text: "<!doctype html><html><body>Weather</body></html>",
+          _meta: {
+            ui: { csp: { connectDomains: ["wss://realtime.service.com"] } },
+          },
+        },
+      ],
+    });
+
+    renderSpecApp();
+
+    // Without this fix the App got the baseline connect-src 'none' policy:
+    // the old code looked at tool._meta.ui.csp, which the spec leaves empty.
+    await waitFor(() => {
+      expect(mockSandboxProps.at(-1)?.csp).toEqual({
+        connectDomains: ["wss://realtime.service.com"],
+      });
+    });
+  });
+
+  it("falls back to the resources/list entry when the read content carries no ui meta", async () => {
+    (client.readResource as jest.Mock).mockResolvedValue({
+      contents: [
+        {
+          uri: "ui://weather/view.html",
+          mimeType: "text/html",
+          text: "<!doctype html><html><body>Weather</body></html>",
+        },
+      ],
+    });
+    (client.listResources as jest.Mock).mockResolvedValue({
+      resources: [
+        {
+          uri: "ui://weather/view.html",
+          name: "weather-view",
+          _meta: {
+            ui: { csp: { resourceDomains: ["https://*.cloudflare.com"] } },
+          },
+        },
+      ],
+    });
+
+    renderSpecApp();
+
+    await waitFor(() => {
+      expect(mockSandboxProps.at(-1)?.csp).toEqual({
+        resourceDomains: ["https://*.cloudflare.com"],
+      });
+    });
+  });
+
+  it("ignores a tool _meta.ui.csp and yields the baseline when the resource declares none", async () => {
+    const toolWithBogusCsp = {
+      ...specTool,
+      _meta: {
+        ui: {
+          resourceUri: "ui://weather/view.html",
+          visibility: ["model", "app"],
+          // Hostile/legacy tool meta csp: typed `never` by ext-apps, must be ignored.
+          csp: { connectDomains: ["https://evil.example"] },
+        },
+      },
+    } as unknown as Tool;
+    (client.readResource as jest.Mock).mockResolvedValue({
+      contents: [
+        {
+          uri: "ui://weather/view.html",
+          mimeType: "text/html",
+          text: "<!doctype html><html><body>Weather</body></html>",
+          _meta: { ui: {} },
+        },
+      ],
+    });
+
+    render(
+      <AppRenderer
+        sandboxPath="/sandbox"
+        tool={toolWithBogusCsp}
+        tools={[toolWithBogusCsp] as Tool[]}
+        mcpClient={client}
+        toolResult={null}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockSandboxProps.at(-1)?.csp).toBeUndefined();
+    });
+  });
+
+  it("yields the baseline when both resource reads fail", async () => {
+    (client.readResource as jest.Mock).mockRejectedValue(
+      new Error("resource read failed"),
+    );
+    (client.listResources as jest.Mock).mockRejectedValue(
+      new Error("list failed"),
+    );
+
+    renderSpecApp();
+
+    await waitFor(() => {
+      expect(mockSandboxProps.at(-1)?.csp).toBeUndefined();
+    });
   });
 });

@@ -75,6 +75,54 @@ export function checkToolVisibility(
   return { allowed: true };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function cspFromMeta(meta: unknown): Record<string, unknown> | undefined {
+  const ui = isRecord(meta) ? meta["ui"] : undefined;
+  const csp = isRecord(ui) ? ui["csp"] : undefined;
+  return isRecord(csp) ? csp : undefined;
+}
+
+/**
+ * [spring-ai-mcp-inspector PATCH] Read the App's CSP from the UI resource, not
+ * from the tool: in @modelcontextprotocol/ext-apps 1.7.2 McpUiToolMeta carries
+ * only resourceUri and visibility (McpUiToolMeta.csp is `never`), and
+ * McpUiResourceMeta.csp is the single source of truth. Per the ext-apps docs
+ * the host reads it from the resources/read content item, with the
+ * resources/list entry as the fallback; a tool that sets _meta.ui.csp anyway
+ * is ignored, and a resource without csp gets the sandbox baseline policy
+ * (owner review PR #199, round 2, BLOCK 2).
+ */
+export async function readResourceCsp(
+  client: Client,
+  resourceUri: string,
+): Promise<Record<string, unknown> | undefined> {
+  try {
+    const result = await client.readResource({ uri: resourceUri });
+    for (const content of result?.contents ?? []) {
+      const csp = cspFromMeta((content as Record<string, unknown>)._meta);
+      if (csp) {
+        return csp;
+      }
+    }
+  } catch {
+    // fall through to the resources/list fallback below
+  }
+  try {
+    const result = await client.listResources();
+    for (const resource of result?.resources ?? []) {
+      if (resource.uri === resourceUri) {
+        return cspFromMeta((resource as Record<string, unknown>)._meta);
+      }
+    }
+  } catch {
+    // no resource meta available: the sandbox baseline policy applies
+  }
+  return undefined;
+}
+
 /**
  * [spring-ai-mcp-inspector PATCH] AppRenderer with SEP-1865 traffic tap
  * and lifecycle state machine.
@@ -99,6 +147,7 @@ const AppRenderer = ({
   onLifecycleChange,
 }: AppRendererProps) => {
   const [error, setError] = useState<string | null>(null);
+  const [resourceCsp, setResourceCsp] = useState<Record<string, unknown> | undefined>(undefined);
   const { toast } = useToast();
   const containerRef = useRef<HTMLDivElement>(null);
   const seqRef = useRef(0);
@@ -113,6 +162,28 @@ const AppRenderer = ({
     },
     [onLifecycleChange],
   );
+
+  // CSP lives on the UI resource, not on the tool meta (see readResourceCsp):
+  // resolve it per rendered tool and hand it to the sandbox frame.
+  const toolUiMeta = ((tool as Record<string, unknown>)._meta as
+    | Record<string, unknown>
+    | undefined)?.["ui"] as Record<string, unknown> | undefined;
+  const toolResourceUri = toolUiMeta?.["resourceUri"];
+  useEffect(() => {
+    let cancelled = false;
+    setResourceCsp(undefined);
+    if (!mcpClient || typeof toolResourceUri !== "string" || toolResourceUri === "") {
+      return;
+    }
+    readResourceCsp(mcpClient, toolResourceUri).then((csp) => {
+      if (!cancelled) {
+        setResourceCsp(csp);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [mcpClient, toolResourceUri]);
 
   const emitTraffic = useCallback(
     (
@@ -415,13 +486,9 @@ const AppRenderer = ({
           toolResult={normalizedToolResult}
           sandbox={{
             url: new URL(sandboxPath, window.location.origin),
-            csp: (((tool as Record<string, unknown>)._meta as
-              | Record<string, unknown>
-              | undefined)?.["ui"] as
-              | Record<string, unknown>
-              | undefined)?.["csp"] as
-              | Record<string, unknown>
-              | undefined,
+            // From the UI resource meta (readResourceCsp), never from the tool
+            // meta: McpUiToolMeta.csp is `never` in ext-apps 1.7.2.
+            csp: resourceCsp,
           }}
           onError={(err) => {
             setError(err.message);

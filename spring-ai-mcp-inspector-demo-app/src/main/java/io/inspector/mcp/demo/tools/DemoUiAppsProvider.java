@@ -58,7 +58,7 @@ public class DemoUiAppsProvider {
 
 	}
 
-	@McpTool(name = "formApp", description = "Form fixture App — opens an HTML form in the Apps tab sandbox",
+	@McpTool(name = "formApp", description = "Form fixture App: opens an HTML form in the Apps tab sandbox",
 			metaProvider = FormAppMetaProvider.class,
 			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public String formApp() {
@@ -66,7 +66,7 @@ public class DemoUiAppsProvider {
 	}
 
 	@McpTool(name = "dashboardApp",
-			description = "Dashboard fixture App — consumes tool-input-partial streams in the sandbox",
+			description = "Dashboard fixture App: consumes tool-input-partial streams in the sandbox",
 			metaProvider = DashboardAppMetaProvider.class,
 			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public String dashboardApp() {
@@ -74,7 +74,7 @@ public class DemoUiAppsProvider {
 	}
 
 	@McpTool(name = "malformedAppTool",
-			description = "Fixture tool pointing to a non-existent ui:// resource — exercises fallback rendering",
+			description = "Fixture tool pointing to a non-existent ui:// resource: exercises fallback rendering",
 			metaProvider = MalformedAppMetaProvider.class,
 			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
 	public String malformedAppTool() {
