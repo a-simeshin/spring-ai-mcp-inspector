@@ -193,6 +193,57 @@ class McpProxyTests {
 		}
 
 		@Test
+		@Story("sendMessage failure is surfaced")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a proxy invalid_request rejection (restricted custom header name) fails the session: every "
+				+ "further frame would fail the same customizer check, so the session is unusable")
+		void start_whenSendFailsWithInvalidProxyRequest_terminatesUpstream() {
+			// given: the factory's fail-fast rejection surfaces on the pump
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any()))
+				.willReturn(Mono.error(new InvalidProxyRequestException(
+						"custom header 'host' is not allowed by the JDK HTTP client: restricted header name")));
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+
+			// when
+			McpProxyTests.this.browserToTarget.tryEmitNext(McpProxyTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.put("method", "initialize"));
+
+			// then: classified invalid_request, the session is torn down
+			verify(McpProxyTests.this.transport, timeout(1000)).sendMessage(any());
+			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
+		}
+
+		@Test
+		@Story("sendMessage failure is contained")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a foreign IllegalArgumentException (NumberFormatException) does not stop the relay: the next "
+				+ "frame is still forwarded, same as any other send failure")
+		void start_whenSendFailsWithForeignIllegalArgument_keepsRelaying() {
+			// given: a JDK parser blow-up is not a proxy rejection
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any()))
+				.willReturn(Mono.error(new NumberFormatException("For input string: \"pw-123\"")), Mono.empty());
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+
+			// when: two valid frames; the first send errors, the second must relay
+			McpProxyTests.this.browserToTarget
+				.tryEmitNext(McpProxyTests.this.mapper.createObjectNode().put("jsonrpc", "2.0").put("method", "ping"));
+			McpProxyTests.this.browserToTarget.tryEmitNext(McpProxyTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 2)
+				.put("method", "tools/list"));
+
+			// then: both frames were sent, the foreign IAE did not stop the relay
+			// itself (the unconditional send-failure teardown is the D9/#89 behaviour
+			// and applies to every error type alike; the classification only decides
+			// the wire reason, which the classify unit tests pin separately)
+			verify(McpProxyTests.this.transport, timeout(1000).times(2)).sendMessage(any());
+		}
+
+		@Test
 		@Story("Handshake ordering")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("initialize and tools/list sent back-to-back must reach the transport in order: "

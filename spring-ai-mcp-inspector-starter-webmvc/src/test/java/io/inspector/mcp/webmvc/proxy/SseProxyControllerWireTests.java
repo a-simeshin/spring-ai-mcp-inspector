@@ -115,7 +115,7 @@ class SseProxyControllerWireTests {
 			.andExpect(jsonPath("$.error.reason").value("invalid_request"))
 			.andExpect(jsonPath("$.error.message", containsString("custom header 'host' is not allowed")))
 			.andExpect(jsonPath("$.error.message", containsString("restricted header name")))
-			.andExpect(jsonPath("$.error.retryable").value(true))
+			.andExpect(jsonPath("$.error.retryable").value(false))
 			.andExpect((result) -> assertThat(result.getResponse().getContentAsString())
 				.doesNotContain("secret-value-that-must-leak-nowhere"));
 	}
@@ -220,7 +220,7 @@ class SseProxyControllerWireTests {
 	void classify_mapsFactoryRejectionValueSafe() {
 		final ProxyTransportFactory factory = new ProxyTransportFactory();
 		try {
-			factory.openSse(URI.create(DEAD_TARGET), null, Map.of("host", "value-not-in-any-message"));
+			factory.buildSse(URI.create(DEAD_TARGET), null, Map.of("host", "value-not-in-any-message"));
 			throw new AssertionError("expected IllegalArgumentException from the factory");
 		}
 		catch (final IllegalArgumentException ex) {

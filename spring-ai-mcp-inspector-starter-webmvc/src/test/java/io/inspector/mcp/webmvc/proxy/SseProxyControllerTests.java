@@ -50,6 +50,7 @@ import io.inspector.mcp.core.auth.BearerProfile;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
 import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
@@ -292,8 +293,8 @@ class SseProxyControllerTests {
 			request.addHeader("x-custom-auth-headers", "X-Tenant");
 			request.addHeader("X-Tenant", "acme");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class), any(), any()))
-				.willThrow(new IllegalArgumentException(
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class), any(), any()))
+				.willThrow(new InvalidProxyRequestException(
 						"custom header 'host' is not allowed by the JDK HTTP client: restricted header name"));
 
 			// when & then - a classified connect failure carrying the header name;
@@ -316,7 +317,7 @@ class SseProxyControllerTests {
 			request.addHeader("x-custom-auth-headers", "X-Tenant");
 			request.addHeader("X-Tenant", "acme");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class), any(), any()))
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class), any(), any()))
 				.willThrow(new RuntimeException(new java.net.SocketTimeoutException("connect timed out")));
 
 			// when & then

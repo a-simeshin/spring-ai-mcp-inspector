@@ -56,6 +56,7 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
@@ -542,19 +543,19 @@ public class SseProxyController {
 			}
 			case "stdio" -> {
 				if (command == null || command.isBlank()) {
-					throw new IllegalArgumentException(
+					throw new InvalidProxyRequestException(
 							"missing required 'command' query parameter for stdio transport");
 				}
 				final List<String> argv = parseArgv(command, args);
 				final Map<String, String> environment = parseEnv(env);
 				yield this.transportFactory.openStdio(argv, environment);
 			}
-			default -> throw new IllegalArgumentException("unsupported transportType: " + transportType);
+			default -> throw new InvalidProxyRequestException("unsupported transportType: " + transportType);
 		};
 	}
 
 	/**
-	
+	 *
 	 * Answers a failed session bring-up with the structured {@code MCP_CONNECT_FAILED}
 	 * payload: 504 Gateway Timeout for {@link ProxyConnectFailure.Reason#TIMEOUT}, 502
 	 * Bad Gateway for every other reason. The body is written by this controller itself
@@ -574,7 +575,8 @@ public class SseProxyController {
 		return ResponseEntity.status(status)
 			.contentType(MediaType.APPLICATION_JSON)
 			.body(Map.of("error", Map.of("code", ERROR_CODE_MCP_CONNECT_FAILED, "reason", failure.reason().wire(),
-					"message", failure.message(), "retryable", Boolean.TRUE)));
+					"message", failure.message(), "retryable", failure.retryable())));
+	}
 
 	/**
 	 * Opens an SSE transport forwarding the inbound {@code Authorization} header and the

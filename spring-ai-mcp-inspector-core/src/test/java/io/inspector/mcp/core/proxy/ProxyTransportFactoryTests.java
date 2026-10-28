@@ -664,7 +664,8 @@ class ProxyTransportFactoryTests {
 					Map.of("X-Custom", "allowed-value"));
 
 			// then
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -682,7 +683,8 @@ class ProxyTransportFactoryTests {
 					Map.of("", "some-value"));
 
 			// then - blank name is skipped, no exception, transport is built
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -701,7 +703,8 @@ class ProxyTransportFactoryTests {
 					headersWithNull);
 
 			// then - null value is skipped, no exception, transport is built
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -718,7 +721,8 @@ class ProxyTransportFactoryTests {
 					Map.of("X-Custom", ""));
 
 			// then
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -738,7 +742,8 @@ class ProxyTransportFactoryTests {
 					headersWithNull);
 
 			// then - null value is skipped, no exception, transport is built
-			assertThat(transport).isNotNull().isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
@@ -955,7 +960,6 @@ class ProxyTransportFactoryTests {
 			customHeaders.put("X-Tenant", "acme");
 			customHeaders.put(" ", "bad-name");
 			customHeaders.put("X-Null", null);
-			customHeaders.put("host", "evil.example.com");
 			final AuthHeaders headers = new AuthHeaders(null, customHeaders, Map.of());
 
 			// when & then — must not throw
@@ -1089,14 +1093,13 @@ class ProxyTransportFactoryTests {
 		@Story("Header forwarding — invalid entries")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("a real SSE connect with a blank authorization value and invalid custom header entries forwards "
-				+ "only the valid ones")
+				+ "only the valid ones (restricted names are rejected at build time, not skipped)")
 		void sseConnect_withBlankAuthAndInvalidEntries_skipsThem() {
 			// given
 			final Map<String, String> customHeaders = new HashMap<>();
 			customHeaders.put("X-Tenant", "acme");
 			customHeaders.put(" ", "bad-name");
 			customHeaders.put("X-Null", null);
-			customHeaders.put("host", "evil.example.com");
 			final AuthHeaders headers = new AuthHeaders("   ", customHeaders, Map.of());
 
 			// when
@@ -1105,7 +1108,7 @@ class ProxyTransportFactoryTests {
 			// then
 			assertThat(this.lastRequestHeaders.getFirst("Authorization")).isNull();
 			assertThat(this.lastRequestHeaders.getFirst("X-Tenant")).isEqualTo("acme");
-			assertThat(this.lastRequestHeaders.getFirst("host")).isNotEqualTo("evil.example.com");
+
 		}
 
 		@Test
@@ -1173,14 +1176,13 @@ class ProxyTransportFactoryTests {
 		@Story("Legacy header forwarding — invalid entries")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("a real SSE connect through the legacy buildSse() overload silently skips custom headers with "
-				+ "blank names, null values or restricted names")
+				+ "blank names or null values; restricted names are rejected at build time")
 		void sseConnect_withLegacyInvalidEntries_skipsThem() {
 			// given
 			final Map<String, String> customHeaders = new HashMap<>();
 			customHeaders.put("X-Tenant", "acme");
 			customHeaders.put(" ", "bad-name");
 			customHeaders.put("X-Null", null);
-			customHeaders.put("host", "evil.example.com");
 
 			// when
 			connectAndClose(
@@ -1189,7 +1191,7 @@ class ProxyTransportFactoryTests {
 			// then
 			assertThat(this.lastRequestHeaders.getFirst("Authorization")).isEqualTo("Bearer tok-legacy");
 			assertThat(this.lastRequestHeaders.getFirst("X-Tenant")).isEqualTo("acme");
-			assertThat(this.lastRequestHeaders.getFirst("host")).isNotEqualTo("evil.example.com");
+
 		}
 
 		private void handleSse(final HttpExchange exchange) throws IOException {

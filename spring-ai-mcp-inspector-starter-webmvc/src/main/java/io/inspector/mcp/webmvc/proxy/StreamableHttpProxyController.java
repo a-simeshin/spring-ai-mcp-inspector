@@ -404,7 +404,7 @@ public class StreamableHttpProxyController {
 		return ResponseEntity.status(status)
 			.contentType(MediaType.APPLICATION_JSON)
 			.body(Map.of("error", Map.of("code", ERROR_CODE_MCP_CONNECT_FAILED, "reason", failure.reason().wire(),
-					"message", failure.message(), "retryable", Boolean.TRUE)));
+					"message", failure.message(), "retryable", failure.retryable())));
 	}
 
 	/**

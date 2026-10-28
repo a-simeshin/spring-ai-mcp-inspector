@@ -89,11 +89,11 @@ class ProxyConnectFailureTests {
 		@Test
 		@Story("Classification")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("An IllegalArgumentException (transport-build rejection) is classified as "
+		@Description("An InvalidProxyRequestException (transport-build rejection) is classified as "
 				+ "invalid_request and keeps the value-safe message")
-		void classify_illegalArgument_returnsInvalidRequestWithMessage() {
+		void classify_invalidProxyRequest_returnsInvalidRequestWithMessage() {
 			// given / when
-			final ProxyConnectFailure failure = ProxyConnectFailure.classify(new IllegalArgumentException(
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(new InvalidProxyRequestException(
 					"custom header 'host' is not allowed by the JDK HTTP client: restricted header name"));
 
 			// then
@@ -104,12 +104,44 @@ class ProxyConnectFailureTests {
 
 		@Test
 		@Story("Classification")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("A bare UnresolvedAddressException (extends IllegalArgumentException) stays a DNS "
+				+ "failure: the invalid_request match must not shadow the DNS check")
+		void classify_bareUnresolvedAddress_returnsDns() {
+			// given / when: JDK usually wraps UAE in ConnectException, but the classify
+			// contract must hold for a bare UAE too - matching plain
+			// IllegalArgumentException
+			// before the DNS check would turn it into invalid_request
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(new UnresolvedAddressException());
+
+			// then
+			assertThat(failure.reason()).isEqualTo(ProxyConnectFailure.Reason.DNS);
+			assertThat(failure.message()).isEqualTo("could not resolve the MCP server host name");
+		}
+
+		@Test
+		@Story("Classification")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("An IllegalArgumentException in a cause chain maps to invalid_request")
-		void classify_wrappedIllegalArgument_returnsInvalidRequest() {
+		@Description("A foreign IllegalArgumentException (NumberFormatException) is unknown, so its raw "
+				+ "message never reaches the browser")
+		void classify_numberFormatException_returnsUnknownAndKeepsGenericMessage() {
+			// given / when: a JDK parser blow-up is not a proxy rejection
+			final ProxyConnectFailure failure = ProxyConnectFailure
+				.classify(new NumberFormatException("For input string: \"secret-token-123\""));
+
+			// then
+			assertThat(failure.reason()).isEqualTo(ProxyConnectFailure.Reason.UNKNOWN);
+			assertThat(failure.message()).doesNotContain("secret-token-123");
+		}
+
+		@Test
+		@Story("Classification")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("An InvalidProxyRequestException in a cause chain maps to invalid_request")
+		void classify_wrappedInvalidProxyRequest_returnsInvalidRequest() {
 			// given: a controller may catch a wrapper thrown around the factory reject
-			final RuntimeException wrapper = new RuntimeException("build failed",
-					new IllegalArgumentException("custom header 'connection' is not allowed by the JDK HTTP client"));
+			final RuntimeException wrapper = new RuntimeException("build failed", new InvalidProxyRequestException(
+					"custom header 'connection' is not allowed by the JDK HTTP client"));
 
 			// when
 			final ProxyConnectFailure failure = ProxyConnectFailure.classify(wrapper);
@@ -122,10 +154,10 @@ class ProxyConnectFailureTests {
 		@Test
 		@Story("Classification")
 		@Severity(SeverityLevel.MINOR)
-		@Description("An IllegalArgumentException with a null message still yields a non-null message")
-		void classify_illegalArgumentWithNullMessage_keepsNonNullMessage() {
+		@Description("An InvalidProxyRequestException with a null message still yields a non-null message")
+		void classify_invalidProxyRequestWithNullMessage_keepsNonNullMessage() {
 			// given / when
-			final ProxyConnectFailure failure = ProxyConnectFailure.classify(new IllegalArgumentException());
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(new InvalidProxyRequestException(null));
 
 			// then
 			assertThat(failure.reason()).isEqualTo(ProxyConnectFailure.Reason.INVALID_REQUEST);
@@ -143,6 +175,25 @@ class ProxyConnectFailureTests {
 			// then
 			assertThat(failure.reason()).isEqualTo(ProxyConnectFailure.Reason.UNKNOWN);
 			assertThat(failure.message()).isNotBlank();
+		}
+
+		@Test
+		@Story("Retryable")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Only an invalid_request failure answers retryable=false: an identical retry would "
+				+ "fail identically")
+		void retryable_invalidRequest_isFalse_everythingElseIsTrue() {
+			// invalid_request
+			assertThat(ProxyConnectFailure
+				.classify(new InvalidProxyRequestException("custom header 'host' is not allowed"))
+				.retryable()).isFalse();
+			// dns (bare UAE - the regression guard)
+			assertThat(ProxyConnectFailure.classify(new UnresolvedAddressException()).retryable()).isTrue();
+			// timeout
+			assertThat(ProxyConnectFailure.classify(new TimeoutException("upstream did not answer")).retryable())
+				.isTrue();
+			// unknown
+			assertThat(ProxyConnectFailure.classify(new IllegalStateException("bad state")).retryable()).isTrue();
 		}
 
 		@Test
