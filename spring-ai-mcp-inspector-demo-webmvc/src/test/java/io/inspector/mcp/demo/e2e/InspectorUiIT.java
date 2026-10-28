@@ -845,7 +845,7 @@ class InspectorUiIT {
 		@Story("Tool call validation")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("Sum tool with empty required fields: submit button disabled, hint shown.")
-		@DisplayName("sumToolEmptyRequired — submit disabled, hint shown")
+		@DisplayName("sumToolEmptyRequired: submit disabled, hint shown")
 		void sumToolEmptyRequired_submitDisabled_hintShown() {
 			// given
 			selectRow("sum");
