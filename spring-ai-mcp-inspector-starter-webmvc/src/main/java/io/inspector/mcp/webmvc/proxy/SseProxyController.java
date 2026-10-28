@@ -648,6 +648,8 @@ public class SseProxyController {
 	 * body the streamable and webflux endpoints serve. Without this advice Boot's
 	 * {@code /error} dispatch answers with an empty body and the offending header shape
 	 * never reaches the browser.
+	 * @param ex the rejected request's status exception carrying the message
+	 * @return the HTTP response entity carrying the explicit error body
 	 */
 	@ExceptionHandler(ResponseStatusException.class)
 	private ResponseEntity<Object> statusException(final ResponseStatusException ex) {
