@@ -234,7 +234,7 @@ describe("useKeepAlive", () => {
     );
   });
 
-  it("parses the WebFlux JSON ping payload ({\"at\":...}) into the bare timestamp", async () => {
+  it("parses the unified JSON ping payload ({\"at\":...}) both stacks emit into the bare timestamp", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ observed: false }),
@@ -257,7 +257,7 @@ describe("useKeepAlive", () => {
     expect(result.current.recentPings).toContain("2026-09-20T12:00:05Z");
   });
 
-  it("keeps the WebMVC bare-string ping payload as-is", async () => {
+  it("tolerates the legacy bare-string ping payload as-is", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ observed: false }),
@@ -277,6 +277,31 @@ describe("useKeepAlive", () => {
     });
 
     expect(result.current.lastPingAt).toBe("2026-09-20T12:00:09Z");
+  });
+
+  it("yields a parseable timestamp from the unified JSON payload so the UI never shows NaN ago", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ observed: false }),
+    });
+
+    const { result } = renderHook(() => useKeepAlive("test-session"));
+
+    await waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    act(() => {
+      MockEventSource.instances[0].simulateEvent(
+        "mcp:keepalive-ping",
+        JSON.stringify({ at: "2026-09-20T12:00:05Z" }),
+      );
+    });
+
+    // Sidebar's KeepAliveIndicator renders "Xs ago" from
+    // new Date(lastPingAt).getTime(); an unparseable payload would show "NaNs ago".
+    expect(Number.isFinite(new Date(result.current.lastPingAt!).getTime())).toBe(true);
+    expect(Number.isFinite(new Date(result.current.recentPings[0]).getTime())).toBe(true);
   });
 
   it("uses custom inspector path from bootstrap", async () => {
