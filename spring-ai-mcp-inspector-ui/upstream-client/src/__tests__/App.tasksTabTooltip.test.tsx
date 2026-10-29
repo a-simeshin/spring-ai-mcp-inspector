@@ -1,6 +1,11 @@
 // [spring-ai-mcp-inspector PATCH] App-level Tasks tab capability-gate regression tests (#182).
 // Must run before react-dom loads (jsdom lacks PointerEvent; React only
 // attaches pointermove listeners when the constructor exists).
+//
+// [spring-ai-mcp-inspector PATCH] Tooltip text updated for issue #212
+// ("Server does not advertise the tasks capability; long-running task
+// tracking is unavailable.") to match MCP_TASKS_DISABLED_HINT in App.tsx.
+// See NOTICE.d/tasks-capability-gating.txt.
 import "../testUtils/pointerEventsPolyfill";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
@@ -128,13 +133,14 @@ jest.mock("../lib/hooks/useConnection", () => ({
   useConnection: jest.fn(),
 }));
 
-// The Tasks tab is disabled when the server does not advertise the MCP Tasks
-// capability (SEP-1686). In that case the trigger is wrapped in a Tooltip that
-// explains why and links to the proposal. When the server DOES advertise it,
-// the tab is a plain enabled trigger with no tooltip.
+// The Tasks tab is enabled but wrapped in a Tooltip when the server does not
+// advertise the MCP Tasks capability (SEP-1686). Clicking the tab shows the
+// capability-gap body; hovering the wrapper span shows the tooltip with the
+// reason and a link to the proposal. When the server DOES advertise it,
+// the tab is a plain enabled trigger with no tooltip wrapper.
 const MCP_TASKS_DOCS_URL = "https://modelcontextprotocol.io/seps/1686-tasks";
 const MCP_TASKS_DISABLED_HINT =
-  "This server does not support MCP Tasks. See the SEP-1686 proposal.";
+  "Server does not advertise the tasks capability; long-running task tracking is unavailable.";
 
 function connectionState(serverCapabilities: Record<string, unknown>) {
   return {
@@ -159,7 +165,7 @@ function connectionState(serverCapabilities: Record<string, unknown>) {
   } as ReturnType<typeof useConnection>;
 }
 
-describe("App - Tasks tab disabled-state tooltip", () => {
+describe("App - Tasks tab tooltip for capability gap", () => {
   const mockUseConnection = jest.mocked(useConnection);
 
   beforeEach(() => {
@@ -174,24 +180,25 @@ describe("App - Tasks tab disabled-state tooltip", () => {
     render(<App />);
 
     const tasksTab = screen.getByRole("tab", { name: /^Tasks$/i });
-    expect(tasksTab).toBeDisabled();
+    // The trigger is enabled (not disabled) so the user can click it to
+    // see the capability-gap body. The tooltip wrapper still provides
+    // the explanation on hover.
+    expect(tasksTab).not.toBeDisabled();
 
-    // The wrapper span (the disabled trigger's parent) is the accessible
-    // container: the disabled trigger itself has pointer-events:none and never
-    // receives hover or focus, so the reason must live on the wrapper as a
-    // native title and an aria-label.
+    // The wrapper span (the enabled trigger's parent) is the accessible
+    // container: it carries the native title and an aria-label so the
+    // reason is discoverable even without hovering.
     const wrapper = tasksTab.parentElement!;
     expect(wrapper).toHaveAttribute("title", MCP_TASKS_DISABLED_HINT);
     expect(wrapper).toHaveAttribute("aria-label", MCP_TASKS_DISABLED_HINT);
 
     // No tooltip content before hover
     expect(
-      screen.queryByText(/does not support MCP Tasks/i),
+      screen.queryByText(/Server does not advertise the tasks capability/i),
     ).not.toBeInTheDocument();
 
-    // Hover the (non-interactive) disabled trigger through its wrapper span.
-    // Radix Tooltip opens on pointermove (700ms delay), so fire on the
-    // TooltipTrigger span.
+    // Hover the enabled trigger through its wrapper span. Radix Tooltip
+    // opens on pointermove (700ms delay), so fire on the TooltipTrigger span.
     fireEvent.pointerMove(wrapper);
 
     await waitFor(
@@ -199,7 +206,7 @@ describe("App - Tasks tab disabled-state tooltip", () => {
         // Radix renders the content twice: the visible popover plus a
         // visually-hidden accessible copy (role=tooltip), so use queryAllBy.
         expect(
-          screen.queryAllByText(/does not support MCP Tasks/i),
+          screen.queryAllByText(/Server does not advertise the tasks capability/i),
         ).not.toHaveLength(0);
       },
       { timeout: 3000 },
@@ -222,10 +229,11 @@ describe("App - Tasks tab disabled-state tooltip", () => {
     render(<App />);
 
     const tasksTab = screen.getByRole("tab", { name: /^Tasks$/i });
-    expect(tasksTab).toBeDisabled();
+    // The trigger is enabled (not disabled) so the user can click it to
+    // see the capability-gap body.
+    expect(tasksTab).not.toBeDisabled();
 
-    // The wrapper span is the keyboard entry point: the disabled trigger is
-    // not focusable (disabled TabsTrigger), so tabIndex keeps the wrapper in
+    // The wrapper span is the keyboard entry point: tabIndex keeps it in
     // the tab order and Radix Tooltip opens on focus.
     const wrapper = tasksTab.parentElement!;
     expect(wrapper).toHaveAttribute("tabindex", "0");
@@ -233,7 +241,7 @@ describe("App - Tasks tab disabled-state tooltip", () => {
 
     // No tooltip content before focus
     expect(
-      screen.queryByText(/does not support MCP Tasks/i),
+      screen.queryByText(/Server does not advertise the tasks capability/i),
     ).not.toBeInTheDocument();
 
     // Focus the wrapper (what happens when the user tabs to it) and verify
@@ -243,7 +251,7 @@ describe("App - Tasks tab disabled-state tooltip", () => {
     await waitFor(
       () => {
         expect(
-          screen.queryAllByText(/does not support MCP Tasks/i),
+          screen.queryAllByText(/Server does not advertise the tasks capability/i),
         ).not.toHaveLength(0);
       },
       { timeout: 3000 },
@@ -260,7 +268,7 @@ describe("App - Tasks tab disabled-state tooltip", () => {
 
   it("keeps the Tasks tab enabled with no tooltip when the tasks capability is advertised", async () => {
     mockUseConnection.mockReturnValue(
-      connectionState({ tasks: { listChanged: true } }),
+      connectionState({ tasks: { listChanged: true, list: {} } }),
     );
 
     render(<App />);
@@ -277,7 +285,7 @@ describe("App - Tasks tab disabled-state tooltip", () => {
     await new Promise((resolve) => setTimeout(resolve, 800));
     await waitFor(() => {
       expect(
-        screen.queryByText(/does not support MCP Tasks/i),
+        screen.queryByText(/Server does not advertise the tasks capability/i),
       ).not.toBeInTheDocument();
       expect(
         screen.queryByRole("link", { name: /MCP Tasks documentation/i }),
@@ -294,18 +302,24 @@ describe("App - Tasks tab capability gate", () => {
     jest.clearAllMocks();
   });
 
-  it("does not mount TasksTab when the server does not advertise the tasks capability", () => {
-    // Regression (owner review on 0a41ca9, mutation a): replacing the
-    // serverCapabilities?.tasks mount gate with {true && } must be caught
-    // here. TasksTab is mocked to a div with the literal text, so mounting
-    // is observable without its polling internals.
+  it("mounts TasksTab even when the server does not advertise the tasks capability", async () => {
+    // Regression (owner review on 0a41ca9, mutation a; adapted for issue
+    // //212 in PR #214): the Tasks tab always mounts now, so removing the
+    // mount again must be caught here. The trigger is enabled without the
+    // capability, and clicking it mounts the (mocked) TasksTab that carries
+    // the capability-gap body. TasksTab is mocked to a div with the literal
+    // text, so mounting is observable without its polling internals.
     mockUseConnection.mockReturnValue(
       connectionState({ tools: { listChanged: true } }),
     );
 
     render(<App />);
 
-    expect(screen.queryByText("TasksTab")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /^Tasks$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("TasksTab")).toBeInTheDocument();
+    });
   });
 
   it("mounts TasksTab when the server advertises the tasks capability", async () => {

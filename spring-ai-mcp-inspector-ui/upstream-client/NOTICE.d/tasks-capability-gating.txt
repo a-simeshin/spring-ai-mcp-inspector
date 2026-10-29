@@ -1,0 +1,58 @@
+src/App.tsx, src/lib/hooks/useConnection.ts, src/components/TasksTab.tsx -- gate
+all tasks/* RPC calls on the advertised server capabilities (issue #212, PR #214).
+
+Changes:
+1. App.tsx: added serverCapabilitiesRef (useRef synced with serverCapabilities
+   state) so the notification callback installed before connect completes reads
+   the current capabilities, not the stale null closure. The notification handler
+   now checks serverCapabilitiesRef.current?.tasks before calling listTasks().
+2. App.tsx: polling loop (tools/call runAsTask path) checks
+   serverCapabilitiesRef.current?.tasks before each iteration and aborts
+   gracefully when the server no longer advertises tasks (disconnect/reconnect).
+3. App.tsx: listTasks callback is gated on
+   serverCapabilitiesRef.current?.tasks?.list (operation-level sub-capability).
+4. App.tsx: cancelTask is gated on
+   serverCapabilitiesRef.current?.tasks?.cancel (operation-level sub-capability).
+5. App.tsx: the activeTab effect for tasks/list is gated on
+   serverCapabilities?.tasks?.list (not just tasks truthiness).
+6. useConnection.ts: added serverCapabilitiesRef (same pattern as App.tsx).
+   listTasks and cancelTask now early-return when the respective operation
+   sub-capability is absent, preventing stale -32601 errors after
+   disconnect/reconnect to a capability-less server.
+7. TasksTab.tsx: empty state with the exact message from issue #212:
+   "Server does not advertise the tasks capability; long-running task tracking
+   is unavailable." The tab trigger is enabled (clickable) and opens this
+   capability-gap body. A tooltip on the trigger wrapper explains why.
+   After #197 moved list polling and per-task tasks/get polling into
+   TasksTab, the pollers are gated on tasksSupported: no tasks/list or
+   tasks/get timer runs while the capability is absent.
+8. useConnection.ts: disconnect() synchronously invalidates
+   serverCapabilitiesRef and calls setServerCapabilities(null) BEFORE any
+   awaited close (terminateSession/mcpClient.close), so no tasks/list or
+   tasks/get request is emitted from stale work during disconnect.
+9. App.tsx: the tasks tab is always a valid route (not gated on
+   serverCapabilities?.tasks?.list). The default tab when no capabilities
+   exist is "tasks" (shows the capability-gap body), not "ping". The
+   null-capabilities routing added later on the base (#t_fdeb9f56, which
+   forced "ping" in the hash-change handler and the routing effect) now
+   forces "tasks" for the same reason: the gap body is a real panel.
+10. TasksTab.tsx: when tasks.cancel is absent, both Cancel affordances (the
+   per-row icon button and the detail-panel button) are disabled with a
+   tooltip and an extended aria-label naming the missing sub-capability.
+   Cancel clicks are additionally gated in App.tsx and useConnection.ts.
+
+Covered by:
+- src/__tests__/App.tasksCapabilityGating.test.tsx (App-level integration)
+- src/__tests__/App.routing.test.tsx (default-tab routing with tasks-always-valid)
+- src/__tests__/App.tasksTabTooltip.test.tsx (trigger tooltip + always-mounted
+  TasksTab, adapted from the #197 mount-gate regression test)
+- src/__tests__/App.tabRouterFallback.test.tsx (null/empty capabilities force
+  the Tasks gap body, adapted from the #t_fdeb9f56 ping-forcing tests)
+- src/components/__tests__/TasksTab.test.tsx (unchanged: tasksSupported
+  defaults to true for pre-existing direct renders)
+- src/lib/hooks/__tests__/useConnection.test.tsx (hook-level unit tests)
+  including delayed-close regression (disconnect window without synchronous
+  invalidation leaks tasks/list)
+- spring-ai-mcp-inspector-demo-webmvc/src/test/java/.../InspectorUiIT.java
+  (E2E tasks-tab probe now checks #run-as-task presence instead of the
+  removed disabled-attribute signal)

@@ -91,9 +91,11 @@ type TaskRowState = {
 
 const TasksTab = ({
   tasks,
+  tasksSupported = true,
   listTasks,
   clearTasks,
   cancelTask,
+  cancelSupported,
   getTask,
   selectedTask,
   setSelectedTask,
@@ -103,9 +105,15 @@ const TasksTab = ({
   updateTask,
 }: {
   tasks: Task[];
+  // [spring-ai-mcp-inspector PATCH] Optional with default true: callers that
+  // predate issue #212 keep the supported layout; App passes it explicitly.
+  // cancelSupported (also this patch) disables both Cancel affordances with a
+  // tooltip when tasks.cancel is absent.
+  tasksSupported?: boolean;
   listTasks: () => void;
   clearTasks: () => void;
   cancelTask: (taskId: string) => Promise<void>;
+  cancelSupported?: boolean;
   getTask: (taskId: string) => Promise<Task>;
   selectedTask: Task | null;
   setSelectedTask: (task: Task | null) => void;
@@ -165,7 +173,9 @@ const TasksTab = ({
   // tasks/list (reflected in the error prop on the next tick) doubles the
   // delay up to MAX_POLL_BACKOFF_MS; a clean poll resets it.
   useEffect(() => {
-    if (activeTab !== "tasks") return;
+    // [spring-ai-mcp-inspector PATCH] Never poll tasks/list when the server
+    // does not advertise the tasks capability (issue #212).
+    if (activeTab !== "tasks" || !tasksSupported) return;
     let delay = LIST_POLL_INTERVAL_MS;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const tick = () => {
@@ -179,7 +189,7 @@ const TasksTab = ({
     return () => {
       if (timeoutId !== undefined) clearTimeout(timeoutId);
     };
-  }, [activeTab]);
+  }, [activeTab, tasksSupported]);
 
   // TTL countdown ticker: only runs while the tasks tab is active and at
   // least one task has a TTL, instead of re-rendering at 1 Hz for the whole
@@ -259,10 +269,11 @@ const TasksTab = ({
     const pollers = taskPollersRef.current;
 
     // Same activeTab gate as the list poll above: no tasks/get may run while
-    // another tab is shown. Leaving the tasks tab stops every poller;
-    // returning re-runs this effect (activeTab is a dependency) and restarts
-    // them from their base intervals.
-    if (activeTab !== "tasks") {
+    // another tab is shown, and none may run at all when the server does not
+    // advertise the tasks capability (issue #212). Leaving the tasks tab (or
+    // losing the capability) stops every poller; returning re-runs this
+    // effect and restarts them from their base intervals.
+    if (activeTab !== "tasks" || !tasksSupported) {
       for (const [taskId, poller] of [...pollers]) {
         poller.stop();
         pollers.delete(taskId);
@@ -332,7 +343,7 @@ const TasksTab = ({
     // their timers from zero. Removals are handled above; unmount is handled
     // by the dedicated effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTaskIdString, activeTab]);
+  }, [activeTaskIdString, activeTab, tasksSupported]);
 
   // Unmount-only cleanup for the per-task pollers
   useEffect(() => {
@@ -372,6 +383,21 @@ const TasksTab = ({
 
   return (
     <TabsContent value="tasks" className="flex-1 overflow-hidden p-0 m-0">
+      {!tasksSupported ? (
+        // [spring-ai-mcp-inspector PATCH] Reachable empty state for the
+        // capability-absent case (issue #212). The exact message matches the
+        // acceptance criteria.
+        <div className="flex h-full items-center justify-center p-8">
+          <div className="text-center max-w-md">
+            <Clock className="mx-auto mb-4 h-12 w-12 opacity-20" />
+            <h3 className="text-lg font-medium mb-2">Tasks Not Available</h3>
+            <p className="text-muted-foreground">
+              Server does not advertise the tasks capability; long-running task tracking is unavailable.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <>
       <div className="flex h-full overflow-hidden p-4 gap-4">
         <div className="w-1/3 flex flex-col gap-4">
           {/* Task list pane */}
@@ -467,12 +493,24 @@ const TasksTab = ({
                             variant="ghost"
                             size="sm"
                             className="h-6 w-6 p-0 shrink-0"
-                            aria-label={`Cancel task ${task.taskId}`}
+                            aria-label={
+                              cancelSupported === false
+                                ? `Cancel task ${task.taskId} - server does not advertise tasks/cancel capability`
+                                : `Cancel task ${task.taskId}`
+                            }
                             onClick={(e) => {
                               e.stopPropagation();
                               void handleCancel(task.taskId);
                             }}
-                            disabled={isCancelling === task.taskId}
+                            disabled={
+                              cancelSupported === false ||
+                              isCancelling === task.taskId
+                            }
+                            title={
+                              cancelSupported === false
+                                ? "Server does not advertise the tasks/cancel capability."
+                                : undefined
+                            }
                           >
                             {isCancelling === task.taskId ? (
                               <RefreshCw className="h-3 w-3 animate-spin" />
@@ -534,9 +572,21 @@ const TasksTab = ({
                     variant="destructive"
                     size="sm"
                     className="shrink-0 ml-4"
-                    aria-label={`Cancel task ${displayedTask.taskId}`}
+                    aria-label={
+                      cancelSupported === false
+                        ? `Cancel task ${displayedTask.taskId} - server does not advertise tasks/cancel capability`
+                        : `Cancel task ${displayedTask.taskId}`
+                    }
                     onClick={() => handleCancel(displayedTask.taskId)}
-                    disabled={isCancelling === displayedTask.taskId}
+                    disabled={
+                      cancelSupported === false ||
+                      isCancelling === displayedTask.taskId
+                    }
+                    title={
+                      cancelSupported === false
+                        ? "Server does not advertise the tasks/cancel capability."
+                        : undefined
+                    }
                   >
                     {isCancelling === displayedTask.taskId ? (
                       <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
@@ -688,6 +738,8 @@ const TasksTab = ({
           )}
         </div>
       </div>
+        </>
+      )}
     </TabsContent>
   );
 };
