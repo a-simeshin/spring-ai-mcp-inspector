@@ -1,0 +1,30 @@
+src/App.tsx: mobile pre-connect sidebar height (issue
+#230 remainder). Upstream (and the fork before this patch) kept the
+vh caps (below-`sm` 30vh, `sm`..`lg` 50vh) on the config-pane
+wrapper at all times; on a 375x812 phone the sidebar's inner scroll
+area showed ~113px of a ~500px column, so the URL input (top ~193)
+and the Connect button (top ~481) sat inside the inner scroll out of
+view at scrollY=0 and a real click at Connect's centre hit the
+floating theme bar (Connect stayed reachable only by scrolling the
+sidebar's inner area). On an 812x375 landscape phone the 50vh cap
+squeezed the pane to ~187px and put Connect back inside an inner
+scroll. Local fix:
+the wrapper's height classes become conditional on a live client
+(mcpClient): pre-connect BOTH cap classes are dropped (no vh cap
+below lg), so the sidebar renders at its natural height
+and URL/Connect sit in normal flow (at 375x812 the whole pre-connect
+block, header + form + footer, fits the viewport); once connected the
+cap returns (`h-[30vh] sm:h-[50vh]`) so the accepted mobile contract
+of issue #58 / plan v10 (config/list/detail pane rects inside the
+first 667px viewport at scrollY=0 after listing tools) keeps holding
+unchanged. Desktop (>=lg) geometry is untouched: the cap classes are
+compact-only and `lg:h-auto` wins there as before. Covered by the
+@Nested MobileViewport375x812 Selenide group in
+spring-ai-mcp-inspector-demo-webmvc InspectorUiIT (real device
+emulation 375x812 DPR 3 via CDP: pre-connect URL input and Connect
+button fully inside the viewport at scrollY=0 with nothing overlaying
+their centres, real click connects; landscape 812x375 device
+emulation: no clipped inner scroll area on the wrapper, URL input
+visible at scrollY=0, Connect reachable by document scroll alone;
+post-connect the 30vh cap state is re-probed: panes still stack, no
+horizontal overflow).
