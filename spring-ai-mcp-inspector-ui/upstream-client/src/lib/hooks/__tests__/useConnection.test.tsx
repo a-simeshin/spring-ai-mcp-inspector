@@ -2778,4 +2778,79 @@ describe("useConnection", () => {
       expect(result.current.authError).toBeNull();
     });
   });
+  // [spring-ai-mcp-inspector PATCH] VersionBadge handshake capture
+  // (NOTICE.d/version-badge.txt): connect() must publish the initialize
+  // frame observed through the client's own request layer, without leaking
+  // the interception wrapper onto the client.
+  describe("VersionBadge handshake capture", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    test("captures the initialize handshake into initializeSnapshot", async () => {
+      // The real SDK client performs the handshake through its own request
+      // method inside connect(); simulate that on the mock client.
+      mockRequest.mockResolvedValueOnce({
+        protocolVersion: "2025-11-25",
+        serverInfo: { name: "demo-server", version: "1.2.3" },
+        capabilities: { tools: {} },
+      });
+      mockClient.connect.mockImplementationOnce(async function (
+        this: typeof mockClient,
+      ) {
+        await this.request(
+          {
+            method: "initialize",
+            params: { protocolVersion: "2026-07-28" },
+          } as never,
+          {} as never,
+        );
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+      await act(async () => {
+        await result.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(result.current.initializeSnapshot).toEqual({
+        clientRequestedVersion: "2026-07-28",
+        negotiatedVersion: "2025-11-25",
+        serverName: "demo-server",
+        serverVersion: "1.2.3",
+        capabilities: { tools: {} },
+      });
+    });
+
+    test("restores the original request method after connect", async () => {
+      // During the handshake the wrapper must be active...
+      mockClient.connect.mockImplementationOnce(async function (
+        this: typeof mockClient,
+      ) {
+        expect(this.request).not.toBe(mockRequest);
+      });
+      const { result } = renderHook(() => useConnection(defaultProps));
+      await act(async () => {
+        await result.current.connect();
+      });
+      // ...and afterwards the exact original jest.fn must be back, or mock
+      // assertions in later tests (toHaveBeenCalledWith) would break.
+      expect(mockClient.request).toBe(mockRequest);
+    });
+
+    test("keeps a null snapshot when connect skips the handshake (resume)", async () => {
+      // connect() that performs no initialize frame: transport-level resume.
+      mockClient.connect.mockResolvedValueOnce(undefined);
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      // The VersionBadge shows its gray unknown state, not a stale snapshot.
+      expect(result.current.initializeSnapshot).toBeNull();
+    });
+  });
 });

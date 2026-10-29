@@ -1,0 +1,52 @@
+File: src/lib/protocolRevision.ts (new)
+      src/lib/__tests__/protocolRevision.test.ts (new)
+      src/components/VersionBadge.tsx (new)
+      src/components/__tests__/VersionBadge.test.tsx (new)
+      src/lib/hooks/useConnection.ts
+      src/lib/hooks/__tests__/useConnection.test.tsx
+      src/components/Sidebar.tsx
+      src/App.tsx
+What: Version badge in the connect zone showing the negotiated MCP protocol
+  revision, color-coded by compatibility severity, expanding to server info
+  (name/version), requested-vs-negotiated revisions, capabilities, and an
+  amber/red notice with the affected-methods list on a revision mismatch.
+  protocolRevision.ts is a client-side port of the server-side matrix
+  io.inspector.mcp.core.protocol.ProtocolRevision (PR #129): known revisions
+  map to the methods they removed; requested-vs-negotiated comparison yields
+  OK / DOWNGRADE / INCOMPATIBLE / UNKNOWN.
+Why: The inspector did not surface the agreed protocol revision after
+  connect. The first iteration (PR #136 round 1) fetched a snapshot from
+  GET /api/session/{id}/initialize, but that REST registry only sees
+  loopback proxy sessions, the proxy session id from headers is a different
+  id, SSE never returns mcp-session-id, and in Direct mode the inspector
+  backend is not on the wire at all, so the badge never rendered on the live
+  demo. The reliable source is the client's own initialize handshake:
+  useConnection wraps client.request around the client.connect() call
+  (scope-limited: the wrapper is installed immediately before the handshake
+  call and the exact original method reference is restored in a finally, so
+  nothing downstream observes the interception) and publishes an
+  InitializeSnapshot {clientRequestedVersion, negotiatedVersion, serverName,
+  serverVersion, capabilities}. This works for every connection type
+  (direct, via proxy) and transport (SSE, Streamable HTTP, STDIO). No REST
+  endpoint, session id, or response header is involved. When no initialize
+  frame was observed (e.g. transport-level resume) the badge renders a gray
+  "unknown" state instead of guessing green.
+Covered by:
+  - src/lib/__tests__/protocolRevision.test.ts (mirrors the Java
+    ProtocolRevisionTests cases: downgrade, incompatible + affected methods,
+    same revision, unknown requested/negotiated, nulls, sorting)
+  - src/components/__tests__/VersionBadge.test.tsx (OK green, DOWNGRADE
+    amber, INCOMPATIBLE red + method list, UNKNOWN blue, no-snapshot gray
+    "unknown" that must never render green, expandable details)
+  - src/lib/hooks/__tests__/useConnection.test.tsx ("VersionBadge handshake
+    capture": snapshot published from the handshake, original request method
+    restored after connect, null snapshot on resume without initialize)
+  - demo-webmvc InspectorUiIT "Version badge": live Via Proxy + SSE connect
+    and live Direct + Streamable HTTP connect both render the badge with the
+    revision actually negotiated on the wire. On the current demo the SSE
+    flavour negotiates legacy 2024-11-05 (not in the known-revision matrix,
+    so severity=UNKNOWN, proving the honest unknown branch), while Direct +
+    Streamable HTTP negotiates 2025-11-25 (severity=OK, proving the green
+    branch). Mutation-checked: with the snapshot publication disabled both
+    live tests fail on their data-severity asserts.
+Upstream-removed: none (badge unmounts when disconnected)

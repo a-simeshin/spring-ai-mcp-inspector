@@ -512,6 +512,9 @@ const App = () => {
     serverCapabilities,
     serverImplementation,
     mcpClient,
+    // [spring-ai-mcp-inspector PATCH] Observed initialize handshake for the
+    // VersionBadge in the connect zone (see NOTICE.d/version-badge.txt).
+    initializeSnapshot,
     requestHistory,
     clearRequestHistory,
     makeRequest,
@@ -1688,6 +1691,8 @@ const App = () => {
           connectionType={connectionType}
           setConnectionType={setConnectionType}
           serverImplementation={serverImplementation}
+          // [spring-ai-mcp-inspector PATCH] VersionBadge handshake snapshot.
+          initializeSnapshot={initializeSnapshot}
           // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
           savedConnections={savedConnections}
           activeConnectionId={activeConnectionId}

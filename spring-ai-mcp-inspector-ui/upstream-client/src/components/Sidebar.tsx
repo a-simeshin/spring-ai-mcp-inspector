@@ -61,6 +61,10 @@ import { validateRedirectUrl, validateServerUrl } from "@/utils/urlValidation";
 import AuthProfiles from "./AuthProfiles";
 import { AuthProfileSummary } from "@/lib/auth-profiles";
 import { ProxyErrorDto } from "@/lib/connectionErrors";
+// [spring-ai-mcp-inspector PATCH] Version badge in the connect zone showing
+// the negotiated protocol revision (see NOTICE.d/version-badge.txt).
+import VersionBadge from "./VersionBadge";
+import type { InitializeSnapshot } from "@/lib/protocolRevision";
 
 interface SidebarProps {
   connectionStatus: ConnectionStatus;
@@ -105,6 +109,9 @@ interface SidebarProps {
   serverImplementation?:
     | (WithIcons & { name?: string; version?: string; websiteUrl?: string })
     | null;
+  // [spring-ai-mcp-inspector PATCH] Observed initialize handshake for the
+  // VersionBadge (see NOTICE.d/version-badge.txt).
+  initializeSnapshot?: InitializeSnapshot | null;
   // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
   savedConnections: SavedConnection[];
   activeConnectionId?: string;
@@ -149,6 +156,8 @@ const Sidebar = ({
   connectionType,
   setConnectionType,
   serverImplementation,
+  // [spring-ai-mcp-inspector PATCH] VersionBadge handshake snapshot.
+  initializeSnapshot,
   savedConnections,
   activeConnectionId,
   onSaveConnection,
@@ -1150,6 +1159,14 @@ const Sidebar = ({
                 })()}
               </span>
             </div>
+
+            {/* [spring-ai-mcp-inspector PATCH] Version badge: negotiated MCP
+                protocol revision with compatibility notice, sourced from the
+                client's own initialize handshake (works direct and via
+                proxy, SSE and Streamable HTTP). */}
+            {connectionStatus === "connected" && (
+              <VersionBadge snapshot={initializeSnapshot ?? null} />
+            )}
 
             {/* [spring-ai-mcp-inspector PATCH] D3 structured error banner
                 (issue #54): exact code/reason/guidance/url from the proxy's
