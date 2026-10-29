@@ -1351,6 +1351,93 @@ class InspectorRestControllerTests {
 			assertThat(payload.getValue()).containsEntry("at", "2026-09-20T10:00:00Z");
 		}
 
+		@Test
+		@Story("Keep-alive tracking")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("connect(SSE) hands the loopback wrap the very tracker the session serves, so wrapper-recorded pings surface on /keepalive")
+		void connect_sse_wiresSessionTrackerIntoLoopbackTransport() {
+			// given
+			given(InspectorRestControllerTests.this.transportDetector.detect())
+				.willReturn(new DetectedTransport(TransportType.SSE, "/sse", "/mcp/message", "WEBMVC"));
+			given(InspectorRestControllerTests.this.portHolder.port()).willReturn(1234);
+			final McpSyncClient client = mock(McpSyncClient.class);
+			given(InspectorRestControllerTests.this.loopbackFactory.forSse(eq("127.0.0.1"), eq(1234), eq("/sse"), any(),
+					any(), any(KeepAliveTracker.class)))
+				.willReturn(client);
+
+			// when
+			final ResponseEntity<Map<String, Object>> response = InspectorRestControllerTests.this.controller
+				.connect(null);
+			final String sessionId = (String) response.getBody().get("sessionId");
+			final ArgumentCaptor<KeepAliveTracker> factoryTracker = ArgumentCaptor.forClass(KeepAliveTracker.class);
+			verify(InspectorRestControllerTests.this.loopbackFactory).forSse(eq("127.0.0.1"), eq(1234), eq("/sse"),
+					any(), any(), factoryTracker.capture());
+
+			// then: the tracker the ping-detecting wrap feeds is the one stored on the
+			// session
+			assertThat(factoryTracker.getValue()).isNotNull();
+			assertThat(InspectorRestControllerTests.this.controller.sessions().get(sessionId).keepAliveTracker())
+				.isSameAs(factoryTracker.getValue());
+			factoryTracker.getValue().recordPing(Instant.parse("2026-09-20T10:00:00Z"));
+			final ArgumentCaptor<Map<String, String>> payload = ArgumentCaptor.forClass(Map.class);
+			verify(InspectorRestControllerTests.this.emitterRegistry).broadcast(eq(sessionId), eq("mcp:keepalive-ping"),
+					payload.capture());
+			assertThat(payload.getValue()).containsEntry("at", "2026-09-20T10:00:00Z");
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> snapshot = (Map<String, Object>) InspectorRestControllerTests.this.controller
+				.keepalive(sessionId)
+				.getBody();
+			assertThat(snapshot.get("observed")).isEqualTo(true);
+			assertThat(snapshot.get("lastPingAt")).isEqualTo("2026-09-20T10:00:00Z");
+		}
+
+		@Test
+		@Story("Keep-alive tracking")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("connect(streamable) hands the loopback wrap the very tracker the session serves")
+		void connect_streamable_wiresSessionTrackerIntoLoopbackTransport() {
+			// given
+			given(InspectorRestControllerTests.this.transportDetector.detect())
+				.willReturn(new DetectedTransport(TransportType.STREAMABLE, "/mcp", null, "WEBMVC"));
+			given(InspectorRestControllerTests.this.portHolder.port()).willReturn(1234);
+			final McpSyncClient client = mock(McpSyncClient.class);
+			given(InspectorRestControllerTests.this.loopbackFactory.forStreamable(anyString(), anyInt(), anyString(),
+					any(), any(), any(KeepAliveTracker.class)))
+				.willReturn(client);
+
+			// when
+			final ResponseEntity<Map<String, Object>> response = InspectorRestControllerTests.this.controller
+				.connect(null);
+			final String sessionId = (String) response.getBody().get("sessionId");
+			final ArgumentCaptor<KeepAliveTracker> factoryTracker = ArgumentCaptor.forClass(KeepAliveTracker.class);
+			verify(InspectorRestControllerTests.this.loopbackFactory).forStreamable(eq("127.0.0.1"), eq(1234),
+					eq("/mcp"), any(), any(), factoryTracker.capture());
+
+			// then
+			assertThat(factoryTracker.getValue()).isNotNull();
+			assertThat(InspectorRestControllerTests.this.controller.sessions().get(sessionId).keepAliveTracker())
+				.isSameAs(factoryTracker.getValue());
+		}
+
+		@Test
+		@Story("Keep-alive tracking")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("keepalive() answers 404 with the documented error body when no proxy registry is wired at all")
+		void keepalive_unknownSessionWithoutProxyRegistry_returns404() {
+			// given: the default controller wires no proxy registry (proxySessions ==
+			// null)
+
+			// when
+			final ResponseEntity<?> response = InspectorRestControllerTests.this.controller.keepalive("missing");
+
+			// then: the id is unknown (not merely untracked) and the fallback must not
+			// reach for the absent registry
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> body = (Map<String, Object>) response.getBody();
+			assertThat(body.get("error")).isEqualTo("Unknown sessionId: missing");
+		}
+
 	}
 
 }
