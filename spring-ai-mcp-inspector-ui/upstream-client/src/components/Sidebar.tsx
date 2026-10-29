@@ -149,6 +149,28 @@ function KeepAliveIndicator({
     return () => clearInterval(interval);
   }, [lastPingAt]);
 
+  // [spring-ai-mcp-inspector PATCH] The banner renders in both branches: the
+  // server flags staleness also when not a single ping arrived for 90s since
+  // connect (#235), so a silent drop must not hide behind "no keep-alive
+  // observed".
+  const staleBanner = isStale ? (
+    <div
+      data-testid="keep-alive-stale-banner"
+      className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded text-xs text-yellow-800 dark:text-yellow-200"
+    >
+      <div className="flex items-start gap-1">
+        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+        <div>
+          <strong>Connection may be dead.</strong> No keep-alive pings
+          received for longer than 2x the estimated interval (or 90s when no
+          interval is known yet). This usually happens when a load balancer or
+          proxy (e.g. ALB, nginx) closes idle connections (typically after
+          60s).
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   if (!observed) {
     return (
       <div
@@ -156,6 +178,7 @@ function KeepAliveIndicator({
         className="text-xs text-gray-500 dark:text-gray-400 text-center mb-2"
       >
         no keep-alive observed
+        {staleBanner}
       </div>
     );
   }
@@ -165,22 +188,7 @@ function KeepAliveIndicator({
       <div className="text-xs text-gray-600 dark:text-gray-300 text-center">
         Last keep-alive: {secondsAgo !== null ? `${secondsAgo}s ago` : "..."}
       </div>
-      {isStale && (
-        <div
-          data-testid="keep-alive-stale-banner"
-          className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded text-xs text-yellow-800 dark:text-yellow-200"
-        >
-          <div className="flex items-start gap-1">
-            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-            <div>
-              <strong>Connection may be dead.</strong> No keep-alive pings
-              received for longer than 2x the estimated interval. This usually
-              happens when a load balancer or proxy (e.g. ALB, nginx) closes
-              idle connections (typically after 60s).
-            </div>
-          </div>
-        </div>
-      )}
+      {staleBanner}
     </div>
   );
 }

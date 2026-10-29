@@ -14,12 +14,15 @@ regular MCP request/response traffic. Pings are merged into the timeline
 in real time and deduplicated by timestamp.
 
 HistoryAndNotifications shows a collapsed "Keep-alive pings" section
-(capped at 10 entries) that expands on click, keeping the main History
-list free of ping spam.
+(capped at 10 entries) that expands on click and from the keyboard
+(Enter expands, Space collapses; it is a real button), keeping the main
+History list free of ping spam.
 
 App.tsx passes mcpSessionId (exposed by useConnection) to both components
 so the hook can subscribe to the correct session.
 
 Covered by useKeepAlive.test.ts (7 tests: null session, snapshot fetch,
-SSE subscription, live ping merge, ping cap, cleanup, custom path) and
-TimelineTab.test.tsx (KEEP_ALIVE rendering, styling, label).
+SSE subscription, live ping merge, ping cap, cleanup, custom path),
+TimelineTab.test.tsx (KEEP_ALIVE rendering, styling, label) and the
+keyboard-accessibility test in HistoryAndNotifications.test.tsx (Enter
+expands, Space collapses, no pointer involved).

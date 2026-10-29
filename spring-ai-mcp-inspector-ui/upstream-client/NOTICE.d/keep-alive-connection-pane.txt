@@ -6,16 +6,19 @@ Adds keep-alive observability to the Connection pane (#235, t_3925eae7).
 The Sidebar shows "Last keep-alive: Xs ago" with a live ticking counter
 (updated every second) when keep-alive pings have been observed. When no
 pings have been seen since connect, a neutral "no keep-alive observed"
-message is shown instead, with no alarm.
+message is shown instead.
 
 When the keep-alive stream goes stale (no pings for longer than 2x the
-estimated interval), a warning banner appears explaining that the connection
-is likely dead, probably due to an idle timeout on a load balancer or proxy
-(ALB, nginx, typically 60s). The banner disappears automatically when pings
-resume.
+estimated interval, or for 90s when not a single ping has arrived since
+connect), a warning banner appears explaining that the connection is likely
+dead, probably due to an idle timeout on a load balancer or proxy (ALB,
+nginx, typically 60s). The banner is rendered in both the observed and the
+never-pinged branches, so a silent drop cannot hide behind the neutral
+message, and it disappears automatically when pings resume.
 
 App.tsx subscribes to the useKeepAlive hook and passes the state down to
 Sidebar as props (keepAliveLastPingAt, keepAliveIsStale, keepAliveObserved).
 
-Covered by Sidebar.keepAlive.test.tsx (7 tests: no keep-alive state,
-ticking counter, stale banner shown/hidden, banner dismissed on resume).
+Covered by Sidebar.keepAlive.test.tsx (9 tests: no keep-alive state,
+ticking counter, stale banner shown/hidden (including the never-pinged
+90s fallback branch), banner dismissed on resume).

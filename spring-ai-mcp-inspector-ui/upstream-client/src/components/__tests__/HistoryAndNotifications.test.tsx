@@ -1,14 +1,33 @@
 import { render, screen, fireEvent, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, it, expect, jest } from "@jest/globals";
+import { describe, it, expect, jest, beforeEach } from "@jest/globals";
 import HistoryAndNotifications from "../HistoryAndNotifications";
 import { ServerNotification } from "@modelcontextprotocol/sdk/types.js";
+import { useKeepAlive } from "@/lib/hooks/useKeepAlive";
 
 // Mock JsonView component
 jest.mock("../JsonView", () => {
   return function JsonView({ data }: { data: string }) {
     return <div data-testid="json-view">{data}</div>;
   };
+});
+
+// [spring-ai-mcp-inspector PATCH] Mock useKeepAlive so the collapsed
+// keep-alive section can be exercised without a live session (#235).
+jest.mock("@/lib/hooks/useKeepAlive", () => ({
+  useKeepAlive: jest.fn(),
+}));
+
+beforeEach(() => {
+  (useKeepAlive as jest.Mock).mockReset();
+  // Neutral default keeps the section hidden for the history tests above.
+  (useKeepAlive as jest.Mock).mockReturnValue({
+    observed: false,
+    lastPingAt: null,
+    isStale: false,
+    recentPings: [],
+  });
 });
 
 describe("HistoryAndNotifications", () => {
@@ -410,5 +429,39 @@ describe("HistoryAndNotifications", () => {
 
     // With null sessionId, no keep-alive section should render
     expect(screen.queryByText(/Keep-alive pings/)).toBeNull();
+  });
+});
+
+describe("keep-alive section keyboard accessibility", () => {
+  // [spring-ai-mcp-inspector PATCH] The expander must be operable from the
+  // keyboard alone (#235 review): Enter expands, Space collapses.
+  it("expands with Enter and collapses with Space without a pointer", async () => {
+    const user = userEvent.setup();
+    (useKeepAlive as jest.Mock).mockReturnValue({
+      observed: true,
+      lastPingAt: "2026-10-29T10:00:00.000Z",
+      isStale: false,
+      recentPings: [],
+    });
+    render(
+      <HistoryAndNotifications
+        requestHistory={[]}
+        serverNotifications={[]}
+        sessionId="session-1"
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: /Keep-alive pings/ });
+    // Collapsed: no section body yet.
+    expect(screen.queryByText("No pings recorded yet")).toBeNull();
+
+    toggle.focus();
+    await user.keyboard("[Enter]");
+    expect(screen.getByText("No pings recorded yet")).toBeTruthy();
+    expect(within(toggle).getByText("\u25BC")).toBeTruthy();
+
+    await user.keyboard("[Space]");
+    expect(screen.queryByText("No pings recorded yet")).toBeNull();
+    expect(within(toggle).getByText("\u25B6")).toBeTruthy();
   });
 });

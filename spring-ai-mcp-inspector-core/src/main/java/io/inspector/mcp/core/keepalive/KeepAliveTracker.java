@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
+import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.function.Consumer;
 
@@ -43,8 +44,10 @@ import java.util.function.Consumer;
  * {@link State#isStale() staleness} when {@code now - lastPingAt > 2 *
  * estimatedInterval}. With a single ping observed the interval cannot be estimated, so
  * {@code isStale} falls back to the fixed {@value #STALE_FALLBACK_MILLIS}ms threshold.
- * With zero pings observed it is always {@code false} so the UI never shows a false alarm
- * for servers that simply do not ping.
+ * With zero pings observed the same fixed threshold applies, anchored at the moment
+ * tracking started, so a session whose transport never reports a single ping is still
+ * flagged after {@value #STALE_FALLBACK_MILLIS}ms of silence (required by the tracking
+ * issue).
  *
  * @author Artem Simeshin
  */
@@ -65,13 +68,33 @@ public final class KeepAliveTracker {
 	/**
 	 * Fallback staleness threshold used when the interval cannot be estimated yet (fewer
 	 * than two pings observed): the session is stale once the silence since the last ping
-	 * exceeds this value. Required by the tracking issue.
+	 * (or, with zero pings, since tracking started) exceeds this value. Required by the
+	 * tracking issue.
 	 */
 	public static final long STALE_FALLBACK_MILLIS = 90_000L;
 
 	private final Deque<Instant> pings = new ArrayDeque<>(MAX_PINGS);
 
 	private volatile Consumer<Instant> listener;
+
+	private final Instant trackingSince;
+
+	/**
+	 * Creates a tracker whose zero-ping staleness fallback window starts now.
+	 */
+	public KeepAliveTracker() {
+		this(Instant.now());
+	}
+
+	/**
+	 * Creates a tracker whose zero-ping staleness fallback window starts at
+	 * {@code trackingSince}, the moment the session began tracking.
+	 * @param trackingSince the anchor for the {@link #STALE_FALLBACK_MILLIS} fallback
+	 * when no ping has been observed yet (must not be {@code null})
+	 */
+	public KeepAliveTracker(final Instant trackingSince) {
+		this.trackingSince = Objects.requireNonNull(trackingSince, "trackingSince");
+	}
 
 	/**
 	 * Registers a listener invoked with the timestamp of each recorded ping. Used to push
@@ -169,9 +192,9 @@ public final class KeepAliveTracker {
 		}
 		final boolean stale;
 		if (last == null) {
-			// No ping ever: never flag as stale. This is the "server simply does not
-			// ping" case and must not produce a false alarm.
-			stale = false;
+			// No ping ever: the fixed fallback still applies, anchored at tracking start,
+			// so a silent drop is surfaced even when the transport never reports a ping.
+			stale = Duration.between(this.trackingSince, now).toMillis() > STALE_FALLBACK_MILLIS;
 		}
 		else if (interval.isEmpty()) {
 			// A single ping, so the cadence is unknown: fall back to the fixed 90s
@@ -186,7 +209,9 @@ public final class KeepAliveTracker {
 	}
 
 	/**
-	 * Clears all retained pings, returning the tracker to the never-pinged state.
+	 * Clears all retained pings, returning the tracker to the never-pinged state. The
+	 * tracking anchor is kept, so the zero-ping fallback window still runs from the
+	 * moment the session started tracking.
 	 */
 	public synchronized void reset() {
 		this.pings.clear();
@@ -201,9 +226,10 @@ public final class KeepAliveTracker {
 	 * entries
 	 * @param estimatedIntervalMillis median interval between pings in milliseconds, or
 	 * {@code null} when fewer than two pings have been observed
-	 * @param isStale whether the silence since {@code lastPingAt} exceeds
-	 * {@link #STALE_FACTOR} times the estimated interval, or
-	 * {@link #STALE_FALLBACK_MILLIS} milliseconds when the interval is not yet estimable
+	 * @param isStale whether the silence since {@code lastPingAt} (or since tracking
+	 * started, when no ping has arrived) exceeds {@link #STALE_FACTOR} times the
+	 * estimated interval, or {@link #STALE_FALLBACK_MILLIS} milliseconds when the
+	 * interval is not yet estimable
 	 */
 	public record State(Instant lastPingAt, List<Instant> recentPings, Long estimatedIntervalMillis, boolean isStale) {
 

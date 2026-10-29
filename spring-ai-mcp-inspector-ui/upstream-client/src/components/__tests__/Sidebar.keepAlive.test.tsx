@@ -92,6 +92,26 @@ describe("Sidebar Keep-Alive Indicator", () => {
     );
   });
 
+  it("shows stale banner after the 90s fallback even when no ping was observed", () => {
+    // The server flags staleness also when not a single ping arrived for 90s
+    // since connect (#235): the banner must not hide behind the neutral text.
+    renderSidebar({ keepAliveObserved: false, keepAliveIsStale: true });
+    expect(screen.getByTestId("keep-alive-indicator")).toHaveTextContent(
+      "no keep-alive observed",
+    );
+    expect(screen.getByTestId("keep-alive-stale-banner")).toBeInTheDocument();
+  });
+
+  it("keeps the neutral message without a banner when not stale and no ping observed", () => {
+    renderSidebar({ keepAliveObserved: false, keepAliveIsStale: false });
+    expect(screen.getByTestId("keep-alive-indicator")).toHaveTextContent(
+      "no keep-alive observed",
+    );
+    expect(
+      screen.queryByTestId("keep-alive-stale-banner"),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows ticking counter when lastPingAt is set", () => {
     const now = new Date();
     const fiveSecondsAgo = new Date(now.getTime() - 5000).toISOString();
