@@ -1912,8 +1912,8 @@ class ProxyHandlerTests {
 			// explicit 400, no transport built
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-			verify(ProxyHandlerTests.this.transportFactory, never()).openSse(any(URI.class));
-			verify(ProxyHandlerTests.this.transportFactory, never()).openSse(any(URI.class), any(), any());
+			verify(ProxyHandlerTests.this.transportFactory, never()).buildSse(any(URI.class));
+			verify(ProxyHandlerTests.this.transportFactory, never()).buildSse(any(URI.class), any(), any());
 		}
 
 		@Test

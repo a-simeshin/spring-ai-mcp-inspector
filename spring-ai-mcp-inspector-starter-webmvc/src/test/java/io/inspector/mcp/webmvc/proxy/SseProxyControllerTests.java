@@ -508,8 +508,8 @@ class SseProxyControllerTests {
 				.isInstanceOf(ResponseStatusException.class)
 				.hasMessageContaining("400")
 				.hasMessageContaining("x-custom-auth-headers must be a JSON array of header names");
-			verify(SseProxyControllerTests.this.transportFactory, never()).openSse(any(URI.class));
-			verify(SseProxyControllerTests.this.transportFactory, never()).openSse(any(URI.class), any(), any());
+			verify(SseProxyControllerTests.this.transportFactory, never()).buildSse(any(URI.class));
+			verify(SseProxyControllerTests.this.transportFactory, never()).buildSse(any(URI.class), any(), any());
 		}
 
 		@Test
