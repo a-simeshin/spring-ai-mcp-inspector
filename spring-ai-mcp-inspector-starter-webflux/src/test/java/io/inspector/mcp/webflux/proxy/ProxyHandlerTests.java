@@ -540,6 +540,88 @@ class ProxyHandlerTests {
 		@Test
 		@Story("SSE proxy open")
 		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() maps a failed proxy start into a structured SSE error event and tears the session down")
+		void openSse_startFailure_emitsStructuredErrorEventAndRemovesSession() {
+			// given - the proxy start fails with a mappable authz failure, but only after
+			// the response stream is subscribed (mirroring the async production
+			// handshake)
+			final reactor.core.publisher.Sinks.Empty<Void> startGate = reactor.core.publisher.Sinks.empty();
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willReturn(startGate.asMono()
+				.then(reactor.core.publisher.Mono.error(new RuntimeException("[401 Unauthorized] GET http://up/sse"))));
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then - the stream carries the endpoint prologue, then the D3 structured
+			// error event (the DTO, not a silent cut), and the failed session is removed
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			reactor.test.StepVerifier.create(body)
+				.assertNext((sse) -> assertThat(sse.event()).isEqualTo("endpoint"))
+				.then(() -> startGate.tryEmitEmpty())
+				.assertNext((sse) -> {
+					assertThat(sse.event()).isEqualTo("error");
+					assertThat(sse.data()).contains("\"code\":\"unauthorized\"");
+					assertThat(sse.data()).contains("\"url\":\"http://up/sse\"");
+				})
+				.then(() -> captured[0].targetToBrowser().tryEmitComplete())
+				.verifyComplete();
+			verify(ProxyHandlerTests.this.registry, org.mockito.Mockito.atLeastOnce())
+				.removeAndClose(captured[0].sessionId());
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with an unmappable proxy start failure emits no error event and still tears the session down")
+		void openSse_startFailureWithoutHttpStatus_emitsNoErrorEventAndRemovesSession() {
+			// given - a start failure the D3 mapper cannot turn into a DTO (no HTTP
+			// status in the message)
+			given(ProxyHandlerTests.this.mcpProxy.start(any()))
+				.willReturn(reactor.core.publisher.Mono.error(new IllegalStateException("connection reset")));
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+
+			// when - the failure fires during assembly, so no DTO is fabricated
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then - the stream carries only the prologue and ends (verifyComplete would
+			// fail on any extra error event), and the failed session is removed
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			reactor.test.StepVerifier.create(body)
+				.assertNext((sse) -> assertThat(sse.event()).isEqualTo("endpoint"))
+				.then(() -> captured[0].targetToBrowser().tryEmitComplete())
+				.verifyComplete();
+			verify(ProxyHandlerTests.this.registry, org.mockito.Mockito.atLeastOnce())
+				.removeAndClose(captured[0].sessionId());
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.CRITICAL)
 		@Description("openSse() under a base path emits a prologue carrying the prefix so the first browser frame is routable")
 		void openSse_underBasePath_prologueCarriesPrefix() {
 			// given
