@@ -1058,7 +1058,11 @@ export function useConnection({
                 captureProxySessionIdFromUrl(url);
                 return fetch(url, {
                   ...init,
-                  headers: { ...headers, ...proxyHeaders },
+                  headers: mergeRequestHeaders(
+                    init?.headers,
+                    headers,
+                    proxyHeaders,
+                  ),
                 });
               },
               requestInit: {
@@ -1108,7 +1112,11 @@ export function useConnection({
                 captureProxySessionIdFromUrl(url);
                 return fetch(url, {
                   ...init,
-                  headers: { ...headers, ...proxyHeaders },
+                  headers: mergeRequestHeaders(
+                    init?.headers,
+                    headers,
+                    proxyHeaders,
+                  ),
                 });
               },
               requestInit: {
