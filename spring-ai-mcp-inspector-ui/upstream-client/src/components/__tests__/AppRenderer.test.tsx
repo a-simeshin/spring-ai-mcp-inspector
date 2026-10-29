@@ -472,6 +472,12 @@ describe("AppRenderer sandbox csp from the UI resource meta (PR #199 round 2 BLO
         },
       ],
     });
+    // The describe shares one client across its tests (jest randomize reorders
+    // them), and a sibling may leave listResources stubbed with a resource
+    // entry. This test is about "the resource declares none", so pin the
+    // fallback list empty: otherwise readResourceCsp falls back to the stale
+    // resources/list entry and the baseline assert below is order-dependent.
+    (client.listResources as jest.Mock).mockResolvedValue({ resources: [] });
 
     render(
       <AppRenderer
