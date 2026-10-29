@@ -9,10 +9,18 @@ What changed for the user:
   every field first. Validation is computed on every render from the
   tool's inputSchema plus current params (derived), not from a flag
   set by a blur event.
-- Required fields without a schema.default are no longer initialized
-  to 0/false/"". They stay absent from state and are omitted from
-  the submit payload, so a `sum` tool no longer silently sends
-  `{a:0,b:0}` when the user never typed anything.
+- Required primitive fields (string/number/enum) without a
+  schema.default stay absent from state and are omitted from the
+  submit payload, so a `sum` tool no longer silently sends
+  `{a:0,b:0}` when the user never typed anything. Required boolean
+  and object/array fields without a default seed the value their
+  widget already displays (false / generated default such as {})
+  into state, so Run Tool is not stuck disabled with no hint and the
+  payload agrees with what the form shows.
+- Numeric inputs parse strictly: only plain decimal and scientific
+  notation become numbers. Whitespace, hex ("0x1F") and "Infinity"
+  stay strings for the server to reject instead of silently becoming
+  0/31/null.
 - The Get Prompt button follows the same rules: disabled when a
   prompt with required arguments is untouched.
 
@@ -29,11 +37,14 @@ Implementation:
   submit hint display only; the button's disabled state derives from
   `validateToolParams(schema, params)` on every render, combined
   with the existing hasValidationErrors (DynamicJsonForm) check.
-  The initialization effect only seeds fields that declare a
-  `default` in the schema; required fields without a default are
-  filtered out of the initial params object. DynamicJsonForm onChange
-  handlers use functional setParams plus a paramsRef to avoid stale
-  closures. formRefs.current is no longer reset in the effect.
+  The initialization effect seeds fields that declare a `default` in
+  the schema, plus required boolean fields (false) and required
+  object/array fields (generateDefaultValue()) without a default;
+  other required primitives stay absent from the initial params
+  object. Numeric onChange parses strictly (decimal/scientific
+  regex). DynamicJsonForm onChange handlers use functional setParams
+  plus a paramsRef to avoid stale closures. formRefs.current is reset
+  in the effect when switching tools (upstream behavior restored).
 - `src/components/PromptsTab.tsx`: same pattern. validatePromptArgs
   drives the disabled state on Get Prompt; fieldErrors only shown
   after touch.
@@ -59,6 +70,10 @@ Covered by:
   or numeric input clears on the next change without another blur,
   and an empty required enum select carries aria-invalid,
   aria-describedby and border-red-500 on its trigger after close.
+  Seeded shown values and strict numeric parse: a required boolean
+  submits false without touching the form, a required object submits
+  its generated default, and whitespace/hex/Infinity never become
+  numbers while 1.5e2 parses to 150.
 - `src/components/__tests__/PromptsTab.test.tsx`: untouched prompt
   → Get Prompt disabled; fills required arg → button enabled;
   aria-invalid and aria-describedby verified on combobox trigger

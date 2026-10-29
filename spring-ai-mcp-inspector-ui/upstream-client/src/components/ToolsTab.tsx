@@ -359,6 +359,9 @@ const ToolsTab = ({
     // Reset validation errors when switching tools
     setHasValidationErrors(false);
     setFieldErrors({});
+
+    // Clear form refs for the previous tool
+    formRefs.current = {};
   }, [selectedTool, serverSupportsTaskRequests]);
 
   const hasReservedMetadataEntry = metadataEntries.some(({ key }) => {
