@@ -1032,6 +1032,27 @@ class InspectorHandlerTests {
 		}
 
 		@Test
+		@Story("Keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("events() for a REST session emits the unified {\"at\"} JSON payload on mcp:keepalive-ping")
+		void events_restSession_emitsUnifiedJsonKeepAlivePingPayload() {
+			// given
+			final McpSyncClient client = connectedClient();
+			final String sessionId = openLoopbackSession(client);
+			final SessionContext ctx = InspectorHandlerTests.this.sessions().get(sessionId);
+
+			// when / then
+			StepVerifier.create(ctx.sink().asFlux())
+				.then(() -> ctx.keepAliveTracker().recordPing(java.time.Instant.parse("2026-09-20T10:00:00Z")))
+				.assertNext((event) -> {
+					assertThat(event.event()).isEqualTo("mcp:keepalive-ping");
+					assertThat(event.data()).isEqualTo("{\"at\":\"2026-09-20T10:00:00Z\"}");
+				})
+				.thenCancel()
+				.verify(java.time.Duration.ofSeconds(5));
+		}
+
+		@Test
 		@Story("Roots")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("putRoots() replaces the root list, notifies the MCP client and returns the updated roots")

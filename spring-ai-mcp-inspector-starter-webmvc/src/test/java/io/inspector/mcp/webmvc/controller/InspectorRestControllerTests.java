@@ -1322,6 +1322,35 @@ class InspectorRestControllerTests {
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
 		}
 
+		@Test
+		@Story("Keep-alive tracking")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a recorded REST-session ping is broadcast as mcp:keepalive-ping with the unified {at} payload")
+		void recordedRestSessionPing_broadcastsUnifiedJsonPayloadToEmitterRegistry() {
+			// given: connect() wires the session tracker to broadcast pings
+			given(InspectorRestControllerTests.this.transportDetector.detect())
+				.willReturn(new DetectedTransport(TransportType.SSE, "/sse", "/mcp/message", "WEBMVC"));
+			given(InspectorRestControllerTests.this.portHolder.port()).willReturn(1234);
+			final McpSyncClient client = mock(McpSyncClient.class);
+			given(InspectorRestControllerTests.this.loopbackFactory.forSse(eq("127.0.0.1"), eq(1234), eq("/sse"), any(),
+					any(), any(KeepAliveTracker.class)))
+				.willReturn(client);
+			InspectorRestControllerTests.this.controller.connect(null);
+			final Map.Entry<String, SessionState> opened = InspectorRestControllerTests.this.controller.sessions()
+				.entrySet()
+				.iterator()
+				.next();
+
+			// when
+			opened.getValue().keepAliveTracker().recordPing(Instant.parse("2026-09-20T10:00:00Z"));
+
+			// then: the same {"at": "<ISO>"} shape the WebFlux stack emits
+			final ArgumentCaptor<Map<String, String>> payload = ArgumentCaptor.forClass(Map.class);
+			verify(InspectorRestControllerTests.this.emitterRegistry).broadcast(eq(opened.getKey()),
+					eq("mcp:keepalive-ping"), payload.capture());
+			assertThat(payload.getValue()).containsEntry("at", "2026-09-20T10:00:00Z");
+		}
+
 	}
 
 }
