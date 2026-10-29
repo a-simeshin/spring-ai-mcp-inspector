@@ -157,6 +157,12 @@ public class InspectorHandler implements ApplicationContextAware {
 
 	private final ConcurrentMap<String, SessionContext> sessions = new ConcurrentHashMap<>();
 
+	/**
+	 * Keep-alive sinks and trackers for proxy sessions (the UI's default connection
+	 * mode); {@code null} when proxy keep-alive streaming is not wired.
+	 */
+	private final KeepAliveEventRegistry keepAliveEvents;
+
 	/** The context this bean belongs to; {@code null} when built outside a container. */
 	private ApplicationContext applicationContext;
 
@@ -192,6 +198,29 @@ public class InspectorHandler implements ApplicationContextAware {
 			final JsonMapper objectMapper, final InspectorOAuthClient oauthClient,
 			final McpInspectorProperties properties, final InspectorBootstrapAssembler bootstrapAssembler,
 			final BootstrapHtmlRenderer bootstrapHtmlRenderer) {
+		this(transportDetector, loopbackFactory, externalStdioFactory, tokenProvider, objectMapper, oauthClient,
+				properties, bootstrapAssembler, bootstrapHtmlRenderer, null);
+	}
+
+	/**
+	 * Full constructor that also resolves keep-alive state for proxy sessions.
+	 * @param transportDetector the transport detector
+	 * @param loopbackFactory the loopback MCP client factory
+	 * @param externalStdioFactory the external stdio client factory
+	 * @param tokenProvider the inspector auth token provider
+	 * @param objectMapper the JSON object mapper
+	 * @param oauthClient the OAuth client
+	 * @param properties the inspector properties
+	 * @param bootstrapAssembler the bootstrap assembler
+	 * @param bootstrapHtmlRenderer the bootstrap HTML renderer
+	 * @param keepAliveEvents the registry holding proxy-session keep-alive sinks and
+	 * trackers; {@code null} keeps the REST-session-only behaviour
+	 */
+	public InspectorHandler(final TransportDetector transportDetector, final LoopbackMcpClientFactory loopbackFactory,
+			final ExternalStdioClientFactory externalStdioFactory, final InspectorAuthTokenProvider tokenProvider,
+			final JsonMapper objectMapper, final InspectorOAuthClient oauthClient,
+			final McpInspectorProperties properties, final InspectorBootstrapAssembler bootstrapAssembler,
+			final BootstrapHtmlRenderer bootstrapHtmlRenderer, final KeepAliveEventRegistry keepAliveEvents) {
 		this.transportDetector = transportDetector;
 		this.loopbackFactory = loopbackFactory;
 		this.externalStdioFactory = externalStdioFactory;
@@ -201,6 +230,7 @@ public class InspectorHandler implements ApplicationContextAware {
 		this.properties = properties;
 		this.bootstrapAssembler = bootstrapAssembler;
 		this.bootstrapHtmlRenderer = bootstrapHtmlRenderer;
+		this.keepAliveEvents = keepAliveEvents;
 	}
 
 	private McpInspectorProperties.Timeouts resolveTimeouts() {
@@ -366,7 +396,16 @@ public class InspectorHandler implements ApplicationContextAware {
 		}
 		final SessionContext ctx = this.sessions.get(sessionId);
 		if (ctx == null) {
-			return ServerResponse.notFound().build();
+			// Not a REST session: stream the proxy session's keep-alive sink when
+			// one is registered (the UI's default connection mode).
+			final Sinks.Many<ServerSentEvent<String>> proxySink = (this.keepAliveEvents != null)
+					? this.keepAliveEvents.sink(sessionId) : null;
+			if (proxySink == null) {
+				return ServerResponse.notFound().build();
+			}
+			return ServerResponse.ok()
+				.contentType(MediaType.TEXT_EVENT_STREAM)
+				.body(BodyInserters.fromServerSentEvents(proxySink.asFlux()));
 		}
 		return ServerResponse.ok()
 			.contentType(MediaType.TEXT_EVENT_STREAM)
@@ -462,6 +501,16 @@ public class InspectorHandler implements ApplicationContextAware {
 	}
 
 	/**
+	 * Serializes a keep-alive ping timestamp into the unified {@code {"at": ...}} payload
+	 * shape shared with the WebMVC stack.
+	 * @param at the ping timestamp in ISO-8601 form
+	 * @return the JSON payload
+	 */
+	private String keepAlivePayload(final String at) {
+		return "{\"at\":\"" + at + "\"}";
+	}
+
+	/**
 	 * Returns the keep-alive state for the given session. The UI subscribes via SSE for
 	 * live {@code mcp:keepalive-ping} events and polls this endpoint for the initial
 	 * snapshot.
@@ -472,16 +521,21 @@ public class InspectorHandler implements ApplicationContextAware {
 	public Mono<ServerResponse> keepalive(final ServerRequest request) {
 		final String sessionId = resolveSessionId(request);
 		final SessionContext ctx = (sessionId != null) ? this.sessions.get(sessionId) : null;
-		if (ctx == null) {
+		KeepAliveTracker tracker = (ctx != null) ? ctx.keepAliveTracker() : null;
+		if (tracker == null && sessionId != null && this.keepAliveEvents != null) {
+			// No REST session: the id may belong to a UI connection relayed through
+			// the SSE/stdio/streamable proxy, the UI's default connection mode.
+			tracker = this.keepAliveEvents.tracker(sessionId);
+		}
+		if (ctx == null && tracker == null) {
 			return ServerResponse.status(404).bodyValue(Map.of("error", "unknown session: " + sessionId));
 		}
-		final KeepAliveTracker tracker = ctx.keepAliveTracker();
 		if (tracker == null) {
 			return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(Map.of("observed", false));
 		}
 		final KeepAliveTracker.State snapshot = tracker.snapshot(Instant.now());
 		final Map<String, Object> body = new LinkedHashMap<>();
-		body.put("observed", true);
+		body.put("observed", snapshot.lastPingAt() != null);
 		body.put("lastPingAt", (snapshot.lastPingAt() != null) ? snapshot.lastPingAt().toString() : null);
 		body.put("recentPings", snapshot.recentPings().stream().map(Instant::toString).toList());
 		body.put("estimatedIntervalMillis", snapshot.estimatedIntervalMillis());
@@ -669,8 +723,10 @@ public class InspectorHandler implements ApplicationContextAware {
 		catch (final Exception ex) {
 			LOG.debug("skills extension detection failed: {}", ex.toString());
 		}
-		keepAliveTracker.setListener((at) -> sink
-			.tryEmitNext(ServerSentEvent.<String>builder().event("mcp:keepalive-ping").data(at.toString()).build()));
+		keepAliveTracker.setListener((at) -> sink.tryEmitNext(ServerSentEvent.<String>builder()
+			.event("mcp:keepalive-ping")
+			.data(keepAlivePayload(at.toString()))
+			.build()));
 		holder.ctx = ctx;
 		this.sessions.put(sessionId, ctx);
 		if (this.closed) {
@@ -706,10 +762,9 @@ public class InspectorHandler implements ApplicationContextAware {
 		final String host = "127.0.0.1";
 		return switch (transport.type()) {
 			case SSE -> this.loopbackFactory.forSse(host, port, transport.endpoint(), handlers, initializeCapture,
-				keepAliveTracker);
-			case STREAMABLE ->
-				this.loopbackFactory.forStreamable(host, port, transport.endpoint(), handlers, initializeCapture,
 					keepAliveTracker);
+			case STREAMABLE -> this.loopbackFactory.forStreamable(host, port, transport.endpoint(), handlers,
+					initializeCapture, keepAliveTracker);
 			case STATELESS ->
 				this.loopbackFactory.forStateless(host, port, transport.endpoint(), handlers, initializeCapture);
 			case STDIO_NO_HTTP -> throw new IllegalStateException(

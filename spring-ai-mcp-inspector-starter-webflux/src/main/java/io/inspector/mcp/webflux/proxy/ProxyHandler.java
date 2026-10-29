@@ -21,6 +21,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -59,6 +60,8 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
+import io.inspector.mcp.core.keepalive.PingDetectingClientTransport;
 import io.inspector.mcp.core.proxy.CustomHeaderNames;
 import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
@@ -85,6 +88,7 @@ import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.core.transport.TransportType;
 import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
+import io.inspector.mcp.webflux.router.KeepAliveEventRegistry;
 
 /**
  * Reactive handlers for the upstream-compatible proxy endpoints. Mirrors the
@@ -108,6 +112,11 @@ import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
 public class ProxyHandler {
 
 	private static final Logger LOG = LoggerFactory.getLogger(ProxyHandler.class);
+
+	/**
+	 * SSE event name used to broadcast a keep-alive ping timestamp to the UI.
+	 */
+	private static final String KEEPALIVE_PING_EVENT = "mcp:keepalive-ping";
 
 	/** Server namespace of the separate actuator web server, when one is started. */
 	private static final String MANAGEMENT_NAMESPACE = "management";
@@ -143,16 +152,19 @@ public class ProxyHandler {
 
 	private final OAuth2AuthCodeTokenExchanger authCodeExchanger;
 
+	private final KeepAliveEventRegistry keepAliveEvents;
+
 	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper) {
-		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, null, null, null, null, null, null);
+		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, null, null, null, null, null, null,
+				null);
 	}
 
 	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper,
 			final McpInspectorProperties properties) {
 		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties, null, null, null, null,
-				null);
+				null, null);
 	}
 
 	/**
@@ -170,7 +182,7 @@ public class ProxyHandler {
 			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper,
 			final McpInspectorProperties properties, final TaskService taskService) {
 		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties, null, null, null, null,
-				taskService);
+				taskService, null);
 	}
 
 	/**
@@ -194,7 +206,27 @@ public class ProxyHandler {
 			final AuthProfileStore authProfileStore, final OAuth2ClientCredentialsTokenManager ccTokenManager,
 			final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
 		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties, sessionOwnerResolver,
-				authProfileStore, ccTokenManager, authCodeExchanger, null);
+				authProfileStore, ccTokenManager, authCodeExchanger, null, null);
+	}
+
+	/**
+	 * Full constructor that also wires keep-alive tracking for proxied sessions.
+	 * @param registry the proxy session registry
+	 * @param transportFactory the proxy transport factory
+	 * @param mcpProxy the MCP proxy relay
+	 * @param transportDetector the transport detector
+	 * @param objectMapper the JSON object mapper
+	 * @param properties the inspector properties
+	 * @param taskService the task service
+	 * @param keepAliveEvents the registry receiving per-session keep-alive trackers and
+	 * SSE sinks; {@code null} disables proxy keep-alive streaming
+	 */
+	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
+			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper,
+			final McpInspectorProperties properties, final TaskService taskService,
+			final KeepAliveEventRegistry keepAliveEvents) {
+		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties, null, null, null, null,
+				taskService, keepAliveEvents);
 	}
 
 	/**
@@ -211,12 +243,15 @@ public class ProxyHandler {
 	 * @param ccTokenManager the client-credentials token manager
 	 * @param authCodeExchanger the auth-code exchanger
 	 * @param taskService the task service for intercepted methods, or {@code null}
+	 * @param keepAliveEvents the registry receiving per-session keep-alive trackers and
+	 * SSE sinks; {@code null} disables proxy keep-alive streaming
 	 */
 	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper,
 			final McpInspectorProperties properties, final ReactiveSessionOwnerResolver sessionOwnerResolver,
 			final AuthProfileStore authProfileStore, final OAuth2ClientCredentialsTokenManager ccTokenManager,
-			final OAuth2AuthCodeTokenExchanger authCodeExchanger, final TaskService taskService) {
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger, final TaskService taskService,
+			final KeepAliveEventRegistry keepAliveEvents) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
@@ -230,6 +265,7 @@ public class ProxyHandler {
 		this.authProfileStore = authProfileStore;
 		this.ccTokenManager = ccTokenManager;
 		this.authCodeExchanger = authCodeExchanger;
+		this.keepAliveEvents = keepAliveEvents;
 	}
 
 	@EventListener
@@ -598,8 +634,9 @@ public class ProxyHandler {
 		// subscriber working.
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
-		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser,
-				authorizationRef);
+		final KeepAliveTracker keepAliveTracker = new KeepAliveTracker();
+		final ProxySession session = new ProxySession(sessionId, trackKeepAlive(sessionId, keepAliveTracker, target),
+				browserToTarget, targetToBrowser, authorizationRef, keepAliveTracker);
 		if (profileId != null && !profileId.isBlank()) {
 			// One-time bind: rejected reuse / foreign ids close the handoff (D4/D8).
 			if (!this.authProfileStore.bind(ownerId, profileId, sessionId)) {
@@ -663,8 +700,8 @@ public class ProxyHandler {
 				}
 			})
 			.startWith(prologue))
-			.doOnCancel(() -> this.registry.removeAndClose(sessionId))
-			.doOnTerminate(() -> this.registry.removeAndClose(sessionId));
+			.doOnCancel(() -> closeProxySession(sessionId))
+			.doOnTerminate(() -> closeProxySession(sessionId));
 
 		// The budget bounds the session bring-up; an overrun is surfaced as a
 		// structured proxy-error event on the side sink instead of a bare stream
@@ -700,10 +737,57 @@ public class ProxyHandler {
 				}
 				errorEvents.tryEmitComplete();
 			}
-			this.registry.removeAndClose(sessionId);
+			closeProxySession(sessionId);
 		});
 
 		return ServerResponse.ok().contentType(MediaType.TEXT_EVENT_STREAM).body(flux, ServerSentEvent.class);
+	}
+
+	/**
+	 * Wires keep-alive tracking for a freshly opened proxy session: registers the tracker
+	 * in the keep-alive event registry and points its listener at the session's SSE sink.
+	 * @param sessionId the proxy session identifier
+	 * @param tracker the session's keep-alive tracker
+	 * @param target the target transport to wrap
+	 * @return the wrapped transport that taps inbound pings into the tracker
+	 */
+	private McpClientTransport trackKeepAlive(final String sessionId, final KeepAliveTracker tracker,
+			final McpClientTransport target) {
+		if (this.keepAliveEvents != null) {
+			this.keepAliveEvents.register(sessionId, tracker);
+			tracker.setListener((at) -> this.keepAliveEvents.emit(sessionId,
+					ServerSentEvent.<String>builder().event(KEEPALIVE_PING_EVENT).data(keepAlivePayload(at)).build()));
+		}
+		return new PingDetectingClientTransport(target, tracker);
+	}
+
+	/**
+	 * Serializes a keep-alive ping timestamp into the unified {@code {"at": ...}} payload
+	 * shape shared with the WebMVC stack.
+	 * @param at the ping timestamp
+	 * @return the JSON payload
+	 */
+	private String keepAlivePayload(final Instant at) {
+		try {
+			return this.objectMapper.writeValueAsString(Map.of("at", at.toString()));
+		}
+		catch (final Exception ex) {
+			// Instant.toString() is plain ISO-8601: the manual fallback is equivalent.
+			return "{\"at\":\"" + at + "\"}";
+		}
+	}
+
+	/**
+	 * Tears a proxy session down: closes the keep-alive stream (when wired) and removes
+	 * the session from the registry.
+	 * @param sessionId the proxy session identifier
+	 * @return whether a live session was removed
+	 */
+	private boolean closeProxySession(final String sessionId) {
+		if (this.keepAliveEvents != null) {
+			this.keepAliveEvents.close(sessionId);
+		}
+		return this.registry.removeAndClose(sessionId);
 	}
 
 	/**
@@ -1093,8 +1177,9 @@ public class ProxyHandler {
 		}
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
-		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser,
-				authorizationRef);
+		final KeepAliveTracker keepAliveTracker = new KeepAliveTracker();
+		final ProxySession session = new ProxySession(sessionId, trackKeepAlive(sessionId, keepAliveTracker, target),
+				browserToTarget, targetToBrowser, authorizationRef, keepAliveTracker);
 		// D5: remember the resolved upstream target so streamable error DTOs can attach
 		// the redacted url (scheme://host[:port]/path, query/fragment stripped).
 		session.targetUri(resolved);
@@ -1129,7 +1214,7 @@ public class ProxyHandler {
 				// the structured proxy-error payload instead of completing silently.
 				session.failUpstream(err);
 			}
-			this.registry.removeAndClose(sessionId);
+			closeProxySession(sessionId);
 		});
 		return relayAndAwait(session, body, true, connectionBudget);
 	}
@@ -1251,7 +1336,7 @@ public class ProxyHandler {
 			// A failed first POST (the initialize) never returned a session id to the
 			// client, so the session is orphaned - tear it down instead of leaking it.
 			if (includeSessionHeader) {
-				this.registry.removeAndClose(session.sessionId());
+				closeProxySession(session.sessionId());
 			}
 			final HttpStatus status = (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT)
 					? HttpStatus.GATEWAY_TIMEOUT : HttpStatus.BAD_GATEWAY;
@@ -1585,7 +1670,7 @@ public class ProxyHandler {
 				return ServerResponse.notFound().build();
 			}
 		}
-		final boolean removed = this.registry.removeAndClose(mcpSessionId);
+		final boolean removed = closeProxySession(mcpSessionId);
 		return (removed) ? ServerResponse.ok().build() : ServerResponse.notFound().build();
 	}
 
