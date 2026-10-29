@@ -1374,6 +1374,78 @@ describe("useConnection", () => {
 
       expect(result.current.proxySessionId).toBe("proxy-stream-sid-1");
     });
+
+    test("sse proxy fetch wrapper preserves the SDK request headers (regression: dropped Content-Type caused 415)", async () => {
+      const props = {
+        ...defaultProps,
+        connectionType: "proxy" as const,
+        transportType: "sse" as const,
+      };
+
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const transportFetch = mockSSETransport.options?.fetch as (
+        url: string | URL | globalThis.Request,
+        init?: RequestInit,
+      ) => Promise<Response>;
+
+      await act(async () => {
+        await transportFetch("http://proxy.example/message?sessionId=proxy-sse-sid-9", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+            "X-SDK-Trace": "sdk-1",
+          },
+        });
+      });
+
+      const sent = (global.fetch as jest.Mock).mock.calls.at(-1)?.[1].headers;
+      expect(sent).toHaveProperty("Content-Type", "application/json");
+      expect(sent).toHaveProperty("Accept", "text/event-stream");
+      expect(sent).toHaveProperty("X-SDK-Trace", "sdk-1");
+      expect(result.current.proxySessionId).toBe("proxy-sse-sid-9");
+    });
+
+    test("stdio proxy fetch wrapper preserves the SDK request headers (regression: dropped Content-Type caused 415)", async () => {
+      const props = {
+        ...defaultProps,
+        connectionType: "proxy" as const,
+        transportType: "stdio" as const,
+        command: "test-command",
+        args: "test-args",
+        env: {},
+      };
+
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const transportFetch = mockSSETransport.options?.fetch as (
+        url: string | URL | globalThis.Request,
+        init?: RequestInit,
+      ) => Promise<Response>;
+
+      await act(async () => {
+        await transportFetch("http://proxy.example/stdio?command=test-command", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-SDK-Trace": "sdk-2",
+          },
+        });
+      });
+
+      const sent = (global.fetch as jest.Mock).mock.calls.at(-1)?.[1].headers;
+      expect(sent).toHaveProperty("Content-Type", "application/json");
+      expect(sent).toHaveProperty("X-SDK-Trace", "sdk-2");
+    });
   });
 
   describe("Custom Headers", () => {
