@@ -16,7 +16,8 @@ Sandboxed iframe renderer with SEP-1865 lifecycle bridge (t_cca2f271):
   Lifecycle: idle -> loading-resource -> sandbox-waiting -> initializing -> ready -> error -> torn-down.
 
 Security fixes (t_e6c85c96):
-- Added csp-serializer.ts (src/lib/csp-serializer.ts): serializes
+- Added csp-serializer.ts (src/lib/csp-serializer.ts, later deleted by the
+  minor-findings sweep below): serializes
   McpUiResourceCsp JSON objects to Content-Security-Policy header strings with
   restrictive defaults (all-'none' baseline when absent).
 - sandbox-proxy.html: always emits a CSP meta tag. The page reads the csp object
@@ -69,8 +70,10 @@ CSP merge into one effective policy (t_5f7281e4, PR #199 owner review BLOCK 2):
   iframe, and malformed JSON or javascript:/data: origins return the page
   baseline (previously a second concatenated all-'none' policy).
 - object-src 'none' added on every path and both stacks plus the page's inline
-  serializer and csp-serializer.ts (SEP-1865 draft, "Sandbox proxy", item 5).
-- csp-serializer.ts and the page's inline serializer tests now parse the policy
+  serializer and the then-present csp-serializer.ts (SEP-1865 draft,
+  "Sandbox proxy", item 5).
+- The then-present csp-serializer.ts and the page's inline serializer tests now
+  parse the policy
   and assert the EFFECTIVE directive (first occurrence wins) and that no
   directive appears twice, instead of substring presence. SandboxProxyIT gains
   a served-header case: an App declaring api.example.com gets exactly that as

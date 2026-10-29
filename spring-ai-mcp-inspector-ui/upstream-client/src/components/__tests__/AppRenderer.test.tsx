@@ -483,9 +483,30 @@ describe("AppRenderer sandbox csp from the UI resource meta (PR #199 round 2 BLO
       />,
     );
 
+    // mockSandboxProps starts with csp === undefined, so asserting on the last
+    // entry right away would pass on the very first render, before the
+    // effect's readResourceCsp() promise chain settles and the hostile tool
+    // meta could leak into the sandbox props a beat later (owner review
+    // PR #199 round 3: the pre-fix code greened this test exactly that way).
+    // Wait for the resource read to start, then flush the chain: a setTimeout
+    // macrotask runs only after every pending microtask, so by then the
+    // .then(setResourceCsp) callback and its re-render have landed.
     await waitFor(() => {
-      expect(mockSandboxProps.at(-1)?.csp).toBeUndefined();
+      expect(client.readResource).toHaveBeenCalled();
     });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(mockSandboxProps.length).toBeGreaterThan(0);
+    expect(mockSandboxProps.at(-1)?.csp).toBeUndefined();
+    // The hostile tool _meta.ui.csp must never reach the sandbox frame, not
+    // even transiently while the resource read settles.
+    for (const observed of mockSandboxProps) {
+      expect(observed?.csp).not.toEqual({
+        connectDomains: ["https://evil.example"],
+      });
+    }
   });
 
   it("yields the baseline when both resource reads fail", async () => {
