@@ -16,7 +16,9 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.logging.Level;
 import java.util.stream.Stream;
 import java.util.concurrent.CompletableFuture;
@@ -26,6 +28,7 @@ import com.codeborne.selenide.Condition;
 import com.codeborne.selenide.Configuration;
 import com.codeborne.selenide.Selenide;
 import com.codeborne.selenide.SelenideElement;
+import com.codeborne.selenide.WebDriverRunner;
 import io.github.bonigarcia.wdm.WebDriverManager;
 import io.inspector.mcp.demo.DemoApplication;
 import io.inspector.mcp.demo.support.E2ePreconditions;
@@ -48,6 +51,7 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
 import org.openqa.selenium.logging.LogEntries;
 import org.openqa.selenium.logging.LogEntry;
@@ -3805,24 +3809,39 @@ class InspectorUiIT {
 
 	// =====================================================================
 	// Mobile viewport (375x812) regression test: issue #230 companion.
-	// Proves the part of the mobile contract that is fixed today: after
-	// connect, History and Server Notifications stack vertically at 375px
-	// and the document does not overflow horizontally.
+	// Two halves of the mobile contract, both asserted for real:
 	//
-	// Deliberately NOT asserted: URL input / Connect button reachability.
-	// At 375px the sidebar IS in compact mode (matchMedia max-width
-	// 1023.98px, no UA sniffing involved), but in compact mode the config
-	// pane is capped at 30vh with an inner scroll area, and on the live
-	// head both the URL input (top ~193) and the Connect button (top
-	// ~481) sit inside that scroll area (clientHeight 113 vs scrollHeight
-	// 500), out of view at scrollY=0. Verified live on this head with a
-	// full device-metrics override (375x812, DPR 2, mobile=true, iPhone
-	// UA): geometry identical to a plain resize, so no emulation makes
-	// them reachable. Selenide scrolls elements into view before a
-	// visibility probe or click, so an "URL/Connect visible" assertion
-	// here would be a false guarantee. Fixing their visibility is a
-	// product change (compact sidebar layout) tracked as the open
-	// remainder of issue #230.
+	// 1. Pre-connect (fixed by the mobile pre-connect sidebar height
+	// patch, see NOTICE.d/mobile-preconnect-sidebar-height.txt): BOTH
+	// compact caps (h-[30vh] below sm and sm:h-[50vh] in the sm range)
+	// are dropped until a client exists, so the URL input and the
+	// Connect button sit in normal flow. The portrait scenario runs
+	// under a REAL device emulation (CDP Emulation.
+	// setDeviceMetricsOverride 375x812, DPR 3, mobile=true, plus an
+	// iPhone UA override), not a plain window resize: the card demands
+	// real-device emulation so a viewport that only a phone UA/DPR
+	// combination could break is actually exercised. Geometry is probed
+	// at scrollY=0 with elementFromPoint (Selenide's own
+	// shouldBe(visible) would scrollIntoView first and hide a clip). The
+	// landscape scenario (812x375, same emulation with the axes swapped)
+	// proves the sm-range half: the pane has no inner scroll area and
+	// the controls are reachable by scrolling the document.
+	//
+	// 2. Post-connect: the 30vh cap is back (the issue #58 / plan v10
+	// contract), History and Server Notifications stack vertically at
+	// 375px and the document does not overflow horizontally.
+	//
+	// History note (why the URL/Connect assertions live here): before
+	// the product fix both controls sat inside the sidebar's inner
+	// scroll area (clientHeight 113 vs scrollHeight 500 at 375x812),
+	// out of view at scrollY=0 under every emulation; a device-metrics
+	// override was verified NOT to change that geometry. Selenide
+	// scrolls elements into view before a visibility probe or click, so
+	// the old "URL/Connect visible" claim was a false guarantee; the
+	// assertions below probe elementFromPoint at scrollY=0 instead (and
+	// document scrolling for the landscape scenario, where the natural
+	// pane height exceeds the 375px viewport and scrolling IS the
+	// reachability contract).
 	// =====================================================================
 
 	@Nested
@@ -3857,22 +3876,240 @@ class InspectorUiIT {
 			return Boolean.TRUE.equals(result);
 		}
 
+		/** The session's original user agent, captured before the override. */
+		private static String originalUserAgent;
+
+		/**
+		 * Applies a real mobile device emulation (not a window resize): CDP
+		 * {@code Emulation.setDeviceMetricsOverride} with the given width and height,
+		 * deviceScaleFactor=3, mobile=true, plus an iPhone-class user agent via
+		 * {@code Emulation.setUserAgentOverride}. The override stays active until
+		 * {@link #clearDeviceEmulation()} clears it.
+		 */
+		private static void emulateIphoneViewport(final int width, final int height) {
+			WebDriver driver = WebDriverRunner.getWebDriver();
+			if (driver instanceof ChromeDriver chrome) {
+				originalUserAgent = (String) Selenide.executeJavaScript("return navigator.userAgent;");
+				Map<String, Object> metrics = new HashMap<>();
+				metrics.put("width", width);
+				metrics.put("height", height);
+				metrics.put("deviceScaleFactor", 3);
+				metrics.put("mobile", true);
+				chrome.executeCdpCommand("Emulation.setDeviceMetricsOverride", metrics);
+				Map<String, Object> ua = new HashMap<>();
+				ua.put("userAgent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
+						+ "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1");
+				chrome.executeCdpCommand("Emulation.setUserAgentOverride", ua);
+			}
+			else {
+				// Non-Chrome drivers cannot run the CDP emulation: the scenario
+				// degrades to the compensated window resize so it still runs.
+				ResponsiveTestHelpers.setViewportExactly(width, height);
+			}
+		}
+
+		/** Portrait phone: 375x812. */
+		private static void emulateIphone375x812() {
+			emulateIphoneViewport(375, 812);
+		}
+
+		/** Landscape phone: 812x375, the width sits inside the sm range. */
+		private static void emulateIphone812x375() {
+			emulateIphoneViewport(812, 375);
+		}
+
+		/**
+		 * Clears the device emulation applied by
+		 * {@link #emulateIphoneViewport(int, int)}. The UA override has no CDP clear
+		 * command, so it is restored by setting the session's original user agent back.
+		 */
+		private static void clearDeviceEmulation() {
+			WebDriver driver = WebDriverRunner.getWebDriver();
+			if (driver instanceof ChromeDriver chrome) {
+				chrome.executeCdpCommand("Emulation.clearDeviceMetricsOverride", Map.of());
+				if (originalUserAgent != null) {
+					Map<String, Object> ua = new HashMap<>();
+					ua.put("userAgent", originalUserAgent);
+					chrome.executeCdpCommand("Emulation.setUserAgentOverride", ua);
+					originalUserAgent = null;
+				}
+			}
+		}
+
+		/**
+		 * True when the element's bounding box lies fully inside the inner viewport (no
+		 * vertical clip) AND {@code document.elementFromPoint} at its centre returns the
+		 * element or a descendant (nothing overlays it): the real tappability condition
+		 * at the current scroll position. Probed at scrollY=0, never after a Selenide
+		 * scrollIntoView.
+		 */
+		private static boolean visibleAndUncoveredAtScrollTop(final SelenideElement element) {
+			Object result = Selenide.executeJavaScript("const el = arguments[0];"
+					+ "const r = el.getBoundingClientRect();"
+					+ "if (r.width === 0 || r.height === 0) { return 'zero-size'; }"
+					+ "if (r.top < -1 || r.bottom > window.innerHeight + 1 || r.left < -1"
+					+ "|| r.right > window.innerWidth + 1) { return 'clipped: ' + JSON.stringify(r) + ', inner '"
+					+ "+ window.innerWidth + 'x' + window.innerHeight; }"
+					+ "const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);"
+					+ "if (!hit || (hit !== el && !el.contains(hit))) { return 'covered: ' + (hit ? hit.tagName : 'none'); }"
+					+ "return true;", element);
+			if (result instanceof String) {
+				Assertions.fail((String) result);
+			}
+			return Boolean.TRUE.equals(result);
+		}
+
+		/**
+		 * True when neither the config pane nor any element inside it scrolls vertically:
+		 * every element of the pane subtree with a scrollable overflow-y fits its content
+		 * ({@code scrollHeight} within {@code clientHeight}). With a compact height cap
+		 * the pane (or its h-full child, which then scrolls internally) clips a ~500px
+		 * form column into ~113-187px and traps URL/Connect inside an inner scroll; with
+		 * the caps dropped the pane grows and the DOCUMENT scrolls instead.
+		 */
+		private static boolean configPaneHasNoInnerScroll() {
+			Object result = Selenide
+				.executeJavaScript("const pane = document.querySelector('[data-testid=config-pane]');"
+						+ "if (!pane) { return 'pane-not-found'; }"
+						+ "const els = [pane]; pane.querySelectorAll('*').forEach(function (e) { els.push(e); });"
+						+ "for (const el of els) {" + "if (el.clientHeight === 0) { continue; }"
+						+ "const oy = getComputedStyle(el).overflowY;"
+						+ "if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 1) {"
+						+ "return 'inner-scroll: ' + el.tagName + ' scrollHeight ' + el.scrollHeight"
+						+ "+ ' > clientHeight ' + el.clientHeight; }" + "}" + "return true;");
+			if (result instanceof String) {
+				Assertions.fail((String) result);
+			}
+			return Boolean.TRUE.equals(result);
+		}
+
+		/**
+		 * Scrolls the DOCUMENT (window.scrollTo, never an inner container) to centre the
+		 * element vertically, then probes {@code document.elementFromPoint} at its
+		 * centre: true when the element lands fully inside the viewport with nothing
+		 * overlaying it. This is the reachable-by-normal-page-scrolling condition: an
+		 * element trapped in a shorter inner scroll area stays clipped or covered no
+		 * matter how the document scrolls.
+		 */
+		private static boolean reachableByDocumentScroll(final SelenideElement element) {
+			Object result = Selenide.executeJavaScript("const el = arguments[0];"
+					+ "const r0 = el.getBoundingClientRect();"
+					+ "if (r0.width === 0 || r0.height === 0) { return 'zero-size'; }"
+					+ "window.scrollTo(0, Math.max(0, window.scrollY + r0.top - (window.innerHeight - r0.height) / 2));"
+					+ "const r = el.getBoundingClientRect();"
+					+ "if (r.top < -1 || r.bottom > window.innerHeight + 1 || r.left < -1"
+					+ "|| r.right > window.innerWidth + 1) { return 'clipped: ' + JSON.stringify(r) + ', inner '"
+					+ "+ window.innerWidth + 'x' + window.innerHeight; }"
+					+ "const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);"
+					+ "if (!hit || (hit !== el && !el.contains(hit))) { return 'covered: ' + (hit ? hit.tagName : 'none'); }"
+					+ "return true;", element);
+			if (result instanceof String) {
+				Assertions.fail((String) result);
+			}
+			return Boolean.TRUE.equals(result);
+		}
+
 		@Test
 		@Story("Mobile viewport")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("At 375x812 the History and Server Notifications panes stack vertically (top of Notifications >= bottom of History) and the document has no horizontal overflow. Connect-form reachability at this viewport is intentionally NOT asserted: see the group comment above and the open remainder of issue #230.")
+		@Description("Pre-connect at a real 375x812 device emulation (CDP device metrics DPR 3 mobile=true + iPhone UA, issue #230 AC): the URL input and the Connect button are fully inside the viewport at scrollY=0, nothing overlays their centres (elementFromPoint), the document does not overflow horizontally, and a real click on Connect connects (the connected Restart/Reconnect control mounts). Before the mobile pre-connect sidebar height patch both controls sat inside the sidebar's 30vh inner scroll area, out of view.")
+		@DisplayName("urlAndConnectReachable_preConnect_375x812: device emulation, URL and Connect reachable")
+		void urlAndConnectReachable_preConnect_375x812() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+			emulateIphone375x812();
+			try {
+				ResponsiveTestHelpers.scrollToTop();
+				Assertions.assertEquals(0, ResponsiveTestHelpers.scrollY(),
+						"pre-connect reachability must be asserted at scrollY=0");
+
+				// given: the sidebar rendered pre-connect
+				connectButton().shouldBe(visible, Duration.ofSeconds(15));
+				ResponsiveTestHelpers.scrollToTop();
+
+				SelenideElement urlInput = $("#sse-url-input");
+				SelenideElement connect = connectButton();
+
+				// then: both controls are fully inside the viewport at the top of
+				// the document and nothing overlays their centres: the AC of
+				// issue #230 (URL fully visible, Connect reachable).
+				Assertions.assertTrue(visibleAndUncoveredAtScrollTop(urlInput),
+						"URL input must be fully visible and uncovered at 375x812 scrollY=0");
+				Assertions.assertTrue(visibleAndUncoveredAtScrollTop(connect),
+						"Connect button must be fully visible and uncovered at 375x812 scrollY=0");
+				Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+						"document.documentElement must not overflow horizontally at 375px pre-connect");
+
+				// when: a real click on the visible Connect button
+				connect.click();
+
+				// then: the connected branch mounts the Restart/Reconnect control:
+				// the click really connected, no scroll-into-view drill-down needed.
+				$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			}
+			finally {
+				clearDeviceEmulation();
+			}
+		}
+
+		@Test
+		@Story("Mobile viewport")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Pre-connect at a real 812x375 landscape device emulation (same CDP device metrics with the axes swapped): the width sits inside the sm range, where the old sm:h-[50vh] cap squashed the pane to ~187px and trapped Connect inside an inner scroll. With the caps dropped the config pane has no inner scroll area, the URL input and the Connect button are reachable by scrolling the document (elementFromPoint after a document scroll, not a Selenide scrollIntoView), and a real click on Connect connects.")
+		@DisplayName("urlAndConnectReachable_preConnect_812x375: landscape, no inner scroll, document-reachable Connect")
+		void urlAndConnectReachable_preConnect_812x375() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+			emulateIphone812x375();
+			try {
+				ResponsiveTestHelpers.scrollToTop();
+				Assertions.assertEquals(0, ResponsiveTestHelpers.scrollY(),
+						"landscape reachability starts from scrollY=0");
+
+				// given: the sidebar rendered pre-connect
+				connectButton().shouldBe(visible, Duration.ofSeconds(15));
+				ResponsiveTestHelpers.scrollToTop();
+
+				SelenideElement urlInput = $("#sse-url-input");
+				SelenideElement connect = connectButton();
+
+				// then: the pane grew to its natural height: no inner scroll area
+				// (the ~500px form column is not clipped into the old 50vh ~187px
+				// window), so the controls sit in document flow, not a sidebar
+				// inner scroll.
+				Assertions.assertTrue(configPaneHasNoInnerScroll(),
+						"config pane must not have an inner scroll area at 812x375 pre-connect");
+
+				// and: both controls are reachable by scrolling the DOCUMENT
+				// (normal page scrolling), nothing overlaying their centres.
+				Assertions.assertTrue(reachableByDocumentScroll(urlInput),
+						"URL input must be document-scroll reachable at 812x375 pre-connect");
+				Assertions.assertTrue(reachableByDocumentScroll(connect),
+						"Connect button must be document-scroll reachable at 812x375 pre-connect");
+				Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+						"document.documentElement must not overflow horizontally at 812x375 pre-connect");
+
+				// when: a real click on the reachable Connect button
+				connect.click();
+
+				// then: the connected branch mounts the Restart/Reconnect control.
+				$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			}
+			finally {
+				clearDeviceEmulation();
+			}
+		}
+
+		@Test
+		@Story("Mobile viewport")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At 375x812 the History and Server Notifications panes stack vertically (top of Notifications >= bottom of History) and the document has no horizontal overflow. Connect-form reachability at this viewport is covered by urlAndConnectReachable_preConnect_375x812 and urlAndConnectReachable_preConnect_812x375; the 30vh connected-state cap of issue #58 stays in force here (the mobile pre-connect sidebar height patch drops the caps only before the first connect).")
 		@DisplayName("historyAndNotificationsStack_375x812: panes stack vertically, no horizontal overflow")
 		void historyAndNotificationsStack_375x812() {
 			startApp(new Combo("sse"));
 			open("/mcp-inspector/index.html");
 
-			// Set the exact mobile viewport right after opening. Note: reachability
-			// of the URL input / Connect button is NOT asserted at this viewport.
-			// In compact mode the config pane is capped at 30vh with an inner
-			// scroll area and both controls sit inside it out of view (see the
-			// group comment above); Selenide would scroll them into view before
-			// any probe, making a visibility assertion a false guarantee. That
-			// part of the mobile contract (issue #230) is tracked separately.
+			// Set the exact mobile viewport right after opening.
 			ResponsiveTestHelpers.setViewportExactly(375, 812);
 
 			// Wait for the sidebar to render at mobile viewport
@@ -3881,7 +4118,7 @@ class InspectorUiIT {
 			// Connect (History/Notifications pane mounts after connect).
 			// Selenide scrolls the button into the sidebar's inner scroll
 			// area before clicking: this is a layout drill-down, not a
-			// tap-reachability proof.
+			// tap-reachability proof (that is the pre-connect scenario above).
 			connectButton().click();
 			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
 			ResponsiveTestHelpers.scrollToTop();
