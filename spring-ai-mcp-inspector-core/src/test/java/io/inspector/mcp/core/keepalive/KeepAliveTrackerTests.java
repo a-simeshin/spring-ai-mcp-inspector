@@ -103,6 +103,38 @@ class KeepAliveTrackerTests {
 	}
 
 	@Test
+	void singlePing_fallsBackToStaleAfterNinetySecondsOfSilence() {
+		final KeepAliveTracker tracker = new KeepAliveTracker();
+		final Instant t0 = Instant.parse("2026-09-20T10:00:00Z");
+		tracker.recordPing(t0);
+
+		// Interval is not estimable from a single ping: the 90s fallback applies.
+		assertThat(tracker.snapshot(t0.plusSeconds(89)).isStale()).isFalse();
+		assertThat(tracker.snapshot(t0.plusSeconds(91)).isStale()).isTrue();
+	}
+
+	@Test
+	void noPings_neverStaleEvenAfterNinetySeconds() {
+		final KeepAliveTracker tracker = new KeepAliveTracker();
+		final Instant t0 = Instant.parse("2026-09-20T10:00:00Z");
+
+		// Zero pings means the server may simply not ping: no false alarm.
+		assertThat(tracker.snapshot(t0.plusSeconds(120)).isStale()).isFalse();
+	}
+
+	@Test
+	void estimatedIntervalWinsOverTheNinetySecondFallback() {
+		final KeepAliveTracker tracker = new KeepAliveTracker();
+		final Instant t0 = Instant.parse("2026-09-20T10:00:00Z");
+		tracker.recordPing(t0);
+		tracker.recordPing(t0.plusSeconds(5));
+
+		// Two pings 5s apart: 60s of silence already exceeds 2x5s, so the session
+		// is stale well before the 90s fallback would fire.
+		assertThat(tracker.snapshot(t0.plusSeconds(65)).isStale()).isTrue();
+	}
+
+	@Test
 	void transitionsToStaleAfterTwoIntervalsOfSilence() {
 		final KeepAliveTracker tracker = new KeepAliveTracker();
 		final Instant t0 = Instant.parse("2026-09-20T10:00:00Z");
