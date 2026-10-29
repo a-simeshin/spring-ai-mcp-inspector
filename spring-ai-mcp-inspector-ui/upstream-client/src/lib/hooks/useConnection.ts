@@ -612,7 +612,13 @@ export function useConnection({
     _e?: unknown,
     retryCount: number = 0,
     profileIdOverride?: string | null,
+    // [spring-ai-mcp-inspector PATCH] Transport override for the Switch-to-SSE
+    // affordance (issue #250): the connect closure sees the state snapshot, so
+    // flipping the selector and reconnecting in one click needs the target
+    // transport passed explicitly rather than read from the stale closure.
+    transportOverride?: "stdio" | "sse" | "streamable-http",
   ) => {
+    const activeTransportType = transportOverride ?? transportType;
     // [spring-ai-mcp-inspector PATCH] Both failure banners reset on every attempt:
     // the transport one (issue #56) and the authorization one (issue #54).
     // Also clear the previous session's server info, so a failed attempt
@@ -747,7 +753,7 @@ export function useConnection({
       let serverUrl: URL;
 
       // Determine connection URL based on the connection type
-      if (connectionType === "direct" && transportType !== "stdio") {
+      if (connectionType === "direct" && activeTransportType !== "stdio") {
         // Direct connection - use the provided URL directly (not available for STDIO)
         serverUrl = new URL(toAbsoluteServerUrl(sseUrl));
 
@@ -755,7 +761,7 @@ export function useConnection({
         if (mcpSessionId) {
           requestHeaders["mcp-session-id"] = mcpSessionId;
         }
-        switch (transportType) {
+        switch (activeTransportType) {
           case "sse":
             requestHeaders["Accept"] = "text/event-stream";
             requestHeaders["content-type"] = "application/json";
@@ -824,7 +830,7 @@ export function useConnection({
         }
 
         let mcpProxyServerUrl;
-        switch (transportType) {
+        switch (activeTransportType) {
           case "stdio": {
             mcpProxyServerUrl = new URL(`${getMCPProxyAddress(config)}/stdio`);
             mcpProxyServerUrl.searchParams.append("command", command);
@@ -987,7 +993,7 @@ export function useConnection({
         if (effectiveProfileId) {
           serverUrl.searchParams.append("profileId", effectiveProfileId);
         }
-        serverUrl.searchParams.append("transportType", transportType);
+        serverUrl.searchParams.append("transportType", activeTransportType);
       }
 
       if (onNotification) {
@@ -1020,7 +1026,7 @@ export function useConnection({
       let capabilities;
       try {
         const transport =
-          transportType === "streamable-http"
+          activeTransportType === "streamable-http"
             ? new StreamableHTTPClientTransport(serverUrl, {
                 sessionId: undefined,
                 ...transportOptions,

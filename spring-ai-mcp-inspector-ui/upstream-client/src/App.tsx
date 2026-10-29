@@ -835,6 +835,17 @@ const App = () => {
     [connectMcpServer],
   );
 
+  // [spring-ai-mcp-inspector PATCH] Switch-to-SSE affordance (issue #250): the
+  // strong connect hint button flips the Transport Type selector to SSE and
+  // reconnects with the same URL in one click. The transport is passed as an
+  // override because the connect closure still sees the previous selector
+  // value; the URL field itself is not rewritten (the SSE branch derives its
+  // own /sse default).
+  const onSwitchToSse = useCallback(() => {
+    setTransportType("sse");
+    void connectMcpServer(undefined, 0, null, "sse");
+  }, [connectMcpServer]);
+
   const onOAuthDebugConnect = useCallback(
     async ({
       authorizationCode,
@@ -1680,6 +1691,7 @@ const App = () => {
           activeProfileId={activeProfileId}
           onActiveProfileChange={setActiveProfileId}
           authError={authError}
+          onSwitchToSse={onSwitchToSse}
           onConnect={connectMcpServer}
           onDisconnect={disconnectMcpServer}
           logLevel={logLevel}

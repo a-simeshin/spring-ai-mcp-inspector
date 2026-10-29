@@ -21,6 +21,8 @@ const refusedFailure: ConnectFailure = {
   reason: "connection_refused",
   message: "Connection refused",
   retryable: true,
+  // [spring-ai-mcp-inspector PATCH] optional additive hint (issue #250)
+  hint: null,
 };
 
 describe("parseConnectFailureResponse", () => {
@@ -41,6 +43,7 @@ describe("parseConnectFailureResponse", () => {
       reason: "connection_refused",
       message: "Connection refused: connect",
       retryable: true,
+      hint: null,
     });
   });
 
@@ -84,6 +87,7 @@ describe("parseConnectFailureResponse", () => {
       reason: "timeout",
       message: "Failed to connect to the MCP server",
       retryable: true,
+      hint: null,
     });
   });
 });
@@ -120,6 +124,7 @@ describe("connectionFailureFromError", () => {
       reason: "unknown",
       message: "Failed to fetch",
       retryable: true,
+      hint: null,
     });
   });
 
@@ -129,6 +134,7 @@ describe("connectionFailureFromError", () => {
       reason: "unknown",
       message: "boom",
       retryable: true,
+      hint: null,
     });
   });
 });
@@ -189,6 +195,7 @@ describe("connectionFailureFromError — unauthorized detection", () => {
       reason: "unauthorized",
       message: "Custom 401 message",
       retryable: true,
+      hint: null,
     };
     expect(connectionFailureFromError(new ConnectFailedError(unauthorized))).toEqual(unauthorized);
   });

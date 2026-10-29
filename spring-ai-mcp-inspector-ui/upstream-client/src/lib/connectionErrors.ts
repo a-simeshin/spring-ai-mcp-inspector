@@ -131,6 +131,23 @@ export interface ConnectFailure {
   reason: ConnectFailureReason;
   message: string;
   retryable: boolean;
+  // [spring-ai-mcp-inspector PATCH] Optional transport-switch hint appended by
+  // the proxy when the SSE probe found evidence of the legacy SSE transport
+  // (issue #250). Absent when the probe did not run or proved nothing; old
+  // payloads keep parsing unchanged.
+  hint?: ConnectHint | null;
+}
+
+/**
+ * Transport-switch hint attached to a failed Streamable HTTP connect when the
+ * proxy's SSE probe found evidence of the legacy SSE transport (issue #250).
+ * Wire shape (spec section 7):
+ * `{"kind":"sse_only"|"maybe_sse","probePath":"/sse","refs":{"upstream":"spring-projects/spring-ai#7207","local":"#250"}}`.
+ */
+export interface ConnectHint {
+  kind: "sse_only" | "maybe_sse";
+  probePath: string;
+  refs?: { upstream?: string; local?: string };
 }
 
 export const CONNECT_FAILED_ERROR_CODE = "MCP_CONNECT_FAILED";
@@ -152,6 +169,9 @@ export class ConnectFailedError extends Error {
   readonly code: string;
   readonly reason: ConnectFailureReason;
   readonly retryable: boolean;
+  // [spring-ai-mcp-inspector PATCH] Carries the optional transport-switch hint
+  // through the SDK transport layer so the alert can render it (issue #250).
+  readonly hint?: ConnectHint | null;
 
   constructor(failure: ConnectFailure) {
     super(failure.message);
@@ -159,6 +179,7 @@ export class ConnectFailedError extends Error {
     this.code = failure.code;
     this.reason = failure.reason;
     this.retryable = failure.retryable;
+    this.hint = failure.hint ?? null;
   }
 }
 
@@ -207,6 +228,38 @@ export async function parseConnectFailureResponse(
         ? error.message
         : "Failed to connect to the MCP server",
     retryable: typeof error.retryable === "boolean" ? error.retryable : true,
+    // [spring-ai-mcp-inspector PATCH] Optional transport-switch hint (issue
+    // #250); absent or malformed payloads parse to null and old behavior is
+    // unchanged.
+    hint: parseConnectHint(error.hint),
+  };
+}
+
+// [spring-ai-mcp-inspector PATCH] Transport-switch hint parsing (issue #250,
+// spec section 7). Tolerant of absent/malformed shapes: anything that does not
+// match the contract parses to null instead of throwing.
+function parseConnectHint(value: unknown): ConnectHint | null {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  if (value.kind !== "sse_only" && value.kind !== "maybe_sse") {
+    return null;
+  }
+  if (typeof value.probePath !== "string") {
+    return null;
+  }
+  const refsValue = value.refs;
+  const refs = isPlainObject(refsValue)
+    ? {
+        upstream:
+          typeof refsValue.upstream === "string" ? refsValue.upstream : undefined,
+        local: typeof refsValue.local === "string" ? refsValue.local : undefined,
+      }
+    : undefined;
+  return {
+    kind: value.kind,
+    probePath: value.probePath,
+    refs,
   };
 }
 
@@ -241,6 +294,8 @@ export function connectionFailureFromError(error: unknown): ConnectFailure {
       reason: error.reason,
       message: error.message,
       retryable: error.retryable,
+      // [spring-ai-mcp-inspector PATCH] Keep the transport-switch hint (issue #250).
+      hint: error.hint ?? null,
     };
   }
   if (isHttp401Error(error)) {
@@ -249,6 +304,7 @@ export function connectionFailureFromError(error: unknown): ConnectFailure {
       reason: "unauthorized",
       message: error instanceof Error ? error.message : String(error),
       retryable: true,
+      hint: null,
     };
   }
   return {
@@ -256,6 +312,7 @@ export function connectionFailureFromError(error: unknown): ConnectFailure {
     reason: "unknown",
     message: error instanceof Error ? error.message : String(error),
     retryable: true,
+    hint: null,
   };
 }
 
@@ -276,3 +333,25 @@ export function humanReadableReason(reason: ConnectFailureReason): string {
       return "";
   }
 }
+
+// [spring-ai-mcp-inspector PATCH] Transport-switch hint copy (issue #250, spec
+// section 6). Lives next to humanReadableReason so a future i18n pass picks
+// both up together. Verbatim for QA: do not reflow or reword.
+
+/** S1 (strong, M1/M2): the probe proved an SSE endpoint alive. Verbatim. */
+export const SSE_SWITCH_HINT_STRONG =
+  "This server appears to serve the legacy SSE transport only. For Spring AI servers set " +
+  "`spring.ai.mcp.server.protocol=STREAMABLE`, or connect with the SSE transport.";
+
+/** Upstream ref link rendered after the S1 copy (Refs line). */
+export const SSE_SWITCH_HINT_UPSTREAM_URL =
+  "https://github.com/spring-projects/spring-ai/issues/7207";
+
+/** Local ref link rendered after the S1 copy (Refs line). */
+export const SSE_SWITCH_HINT_LOCAL_URL =
+  "https://github.com/a-simeshin/spring-ai-mcp-inspector/issues/250";
+
+/** S2 (weak, M3): nothing was proved, but the trigger was a 404. Verbatim. */
+export const SSE_SWITCH_HINT_WEAK =
+  "If this is a Spring AI server, its SSE transport may be active instead: try Transport " +
+  "Type SSE or set `spring.ai.mcp.server.protocol=STREAMABLE` on the server (#250).";

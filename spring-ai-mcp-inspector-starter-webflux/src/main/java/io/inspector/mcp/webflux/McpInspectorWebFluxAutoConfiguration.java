@@ -284,11 +284,11 @@ public class McpInspectorWebFluxAutoConfiguration {
 			final TransportDetector transportDetector, final JsonMapper objectMapper,
 			final McpInspectorProperties properties, final ReactiveSessionOwnerResolver sessionOwnerResolver,
 			final AuthProfileStore authProfileStore, final OAuth2ClientCredentialsTokenManager ccTokenManager,
-			final OAuth2AuthCodeTokenExchanger authCodeExchanger,
-			final ObjectProvider<TaskService> taskServiceProvider) {
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger, final ObjectProvider<TaskService> taskServiceProvider,
+			final ObjectProvider<McpTrafficRecorder> trafficRecorder) {
 		return new ProxyHandler(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties,
 				sessionOwnerResolver, authProfileStore, ccTokenManager, authCodeExchanger,
-				taskServiceProvider.getIfAvailable());
+				taskServiceProvider.getIfAvailable(), trafficRecorder.getIfAvailable());
 	}
 
 	@Bean

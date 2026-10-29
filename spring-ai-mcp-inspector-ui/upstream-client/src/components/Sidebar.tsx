@@ -35,6 +35,10 @@ import { InspectorConfig } from "@/lib/configurationTypes";
 import { ConnectionStatus } from "@/lib/constants";
 import {
   humanReadableReason,
+  SSE_SWITCH_HINT_STRONG,
+  SSE_SWITCH_HINT_UPSTREAM_URL,
+  SSE_SWITCH_HINT_LOCAL_URL,
+  SSE_SWITCH_HINT_WEAK,
   type ConnectFailure,
 } from "@/lib/connectionErrors";
 import useTheme from "../lib/hooks/useTheme";
@@ -93,6 +97,10 @@ interface SidebarProps {
   // D3 authorization DTO (issue #54): the server answered and refused.
   // Distinct from connectionError, which means the server was never reached.
   authError?: ProxyErrorDto | null;
+  // [spring-ai-mcp-inspector PATCH] Switch-to-SSE affordance (issue #250): called
+  // by the strong transport-switch hint button; flips the Transport Type
+  // selector to SSE and reconnects with the same URL (App wires both).
+  onSwitchToSse?: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
   logLevel: LoggingLevel;
@@ -139,6 +147,7 @@ const Sidebar = ({
   activeProfileId,
   onActiveProfileChange,
   authError,
+  onSwitchToSse,
   onConnect,
   onDisconnect,
   logLevel,
@@ -1049,6 +1058,53 @@ const Sidebar = ({
                     </>
                   )}
                 </p>
+                {/* [spring-ai-mcp-inspector PATCH] Transport-switch hint
+                    (issue #250): the proxy's SSE probe appended a hint to the
+                    MCP_CONNECT_FAILED payload. Strong (sse_only) renders the
+                    verbatim S1 copy, the refs as links and the Switch-to-SSE
+                    button; weak (maybe_sse) renders the verbatim S2 paragraph
+                    only. The hint never replaces the reason/message above. */}
+                {connectionError.hint?.kind === "sse_only" && (
+                  <div data-testid="connect-hint-strong" className="mb-2">
+                    <p className="text-xs mb-1">{SSE_SWITCH_HINT_STRONG}</p>
+                    <p className="text-xs mb-2">
+                      Refs:{" "}
+                      <a
+                        href={SSE_SWITCH_HINT_UPSTREAM_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline"
+                      >
+                        spring-projects/spring-ai#7207
+                      </a>
+                      ,{" "}
+                      <a
+                        href={SSE_SWITCH_HINT_LOCAL_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline"
+                      >
+                        #250
+                      </a>
+                    </p>
+                    {onSwitchToSse && (
+                      <Button
+                        data-testid="switch-to-sse-button"
+                        size="sm"
+                        variant="outline"
+                        className="w-full"
+                        onClick={onSwitchToSse}
+                      >
+                        Switch to SSE
+                      </Button>
+                    )}
+                  </div>
+                )}
+                {connectionError.hint?.kind === "maybe_sse" && (
+                  <p data-testid="connect-hint-weak" className="text-xs mb-2">
+                    {SSE_SWITCH_HINT_WEAK}
+                  </p>
+                )}
                 <Button
                   data-testid="retry-connect-button"
                   size="sm"

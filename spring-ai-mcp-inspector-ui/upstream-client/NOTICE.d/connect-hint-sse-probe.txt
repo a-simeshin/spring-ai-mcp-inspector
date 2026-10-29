@@ -1,0 +1,44 @@
+spring-ai-mcp-inspector local patch (issue #250, spec card t_42b235d6):
+Spring-AI-aware connect hint for failed Streamable HTTP connects.
+
+When a streamable-http connect through the proxy fails with a 404/405-shaped
+error (classified not_found, or unknown with the MCP SDK "Failed to send
+message" signature; reason timeout/connection_refused/dns keep the bare
+error), the backend runs the spec's SSE probe before building the
+MCP_CONNECT_FAILED response: a non-mutating GET with Accept:
+text/event-stream against the connect URL and the sibling paths /mcp and
+/sse, bounded by a short probe timeout. If any probe target answers like an
+SSE endpoint (event-stream content type, or 405 whose Allow advertises
+text/event-stream), the error payload gains an additive hint object
+{"kind":"sse_only","probePath":"...","refs":{"upstream":"spring-projects/spring-ai#7207","local":"#250"}}
+- the classified reason/message/retryable are never altered. If nothing was
+proved, a weaker hint {"kind":"maybe_sse",...} is appended instead. The
+probe/timeout itself can never mask the original error (probe failures are
+swallowed into the weak-hint branch) and adds no overhead on successful
+connects or other failure classes. The backend also records an
+MCP_CONNECT_FAILED timeline event (reason, probe outcome, hint kind) when
+the recorder bean is present. Both starters share the behavior: webmvc
+StreamableHttpProxyController and webflux ProxyHandler.
+
+Client-side (this package):
+- src/lib/connectionErrors.ts: ConnectFailure gains an optional additive
+  `hint` field; parseConnectFailureResponse parses it tolerantly (absent or
+  malformed hint parses to null, old payloads unchanged); ConnectFailedError
+  and connectionFailureFromError carry it through; verbatim S1/S2 hint copy
+  constants live next to humanReadableReason.
+- src/lib/hooks/useConnection.ts: connect() accepts an optional transport
+  override argument so the Switch-to-SSE button can reconnect as SSE in the
+  same tick (the connect closure would otherwise see the previous selector
+  state); override only affects the current call, the selector state remains
+  the source of truth.
+- src/components/Sidebar.tsx: the connection-error alert renders the strong
+  hint (verbatim S1 copy, Refs line with upstream #7207 and local #250
+  links, and a "Switch to SSE" button) or the weak hint (verbatim S2
+  paragraph, no button, no links) when the payload carries one; the
+  reason/message lines are unchanged and the hint never replaces them.
+- src/App.tsx: onSwitchToSse callback flips the Transport Type selector to
+  SSE and reconnects with the same URL (SSE branch derives its own /sse
+  default; the URL field is not rewritten).
+- src/components/TimelineTab.tsx: MCP_CONNECT_FAILED rows render with an
+  amber border, the "MCP connect failed" title with the classified reason,
+  and the S1/S2 hint text (plain, no button) in the expanded row.

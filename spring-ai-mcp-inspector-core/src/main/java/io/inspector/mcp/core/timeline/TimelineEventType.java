@@ -49,6 +49,13 @@ public enum TimelineEventType {
 	MCP_STREAM_EVENT("mcp.stream.event"),
 
 	/**
+	 * A proxy connect attempt that failed before any MCP frame could flow (issue #250).
+	 * Recorded with a fresh correlation id; the payload carries the classified reason,
+	 * the SSE probe outcome and the transport-switch hint, if any.
+	 */
+	MCP_CONNECT_FAILED("mcp.connect.failed"),
+
+	/**
 	 * An application log entry captured by the {@link TimelineAppender} or
 	 * {@link SystemErrOutSink}.
 	 */

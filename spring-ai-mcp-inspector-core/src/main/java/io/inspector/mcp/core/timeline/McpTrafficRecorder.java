@@ -215,6 +215,21 @@ public final class McpTrafficRecorder {
 	}
 
 	/**
+	 * Records a failed proxy connect attempt (issue #250) with a fresh correlation id.
+	 * Appended right after classification, before any probe hint is added to the HTTP
+	 * response, so the timeline reflects the failure even when the response path throws.
+	 * @param sessionId the proxy session identifier of the attempt (may be {@code null})
+	 * @param payload the connect-failure payload (reason, hint, probe outcome; may be
+	 * {@code null})
+	 */
+	public void recordConnectFailed(final String sessionId, final JsonNode payload) {
+		final String correlationId = UUID.randomUUID().toString();
+		final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, sessionId,
+				TimelineEventType.MCP_CONNECT_FAILED, Instant.now(), payload);
+		appendWithMdc(correlationId, event);
+	}
+
+	/**
 	 * Appends {@code event} to the timeline with {@code correlationId} in the MDC, then
 	 * restores the prior MDC value. Restoration happens in a {@code finally} block: a
 	 * throwing {@link TimelineService} must never leak the recorder's correlation into

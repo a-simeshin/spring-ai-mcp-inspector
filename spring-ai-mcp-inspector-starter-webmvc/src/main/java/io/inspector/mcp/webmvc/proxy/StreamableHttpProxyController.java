@@ -70,11 +70,13 @@ import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.proxy.SseConnectProbe;
 import io.inspector.mcp.core.proxy.TransportKind;
 import io.inspector.mcp.core.task.TaskHandle;
 import io.inspector.mcp.core.task.TaskNotCancelableException;
 import io.inspector.mcp.core.task.TaskNotFoundException;
 import io.inspector.mcp.core.task.TaskService;
+import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 import io.inspector.mcp.webmvc.InspectorServerPortHolder;
 import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
 
@@ -142,6 +144,13 @@ public class StreamableHttpProxyController {
 
 	private final ObjectProvider<TaskService> taskServiceProvider;
 
+	/**
+	 * Optional traffic recorder for MCP_CONNECT_FAILED timeline events (issue #250); may
+	 * be {@code null} when no recorder bean is available, in which case timeline
+	 * recording is skipped silently, same as traffic recording.
+	 */
+	private final McpTrafficRecorder trafficRecorder;
+
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper) {
 		this(registry, transportFactory, mcpProxy, objectMapper, null, null, null, null, null, null);
@@ -176,7 +185,7 @@ public class StreamableHttpProxyController {
 			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,
 			final ObjectProvider<TaskService> taskServiceProvider) {
 		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, null, null, null, null,
-				taskServiceProvider);
+				taskServiceProvider, null);
 	}
 
 	/**
@@ -228,6 +237,8 @@ public class StreamableHttpProxyController {
 	 * @param ccTokenManager the client-credentials token manager
 	 * @param authCodeExchanger the auth-code exchanger
 	 * @param taskServiceProvider provider for an optional {@link TaskService}
+	 * @param trafficRecorderProvider provider for an optional {@link McpTrafficRecorder}
+	 * used for MCP_CONNECT_FAILED timeline events (issue #250)
 	 */
 	@Autowired
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
@@ -235,8 +246,8 @@ public class StreamableHttpProxyController {
 			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,
 			final ServletSessionOwnerResolver sessionOwnerResolver, final AuthProfileStore authProfileStore,
 			final OAuth2ClientCredentialsTokenManager ccTokenManager,
-			final OAuth2AuthCodeTokenExchanger authCodeExchanger,
-			final ObjectProvider<TaskService> taskServiceProvider) {
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger, final ObjectProvider<TaskService> taskServiceProvider,
+			final ObjectProvider<McpTrafficRecorder> trafficRecorderProvider) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
@@ -248,6 +259,7 @@ public class StreamableHttpProxyController {
 		this.ccTokenManager = ccTokenManager;
 		this.authCodeExchanger = authCodeExchanger;
 		this.taskServiceProvider = taskServiceProvider;
+		this.trafficRecorder = (trafficRecorderProvider != null) ? trafficRecorderProvider.getIfAvailable() : null;
 	}
 
 	/**
@@ -352,7 +364,12 @@ public class StreamableHttpProxyController {
 			session = openSession(url, profileId);
 		}
 		catch (final ProxyConnectFailureException ex) {
-			return connectFailureResponse(ex.failure());
+			// Spec card t_42b235d6 (issue #250): on a failed streamable connect, run the
+			// SSE probe and record the MCP_CONNECT_FAILED timeline event before building
+			// the error response; the probe may only ADD a hint, never alter the failure.
+			final URI probeTarget = resolveProbeTarget(url);
+			return connectFailureResponse(ex.failure(),
+					diagnoseConnect(ex.sessionId(), ex.failure(), ex.getCause(), probeTarget));
 		}
 		if (session == null) {
 			// D8: a foreign/unknown profileId is a structured 400; any other bring-up
@@ -399,12 +416,98 @@ public class StreamableHttpProxyController {
 	 * @return the HTTP response entity
 	 */
 	private static ResponseEntity<Object> connectFailureResponse(final ProxyConnectFailure failure) {
+		return connectFailureResponse(failure, null);
+	}
+
+	/**
+	 * Maps a classified connect failure onto a non-2xx response: 504 Gateway Timeout for
+	 * {@link ProxyConnectFailure.Reason#TIMEOUT}, 502 Bad Gateway for every other reason.
+	 * The body carries a machine-readable {@code error} payload; stack traces and
+	 * internal details stay server-side in the log. When the SSE probe produced a
+	 * transport-switch hint (spec card t_42b235d6, issue #250) the payload gains an
+	 * optional {@code hint} object; the original reason, message and status are never
+	 * altered by the probe (failure isolation).
+	 * @param failure the classified connect failure (never {@code null})
+	 * @param diagnosis the probe diagnosis, or {@code null} when no probe ran
+	 * @return the HTTP response entity
+	 */
+	private static ResponseEntity<Object> connectFailureResponse(final ProxyConnectFailure failure,
+			final SseConnectProbe.Diagnosis diagnosis) {
 		final HttpStatus status = (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT) ? HttpStatus.GATEWAY_TIMEOUT
 				: HttpStatus.BAD_GATEWAY;
-		return ResponseEntity.status(status)
-			.contentType(MediaType.APPLICATION_JSON)
-			.body(Map.of("error", Map.of("code", ERROR_CODE_MCP_CONNECT_FAILED, "reason", failure.reason().wire(),
-					"message", failure.message(), "retryable", Boolean.TRUE)));
+		final Map<String, Object> error = new LinkedHashMap<>();
+		error.put("code", ERROR_CODE_MCP_CONNECT_FAILED);
+		error.put("reason", failure.reason().wire());
+		error.put("message", failure.message());
+		error.put("retryable", Boolean.TRUE);
+		if (diagnosis != null && diagnosis.hint() != null) {
+			error.put("hint", diagnosis.hint().toWire());
+		}
+		return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON).body(Map.of("error", error));
+	}
+
+	/**
+	 * Runs the SSE transport-switch probe for a failed Streamable HTTP connect (spec card
+	 * t_42b235d6, issue #250) and records the MCP_CONNECT_FAILED timeline event. Never
+	 * throws and never alters the original failure: the outcome may only ADD a hint to
+	 * the error payload.
+	 * @param sessionId the proxy session identifier of the attempt (may be {@code null})
+	 * @param failure the classified connect failure (never {@code null})
+	 * @param error the original exception behind the failure (may be {@code null})
+	 * @param target the resolved target URI, or {@code null} when it cannot be
+	 * re-resolved
+	 * @return the diagnosis (never {@code null}); its hint is {@code null} when the
+	 * decision matrix produced none
+	 */
+	private SseConnectProbe.Diagnosis diagnoseConnect(final String sessionId, final ProxyConnectFailure failure,
+			final Throwable error, final URI target) {
+		SseConnectProbe.Diagnosis diagnosis;
+		try {
+			diagnosis = SseConnectProbe.diagnose(failure, error, target);
+		}
+		catch (final Exception ex) {
+			LOG.debug("proxy[{}] sse connect probe skipped: {}", sessionId, ex.toString());
+			diagnosis = new SseConnectProbe.Diagnosis(null, null);
+		}
+		recordConnectFailed(sessionId, failure, diagnosis, target);
+		return diagnosis;
+	}
+
+	/**
+	 * Records the MCP_CONNECT_FAILED timeline event when the recorder bean is available;
+	 * skipped silently otherwise, and a throwing recorder never breaks the error path.
+	 * @param sessionId the proxy session identifier of the attempt (may be {@code null})
+	 * @param failure the classified connect failure (never {@code null})
+	 * @param diagnosis the probe diagnosis (never {@code null})
+	 * @param target the resolved target URI, or {@code null}
+	 */
+	private void recordConnectFailed(final String sessionId, final ProxyConnectFailure failure,
+			final SseConnectProbe.Diagnosis diagnosis, final URI target) {
+		if (this.trafficRecorder == null) {
+			return;
+		}
+		try {
+			this.trafficRecorder.recordConnectFailed(sessionId,
+					SseConnectProbe.timelinePayload(JsonNodeFactory.instance, failure, diagnosis, target));
+		}
+		catch (final Exception ex) {
+			LOG.debug("proxy[{}] timeline connect-failed record skipped: {}", sessionId, ex.toString());
+		}
+	}
+
+	/**
+	 * Re-resolves the probe target for a connect that failed before the transport could
+	 * be built, so the probe still knows which URI was attempted.
+	 * @param url the request-supplied target URL
+	 * @return the resolved target URI, or {@code null} when it cannot be resolved
+	 */
+	private URI resolveProbeTarget(final String url) {
+		try {
+			return ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
+		}
+		catch (final Exception ex) {
+			return null;
+		}
 	}
 
 	/**
@@ -562,8 +665,12 @@ public class StreamableHttpProxyController {
 					ex.toString());
 			// A failed first POST (the initialize) never returned a session id to the
 			// client, so the session is orphaned — tear it down instead of leaking it.
+			// Spec card t_42b235d6 (issue #250): the SSE probe and the timeline event
+			// belong to the connect POST only, never to a mid-session relay failure.
 			if (includeSessionHeader) {
 				this.registry.removeAndClose(session.sessionId());
+				return connectFailureResponse(failure,
+						diagnoseConnect(session.sessionId(), failure, ex, session.targetUri()));
 			}
 			return connectFailureResponse(failure);
 		}

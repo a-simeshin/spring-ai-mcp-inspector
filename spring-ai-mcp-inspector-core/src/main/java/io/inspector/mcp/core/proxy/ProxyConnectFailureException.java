@@ -32,9 +32,25 @@ public final class ProxyConnectFailureException extends RuntimeException {
 
 	private final ProxyConnectFailure failure;
 
+	private final String sessionId;
+
 	public ProxyConnectFailureException(final ProxyConnectFailure failure, final Throwable cause) {
+		this(failure, cause, null);
+	}
+
+	/**
+	 * Full constructor.
+	 * @param failure the classified connect failure
+	 * @param cause the original exception, for server-side logging only
+	 * @param sessionId the proxy session identifier generated for the attempt, exposed so
+	 * downstream handlers can attribute timeline events to the failed connect (may be
+	 * {@code null})
+	 */
+	public ProxyConnectFailureException(final ProxyConnectFailure failure, final Throwable cause,
+			final String sessionId) {
 		super(failure.message(), cause);
 		this.failure = failure;
+		this.sessionId = sessionId;
 	}
 
 	/**
@@ -43,6 +59,14 @@ public final class ProxyConnectFailureException extends RuntimeException {
 	 */
 	public ProxyConnectFailure failure() {
 		return this.failure;
+	}
+
+	/**
+	 * The proxy session identifier generated for the failed attempt, if known.
+	 * @return the session identifier or {@code null}
+	 */
+	public String sessionId() {
+		return this.sessionId;
 	}
 
 }

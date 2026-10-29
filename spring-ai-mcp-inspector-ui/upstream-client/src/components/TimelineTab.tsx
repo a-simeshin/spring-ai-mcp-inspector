@@ -8,12 +8,32 @@ import { useEffect, useState, useCallback, useRef } from "react";
 // [spring-ai-mcp-inspector PATCH] Error highlighting for CallToolResult frames
 // with isError=true (#184). Renders the row with a distinct error color, a
 // "tool error" badge, and the server error text in the tooltip and expanded row.
+// [spring-ai-mcp-inspector PATCH] MCP_CONNECT_FAILED rows (issue #250): the
+// recorder emits them with the classified reason, the SSE probe outcome and the
+// hint kind; the hint copy is shared with the connect alert in Sidebar.
+
+import {
+  SSE_SWITCH_HINT_STRONG,
+  SSE_SWITCH_HINT_WEAK,
+} from "@/lib/connectionErrors";
+
+/** Maps a recorded hintKind to the verbatim S1/S2 copy, or null when absent. */
+function connectHintTextOf(hintKind: unknown): string | null {
+  if (hintKind === "sse_only") {
+    return SSE_SWITCH_HINT_STRONG;
+  }
+  if (hintKind === "maybe_sse") {
+    return SSE_SWITCH_HINT_WEAK;
+  }
+  return null;
+}
 
 type TimelineEventType =
   | "MCP_JSONRPC_REQUEST"
   | "MCP_JSONRPC_RESPONSE"
   | "MCP_JSONRPC_NOTIFICATION"
   | "MCP_STREAM_EVENT"
+  | "MCP_CONNECT_FAILED"
   | "APP_LOG";
 
 // Mirrors io.inspector.mcp.core.timeline.TimelineEvent as serialized by the REST
@@ -43,6 +63,7 @@ const EVENT_COLORS: Record<TimelineEventType, string> = {
   MCP_JSONRPC_RESPONSE: "text-green-400 border-l-green-500",
   MCP_JSONRPC_NOTIFICATION: "text-yellow-400 border-l-yellow-500",
   MCP_STREAM_EVENT: "text-purple-400 border-l-purple-500",
+  MCP_CONNECT_FAILED: "text-amber-400 border-l-amber-500",
   APP_LOG: "text-gray-400 border-l-gray-500",
 };
 
@@ -51,6 +72,7 @@ const EVENT_BG: Record<TimelineEventType, string> = {
   MCP_JSONRPC_RESPONSE: "bg-green-950/30",
   MCP_JSONRPC_NOTIFICATION: "bg-yellow-950/30",
   MCP_STREAM_EVENT: "bg-purple-950/30",
+  MCP_CONNECT_FAILED: "bg-amber-950/30",
   APP_LOG: "bg-gray-950/30",
 };
 
@@ -193,8 +215,18 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
   const colorClass = isError ? ERROR_COLOR : (EVENT_COLORS[type] || "text-gray-400");
   const bgClass = isError ? ERROR_BG : (EVENT_BG[type] || "bg-gray-950/30");
 
-  const typeLabel = (type || "").replace("MCP_", "").replace("_", " ");
+  // [spring-ai-mcp-inspector PATCH] Failed-connect rows render the spec title
+  // "MCP connect failed" (issue #250) instead of the auto-derived label.
+  const typeLabel =
+    type === "MCP_CONNECT_FAILED"
+      ? "MCP connect failed"
+      : (type || "").replace("MCP_", "").replace("_", " ");
   const label =
+    // [spring-ai-mcp-inspector PATCH] Failed-connect rows carry the classified
+    // reason in the payload (issue #250); show it instead of the raw type.
+    (type === "MCP_CONNECT_FAILED" &&
+      typeof payload.reason === "string" &&
+      payload.reason) ||
     (typeof payload.method === "string" && payload.method) ||
     (typeof payload.message === "string" && payload.message) ||
     (typeof payload.logLevel === "string" && payload.logLevel) ||
@@ -228,6 +260,13 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
       {expanded ? (
         <div className="mt-1 text-[11px] font-mono opacity-80 overflow-x-auto whitespace-pre-wrap max-h-40 overflow-y-auto">
           {negotiation && <ProtocolNegotiationBlock negotiation={negotiation} />}
+          {/* [spring-ai-mcp-inspector PATCH] S1/S2 hint text on failed-connect
+              rows (issue #250): plain text, no button in the timeline. */}
+          {type === "MCP_CONNECT_FAILED" && connectHintTextOf(payload.hintKind) && (
+            <div className="mb-1 p-2 border border-amber-700 rounded text-[11px] bg-amber-950/30 text-amber-200">
+              {connectHintTextOf(payload.hintKind)}
+            </div>
+          )}
           {isError && <ToolErrorBlock text={errorText} />}
           {Object.keys(payload).length > 0 ? (
             <div className="mb-1">{JSON.stringify(payload, null, 2)}</div>
