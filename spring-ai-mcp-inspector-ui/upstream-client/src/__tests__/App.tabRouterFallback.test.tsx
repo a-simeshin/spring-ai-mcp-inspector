@@ -474,5 +474,28 @@ describe("App - tab router hash fallback (#226)", () => {
       });
       expect(window.location.hash).toBe("#ping");
     });
+
+    it("cold load with null capabilities lands on Ping with no hashchange to rescue (effect guard)", async () => {
+      mockUseConnection.mockReturnValue(connectionState(null));
+      // A real browser opening the page with #apps already in the URL fires
+      // no hashchange event, so only the capability-gated effect guard can
+      // force Ping. jsdom queues an async hashchange when location.hash is
+      // assigned: drain it BEFORE mounting so the hashchange guard cannot
+      // rescue a disabled effect guard (owner review of #228).
+      window.location.hash = "#apps";
+      await act(async () => {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0);
+        });
+      });
+      render(<App />);
+
+      await waitFor(() => {
+        expectSingleSelectedTab("ping");
+      });
+      await waitFor(() => {
+        expect(window.location.hash).toBe("#ping");
+      });
+    });
   });
 });
