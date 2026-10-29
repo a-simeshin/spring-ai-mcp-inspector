@@ -43,8 +43,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class KeepAliveTrackerTests {
 
 	@Test
-	void noPings_neverStaleAndNoInterval() {
+	void noPings_notStaleInsideTheNinetySecondWindow() {
 		final KeepAliveTracker tracker = new KeepAliveTracker();
+		// Fresh tracker: the zero-ping fallback window has not elapsed yet.
 		final State state = tracker.snapshot(Instant.now());
 		assertThat(state.lastPingAt()).isNull();
 		assertThat(state.recentPings()).isEmpty();
@@ -114,12 +115,18 @@ class KeepAliveTrackerTests {
 	}
 
 	@Test
-	void noPings_neverStaleEvenAfterNinetySeconds() {
-		final KeepAliveTracker tracker = new KeepAliveTracker();
+	void noPings_staleAfterNinetySecondsSinceTrackingStart() {
 		final Instant t0 = Instant.parse("2026-09-20T10:00:00Z");
+		final KeepAliveTracker tracker = new KeepAliveTracker(t0);
 
-		// Zero pings means the server may simply not ping: no false alarm.
-		assertThat(tracker.snapshot(t0.plusSeconds(120)).isStale()).isFalse();
+		// Zero pings: the 90s fallback is anchored at tracking start, so a session whose
+		// transport never reports a single ping is still flagged after 90s (#235).
+		assertThat(tracker.snapshot(t0.plusSeconds(89)).isStale()).isFalse();
+		assertThat(tracker.snapshot(t0.plusSeconds(91)).isStale()).isTrue();
+		// Stale-with-zero-pings must not flip observed: no ping timestamp exists.
+		final State state = tracker.snapshot(t0.plusSeconds(91));
+		assertThat(state.lastPingAt()).isNull();
+		assertThat(state.recentPings()).isEmpty();
 	}
 
 	@Test
