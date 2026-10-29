@@ -227,9 +227,7 @@ const ALL_TABS: string[] = [
   "timeline",
 ];
 
-const getDefaultTab = (
-  caps: ServerCapabilities | null | undefined,
-): string => {
+const getDefaultTab = (caps: ServerCapabilities | null | undefined): string => {
   if (caps?.resources) return "resources";
   if (caps?.prompts) return "prompts";
   if (caps?.tools) return "tools";
@@ -484,9 +482,9 @@ const App = () => {
   // one test stomps the next one's hash) and, in the app, yanks a user who navigated
   // away within those 100 ms. Both schedulers share this handle: the second one
   // supersedes the first rather than racing it.
-  const originatingTabTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
+  const originatingTabTimerRef = useRef<
+    ReturnType<typeof setTimeout> | undefined
+  >(undefined);
 
   useEffect(() => {
     currentTabRef.current = activeTab;
@@ -607,7 +605,6 @@ const App = () => {
     serverCapabilities,
     serverImplementation,
     mcpClient,
-    mcpSessionId,
     // [spring-ai-mcp-inspector PATCH] proxy-side session id: the id the
     // inspector's keep-alive endpoints actually resolve (#235)
     proxySessionId,
@@ -764,9 +761,7 @@ const App = () => {
         const existing = findConnectionByName(name);
         if (existing) {
           if (
-            !window.confirm(
-              `Connection "${name}" already exists. Overwrite?`,
-            )
+            !window.confirm(`Connection "${name}" already exists. Overwrite?`)
           ) {
             return undefined;
           }
@@ -909,12 +904,13 @@ const App = () => {
       // when connected but capabilities have no rendered panels (null or
       // empty of resources/prompts/tools), only PingTab renders. Force
       // "ping" as the active tab regardless of the current hash.
-      const resolved = mcpClient &&
+      const resolved =
+        mcpClient &&
         !serverCapabilities?.resources &&
         !serverCapabilities?.prompts &&
         !serverCapabilities?.tools
-        ? "ping"
-        : resolveTab(hash, serverCapabilities);
+          ? "ping"
+          : resolveTab(hash, serverCapabilities);
       if (resolved !== hash) {
         window.location.hash = resolved;
       }
@@ -2069,7 +2065,9 @@ const App = () => {
               width: 6,
               height: "100%",
               zIndex: 10,
-              background: isSidebarDragging ? "rgba(0,0,0,0.08)" : "transparent",
+              background: isSidebarDragging
+                ? "rgba(0,0,0,0.08)"
+                : "transparent",
             }}
             aria-label="Resize sidebar"
             data-testid="sidebar-drag-handle"
@@ -2153,7 +2151,10 @@ const App = () => {
                           </TabsTrigger>
                         </span>
                       </TooltipTrigger>
-                      <TooltipContent side="bottom" className="max-w-xs text-center">
+                      <TooltipContent
+                        side="bottom"
+                        className="max-w-xs text-center"
+                      >
                         This server does not support MCP Tasks.{" "}
                         <a
                           href={MCP_TASKS_DOCS_URL}
@@ -2486,7 +2487,8 @@ const App = () => {
                       onMetadataChange={handleMetadataChange}
                     />
                     {/* [spring-ai-mcp-inspector PATCH] Timeline tab (#112). */}
-                    <TimelineTab sessionId={mcpSessionId} />
+                    {/* [spring-ai-mcp-inspector PATCH] keep-alive resolves the proxy-side session id */}
+                    <TimelineTab sessionId={proxySessionId} />
                   </>
                 )}
               </div>
