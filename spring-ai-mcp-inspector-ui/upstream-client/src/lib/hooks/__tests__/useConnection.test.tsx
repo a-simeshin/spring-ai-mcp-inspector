@@ -2265,6 +2265,15 @@ describe("PR #166 round 4 regression tests", () => {
 
   let mockClear: jest.Mock;
 
+  // This is a top-level describe: the setLoggingLevel cleanup that
+  // describe("useConnection") runs in its own afterEach does not cover these
+  // tests. Without the delete here, an assigned setLoggingLevel leaks into
+  // later tests that require it to be absent (randomize: true runs them in
+  // any order) and a "post-connect error" toast assertion fails.
+  afterEach(() => {
+    delete (mockClient as { setLoggingLevel?: unknown }).setLoggingLevel;
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     mockClient.connect.mockResolvedValue(undefined);
