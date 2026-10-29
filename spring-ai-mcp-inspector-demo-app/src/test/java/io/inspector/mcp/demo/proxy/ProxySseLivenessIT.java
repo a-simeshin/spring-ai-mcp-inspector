@@ -71,6 +71,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * notifications/initialized notification), so probes are never answered - the session
  * must survive them all; only transport-level death (verified by killing the target at
  * the end) may close the stream.</li>
+ * <li>{@code upstreamAlive_pingRejected4xx_streamStaysOpen}: a live stub upstream whose
+ * message endpoint answers every probe ping POST with HTTP 400 must not be failed either
+ * (a protocol-level rejection from a live transport is not transport-level death); the
+ * stub counts the rejected pings, proving the probes really ran.</li>
  * </ul>
  *
  * <p>
@@ -91,9 +95,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * SSE endpoint: confirm the SSE stream is alive by receiving the endpoint prologue.</li>
  * <li>Post an {@code initialize} frame to confirm the session is working.</li>
  * <li>Shut down {@code targetApp}.</li>
- * <li>The SSE stream must close within 30s (the probe-based detection bound:
- * idleThreshold(2s) + probeInterval(2s) + probeTimeout(2s) = 6s worst case, with generous
- * headroom for JVM shutdown delays).</li>
+ * <li>The SSE stream must close within 15s (the probe-based detection bound with this
+ * test's config: idleThreshold(3s) + one probeInterval tick(2s) + the instantly refused
+ * POST = 5s worst case, with generous headroom for JVM shutdown delays).</li>
  * </ol>
  */
 @Epic("Inspector Proxy")
@@ -109,11 +113,13 @@ class ProxySseLivenessIT {
 	private static final Duration BUDGET = Duration.ofSeconds(20);
 
 	/**
-	 * Max time to wait for the SSE stream to close after the target is killed. The
-	 * probe-based detection bound is 6s (2s interval + 2s timeout + 2s idle threshold);
-	 * we add generous headroom for JVM shutdown delays.
+	 * Max time to wait for the SSE stream to close after the target is killed. With the
+	 * fast test config (2s interval, 3s idle threshold) the probe-based detection bound
+	 * is about 5s (3s idle + one 2s tick + the instantly refused POST); 15s adds generous
+	 * headroom for JVM shutdown delays. The red control below out-waits this entire
+	 * budget, so the positive/red pair stays falsifiable.
 	 */
-	private static final Duration SSE_CLOSE_BUDGET = Duration.ofSeconds(30);
+	private static final Duration SSE_CLOSE_BUDGET = Duration.ofSeconds(15);
 
 	/** Inspector app: hosts the proxy with liveness probing. */
 	private ConfigurableApplicationContext inspectorApp;
@@ -144,11 +150,12 @@ class ProxySseLivenessIT {
 	}
 
 	@Test
-	@DisplayName("Upstream death closes the downstream SSE stream within 30s")
+	@DisplayName("Upstream death closes the downstream SSE stream within 15s")
 	@Story("SSE liveness detection")
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Kills the upstream target mid-session and verifies the SSE stream is closed "
-			+ "within the probe-based detection bound (idleThreshold 2s + probeInterval 2s + probeTimeout 2s = 6s worst case)")
+			+ "within the probe-based detection bound (idleThreshold 3s + one probeInterval 2s tick "
+			+ "+ the instantly refused POST = 5s worst case)")
 	void upstreamDeath_closesDownstreamSseWithinBound() throws Exception {
 		// given
 		// Use fast probe intervals to keep the test bounded
@@ -285,8 +292,8 @@ class ProxySseLivenessIT {
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Red control for upstreamDeath_closesDownstreamSseWithinBound: with "
 			+ "upstream-liveness-probe-enabled=false the same kill must leave the stream open past the "
-			+ "window in which the probe-based run closes it, proving the probe (not reactor-netty "
-			+ "resource sharing) is what detects the dead upstream")
+			+ "entire 15s budget within which the probe-based run closes it, proving the probe (not "
+			+ "reactor-netty resource sharing) is what detects the dead upstream")
 	void upstreamDeath_probeDisabled_streamStaysOpen() throws Exception {
 		// given: probing disabled; other timeouts at defaults so nothing else fires
 		inspectorApp = ProxyAppHarness.start("SSE", false, null,
@@ -365,10 +372,13 @@ class ProxySseLivenessIT {
 		targetApp = null;
 
 		// then: with no probe, nothing detects the dead upstream: the stream must
-		// still be open after 10s, well past the ~6s window in which the
-		// probe-enabled run closes it. The JDK HTTP client only surfaces the dead
-		// TCP peer on a write, and the idle SSE connection performs none.
-		Thread.sleep(Duration.ofSeconds(10).toMillis());
+		// still be open after 16s, past the probe-enabled run's ENTIRE 15s close
+		// budget (SSE_CLOSE_BUDGET). Any closure mechanism that also ran with the
+		// probe disabled would have fired inside that budget in the probe-enabled
+		// run too; that run closes and this one does not, so the probe is the
+		// detector. The JDK HTTP client only surfaces the dead TCP peer on a
+		// write, and the idle SSE connection performs none.
+		Thread.sleep(Duration.ofSeconds(16).toMillis());
 		assertThat(streamClosed.get())
 			.as("SSE stream must stay open with probing disabled on %s", ProxyAppHarness.stack())
 			.isFalse();
@@ -565,6 +575,106 @@ class ProxySseLivenessIT {
 			.atMost(SSE_CLOSE_BUDGET)
 			.pollInterval(Duration.ofMillis(200))
 			.until(() -> sse.closed.get() || sse.error.get() != null);
+	}
+
+	@Test
+	@DisplayName("Live upstream rejecting probe pings with HTTP 4xx keeps the SSE stream open")
+	@Story("SSE liveness detection")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("A live upstream that answers every probe ping POST with HTTP 4xx must not "
+			+ "be failed: the rejection is a protocol-level error from a LIVE transport (the "
+			+ "exact wire shape a server produces for pings it refuses), not transport-level "
+			+ "death. A stub upstream serves the SSE prologue forever and rejects every POST "
+			+ "with 400; the stream must stay open across two full probe cycles while the stub "
+			+ "counts at least two rejected probe pings, proving the probes really ran")
+	void upstreamAlive_pingRejected4xx_streamStaysOpen() throws Exception {
+		// given: fast probe config (2s interval, 2s answer window, 2s idle
+		// threshold) and a stub upstream whose SSE endpoint never ends but whose
+		// message endpoint rejects every POST with HTTP 400: a live transport
+		// refusing the ping at the protocol level.
+		inspectorApp = ProxyAppHarness.start("SSE", false, null,
+				"--spring.ai.mcp.inspector.upstream-liveness-probe-enabled=true",
+				"--spring.ai.mcp.inspector.timeouts.upstream-probe-interval=PT2S",
+				"--spring.ai.mcp.inspector.timeouts.upstream-probe-timeout=PT2S",
+				"--spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold=PT2S");
+		final java.util.concurrent.atomic.AtomicInteger pingPosts = new java.util.concurrent.atomic.AtomicInteger();
+		final java.util.concurrent.atomic.AtomicBoolean stubStopped = new java.util.concurrent.atomic.AtomicBoolean(
+				false);
+		final com.sun.net.httpserver.HttpServer stub = com.sun.net.httpserver.HttpServer
+			.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+		stub.createContext("/", (exchange) -> {
+			if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+				pingPosts.incrementAndGet();
+				final byte[] body = "{\"jsonrpc\":\"2.0\",\"id\":\"mcpi-probe-stub\",\"error\":{\"code\":-32000}}"
+					.getBytes(StandardCharsets.UTF_8);
+				exchange.getResponseHeaders().set("Content-Type", "application/json");
+				exchange.sendResponseHeaders(400, body.length);
+				try (var out = exchange.getResponseBody()) {
+					out.write(body);
+				}
+				return;
+			}
+			// GET: serve the SSE prologue, then hold the stream open until stopped
+			exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+			exchange.sendResponseHeaders(200, 0);
+			try (var out = exchange.getResponseBody()) {
+				out.write("event: endpoint\ndata: /message?sessionId=stub-sse-1\n\n".getBytes(StandardCharsets.UTF_8));
+				out.flush();
+				while (!stubStopped.get()) {
+					try {
+						Thread.sleep(1000);
+					}
+					catch (InterruptedException ex) {
+						Thread.currentThread().interrupt();
+						break;
+					}
+				}
+			}
+		});
+		final java.util.concurrent.ThreadFactory stubThreads = (runnable) -> {
+			final Thread thread = new Thread(runnable, "sse-4xx-stub-" + ProxyAppHarness.stack());
+			thread.setDaemon(true);
+			return thread;
+		};
+		stub.setExecutor(java.util.concurrent.Executors.newCachedThreadPool(stubThreads));
+		stub.start();
+		try {
+			final int inspectorPort = ProxyAppHarness.port(inspectorApp);
+			final String proxyBase = "http://127.0.0.1:" + inspectorPort + "/mcp-inspector-api";
+			final String targetUrl = "http://127.0.0.1:" + stub.getAddress().getPort() + "/sse";
+
+			final SseStream sse = new SseStream(proxyBase, targetUrl, "sse-4xx-reader");
+
+			// 1. The proxy relays the stub's endpoint prologue.
+			Awaitility.await("endpoint prologue frame (4xx stub) on " + ProxyAppHarness.stack())
+				.atMost(BUDGET)
+				.pollInterval(Duration.ofMillis(100))
+				.until(() -> sse.endpointData.get() != null);
+
+			// 2. Stay idle for longer than two full probe cycles (4-6s worst case
+			// each): every probe POST is answered with HTTP 400.
+			Thread.sleep(Duration.ofSeconds(12).toMillis());
+
+			// 3. The stream MUST still be open and error-free: a 4xx from a live
+			// upstream is not transport-level death, the session must survive it.
+			assertThat(sse.closed.get())
+				.as("SSE stream must not close while the 4xx-rejecting target is alive on %s", ProxyAppHarness.stack())
+				.isFalse();
+			assertThat(sse.error.get())
+				.as("SSE stream must not error while the 4xx-rejecting target is alive on %s", ProxyAppHarness.stack())
+				.isNull();
+
+			// 4. The probes really ran: the stub counted at least two ping POSTs
+			// (answering each with 400), so survival is not "nothing happened".
+			Awaitility.await("probe pings rejected with 400 by the stub on " + ProxyAppHarness.stack())
+				.atMost(BUDGET)
+				.pollInterval(Duration.ofMillis(200))
+				.until(pingPosts::get, (count) -> count >= 2);
+		}
+		finally {
+			stubStopped.set(true);
+			stub.stop(0);
+		}
 	}
 
 	/**

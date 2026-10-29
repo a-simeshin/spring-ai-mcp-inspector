@@ -30,9 +30,9 @@ import reactor.core.scheduler.Schedulers;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 
 /**
- * Scheduled liveness prober for proxied SSE sessions. Periodically checks every active
- * session for upstream inactivity. When a session has been idle longer than the
- * configured threshold, the prober sends a JSON-RPC {@code ping} request through the
+ * Scheduled liveness prober for proxied sessions (any transport). Periodically checks
+ * every active session for upstream inactivity. When a session has been idle longer than
+ * the configured threshold, the prober sends a JSON-RPC {@code ping} request through the
  * session's transport. Only a transport-level failure of the probe POST itself
  * (connection refused, DNS failure, connect timeout) tears the session down via
  * {@link ProxySession#failUpstream}, which closes the downstream SSE stream and triggers
@@ -137,7 +137,7 @@ public class ProxyUpstreamProber {
 				// transport is alive. The JSON-RPC answer, if the upstream sends
 				// one, arrives on the inbound flux and is filtered from the browser
 				// stream by McpProxy. lastActivity is NOT updated by the probe;
-				// only real browser-initiated frames update it.
+				// only relayed frames (browser sends and upstream deliveries) update it.
 			});
 
 			// Bound the answer window: keep filtering for this probe's answer at most

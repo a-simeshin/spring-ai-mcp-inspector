@@ -282,8 +282,8 @@ fast). All values use Spring's relaxed `Duration` syntax — e.g. `30s`, `2m`, `
 | `spring.ai.mcp.inspector.timeouts.fetch-request` | `30s` | Per-request timeout for outbound `/fetch` calls. |
 | `spring.ai.mcp.inspector.timeouts.server-request` | `120s` | How long a server→UI request (sampling / elicitation / roots) waits for the browser to answer. |
 | `spring.ai.mcp.inspector.timeouts.upstream-probe-interval` | `10s` | Interval between liveness probes: every idle proxied session is pinged on this cadence. |
-| `spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold` | `15s` | How long a session may see no browser-initiated traffic before the first probe is sent. |
-| `spring.ai.mcp.inspector.timeouts.upstream-probe-timeout` | `5s` | Budget for one probe, applied to both the ping POST and the JSON-RPC answer deadline. A half-open upstream that accepts the POST but never answers is detected too. Worst-case upstream-death detection is idle-threshold + interval + timeout. |
+| `spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold` | `15s` | How long a session may see no relayed traffic (browser request or upstream response) before the first probe is sent. |
+| `spring.ai.mcp.inspector.timeouts.upstream-probe-timeout` | `5s` | How long a probe's JSON-RPC answer stays filtered from the browser stream. The probe POST itself carries no deadline: a live upstream that accepts it but never answers (e.g. before `initialize`) keeps its session. Worst-case upstream-death detection is idle-threshold + interval. |
 
 ```yaml
 spring:

@@ -92,8 +92,8 @@ public class McpInspectorProperties {
 	private Timeline timeline = new Timeline();
 
 	/**
-	 * Whether upstream liveness probing is enabled for proxied SSE sessions. Defaults to
-	 * {@code true}.
+	 * Whether upstream liveness probing is enabled for proxied sessions (any transport).
+	 * Defaults to {@code true}.
 	 */
 	private boolean upstreamLivenessProbeEnabled = true;
 
@@ -251,19 +251,18 @@ public class McpInspectorProperties {
 	public static class Timeouts {
 
 		/**
-		 * Interval between upstream liveness probes for proxied SSE sessions. Default
-		 * 10s.
+		 * Interval between upstream liveness probes for proxied sessions. Default 10s.
 		 */
 		private Duration upstreamProbeInterval = Duration.ofSeconds(10);
 
 		/**
-		 * Timeout for each upstream liveness probe POST. Default 5s.
+		 * How long a probe answer stays filtered from the browser stream. Default 5s.
 		 */
 		private Duration upstreamProbeTimeout = Duration.ofSeconds(5);
 
 		/**
-		 * How long a proxied session may see no upstream traffic before the first probe
-		 * is sent. Default 15s.
+		 * How long a proxied session may relay no traffic in either direction before the
+		 * first probe is sent. Default 15s.
 		 */
 		private Duration upstreamProbeIdleThreshold = Duration.ofSeconds(15);
 

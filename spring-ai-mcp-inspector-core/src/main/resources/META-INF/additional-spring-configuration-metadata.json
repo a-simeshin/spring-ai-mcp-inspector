@@ -3,7 +3,7 @@
     {
       "name": "spring.ai.mcp.inspector.upstream-liveness-probe-enabled",
       "type": "java.lang.Boolean",
-      "description": "Whether upstream liveness probing is enabled for proxied SSE/streamable-HTTP sessions. When enabled, idle sessions are probed with JSON-RPC ping requests and torn down on transport-level failure.",
+      "description": "Whether upstream liveness probing is enabled for proxied sessions. When enabled, idle sessions are probed with JSON-RPC ping requests and torn down on transport-level failure.",
       "defaultValue": true
     },
     {
@@ -21,7 +21,7 @@
     {
       "name": "spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold",
       "type": "java.time.Duration",
-      "description": "How long a proxied session may see no upstream traffic before the first liveness probe is sent. Only browser-initiated frames count as activity; probe traffic does not reset the timer.",
+      "description": "How long a proxied session may go without relayed traffic before the first liveness probe is sent. Every relayed frame (browser request or upstream response) counts as activity; probe traffic does not reset the timer.",
       "defaultValue": "15s"
     }
   ]
