@@ -564,12 +564,12 @@ public class SseProxyController {
 		return switch (type) {
 			case "sse" -> {
 				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/sse");
-	 yard (headers != null) ? this.transportFactory.buildSseWithAuth(target, headers, authorizationRef)
+				yield (headers != null) ? this.transportFactory.buildSseWithAuth(target, headers, authorizationRef)
 						: openSseWithInboundHeaders(target, customHeaders);
 			}
 			case "streamable-http" -> {
 				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
-				yield (headers != null) ? this.transportFactory.buildSseWithAuth(target, headers, authorizationRef)
+				yield (headers != null)
 						? this.transportFactory.openStreamableWithAuth(target, headers, authorizationRef)
 						: openStreamableWithInboundHeaders(target, customHeaders);
 			}
