@@ -80,6 +80,8 @@ import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthInitiateResponse;
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
+import io.inspector.mcp.core.proxy.ProxySession;
+import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.shutdown.ShutdownDrain;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
@@ -155,6 +157,13 @@ public class InspectorRestController implements ApplicationContextAware {
 
 	private final ConcurrentMap<String, SessionState> sessions = new ConcurrentHashMap<>();
 
+	/**
+	 * Proxy sessions opened by the SSE/stdio/streamable proxy controllers. The UI's
+	 * default connection mode goes through the proxy, so keep-alive lookups fall back to
+	 * these sessions when no REST session matches.
+	 */
+	private final ProxySessionRegistry proxySessions;
+
 	/** The context this bean belongs to; {@code null} when built outside a container. */
 	private ApplicationContext applicationContext;
 
@@ -166,6 +175,30 @@ public class InspectorRestController implements ApplicationContextAware {
 			final InspectorSseEmitterRegistry emitterRegistry, final InspectorServerPortHolder portHolder,
 			final JsonMapper objectMapper, final InspectorOAuthClient oauthClient,
 			@Value("${spring.application.name:mcp-server}") final String serverName) {
+		this(properties, transportDetector, loopbackFactory, authTokenProvider, emitterRegistry, portHolder,
+				objectMapper, oauthClient, serverName, null);
+	}
+
+	/**
+	 * Full constructor that also resolves keep-alive trackers for proxy sessions.
+	 * @param properties the inspector properties
+	 * @param transportDetector the transport detector
+	 * @param loopbackFactory the loopback MCP client factory
+	 * @param authTokenProvider the inspector auth token provider
+	 * @param emitterRegistry the SSE emitter registry
+	 * @param portHolder the server port holder
+	 * @param objectMapper the JSON object mapper
+	 * @param oauthClient the OAuth client
+	 * @param serverName the server name
+	 * @param proxySessions the proxy session registry, may be {@code null} when proxy
+	 * keep-alive tracking is not wired
+	 */
+	public InspectorRestController(final McpInspectorProperties properties, final TransportDetector transportDetector,
+			final LoopbackMcpClientFactory loopbackFactory, final InspectorAuthTokenProvider authTokenProvider,
+			final InspectorSseEmitterRegistry emitterRegistry, final InspectorServerPortHolder portHolder,
+			final JsonMapper objectMapper, final InspectorOAuthClient oauthClient,
+			@Value("${spring.application.name:mcp-server}") final String serverName,
+			final ProxySessionRegistry proxySessions) {
 		this.properties = properties;
 		this.transportDetector = transportDetector;
 		this.loopbackFactory = loopbackFactory;
@@ -175,6 +208,7 @@ public class InspectorRestController implements ApplicationContextAware {
 		this.objectMapper = objectMapper;
 		this.oauthClient = (oauthClient != null) ? oauthClient : new InspectorOAuthClient();
 		this.serverName = serverName;
+		this.proxySessions = proxySessions;
 	}
 
 	@GetMapping(path = "/config", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -342,16 +376,22 @@ public class InspectorRestController implements ApplicationContextAware {
 	@GetMapping(path = "/keepalive", produces = MediaType.APPLICATION_JSON_VALUE)
 	public ResponseEntity<?> keepalive(@RequestParam("sessionId") final String sessionId) {
 		final SessionState state = this.sessions.get(sessionId);
-		if (state == null) {
+		KeepAliveTracker tracker = (state != null) ? state.keepAliveTracker() : null;
+		if (tracker == null && this.proxySessions != null) {
+			// No REST session: the id may belong to a UI connection relayed through
+			// the SSE/stdio/streamable proxy, the UI's default connection mode.
+			final ProxySession proxySession = this.proxySessions.get(sessionId);
+			tracker = (proxySession != null) ? proxySession.keepAliveTracker() : null;
+		}
+		if (state == null && tracker == null) {
 			return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "Unknown sessionId: " + sessionId));
 		}
-		final KeepAliveTracker tracker = state.keepAliveTracker();
 		if (tracker == null) {
 			return ResponseEntity.ok(Map.of("observed", false));
 		}
 		final KeepAliveTracker.State snapshot = tracker.snapshot(Instant.now());
 		final Map<String, Object> body = new LinkedHashMap<>();
-		body.put("observed", true);
+		body.put("observed", snapshot.lastPingAt() != null);
 		body.put("lastPingAt", (snapshot.lastPingAt() != null) ? snapshot.lastPingAt().toString() : null);
 		body.put("recentPings", snapshot.recentPings().stream().map(Instant::toString).toList());
 		body.put("estimatedIntervalMillis", snapshot.estimatedIntervalMillis());
@@ -557,10 +597,9 @@ public class InspectorRestController implements ApplicationContextAware {
 		final int port = this.portHolder.port();
 		return switch (t.type()) {
 			case SSE -> this.loopbackFactory.forSse("127.0.0.1", port, t.endpoint(), handlers, initializeCapture,
-				keepAliveTracker);
-			case STREAMABLE ->
-				this.loopbackFactory.forStreamable("127.0.0.1", port, t.endpoint(), handlers, initializeCapture,
 					keepAliveTracker);
+			case STREAMABLE -> this.loopbackFactory.forStreamable("127.0.0.1", port, t.endpoint(), handlers,
+					initializeCapture, keepAliveTracker);
 			case STATELESS ->
 				this.loopbackFactory.forStateless("127.0.0.1", port, t.endpoint(), handlers, initializeCapture);
 			case STDIO_NO_HTTP, UNKNOWN -> null;
