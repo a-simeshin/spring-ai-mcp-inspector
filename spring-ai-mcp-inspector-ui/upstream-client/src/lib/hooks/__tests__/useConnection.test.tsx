@@ -1,5 +1,6 @@
 // [spring-ai-mcp-inspector PATCH] owner-session isolation and auth-profile tests
 // [spring-ai-mcp-inspector PATCH] Regression tests for connect state hygiene (NOTICE.d/stale-connect-status-fix.txt).
+// [spring-ai-mcp-inspector PATCH] useConnection proxy session id capture tests (#235).
 import { renderHook, act } from "@testing-library/react";
 import { useConnection } from "../useConnection";
 // [spring-ai-mcp-inspector PATCH] History persistence regression tests (#218).
