@@ -2186,6 +2186,69 @@ describe("disconnect swallows terminateSession 404 (PR #166)", () => {
   });
 });
 
+// [spring-ai-mcp-inspector PATCH] PR #166 / #177: reconnect must not send a
+// stale mcp-session-id. The StreamableHTTPClientTransport constructor is
+// always given `sessionId: undefined` so the handshake starts a fresh session;
+// the server assigns the new session id in its response headers.
+describe("reconnect must not send a stale mcp-session-id (PR #166)", () => {
+  const StreamableHTTPClientTransport = jest.requireMock(
+    "@modelcontextprotocol/sdk/client/streamableHttp.js",
+  ).StreamableHTTPClientTransport as jest.Mock;
+
+  const streamableProps: Parameters<typeof useConnection>[0] = {
+    transportType: "streamable-http" as const,
+    connectionType: "direct",
+    command: "",
+    args: "",
+    sseUrl: "http://localhost:8080",
+    env: {},
+    config: DEFAULT_INSPECTOR_CONFIG,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockClient.connect.mockResolvedValue(undefined);
+    // The custom fetch inside transportOptions captures the mcp-session-id
+    // response header, so a real session id is in state after the first
+    // handshake. Without this, the stale-id guard has nothing to be stale.
+    (global.fetch as jest.Mock).mockImplementation(async () =>
+      new Response(null, {
+        status: 200,
+        headers: { "mcp-session-id": "session-1" },
+      }),
+    );
+  });
+
+  // Restore the file-level default fetch mock: jest.clearAllMocks() in other
+  // describes clears calls but NOT implementations, so a leaked
+  // mockImplementation breaks every later test that relies on the default
+  // shape (proxy checks read json().status).
+  afterEach(() => {
+    (global.fetch as jest.Mock).mockImplementation(async () => ({
+      json: () => Promise.resolve({ status: "ok" }),
+      headers: { get: () => null },
+    }));
+  });
+
+  test("every handshake constructs the transport with sessionId: undefined", async () => {
+    const { result } = renderHook(() => useConnection(streamableProps));
+
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    await act(async () => {
+      await result.current.resetSessionAndConnect();
+    });
+
+    expect(StreamableHTTPClientTransport.mock.calls.length).toBe(2);
+    for (const call of StreamableHTTPClientTransport.mock.calls) {
+      expect(call[1].sessionId).toBeUndefined();
+      expect(call[1].requestInit.headers).not.toHaveProperty("mcp-session-id");
+    }
+  });
+});
+
 // [spring-ai-mcp-inspector PATCH] Regression tests for PR #166 round 4.
 // Blocker 1: stale completion after setLoggingLevel must not append history.
 // Blocker 2: stale attempt must NOT clear connectingRef (A/B/C race).
