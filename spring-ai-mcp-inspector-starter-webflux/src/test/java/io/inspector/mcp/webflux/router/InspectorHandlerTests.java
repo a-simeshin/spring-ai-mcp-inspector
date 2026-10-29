@@ -42,6 +42,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
+import org.springframework.web.reactive.function.server.EntityResponse;
 import org.springframework.web.reactive.function.server.HandlerStrategies;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
@@ -130,6 +131,11 @@ class InspectorHandlerTests {
 		return ServerRequest.create(exchange, STRATEGIES.messageReaders());
 	}
 
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> entityBody(final ServerResponse response) {
+		return (Map<String, Object>) ((EntityResponse<Object>) response).entity();
+	}
+
 	private static McpSyncClient connectedClient() {
 		final McpSyncClient client = mock(McpSyncClient.class);
 		given(client.initialize()).willReturn(null);
@@ -178,13 +184,6 @@ class InspectorHandlerTests {
 			.block();
 		assertThat(response).isNotNull();
 		return entityBody(response);
-	}
-
-	@SuppressWarnings("unchecked")
-	private static Map<String, Object> entityBody(final ServerResponse response) {
-		final Object entity = ((org.springframework.web.reactive.function.server.EntityResponse<Object>) response)
-			.entity();
-		return (Map<String, Object>) entity;
 	}
 
 	private String readState(final ServerResponse response) {
@@ -890,8 +889,8 @@ class InspectorHandlerTests {
 		@Test
 		@Story("Keep-alive")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("keepalive() for a session whose tracker never observed a ping returns observed=true with empty state")
-		void keepalive_withKnownSessionAndNoPings_returnsObservedTrueWithNoInterval() {
+		@Description("keepalive() for a session whose tracker never observed a ping returns observed=false with empty state")
+		void keepalive_withKnownSessionAndNoPings_returnsObservedFalseWithNoInterval() {
 			// given
 			final String sessionId = openLoopbackSession(connectedClient());
 			final ServerRequest request = toServerRequest(
@@ -904,6 +903,90 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			assertThat(response.headers().getContentType()).isEqualTo(MediaType.APPLICATION_JSON);
+			final Map<String, Object> body = entityBody(response);
+			assertThat(body.get("observed")).isEqualTo(false);
+			assertThat(body.get("lastPingAt")).isNull();
+		}
+
+		@Test
+		@Story("Keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("keepalive() resolves proxy sessions (the UI default connection mode) through the keep-alive registry")
+		void keepalive_forProxySession_returnsProxyTrackerSnapshot() {
+			// given
+			final KeepAliveEventRegistry keepAliveEvents = new KeepAliveEventRegistry();
+			final KeepAliveTracker tracker = new KeepAliveTracker();
+			tracker.recordPing(java.time.Instant.parse("2026-09-20T10:00:00Z"));
+			keepAliveEvents.register("proxy-1", tracker);
+			final InspectorHandler proxyAware = new InspectorHandler(InspectorHandlerTests.this.transportDetector,
+					InspectorHandlerTests.this.loopbackFactory, InspectorHandlerTests.this.externalStdioFactory,
+					InspectorHandlerTests.this.tokenProvider, InspectorHandlerTests.this.objectMapper,
+					InspectorHandlerTests.this.oauthClient, InspectorHandlerTests.this.properties,
+					InspectorHandlerTests.this.bootstrapAssembler, InspectorHandlerTests.this.bootstrapHtmlRenderer,
+					keepAliveEvents);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector/api/keepalive?sessionId=proxy-1").build());
+
+			// when
+			final ServerResponse response = proxyAware.keepalive(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final Map<String, Object> body = entityBody(response);
+			assertThat(body.get("observed")).isEqualTo(true);
+			assertThat(body.get("lastPingAt")).isEqualTo("2026-09-20T10:00:00Z");
+		}
+
+		@Test
+		@Story("Keep-alive")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("keepalive() answers 404 when neither a REST session nor a proxy tracker matches")
+		void keepalive_registeredSinkWithoutTracker_returnsNotFound() {
+			// given
+			final KeepAliveEventRegistry keepAliveEvents = new KeepAliveEventRegistry();
+			keepAliveEvents.register("proxy-untracked", null);
+			final InspectorHandler proxyAware = new InspectorHandler(InspectorHandlerTests.this.transportDetector,
+					InspectorHandlerTests.this.loopbackFactory, InspectorHandlerTests.this.externalStdioFactory,
+					InspectorHandlerTests.this.tokenProvider, InspectorHandlerTests.this.objectMapper,
+					InspectorHandlerTests.this.oauthClient, InspectorHandlerTests.this.properties,
+					InspectorHandlerTests.this.bootstrapAssembler, InspectorHandlerTests.this.bootstrapHtmlRenderer,
+					keepAliveEvents);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector/api/keepalive?sessionId=proxy-untracked").build());
+
+			// when
+			final ServerResponse response = proxyAware.keepalive(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("events() streams the registered proxy keep-alive sink when no REST session matches")
+		void events_forProxySession_streamsRegisteredSink() {
+			// given
+			final KeepAliveEventRegistry keepAliveEvents = new KeepAliveEventRegistry();
+			keepAliveEvents.register("proxy-1", new KeepAliveTracker());
+			final InspectorHandler proxyAware = new InspectorHandler(InspectorHandlerTests.this.transportDetector,
+					InspectorHandlerTests.this.loopbackFactory, InspectorHandlerTests.this.externalStdioFactory,
+					InspectorHandlerTests.this.tokenProvider, InspectorHandlerTests.this.objectMapper,
+					InspectorHandlerTests.this.oauthClient, InspectorHandlerTests.this.properties,
+					InspectorHandlerTests.this.bootstrapAssembler, InspectorHandlerTests.this.bootstrapHtmlRenderer,
+					keepAliveEvents);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector/api/events?sessionId=proxy-1").build());
+
+			// when
+			final ServerResponse response = proxyAware.events(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(response.headers().getContentType()).isEqualTo(MediaType.TEXT_EVENT_STREAM);
 		}
 
 		@Test

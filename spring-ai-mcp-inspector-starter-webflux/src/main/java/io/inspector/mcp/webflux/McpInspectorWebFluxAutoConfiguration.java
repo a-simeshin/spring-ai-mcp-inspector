@@ -55,6 +55,7 @@ import io.inspector.mcp.webflux.proxy.ProxyAuthWebFilter;
 import io.inspector.mcp.webflux.proxy.ProxyHandler;
 import io.inspector.mcp.webflux.router.InspectorHandler;
 import io.inspector.mcp.webflux.router.InspectorRouterConfig;
+import io.inspector.mcp.webflux.router.KeepAliveEventRegistry;
 import io.inspector.mcp.webflux.router.TimelineHandler;
 
 /**
@@ -145,15 +146,27 @@ public class McpInspectorWebFluxAutoConfiguration {
 		return new InspectorOAuthClient(java.net.http.HttpClient.newHttpClient(), objectMapper);
 	}
 
+	/**
+	 * Per-proxy-session keep-alive sinks and trackers shared by the proxy handlers
+	 * (producers) and the inspector handler (streaming/polling consumers).
+	 * @return the keep-alive event registry
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	public KeepAliveEventRegistry mcpInspectorKeepAliveEventRegistry() {
+		return new KeepAliveEventRegistry();
+	}
+
 	@Bean
 	@ConditionalOnMissingBean
 	public InspectorHandler mcpInspectorHandler(final TransportDetector transportDetector,
 			final LoopbackMcpClientFactory loopbackFactory, final ExternalStdioClientFactory externalStdioFactory,
 			final InspectorAuthTokenProvider tokenProvider, final JsonMapper objectMapper,
 			final InspectorOAuthClient oauthClient, final McpInspectorProperties properties,
-			final InspectorBootstrapAssembler bootstrapAssembler, final BootstrapHtmlRenderer bootstrapHtmlRenderer) {
+			final InspectorBootstrapAssembler bootstrapAssembler, final BootstrapHtmlRenderer bootstrapHtmlRenderer,
+			final KeepAliveEventRegistry keepAliveEvents) {
 		return new InspectorHandler(transportDetector, loopbackFactory, externalStdioFactory, tokenProvider,
-				objectMapper, oauthClient, properties, bootstrapAssembler, bootstrapHtmlRenderer);
+				objectMapper, oauthClient, properties, bootstrapAssembler, bootstrapHtmlRenderer, keepAliveEvents);
 	}
 
 	@Bean
@@ -210,9 +223,10 @@ public class McpInspectorWebFluxAutoConfiguration {
 	public ProxyHandler mcpInspectorProxyHandler(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy,
 			final TransportDetector transportDetector, final JsonMapper objectMapper,
-			final McpInspectorProperties properties, final ObjectProvider<TaskService> taskServiceProvider) {
+			final McpInspectorProperties properties, final ObjectProvider<TaskService> taskServiceProvider,
+			final KeepAliveEventRegistry keepAliveEvents) {
 		return new ProxyHandler(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties,
-				taskServiceProvider.getIfAvailable());
+				taskServiceProvider.getIfAvailable(), keepAliveEvents);
 	}
 
 	@Bean
