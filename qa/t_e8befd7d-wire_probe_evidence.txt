@@ -1,0 +1,14 @@
+== initialize: HTTP 200 session-id: 9a55cbad-a36...
+   serverInfo: {}
+== initialized notification: HTTP 202
+== tools/call errorTool: HTTP 200
+-- raw body --
+id:9a55cbad-a365-436a-8fee-c7877a145623
+event:message
+data:{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"intentional demo failure"}],"isError":true}}
+
+
+-- parsed --
+content blocks: 1 isError: True
+text[0] = 'intentional demo failure'
+VERDICT: NO-DOUBLING
