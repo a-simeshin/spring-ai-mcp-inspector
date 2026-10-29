@@ -111,7 +111,29 @@ public final class McpProxy {
 		// We serialize the typed frame back to a JsonNode and emit it on the
 		// targetToBrowser sink. Returning Mono.empty() tells the SDK we have no
 		// further response to send.
+		//
+		// Terminal-signal wiring: the publisher the SDK hands to this handler is
+		// per-frame, not the inbound stream: HttpClientSseClientTransport invokes
+		// it as handler.apply(Mono.just(msg)) once per SSE message, so a
+		// doOnSuccess/doOnTerminate hook there completes the targetToBrowser sink
+		// after the FIRST relayed frame and closes the browser-facing stream on a
+		// live session. Only a frame-level ERROR is routed to failUpstream;
+		// upstream death is otherwise detected by sendMessage failures and the
+		// liveness prober.
 		return session.targetTransport().connect((inbound) -> inbound.flatMap((message) -> {
+			// Skip internal probe responses - they are not real MCP messages
+			// and must not be forwarded to the browser.
+			if (message instanceof McpSchema.JSONRPCResponse response) {
+				final Object id = response.id();
+				if (id instanceof String strId && session.isProbeId(strId)) {
+					// Probe responses are internal traffic - they must not refresh
+					// the idle clock (lastActivity). Removing the probe id both bounds
+					// the probeIds set and ends the answer filtering for that probe
+					// (the prober's window timer re-checks the id before dropping it).
+					session.removeProbeId(strId);
+					return Mono.<JSONRPCMessage>empty();
+				}
+			}
 			final JsonNode body = toJsonNode(message);
 			if (body != null) {
 				// Concurrent responses arrive on different transport threads; a dropped
@@ -120,7 +142,7 @@ public final class McpProxy {
 				session.touch();
 			}
 			return Mono.<JSONRPCMessage>empty();
-		}));
+		}).doOnError((err) -> session.failUpstream(err))).doOnError((err) -> session.failUpstream(err));
 	}
 
 	/**
