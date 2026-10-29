@@ -241,9 +241,11 @@ public final class ProxySession {
 	/** Monotonic counter for generating unique probe request IDs. */
 	private static final AtomicLong PROBE_ID_SEQ = new AtomicLong(0);
 
+	private final io.inspector.mcp.core.keepalive.KeepAliveTracker keepAliveTracker;
+
 	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
 			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser) {
-		this(sessionId, targetTransport, browserToTarget, targetToBrowser, new AtomicReference<>());
+		this(sessionId, targetTransport, browserToTarget, targetToBrowser, new AtomicReference<>(), null);
 	}
 
 	/**
@@ -261,11 +263,52 @@ public final class ProxySession {
 	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
 			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser,
 			final AtomicReference<String> authorizationRef) {
+		this(sessionId, targetTransport, browserToTarget, targetToBrowser, authorizationRef, null);
+	}
+
+	/**
+	 * Full constructor carrying the keep-alive tracker tapping the target transport.
+	 * @param sessionId the proxy-side session identifier
+	 * @param targetTransport the transport toward the target MCP server; when a tracker
+	 * is given this is expected to be a ping-detecting decoration so inbound pings reach
+	 * the tracker
+	 * @param browserToTarget inbound frames from the browser
+	 * @param targetToBrowser frames from the target server
+	 * @param keepAliveTracker per-session keep-alive tracker; may be {@code null} when
+	 * this session is not keep-alive tracked
+	 */
+	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
+			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser,
+			final io.inspector.mcp.core.keepalive.KeepAliveTracker keepAliveTracker) {
+		this(sessionId, targetTransport, browserToTarget, targetToBrowser, null, keepAliveTracker);
+	}
+
+	/**
+	 * Full constructor: shares the live {@code Authorization} reference with the upstream
+	 * transport's request customizer (D9): the OAuth2 one-retry path refreshes the token
+	 * through the same reference the transport reads, so a retried call carries the fresh
+	 * token without rebuilding the transport; when a tracker is given the target
+	 * transport is expected to be a ping-detecting decoration so inbound pings reach the
+	 * tracker.
+	 * @param sessionId the proxy session identifier
+	 * @param targetTransport the upstream client transport
+	 * @param browserToTarget the browser→target sink
+	 * @param targetToBrowser the target→browser sink
+	 * @param authorizationRef the shared live authorization reference (never
+	 * {@code null})
+	 * @param keepAliveTracker per-session keep-alive tracker; may be {@code null} when
+	 * this session is not keep-alive tracked
+	 */
+	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
+			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser,
+			final AtomicReference<String> authorizationRef,
+			final io.inspector.mcp.core.keepalive.KeepAliveTracker keepAliveTracker) {
 		this.sessionId = sessionId;
 		this.targetTransport = targetTransport;
 		this.browserToTarget = browserToTarget;
 		this.targetToBrowser = targetToBrowser;
 		this.authorizationRef = (authorizationRef != null) ? authorizationRef : new AtomicReference<>();
+		this.keepAliveTracker = keepAliveTracker;
 		this.lastActivity = Instant.now();
 		// suppressCancel: one subscriber going away (a browser tab closing its SSE
 		// stream) must not cancel — and so terminate — the future every other
@@ -279,6 +322,15 @@ public final class ProxySession {
 
 	public McpClientTransport targetTransport() {
 		return this.targetTransport;
+	}
+
+	/**
+	 * The keep-alive tracker tapped into this session's target transport, when keep-alive
+	 * tracking is enabled for this session.
+	 * @return the tracker, or {@code null} when the session is not tracked
+	 */
+	public io.inspector.mcp.core.keepalive.KeepAliveTracker keepAliveTracker() {
+		return this.keepAliveTracker;
 	}
 
 	public Sinks.Many<JsonNode> browserToTarget() {
