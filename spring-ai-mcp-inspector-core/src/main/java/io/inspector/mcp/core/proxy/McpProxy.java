@@ -296,11 +296,14 @@ public final class McpProxy {
 		//
 		// Internal liveness-probe responses are detected by their JSON-RPC id
 		// (registered via session.registerProbeId) and filtered out - they must
-		// never reach the browser. Receiving one also cancels the probe's answer
-		// deadline (the prober re-checks the id when its timer fires).
-		// The inbound flux's terminal signals are surfaced too: an upstream
-		// disconnect that completes/errors the inbound stream is propagated via
+		// never reach the browser. Receiving one also removes the id from the
+		// answer filter set (the prober's window timer re-checks the id).
+		// The inbound flux's error signal is surfaced too: an upstream
+		// disconnect that ERRORS the inbound stream is propagated via
 		// failUpstream so awaiters and the SSE subscriber are released promptly.
+		// A clean COMPLETE terminates nothing: the SSE inbound completes on
+		// ordinary upstream shutdown, and a session whose stream simply ended
+		// stays up for the prober to diagnose.
 		final Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>> inboundHandler = (inbound) -> inbound
 			.flatMap((message) -> {
 				// Skip internal probe responses - they are not real MCP messages
@@ -310,8 +313,9 @@ public final class McpProxy {
 					if (id instanceof String strId && session.isProbeId(strId)) {
 						// Probe responses are internal traffic - they must not count as
 						// activity for session reaping. Removing the probe id both bounds
-						// the probeIds set and cancels this probe's answer deadline (the
-						// prober re-checks the id when its timer fires).
+						// the probeIds set and ends the answer filtering for that probe
+						// (the prober's window timer re-checks the id before dropping
+						// it).
 						session.removeProbeId(strId);
 						return Mono.<JSONRPCMessage>empty();
 					}

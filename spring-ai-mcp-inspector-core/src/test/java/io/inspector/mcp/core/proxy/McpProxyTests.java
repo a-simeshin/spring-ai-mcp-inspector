@@ -151,7 +151,7 @@ class McpProxyTests {
 				.willReturn(Mono.error(new RuntimeException("send failed")), Mono.empty());
 			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
 
-			// when: two valid frames; the first send errors, the second must still be
+			// when — two valid frames; the first send errors, the second must still be
 			// relayed
 			McpProxyTests.this.browserToTarget
 				.tryEmitNext(McpProxyTests.this.mapper.createObjectNode().put("jsonrpc", "2.0").put("method", "ping"));
@@ -169,7 +169,7 @@ class McpProxyTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("a sendMessage failure (e.g. connection refused) fails the session upstream so per-request awaiters and the SSE backchannel wake fast")
 		void start_whenSendMessageFails_terminatesUpstream() {
-			// given: the SDK masks sendMessage errors and re-surfaces them on the
+			// given — the SDK masks sendMessage errors and re-surfaces them on the
 			// pump as a wrapped completion failure
 			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
 			final java.util.concurrent.CompletionException connectError = new java.util.concurrent.CompletionException(
@@ -183,7 +183,7 @@ class McpProxyTests {
 				.put("id", 1)
 				.put("method", "initialize"));
 
-			// then: the upstream failure is propagated to the browser side instead of
+			// then — the upstream failure is propagated to the browser side instead of
 			// being swallowed until the streamable-request timeout
 			verify(McpProxyTests.this.transport, timeout(1000)).sendMessage(any());
 			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
@@ -311,7 +311,7 @@ class McpProxyTests {
 					McpProxyTests.this.mapper.createObjectNode().put("ok", true), null);
 			final Mono<JSONRPCMessage> reply = handler.apply(Mono.just(inbound));
 
-			// then: handler returns empty (proxy never originates a reply)
+			// then — handler returns empty (proxy never originates a reply)
 			StepVerifier.create(reply).verifyComplete();
 			// and the inbound frame was emitted to the browser sink
 			StepVerifier.create(McpProxyTests.this.targetToBrowser.asFlux().next())
@@ -328,7 +328,7 @@ class McpProxyTests {
 				+ "and still returns an empty reply")
 		@SuppressWarnings("unchecked")
 		void start_whenBrowserSinkComplete_handlerSwallowsEmitFailure() {
-			// given: complete the browser sink so tryEmitNext reports a failure result
+			// given — complete the browser sink so tryEmitNext reports a failure result
 			McpProxyTests.this.targetToBrowser.tryEmitComplete();
 			final ArgumentCaptor<Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>>> handlerCaptor = ArgumentCaptor
 				.forClass(Function.class);
@@ -341,7 +341,7 @@ class McpProxyTests {
 			// when
 			final Mono<JSONRPCMessage> reply = handler.apply(Mono.just(inbound));
 
-			// then: the handler never originates a reply even when emission fails
+			// then — the handler never originates a reply even when emission fails
 			StepVerifier.create(reply).verifyComplete();
 		}
 

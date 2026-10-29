@@ -198,15 +198,17 @@ class ProxyUpstreamProberTests {
 
 			// then
 			verify(ProxyUpstreamProberTests.this.transport, timeout(2000)).sendMessage(any());
-			// The session must NOT be failed for UNKNOWN errors
-			assertThat(ProxyUpstreamProberTests.this.session.isUpstreamTerminated()).isFalse();
-			// and the probe id must not leak: the error path removes it (it runs
-			// async on boundedElastic - poll until the removal lands)
+			// The session must NOT be failed for UNKNOWN errors. The fail-or-keep
+			// decision runs async on boundedElastic and the answer window drops the
+			// id after FAST_PROBE: wait the id out first, then give the (absent)
+			// failUpstream an explicit grace window to surface before asserting.
 			final long deadline = System.currentTimeMillis() + 2000;
 			while (ProxyUpstreamProberTests.this.session.probeIdCount() > 0 && System.currentTimeMillis() < deadline) {
 				ProxyUpstreamProberTests.await(25);
 			}
 			assertThat(ProxyUpstreamProberTests.this.session.probeIdCount()).isZero();
+			ProxyUpstreamProberTests.await(250);
+			assertThat(ProxyUpstreamProberTests.this.session.isUpstreamTerminated()).isFalse();
 		}
 
 		@Test
