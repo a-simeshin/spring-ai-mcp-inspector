@@ -52,6 +52,8 @@ import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
+import io.inspector.mcp.core.keepalive.PingDetectingClientTransport;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
 import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
@@ -64,6 +66,7 @@ import io.inspector.mcp.core.task.TaskNotCancelableException;
 import io.inspector.mcp.core.task.TaskNotFoundException;
 import io.inspector.mcp.core.task.TaskService;
 import io.inspector.mcp.webmvc.InspectorServerPortHolder;
+import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
 
 /**
  * Streamable-HTTP transport ports.
@@ -96,6 +99,11 @@ public class StreamableHttpProxyController {
 	private static final Logger LOG = LoggerFactory.getLogger(StreamableHttpProxyController.class);
 
 	/**
+	 * SSE event name used to broadcast a keep-alive ping timestamp to the UI.
+	 */
+	private static final String KEEPALIVE_PING_EVENT = "mcp:keepalive-ping";
+
+	/**
 	 * Error code of the structured connect-failure payload (see
 	 * {@link #connectFailureResponse}).
 	 */
@@ -121,6 +129,8 @@ public class StreamableHttpProxyController {
 
 	private final ObjectProvider<TaskService> taskServiceProvider;
 
+	private final InspectorSseEmitterRegistry emitterRegistry;
+
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper) {
 		this(registry, transportFactory, mcpProxy, objectMapper, null, null);
@@ -135,13 +145,7 @@ public class StreamableHttpProxyController {
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
 			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder) {
-		this.registry = registry;
-		this.transportFactory = transportFactory;
-		this.mcpProxy = mcpProxy;
-		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
-		this.properties = properties;
-		this.portHolder = portHolder;
-		this.taskServiceProvider = null;
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, null, null);
 	}
 
 	/**
@@ -156,11 +160,31 @@ public class StreamableHttpProxyController {
 	 * @param portHolder the server port holder
 	 * @param taskServiceProvider provider for an optional {@link TaskService}
 	 */
-	@Autowired
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
 			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,
 			final ObjectProvider<TaskService> taskServiceProvider) {
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, taskServiceProvider, null);
+	}
+
+	/**
+	 * Primary constructor: additionally wires per-session keep-alive tracking so the UI
+	 * can follow pings on the streamable proxy path.
+	 * @param registry the proxy session registry
+	 * @param transportFactory the proxy transport factory
+	 * @param mcpProxy the MCP proxy relay
+	 * @param objectMapper the JSON object mapper
+	 * @param properties the inspector properties
+	 * @param portHolder the server port holder
+	 * @param taskServiceProvider provider for an optional {@link TaskService}
+	 * @param emitterRegistry the SSE emitter registry used to broadcast
+	 * {@code mcp:keepalive-ping} events to UI subscribers
+	 */
+	@Autowired
+	public StreamableHttpProxyController(final ProxySessionRegistry registry,
+			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
+			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,
+			final ObjectProvider<TaskService> taskServiceProvider, final InspectorSseEmitterRegistry emitterRegistry) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
@@ -168,15 +192,23 @@ public class StreamableHttpProxyController {
 		this.properties = properties;
 		this.portHolder = portHolder;
 		this.taskServiceProvider = taskServiceProvider;
+		this.emitterRegistry = emitterRegistry;
+	}
+
+	private TaskService taskService() {
+		return (this.taskServiceProvider != null) ? this.taskServiceProvider.getIfAvailable() : null;
 	}
 
 	/**
-	 * Lazily resolves the optional {@link TaskService} bean. Resolved on first use so the
-	 * constructor stays trivially safe (no method calls that could throw).
-	 * @return the resolved service, or {@code null} when unavailable
+	 * Broadcasts a keep-alive ping timestamp to UI subscribers of the given proxy session
+	 * as an SSE {@code mcp:keepalive-ping} event.
+	 * @param sessionId the proxy session identifier
+	 * @param at the ping timestamp in ISO-8601 form
 	 */
-	private TaskService taskService() {
-		return (this.taskServiceProvider != null) ? this.taskServiceProvider.getIfAvailable() : null;
+	private void broadcastKeepAlivePing(final String sessionId, final String at) {
+		if (this.emitterRegistry != null) {
+			this.emitterRegistry.broadcast(sessionId, KEEPALIVE_PING_EVENT, Map.of("at", at));
+		}
 	}
 
 	private int loopbackPort() {
@@ -439,7 +471,11 @@ public class StreamableHttpProxyController {
 		}
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(REPLAY_BUFFER);
-		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
+		final KeepAliveTracker keepAliveTracker = new KeepAliveTracker();
+		keepAliveTracker.setListener((at) -> broadcastKeepAlivePing(sessionId, at.toString()));
+		final ProxySession session = new ProxySession(sessionId,
+				new PingDetectingClientTransport(target, keepAliveTracker), browserToTarget, targetToBrowser,
+				keepAliveTracker);
 		this.registry.put(session);
 		this.mcpProxy.start(session).subscribe((ignored) -> {
 		}, (err) -> {

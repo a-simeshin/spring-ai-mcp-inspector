@@ -47,12 +47,15 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
+import io.inspector.mcp.core.keepalive.PingDetectingClientTransport;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.webmvc.InspectorServerPortHolder;
+import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
 
 /**
  * Upstream-compatible proxy endpoints for SSE-style sessions.
@@ -83,6 +86,11 @@ public class SseProxyController {
 
 	private static final Logger LOG = LoggerFactory.getLogger(SseProxyController.class);
 
+	/**
+	 * SSE event name used to broadcast a keep-alive ping timestamp to the UI.
+	 */
+	private static final String KEEPALIVE_PING_EVENT = "mcp:keepalive-ping";
+
 	private final ProxySessionRegistry registry;
 
 	private final ProxyTransportFactory transportFactory;
@@ -95,21 +103,51 @@ public class SseProxyController {
 
 	private final InspectorServerPortHolder portHolder;
 
+	private final InspectorSseEmitterRegistry emitterRegistry;
+
 	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final JsonMapper objectMapper, final McpInspectorProperties properties) {
-		this(registry, transportFactory, mcpProxy, objectMapper, properties, null);
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, null, null);
 	}
 
-	@Autowired
+	/**
+	 * Backward-compatible constructor without keep-alive broadcasting.
+	 * @param registry the proxy session registry
+	 * @param transportFactory the proxy transport factory
+	 * @param mcpProxy the MCP proxy relay
+	 * @param objectMapper the JSON object mapper
+	 * @param properties the inspector properties
+	 * @param portHolder the server port holder
+	 */
 	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final JsonMapper objectMapper, final McpInspectorProperties properties,
 			final InspectorServerPortHolder portHolder) {
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, null);
+	}
+
+	/**
+	 * Primary constructor: wires per-session keep-alive tracking so the UI can follow
+	 * pings on the proxy path (the default UI connection mode).
+	 * @param registry the proxy session registry
+	 * @param transportFactory the proxy transport factory
+	 * @param mcpProxy the MCP proxy relay
+	 * @param objectMapper the JSON object mapper
+	 * @param properties the inspector properties
+	 * @param portHolder the server port holder
+	 * @param emitterRegistry the SSE emitter registry used to broadcast
+	 * {@code mcp:keepalive-ping} events to UI subscribers
+	 */
+	@Autowired
+	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
+			final McpProxy mcpProxy, final JsonMapper objectMapper, final McpInspectorProperties properties,
+			final InspectorServerPortHolder portHolder, final InspectorSseEmitterRegistry emitterRegistry) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.properties = properties;
 		this.portHolder = portHolder;
+		this.emitterRegistry = emitterRegistry;
 	}
 
 	private int loopbackPort() {
@@ -194,6 +232,18 @@ public class SseProxyController {
 	// session bring-up
 	// ---------------------------------------------------------------------
 
+	/**
+	 * Broadcasts a keep-alive ping timestamp to UI subscribers of the given proxy session
+	 * as an SSE {@code mcp:keepalive-ping} event.
+	 * @param sessionId the proxy session identifier
+	 * @param at the ping timestamp in ISO-8601 form
+	 */
+	private void broadcastKeepAlivePing(final String sessionId, final String at) {
+		if (this.emitterRegistry != null) {
+			this.emitterRegistry.broadcast(sessionId, KEEPALIVE_PING_EVENT, Map.of("at", at));
+		}
+	}
+
 	private static String contextPath(final HttpServletRequest request) {
 		// A root-mounted application reports "" per the servlet spec; a container
 		// reporting "/" instead would yield a protocol-relative "//..." prologue.
@@ -223,7 +273,11 @@ public class SseProxyController {
 		// unicast contract.
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
-		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser);
+		final KeepAliveTracker keepAliveTracker = new KeepAliveTracker();
+		keepAliveTracker.setListener((at) -> broadcastKeepAlivePing(sessionId, at.toString()));
+		final ProxySession session = new ProxySession(sessionId,
+				new PingDetectingClientTransport(target, keepAliveTracker), browserToTarget, targetToBrowser,
+				keepAliveTracker);
 		this.registry.put(session);
 
 		// SSE prologue — tells SSEClientTransport on the browser where to POST.

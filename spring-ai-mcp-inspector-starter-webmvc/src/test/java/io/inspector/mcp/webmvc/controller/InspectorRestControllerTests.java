@@ -16,12 +16,14 @@
 
 package io.inspector.mcp.webmvc.controller;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentMap;
 
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.server.McpServerFeatures;
+import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -40,6 +42,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -59,6 +62,8 @@ import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthInitiateResponse;
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
+import io.inspector.mcp.core.proxy.ProxySession;
+import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.core.transport.TransportType;
@@ -1184,6 +1189,135 @@ class InspectorRestControllerTests {
 				.tool(tool)
 				.callHandler((exchange, request) -> McpSchema.CallToolResult.builder(List.of()).build())
 				.build());
+		}
+
+	}
+
+	@Nested
+	@DisplayName("keepalive()")
+	class Keepalive {
+
+		@Test
+		@Story("Keep-alive tracking")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("keepalive() answers 404 for an unknown session id")
+		void keepalive_unknownSession_returns404() {
+			// given
+			final InspectorRestController withRegistry = new InspectorRestController(
+					InspectorRestControllerTests.this.properties, InspectorRestControllerTests.this.transportDetector,
+					InspectorRestControllerTests.this.loopbackFactory,
+					InspectorRestControllerTests.this.authTokenProvider,
+					InspectorRestControllerTests.this.emitterRegistry, InspectorRestControllerTests.this.portHolder,
+					InspectorRestControllerTests.this.objectMapper, InspectorRestControllerTests.this.oauthClient,
+					"demo-server", new ProxySessionRegistry());
+
+			// when
+			final ResponseEntity<?> response = withRegistry.keepalive("missing");
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Keep-alive tracking")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("keepalive() reports observed=false while a tracked session has not seen a single ping")
+		void keepalive_trackedSessionWithoutPings_reportsObservedFalse() {
+			// given
+			final String sessionId = "session-no-pings";
+			InspectorRestControllerTests.this.controller.sessions()
+				.put(sessionId, new SessionState(mock(McpSyncClient.class), new KeepAliveTracker()));
+
+			// when
+			final ResponseEntity<?> response = InspectorRestControllerTests.this.controller.keepalive(sessionId);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> body = (Map<String, Object>) response.getBody();
+			assertThat(body.get("observed")).isEqualTo(false);
+			assertThat(body.get("lastPingAt")).isNull();
+		}
+
+		@Test
+		@Story("Keep-alive tracking")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("keepalive() reports observed=true with the last ping once pings were recorded")
+		void keepalive_trackedSessionWithPings_reportsObservedTrue() {
+			// given
+			final KeepAliveTracker tracker = new KeepAliveTracker();
+			final Instant t0 = Instant.parse("2026-09-20T10:00:00Z");
+			tracker.recordPing(t0);
+			tracker.recordPing(t0.plusSeconds(5));
+			final String sessionId = "session-with-pings";
+			InspectorRestControllerTests.this.controller.sessions()
+				.put(sessionId, new SessionState(mock(McpSyncClient.class), tracker));
+
+			// when
+			final ResponseEntity<?> response = InspectorRestControllerTests.this.controller.keepalive(sessionId);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> body = (Map<String, Object>) response.getBody();
+			assertThat(body.get("observed")).isEqualTo(true);
+			assertThat(body.get("lastPingAt")).isEqualTo(t0.plusSeconds(5).toString());
+			assertThat(body.get("estimatedIntervalMillis")).isEqualTo(5000L);
+		}
+
+		@Test
+		@Story("Keep-alive tracking")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("keepalive() resolves proxy sessions (the UI default connection mode) via the proxy registry")
+		void keepalive_proxySession_returnsProxyTrackerSnapshot() {
+			// given
+			final ProxySessionRegistry proxyRegistry = new ProxySessionRegistry();
+			final KeepAliveTracker tracker = new KeepAliveTracker();
+			tracker.recordPing(Instant.parse("2026-09-20T10:00:00Z"));
+			proxyRegistry.put(new ProxySession("proxy-1", mock(McpClientTransport.class),
+					Sinks.many().unicast().onBackpressureBuffer(), Sinks.many().replay().limit(8), tracker));
+			final InspectorRestController withRegistry = new InspectorRestController(
+					InspectorRestControllerTests.this.properties, InspectorRestControllerTests.this.transportDetector,
+					InspectorRestControllerTests.this.loopbackFactory,
+					InspectorRestControllerTests.this.authTokenProvider,
+					InspectorRestControllerTests.this.emitterRegistry, InspectorRestControllerTests.this.portHolder,
+					InspectorRestControllerTests.this.objectMapper, InspectorRestControllerTests.this.oauthClient,
+					"demo-server", proxyRegistry);
+
+			// when
+			final ResponseEntity<?> response = withRegistry.keepalive("proxy-1");
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> body = (Map<String, Object>) response.getBody();
+			assertThat(body.get("observed")).isEqualTo(true);
+			assertThat(body.get("lastPingAt")).isEqualTo("2026-09-20T10:00:00Z");
+		}
+
+		@Test
+		@Story("Keep-alive tracking")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("keepalive() answers 404 when neither a REST nor a proxy session matches")
+		void keepalive_unknownToBothRegistries_returns404() {
+			// given
+			final ProxySessionRegistry proxyRegistry = new ProxySessionRegistry();
+			proxyRegistry.put(new ProxySession("proxy-1", mock(McpClientTransport.class),
+					Sinks.many().unicast().onBackpressureBuffer(), Sinks.many().replay().limit(8), null));
+			final InspectorRestController withRegistry = new InspectorRestController(
+					InspectorRestControllerTests.this.properties, InspectorRestControllerTests.this.transportDetector,
+					InspectorRestControllerTests.this.loopbackFactory,
+					InspectorRestControllerTests.this.authTokenProvider,
+					InspectorRestControllerTests.this.emitterRegistry, InspectorRestControllerTests.this.portHolder,
+					InspectorRestControllerTests.this.objectMapper, InspectorRestControllerTests.this.oauthClient,
+					"demo-server", proxyRegistry);
+
+			// when
+			final ResponseEntity<?> response = withRegistry.keepalive("proxy-1");
+
+			// then: the proxy session carries no tracker (untracked wiring), and no
+			// REST session exists: the id is unknown, not merely untracked.
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
 		}
 
 	}
