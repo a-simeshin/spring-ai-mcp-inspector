@@ -21,8 +21,10 @@ History list free of ping spam.
 App.tsx passes mcpSessionId (exposed by useConnection) to both components
 so the hook can subscribe to the correct session.
 
-Covered by useKeepAlive.test.ts (7 tests: null session, snapshot fetch,
-SSE subscription, live ping merge, ping cap, cleanup, custom path),
+Covered by useKeepAlive.test.ts (11 tests: null session, snapshot fetch,
+SSE subscription, live ping merge, ping cap, cleanup, auth forms,
+unified JSON payload parse, legacy bare-string tolerance, never-NaN-ago,
+custom path),
 TimelineTab.test.tsx (KEEP_ALIVE rendering, styling, label) and the
 keyboard-accessibility test in HistoryAndNotifications.test.tsx (Enter
 expands, Space collapses, no pointer involved).
