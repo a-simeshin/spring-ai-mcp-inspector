@@ -1223,6 +1223,80 @@ describe("useConnection", () => {
     });
   });
 
+  describe("Proxy Session Id Capture", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockSSETransport.url = undefined;
+      mockSSETransport.options = undefined;
+      mockStreamableHTTPTransport.url = undefined;
+      mockStreamableHTTPTransport.options = undefined;
+    });
+
+    test("captures the proxy session id from the SSE POST endpoint URL (?sessionId=...)", async () => {
+      const props = {
+        ...defaultProps,
+        connectionType: "proxy" as const,
+        transportType: "sse" as const,
+      };
+
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const transportFetch = mockSSETransport.options?.fetch as (
+        url: string | URL | globalThis.Request,
+        init?: RequestInit,
+      ) => Promise<Response>;
+      expect(transportFetch).toBeDefined();
+
+      await act(async () => {
+        await transportFetch(
+          "http://proxy.example/message?sessionId=proxy-sse-sid-1",
+          { method: "POST" },
+        );
+      });
+
+      // The keep-alive endpoints resolve the proxy-side session id announced in
+      // the endpoint event, NOT the upstream mcp-session-id.
+      expect(result.current.proxySessionId).toBe("proxy-sse-sid-1");
+    });
+
+    test("captures the proxy session id from the streamable mcp-session-id response header", async () => {
+      const props = {
+        ...defaultProps,
+        connectionType: "proxy" as const,
+        transportType: "streamable-http" as const,
+      };
+
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const transportFetch = mockStreamableHTTPTransport.options?.fetch as (
+        url: string | URL | globalThis.Request,
+        init?: RequestInit,
+      ) => Promise<Response>;
+      expect(transportFetch).toBeDefined();
+
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ "mcp-session-id": "proxy-stream-sid-1" }),
+      });
+
+      await act(async () => {
+        await transportFetch("http://proxy.example/mcp?url=http://upstream", {
+          method: "POST",
+        });
+      });
+
+      expect(result.current.proxySessionId).toBe("proxy-stream-sid-1");
+    });
+  });
+
   describe("Custom Headers", () => {
     beforeEach(() => {
       jest.clearAllMocks();

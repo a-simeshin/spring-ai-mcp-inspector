@@ -31,29 +31,56 @@ interface KeepAliveSnapshotDto {
   isStale?: boolean;
 }
 
+// [spring-ai-mcp-inspector PATCH] The inspector API auth filter compares the
+// X-MCP-Inspector-Auth header (or the auth= query parameter) against the
+// server-generated token verbatim - no Authorization/Bearer scheme is
+// recognized. The token is delivered to the UI via the server-rendered
+// bootstrap payload (#235).
+function resolveInspectorBootstrap(): {
+  inspectorPath?: string;
+  authToken?: string;
+} | undefined {
+  return (window as unknown as {
+    __MCP_INSPECTOR_BOOTSTRAP?: { inspectorPath?: string; authToken?: string };
+  }).__MCP_INSPECTOR_BOOTSTRAP;
+}
+
 function resolveApiBase(): string {
-  const bootstrap = (
-    window as unknown as {
-      __MCP_INSPECTOR_BOOTSTRAP?: { inspectorPath?: string };
-    }
-  ).__MCP_INSPECTOR_BOOTSTRAP;
+  const bootstrap = resolveInspectorBootstrap();
   return (bootstrap?.inspectorPath || "/mcp-inspector").replace(/\/$/, "");
 }
 
+function inspectorAuthToken(): string | null {
+  const token = resolveInspectorBootstrap()?.authToken;
+  return token ? token : null;
+}
+
 function authHeaders(): Record<string, string> {
-  const token = sessionStorage.getItem("inspectorConfig_v1_ephemeral");
-  const headers: Record<string, string> = {};
-  if (token) {
-    try {
-      const parsed = JSON.parse(token);
-      if (parsed.MCP_PROXY_AUTH_TOKEN?.value) {
-        headers["Authorization"] = "Bearer " + parsed.MCP_PROXY_AUTH_TOKEN.value;
-      }
-    } catch {
-      // Ignore parse errors
-    }
+  const token = inspectorAuthToken();
+  return token ? { "X-MCP-Inspector-Auth": token } : {};
+}
+
+function authQuery(): string {
+  const token = inspectorAuthToken();
+  return token ? `&auth=${encodeURIComponent(token)}` : "";
+}
+
+// Keep-alive ping payloads are unified on the {"at":"..."} JSON shape across
+// stacks; the bare timestamp string emitted by earlier server builds is
+// still accepted. Normalize to the timestamp itself (#235).
+function parsePingAt(data: unknown): string | null {
+  if (typeof data !== "string" || data.length === 0) {
+    return null;
   }
-  return headers;
+  try {
+    const parsed = JSON.parse(data) as { at?: unknown };
+    if (typeof parsed?.at === "string") {
+      return parsed.at;
+    }
+  } catch {
+    // Bare (non-JSON) payload: use as-is.
+  }
+  return data;
 }
 
 export function useKeepAlive(sessionId: string | null) {
@@ -97,12 +124,17 @@ export function useKeepAlive(sessionId: string | null) {
     void fetchSnapshot();
 
     // SSE subscription for live ping events
-    const sseUrl = `${apiBase}/api/events?sessionId=${encodeURIComponent(sessionId)}`;
+    // EventSource cannot send custom headers, so the inspector auth token
+    // travels as the auth= query parameter the filter accepts.
+    const sseUrl = `${apiBase}/api/events?sessionId=${encodeURIComponent(sessionId)}${authQuery()}`;
     const eventSource = new EventSource(sseUrl);
     eventSourceRef.current = eventSource;
 
     eventSource.addEventListener("mcp:keepalive-ping", (event) => {
-      const at = (event as MessageEvent).data as string;
+      const at = parsePingAt((event as MessageEvent).data);
+      if (at === null) {
+        return;
+      }
       setState((prev) => {
         const nextPings = [...prev.recentPings, at].slice(-MAX_KEEPALIVE_PINGS);
         return {

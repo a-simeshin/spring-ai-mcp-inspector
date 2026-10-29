@@ -509,6 +509,9 @@ const App = () => {
     serverImplementation,
     mcpClient,
     mcpSessionId,
+    // [spring-ai-mcp-inspector PATCH] proxy-side session id: the id the
+    // inspector's keep-alive endpoints actually resolve (#235)
+    proxySessionId,
     requestHistory,
     clearRequestHistory,
     makeRequest,
@@ -620,7 +623,10 @@ const App = () => {
   // [spring-ai-mcp-inspector PATCH] Subscribe to keep-alive pings so the
   // Connection pane can show "Last keep-alive: Xs ago" and warn when the
   // stream goes stale (#235, t_3925eae7).
-  const keepAlive = useKeepAlive(mcpSessionId);
+  // The keep-alive tracker lives on the proxy session the inspector created
+  // for this UI connection; the upstream mcpSessionId (direct mode capture)
+  // is unknown to the inspector and would 404 (#235).
+  const keepAlive = useKeepAlive(proxySessionId);
 
   const handleSaveConnection = useCallback(
     (name: string): SavedConnection | undefined => {
@@ -2129,7 +2135,7 @@ const App = () => {
               serverNotifications={notifications}
               onClearHistory={clearRequestHistory}
               onClearNotifications={handleClearNotifications}
-              sessionId={mcpSessionId}
+              sessionId={proxySessionId}
             />
           </div>
         </div>

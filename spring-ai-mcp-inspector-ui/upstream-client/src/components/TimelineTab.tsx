@@ -189,19 +189,21 @@ const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
   const keepAlive = useKeepAlive(sessionId ?? null);
 
   const fetchTimeline = useCallback(async () => {
-    const token = sessionStorage.getItem("inspectorConfig_v1_ephemeral");
-    const headers: Record<string, string> = {};
-    if (token) {
-      const parsed = JSON.parse(token);
-      if (parsed.MCP_PROXY_AUTH_TOKEN?.value) {
-        headers["Authorization"] = "Bearer " + parsed.MCP_PROXY_AUTH_TOKEN.value;
-      }
-    }
     // The API is mounted under the configured spring.ai.mcp.inspector.path; the
     // server advertises the deployed prefix through the bootstrap payload.
+    // [spring-ai-mcp-inspector PATCH] The auth filter compares the
+    // X-MCP-Inspector-Auth header against the server-generated bootstrap
+    // token verbatim; Authorization/Bearer is not recognized (#235).
     const bootstrap = (window as unknown as {
-      __MCP_INSPECTOR_BOOTSTRAP?: { inspectorPath?: string };
+      __MCP_INSPECTOR_BOOTSTRAP?: {
+        inspectorPath?: string;
+        authToken?: string;
+      };
     }).__MCP_INSPECTOR_BOOTSTRAP;
+    const headers: Record<string, string> = {};
+    if (bootstrap?.authToken) {
+      headers["X-MCP-Inspector-Auth"] = bootstrap.authToken;
+    }
     const apiBase = (bootstrap?.inspectorPath || "/mcp-inspector").replace(/\/$/, "");
     try {
       const res = await fetch(`${apiBase}/api/timeline?limit=200`, { headers });
