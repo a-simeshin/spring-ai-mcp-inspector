@@ -35,6 +35,7 @@ import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
@@ -180,7 +181,10 @@ public class InspectorRestController implements ApplicationContextAware {
 	}
 
 	/**
-	 * Full constructor that also resolves keep-alive trackers for proxy sessions.
+	 * Full constructor that also resolves keep-alive trackers for proxy sessions. Marked
+	 * {@code @Autowired} because the class is registered via {@code @Import} and carries
+	 * two constructors: without a single autowiring candidate Spring falls back to the
+	 * no-arg constructor, which does not exist, and application startup fails.
 	 * @param properties the inspector properties
 	 * @param transportDetector the transport detector
 	 * @param loopbackFactory the loopback MCP client factory
@@ -193,6 +197,7 @@ public class InspectorRestController implements ApplicationContextAware {
 	 * @param proxySessions the proxy session registry, may be {@code null} when proxy
 	 * keep-alive tracking is not wired
 	 */
+	@Autowired
 	public InspectorRestController(final McpInspectorProperties properties, final TransportDetector transportDetector,
 			final LoopbackMcpClientFactory loopbackFactory, final InspectorAuthTokenProvider authTokenProvider,
 			final InspectorSseEmitterRegistry emitterRegistry, final InspectorServerPortHolder portHolder,
