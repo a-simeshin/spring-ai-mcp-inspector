@@ -9,6 +9,8 @@ import {
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { validateToolOutput, hasOutputSchema } from "@/utils/schemaUtils";
+// [spring-ai-mcp-inspector PATCH] missing-output-schema-warning (#6773)
+import { findMissingOutputSchemaWarning } from "@/utils/schemaUtils";
 import useCopy from "@/lib/hooks/useCopy";
 import { useToast } from "@/lib/hooks/useToast";
 
@@ -137,6 +139,15 @@ const ToolResults = ({
       );
     }
 
+    // [spring-ai-mcp-inspector PATCH] missing-output-schema-warning (#6773):
+    // surface a best-effort warning when the tool advertises no output
+    // schema but the observed result itself encodes a JSON primitive
+    // (quoted JSON string, number, boolean, null). Plain text output is the
+    // normal case for a schema-less String tool and is not flagged.
+    const missingSchemaWarning = selectedTool
+      ? findMissingOutputSchemaWarning(selectedTool, structuredResult)
+      : null;
+
     // [spring-ai-mcp-inspector PATCH] Copy button for full tool result + scrollable
     // container (#??): the result content is wrapped in a scrollable container so
     // long output does not extend into the History pane below, and the horizontal
@@ -144,13 +155,31 @@ const ToolResults = ({
     // copies the complete un-truncated output to clipboard.
     return (
       <>
+        {missingSchemaWarning && (
+          <div
+            className="mb-2 p-2 rounded text-sm bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200"
+            data-testid="missing-output-schema-warning"
+          >
+            {missingSchemaWarning}{" "}
+            <a
+              href="https://github.com/spring-projects/spring-ai/issues/6773"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              spring-ai#6773
+            </a>
+          </div>
+        )}
         <div className="flex items-center justify-between mb-2">
           <h4 className="font-semibold">
             Tool Result:{" "}
             {isError ? (
               <span className="text-red-600 font-semibold">Error</span>
             ) : isTaskRunning ? (
-              <span className="text-yellow-600 font-semibold">Task Running</span>
+              <span className="text-yellow-600 font-semibold">
+                Task Running
+              </span>
             ) : (
               <span className="text-green-600 font-semibold">Success</span>
             )}
@@ -184,99 +213,109 @@ const ToolResults = ({
         </div>
         <div className="overflow-auto max-h-[60vh]">
           {structuredResult.structuredContent && (
-          <div className="mb-4">
-            <h5 className="font-semibold mb-2 text-sm">Structured Content:</h5>
-            <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
-              <JsonView data={structuredResult.structuredContent} />
-              {validationResult && (
-                <div
-                  className={`mt-2 p-2 rounded text-sm ${
-                    validationResult.isValid
-                      ? "bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200"
-                      : "bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200"
-                  }`}
-                >
-                  {validationResult.isValid ? (
-                    "✓ Valid according to output schema"
-                  ) : (
-                    <>✗ Validation Error: {validationResult.error}</>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-        {structuredResult._meta && (
-          <div className="mb-4">
-            <h5 className="font-semibold mb-2 text-sm">Meta:</h5>
-            <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
-              <JsonView data={structuredResult._meta} />
-            </div>
-          </div>
-        )}
-        {!structuredResult.structuredContent &&
-          validationResult &&
-          !validationResult.isValid && (
             <div className="mb-4">
-              <div className="bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 p-2 rounded text-sm">
-                ✗ Validation Error: {validationResult.error}
+              <h5 className="font-semibold mb-2 text-sm">
+                Structured Content:
+              </h5>
+              <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
+                <JsonView data={structuredResult.structuredContent} />
+                {validationResult && (
+                  <div
+                    className={`mt-2 p-2 rounded text-sm ${
+                      validationResult.isValid
+                        ? "bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200"
+                        : "bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200"
+                    }`}
+                  >
+                    {validationResult.isValid ? (
+                      "✓ Valid according to output schema"
+                    ) : (
+                      <>✗ Validation Error: {validationResult.error}</>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
-        {structuredResult.content.length > 0 && (
-          <div className="mb-4">
-            {structuredResult.structuredContent && (
-              <>
-                <h5 className="font-semibold mb-2 text-sm">
-                  Unstructured Content:
-                </h5>
-                {compatibilityResult?.hasMatch && (
-                  <div className="mb-2 p-2 rounded text-sm bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200">
-                    ✓ {compatibilityResult.message}
-                  </div>
-                )}
-              </>
-            )}
-            {structuredResult.content.map((item, index) => (
-              <div key={index} className="mb-2">
-                {item.type === "text" && (
-                  <JsonView data={item.text} isError={isError} />
-                )}
-                {item.type === "image" && (
-                  <MediaContentView
-                    mimeType={item.mimeType}
-                    base64Data={item.data}
-                    alt="Tool result image"
-                  />
-                )}
-                {item.type === "resource" && (() => {
-                  const res = item.resource as { uri?: string; mimeType?: string; blob?: string; text?: string } | undefined;
-                  if (!res) return null;
-                  const isBlob = "blob" in res;
-                  return (
-                    <MediaContentView
-                      mimeType={res.mimeType}
-                      base64Data={isBlob ? res.blob : undefined}
-                      text={!isBlob ? res.text : undefined}
-                      alt="Embedded resource"
-                      filename={res.uri?.split("/").pop()}
-                    />
-                  );
-                })()}
-                {item.type === "resource_link" && (
-                  <ResourceLinkView
-                    uri={item.uri}
-                    name={item.name}
-                    description={item.description}
-                    mimeType={item.mimeType}
-                    resourceContent={resourceContent[item.uri] || {}}
-                    onReadResource={onReadResource}
-                  />
-                )}
+          {structuredResult._meta && (
+            <div className="mb-4">
+              <h5 className="font-semibold mb-2 text-sm">Meta:</h5>
+              <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
+                <JsonView data={structuredResult._meta} />
               </div>
-            ))}
-          </div>
-        )}
+            </div>
+          )}
+          {!structuredResult.structuredContent &&
+            validationResult &&
+            !validationResult.isValid && (
+              <div className="mb-4">
+                <div className="bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 p-2 rounded text-sm">
+                  ✗ Validation Error: {validationResult.error}
+                </div>
+              </div>
+            )}
+          {structuredResult.content.length > 0 && (
+            <div className="mb-4">
+              {structuredResult.structuredContent && (
+                <>
+                  <h5 className="font-semibold mb-2 text-sm">
+                    Unstructured Content:
+                  </h5>
+                  {compatibilityResult?.hasMatch && (
+                    <div className="mb-2 p-2 rounded text-sm bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200">
+                      ✓ {compatibilityResult.message}
+                    </div>
+                  )}
+                </>
+              )}
+              {structuredResult.content.map((item, index) => (
+                <div key={index} className="mb-2">
+                  {item.type === "text" && (
+                    <JsonView data={item.text} isError={isError} />
+                  )}
+                  {item.type === "image" && (
+                    <MediaContentView
+                      mimeType={item.mimeType}
+                      base64Data={item.data}
+                      alt="Tool result image"
+                    />
+                  )}
+                  {item.type === "resource" &&
+                    (() => {
+                      const res = item.resource as
+                        | {
+                            uri?: string;
+                            mimeType?: string;
+                            blob?: string;
+                            text?: string;
+                          }
+                        | undefined;
+                      if (!res) return null;
+                      const isBlob = "blob" in res;
+                      return (
+                        <MediaContentView
+                          mimeType={res.mimeType}
+                          base64Data={isBlob ? res.blob : undefined}
+                          text={!isBlob ? res.text : undefined}
+                          alt="Embedded resource"
+                          filename={res.uri?.split("/").pop()}
+                        />
+                      );
+                    })()}
+                  {item.type === "resource_link" && (
+                    <ResourceLinkView
+                      uri={item.uri}
+                      name={item.name}
+                      description={item.description}
+                      mimeType={item.mimeType}
+                      resourceContent={resourceContent[item.uri] || {}}
+                      onReadResource={onReadResource}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </>
     );

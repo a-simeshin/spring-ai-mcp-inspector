@@ -17,7 +17,7 @@ const toolOutputValidators = new Map<string, ValidateFunction>();
 export function cacheToolOutputSchemas(tools: Tool[]): void {
   toolOutputValidators.clear();
   for (const tool of tools) {
-    if (tool.outputSchema) {
+    if (advertisesOutputSchema(tool.outputSchema)) {
       try {
         const validator = ajv.compile(tool.outputSchema);
         toolOutputValidators.set(tool.name, validator);
@@ -591,4 +591,147 @@ export function resolveRefsInMessage(message: JSONRPCMessage): JSONRPCMessage {
   };
 
   return resolvedMessage;
+}
+
+// [spring-ai-mcp-inspector PATCH] missing-output-schema-warning (#6773):
+// schema generation in spring-ai silently skips primitive/simple return types,
+// so a @McpTool(generateOutputSchema=true) method returning String/int/...
+// ends up advertising no outputSchema. The client cannot observe the
+// annotation, so detection is best-effort and result-shaped: warn only when
+// the observed result itself encodes a JSON primitive (a quoted JSON string,
+// number, boolean, or null). Plain text output is the normal case for a
+// schema-less String tool and is never flagged. Known tradeoff: a
+// numeric/boolean result without the annotation is indistinguishable from
+// the #6773 shape client-side and still warns. Structured results (any JSON
+// object or array block, object structuredContent) are out of scope.
+const PRIMITIVE_CONTENT_TYPES = new Set(["string", "number", "boolean"]);
+
+/**
+ * Minimal shape of a CallToolResult needed for #6773 detection. We avoid
+ * pulling in the full SDK union type here so the helper stays easy to test.
+ */
+type ToolCallResultLike = {
+  content?: Array<{
+    type?: string;
+    text?: string;
+    [key: string]: unknown;
+  }>;
+  structuredContent?: unknown;
+  isError?: boolean;
+};
+
+/**
+ * True when an outputSchema actually describes a value: a declared type, at
+ * least one property, a $ref, or a compositor keyword (anyOf/oneOf). Absent,
+ * null, and shapeless ({} / {not: {}}) schemas read as "no schema
+ * advertised". Shared by cacheToolOutputSchemas and the #6773 detector so
+ * the validators cache and the detector can never disagree about whether a
+ * tool advertised an output schema.
+ */
+function advertisesOutputSchema(
+  schema: JsonSchemaType | null | undefined,
+): schema is JsonSchemaType {
+  if (!schema || typeof schema !== "object") {
+    return false;
+  }
+  return (
+    schema.type !== undefined ||
+    (schema.properties !== undefined &&
+      schema.properties !== null &&
+      Object.keys(schema.properties).length > 0) ||
+    schema.$ref !== undefined ||
+    schema.anyOf !== undefined ||
+    schema.oneOf !== undefined
+  );
+}
+
+/**
+ * True when the observed result looks like an encoded JSON primitive:
+ * structuredContent is itself a primitive, or at least one text block parses
+ * as a JSON primitive (quoted string, number, boolean, null) while no text
+ * block parses as a JSON object or array. Plain text that fails JSON.parse
+ * is NOT a #6773 signal: it is the normal output of a schema-less String
+ * tool, so it neither triggers nor vetoes.
+ */
+function isPrimitiveResult(result: ToolCallResultLike): boolean {
+  const structured = result.structuredContent;
+  if (structured !== undefined && structured !== null) {
+    return PRIMITIVE_CONTENT_TYPES.has(typeof structured);
+  }
+
+  if (!Array.isArray(result.content)) {
+    return false;
+  }
+
+  let sawPrimitive = false;
+  for (const block of result.content) {
+    if (!block || block.type !== "text") {
+      continue;
+    }
+    const text = block.text;
+    if (typeof text !== "string") {
+      continue;
+    }
+    const trimmed = text.trim();
+    if (trimmed === "") {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      // Plain (non-JSON) text: the normal case for a schema-less String
+      // tool. Not a #6773 signal; other blocks may still decide.
+      continue;
+    }
+    if (parsed === null || PRIMITIVE_CONTENT_TYPES.has(typeof parsed)) {
+      sawPrimitive = true;
+    } else {
+      // A JSON object or array in any block means the result is structured
+      // and out of scope for #6773, even if another block is a primitive.
+      return false;
+    }
+  }
+  return sawPrimitive;
+}
+
+/**
+ * Detects the spring-ai#6773 shape from the observed result: the tool
+ * advertises no meaningful outputSchema while the result encodes a JSON
+ * primitive. Best-effort only, because the generateOutputSchema annotation
+ * is server-side; see the block comment above for the exact tradeoffs.
+ *
+ * @returns the warning text with a link to the upstream issue, or null when
+ * the result does not look like the #6773 case.
+ */
+export function findMissingOutputSchemaWarning(
+  tool: { name: string; outputSchema?: JsonSchemaType | null } | null,
+  toolResult: ToolCallResultLike | null,
+): string | null {
+  if (!tool || !toolResult) {
+    return null;
+  }
+
+  // Same predicate the validators cache uses, so a schema the UI treats as
+  // advertised is never reported here as missing.
+  if (advertisesOutputSchema(tool.outputSchema)) {
+    return null;
+  }
+
+  // Error results say nothing about the success-path output shape.
+  if (toolResult.isError === true) {
+    return null;
+  }
+
+  if (!isPrimitiveResult(toolResult)) {
+    return null;
+  }
+
+  return (
+    `Tool '${tool.name ?? "unknown"}' returned a JSON primitive but ` +
+    `advertises no output schema. If @McpTool(generateOutputSchema=true) ` +
+    `was intended, spring-ai skipped schema generation for the primitive ` +
+    `return type. Plain-text results are not flagged. See ` +
+    `https://github.com/spring-projects/spring-ai/issues/6773.`
+  );
 }
