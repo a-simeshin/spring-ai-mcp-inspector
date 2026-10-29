@@ -280,11 +280,42 @@ public final class McpProxy {
 		// targetToBrowser sink. Returning Mono.empty() tells the SDK we have no
 		// further response to send.
 		//
+		// Terminal-signal wiring: neither the connect() Mono nor the per-frame
+		// publisher the SDK hands to this handler may be treated as "the inbound
+		// stream". connect() succeeds as soon as the client is set up (for the
+		// SSE transport that is the endpoint prologue), and the handler is invoked
+		// once per inbound message on a Mono that completes after that single
+		// frame (HttpClientSseClientTransport applies it as
+		// handler.apply(Mono.just(msg))),
+		// so a doOnSuccess/doOnTerminate hook on either would complete the
+		// targetToBrowser sink after the FIRST relayed frame and close the
+		// browser-facing stream on a perfectly live session. Only a frame-level
+		// ERROR is routed to failUpstream here; upstream death is otherwise
+		// detected by the transport exception handler, sendMessage failures and
+		// the liveness prober.
+		//
+		// Internal liveness-probe responses are detected by their JSON-RPC id
+		// (registered via session.registerProbeId) and filtered out - they must
+		// never reach the browser. Receiving one also cancels the probe's answer
+		// deadline (the prober re-checks the id when its timer fires).
 		// The inbound flux's terminal signals are surfaced too: an upstream
 		// disconnect that completes/errors the inbound stream is propagated via
 		// failUpstream so awaiters and the SSE subscriber are released promptly.
 		final Function<Mono<JSONRPCMessage>, Mono<JSONRPCMessage>> inboundHandler = (inbound) -> inbound
 			.flatMap((message) -> {
+				// Skip internal probe responses - they are not real MCP messages
+				// and must not be forwarded to the browser.
+				if (message instanceof McpSchema.JSONRPCResponse response) {
+					final Object id = response.id();
+					if (id instanceof String strId && session.isProbeId(strId)) {
+						// Probe responses are internal traffic - they must not count as
+						// activity for session reaping. Removing the probe id both bounds
+						// the probeIds set and cancels this probe's answer deadline (the
+						// prober re-checks the id when its timer fires).
+						session.removeProbeId(strId);
+						return Mono.<JSONRPCMessage>empty();
+					}
+				}
 				final JsonNode body = toJsonNode(message);
 				if (body != null) {
 					recordInbound(session, message, body);
