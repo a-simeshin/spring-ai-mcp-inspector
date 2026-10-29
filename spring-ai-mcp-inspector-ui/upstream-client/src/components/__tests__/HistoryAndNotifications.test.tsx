@@ -384,4 +384,31 @@ describe("HistoryAndNotifications", () => {
     expect(rows[1].className).toContain("border-transparent");
     expect(rows[1].className).not.toContain("border-red-500");
   });
+
+  // [spring-ai-mcp-inspector PATCH] Keep-alive collapsed section tests (#235).
+
+  it("does not render keep-alive section when no pings observed", () => {
+    render(
+      <HistoryAndNotifications
+        requestHistory={[]}
+        serverNotifications={[]}
+        sessionId={null}
+      />,
+    );
+
+    expect(screen.queryByText(/Keep-alive pings/)).toBeNull();
+  });
+
+  it("does not render keep-alive section when sessionId is null", () => {
+    render(
+      <HistoryAndNotifications
+        requestHistory={[]}
+        serverNotifications={[]}
+        sessionId={null}
+      />,
+    );
+
+    // With null sessionId, no keep-alive section should render
+    expect(screen.queryByText(/Keep-alive pings/)).toBeNull();
+  });
 });

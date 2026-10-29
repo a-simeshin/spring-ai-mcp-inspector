@@ -17,6 +17,8 @@
 package io.inspector.mcp.webmvc.sse;
 
 import java.lang.reflect.Field;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 import io.qameta.allure.Description;
@@ -49,30 +51,37 @@ class InspectorSseEmitterRegistryTests {
 		@Test
 		@Story("Event fan-out")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("broadcast() sends the event to the emitter registered under the session id")
+		@Description("broadcast() sends the event to every emitter registered under the session id")
 		@SuppressWarnings("unchecked")
 		void broadcastsToAllRegisteredEmitters() throws Exception {
 			// given
 			final InspectorSseEmitterRegistry registry = new InspectorSseEmitterRegistry();
 			final String sessionId = "session-1";
 			registry.register(sessionId);
+			registry.register(sessionId);
 
-			// Swap registered emitter with a Mockito spy so we can verify a send
-			// happened.
+			// Swap the registered emitters with Mockito spies so we can verify a
+			// send happened on both subscribers.
 			final Field emittersField = InspectorSseEmitterRegistry.class.getDeclaredField("emitters");
 			emittersField.setAccessible(true);
-			final ConcurrentMap<String, SseEmitter> emitters = (ConcurrentMap<String, SseEmitter>) emittersField
+			final ConcurrentMap<String, Set<SseEmitter>> emitters = (ConcurrentMap<String, Set<SseEmitter>>) emittersField
 				.get(registry);
 
-			final SseEmitter spyEmitter = spy(new SseEmitter(Long.MAX_VALUE));
-			willDoNothing().given(spyEmitter).send(any(SseEmitter.SseEventBuilder.class));
-			emitters.put(sessionId, spyEmitter);
+			final SseEmitter firstSpy = spy(new SseEmitter(Long.MAX_VALUE));
+			final SseEmitter secondSpy = spy(new SseEmitter(Long.MAX_VALUE));
+			willDoNothing().given(firstSpy).send(any(SseEmitter.SseEventBuilder.class));
+			willDoNothing().given(secondSpy).send(any(SseEmitter.SseEventBuilder.class));
+			final Set<SseEmitter> subscribers = ConcurrentHashMap.newKeySet();
+			subscribers.add(firstSpy);
+			subscribers.add(secondSpy);
+			emitters.put(sessionId, subscribers);
 
 			// when
 			registry.broadcast(sessionId, "notify", "payload");
 
 			// then
-			verify(spyEmitter, atLeastOnce()).send(any(SseEmitter.SseEventBuilder.class));
+			verify(firstSpy, atLeastOnce()).send(any(SseEmitter.SseEventBuilder.class));
+			verify(secondSpy, atLeastOnce()).send(any(SseEmitter.SseEventBuilder.class));
 		}
 
 		@Test
@@ -99,8 +108,8 @@ class InspectorSseEmitterRegistryTests {
 		@Test
 		@Story("Registration")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("register() replaces a previous emitter for the same session id")
-		void registerReplacesPreviousEmitter() {
+		@Description("register() keeps every subscriber of a session alive: two open UI panels mean two live emitters")
+		void registerKeepsPreviousSubscribersAlive() {
 			// given
 			final InspectorSseEmitterRegistry registry = new InspectorSseEmitterRegistry();
 			final String sessionId = "s1";
@@ -111,7 +120,7 @@ class InspectorSseEmitterRegistryTests {
 
 			// then
 			assertThat(first).isNotSameAs(second);
-			assertThat(registry.size()).isEqualTo(1);
+			assertThat(registry.size()).isEqualTo(2);
 		}
 
 	}

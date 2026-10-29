@@ -55,6 +55,8 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
+import io.inspector.mcp.core.keepalive.PingDetectingClientTransport;
 import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
@@ -66,6 +68,7 @@ import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.proxy.TransportKind;
 import io.inspector.mcp.webmvc.InspectorServerPortHolder;
 import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
+import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
 
 /**
  * Upstream-compatible proxy endpoints for SSE-style sessions.
@@ -96,6 +99,11 @@ public class SseProxyController {
 
 	private static final Logger LOG = LoggerFactory.getLogger(SseProxyController.class);
 
+	/**
+	 * SSE event name used to broadcast a keep-alive ping timestamp to the UI.
+	 */
+	private static final String KEEPALIVE_PING_EVENT = "mcp:keepalive-ping";
+
 	private final ProxySessionRegistry registry;
 
 	private final ProxyTransportFactory transportFactory;
@@ -116,21 +124,77 @@ public class SseProxyController {
 
 	private final OAuth2AuthCodeTokenExchanger authCodeExchanger;
 
+	private final InspectorSseEmitterRegistry emitterRegistry;
+
 	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final JsonMapper objectMapper, final McpInspectorProperties properties) {
-		this(registry, transportFactory, mcpProxy, objectMapper, properties, null, null, null, null, null);
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, null, null, null, null, null, null);
 	}
 
+	/**
+	 * Backward-compatible constructor without keep-alive broadcasting.
+	 * @param registry the proxy session registry
+	 * @param transportFactory the proxy transport factory
+	 * @param mcpProxy the MCP proxy relay
+	 * @param objectMapper the JSON object mapper
+	 * @param properties the inspector properties
+	 * @param portHolder the server port holder
+	 */
 	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final JsonMapper objectMapper, final McpInspectorProperties properties,
 			final InspectorServerPortHolder portHolder) {
-		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, null, null, null, null);
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, null, null, null, null, null);
+	}
+
+	/**
+	 * Keep-alive constructor wiring ping broadcasting on the SSE proxy path without the
+	 * D8/D9 auth-profile wiring.
+	 * @param registry the proxy session registry
+	 * @param transportFactory the proxy transport factory
+	 * @param mcpProxy the MCP proxy relay
+	 * @param objectMapper the JSON object mapper
+	 * @param properties the inspector properties
+	 * @param portHolder the server port holder
+	 * @param emitterRegistry the SSE emitter registry used to broadcast
+	 * {@code mcp:keepalive-ping} events to UI subscribers
+	 */
+	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
+			final McpProxy mcpProxy, final JsonMapper objectMapper, final McpInspectorProperties properties,
+			final InspectorServerPortHolder portHolder, final InspectorSseEmitterRegistry emitterRegistry) {
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, null, null, null, null,
+				emitterRegistry);
 	}
 
 	/**
 	 * Full constructor with the D8/D9 wiring: the session-owner resolver (owner id from
 	 * the signed cookie) and the owner-scoped auth-profile store + OAuth2 managers used
 	 * to resolve the bound profile into transport headers.
+	 * @param registry the proxy session registry
+	 * @param transportFactory the proxy pump
+	 * @param mcpProxy the MCP proxy relay
+	 * @param objectMapper the JSON mapper
+	 * @param properties the inspector properties
+	 * @param portHolder the loopback port holder
+	 * @param sessionOwnerResolver the signed-cookie owner resolver
+	 * @param authProfileStore the owner-scoped profile store
+	 * @param ccTokenManager the client-credentials token manager
+	 * @param authCodeExchanger the auth-code exchanger
+	 */
+	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
+			final McpProxy mcpProxy, final JsonMapper objectMapper, final McpInspectorProperties properties,
+			final InspectorServerPortHolder portHolder, final ServletSessionOwnerResolver sessionOwnerResolver,
+			final AuthProfileStore authProfileStore, final OAuth2ClientCredentialsTokenManager ccTokenManager,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, sessionOwnerResolver,
+				authProfileStore, ccTokenManager, authCodeExchanger, null);
+	}
+
+	/**
+	 * Full constructor with the D8/D9 wiring and keep-alive broadcasting: the
+	 * session-owner resolver (owner id from the signed cookie), the owner-scoped
+	 * auth-profile store + OAuth2 managers used to resolve the bound profile into
+	 * transport headers, and the SSE emitter registry used to broadcast
+	 * {@code mcp:keepalive-ping} events to UI subscribers.
 	 * @param registry the proxy session registry
 	 * @param transportFactory the transport factory
 	 * @param mcpProxy the proxy pump
@@ -141,13 +205,15 @@ public class SseProxyController {
 	 * @param authProfileStore the owner-scoped profile store
 	 * @param ccTokenManager the client-credentials token manager
 	 * @param authCodeExchanger the auth-code exchanger
+	 * @param emitterRegistry the SSE emitter registry used to broadcast
+	 * {@code mcp:keepalive-ping} events to UI subscribers
 	 */
 	@Autowired
 	public SseProxyController(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final JsonMapper objectMapper, final McpInspectorProperties properties,
 			final InspectorServerPortHolder portHolder, final ServletSessionOwnerResolver sessionOwnerResolver,
 			final AuthProfileStore authProfileStore, final OAuth2ClientCredentialsTokenManager ccTokenManager,
-			final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger, final InspectorSseEmitterRegistry emitterRegistry) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
@@ -158,6 +224,7 @@ public class SseProxyController {
 		this.authProfileStore = authProfileStore;
 		this.ccTokenManager = ccTokenManager;
 		this.authCodeExchanger = authCodeExchanger;
+		this.emitterRegistry = emitterRegistry;
 	}
 
 	private int loopbackPort() {
@@ -286,6 +353,18 @@ public class SseProxyController {
 	// session bring-up
 	// ---------------------------------------------------------------------
 
+	/**
+	 * Broadcasts a keep-alive ping timestamp to UI subscribers of the given proxy session
+	 * as an SSE {@code mcp:keepalive-ping} event.
+	 * @param sessionId the proxy session identifier
+	 * @param at the ping timestamp in ISO-8601 form
+	 */
+	private void broadcastKeepAlivePing(final String sessionId, final String at) {
+		if (this.emitterRegistry != null) {
+			this.emitterRegistry.broadcast(sessionId, KEEPALIVE_PING_EVENT, Map.of("at", at));
+		}
+	}
+
 	private static String contextPath(final HttpServletRequest request) {
 		// A root-mounted application reports "" per the servlet spec; a container
 		// reporting "/" instead would yield a protocol-relative "//..." prologue.
@@ -338,8 +417,11 @@ public class SseProxyController {
 		// unicast contract.
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
-		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser,
-				authorizationRef);
+		final KeepAliveTracker keepAliveTracker = new KeepAliveTracker();
+		keepAliveTracker.setListener((at) -> broadcastKeepAlivePing(sessionId, at.toString()));
+		final ProxySession session = new ProxySession(sessionId,
+				new PingDetectingClientTransport(target, keepAliveTracker), browserToTarget, targetToBrowser,
+				authorizationRef, keepAliveTracker);
 		if (profileId != null && !profileId.isBlank()) {
 			// One-time bind: rejected reuse / foreign ids close the handoff (D4/D8).
 			if (!this.authProfileStore.bind(ownerId, profileId, sessionId)) {
