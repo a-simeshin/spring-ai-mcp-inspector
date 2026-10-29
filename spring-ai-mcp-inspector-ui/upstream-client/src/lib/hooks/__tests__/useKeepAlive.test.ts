@@ -205,6 +205,80 @@ describe("useKeepAlive", () => {
     );
   });
 
+  it("sends the bootstrap auth token as X-MCP-Inspector-Auth (not Bearer) and as the events auth= query", async () => {
+    (window as unknown as Record<string, unknown>)[
+      "__MCP_INSPECTOR_BOOTSTRAP"
+    ] = { authToken: "inspector-token" };
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ observed: false }),
+    });
+
+    renderHook(() => useKeepAlive("test-session"));
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledWith(
+        "/mcp-inspector/api/keepalive?sessionId=test-session",
+        expect.objectContaining({
+          headers: { "X-MCP-Inspector-Auth": "inspector-token" },
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+    expect(MockEventSource.instances[0].url).toBe(
+      "/mcp-inspector/api/events?sessionId=test-session&auth=inspector-token",
+    );
+  });
+
+  it("parses the WebFlux JSON ping payload ({\"at\":...}) into the bare timestamp", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ observed: false }),
+    });
+
+    const { result } = renderHook(() => useKeepAlive("test-session"));
+
+    await waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    act(() => {
+      MockEventSource.instances[0].simulateEvent(
+        "mcp:keepalive-ping",
+        JSON.stringify({ at: "2026-09-20T12:00:05Z" }),
+      );
+    });
+
+    expect(result.current.lastPingAt).toBe("2026-09-20T12:00:05Z");
+    expect(result.current.recentPings).toContain("2026-09-20T12:00:05Z");
+  });
+
+  it("keeps the WebMVC bare-string ping payload as-is", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ observed: false }),
+    });
+
+    const { result } = renderHook(() => useKeepAlive("test-session"));
+
+    await waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    act(() => {
+      MockEventSource.instances[0].simulateEvent(
+        "mcp:keepalive-ping",
+        "2026-09-20T12:00:09Z",
+      );
+    });
+
+    expect(result.current.lastPingAt).toBe("2026-09-20T12:00:09Z");
+  });
+
   it("uses custom inspector path from bootstrap", async () => {
     (window as unknown as Record<string, unknown>)[
       "__MCP_INSPECTOR_BOOTSTRAP"

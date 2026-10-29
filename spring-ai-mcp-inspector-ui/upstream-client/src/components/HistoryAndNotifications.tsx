@@ -63,8 +63,9 @@ const HistoryAndNotifications = ({
         {/* [spring-ai-mcp-inspector PATCH] Collapsed keep-alive pings section (#235). */}
         {keepAlive.observed && (
           <div className="mb-4 border border-cyan-800 rounded">
-            <div
-              className="flex items-center justify-between px-3 py-2 cursor-pointer bg-cyan-950/30 hover:bg-cyan-950/50"
+            <button
+              type="button"
+              className="flex items-center justify-between w-full px-3 py-2 cursor-pointer bg-cyan-950/30 hover:bg-cyan-950/50"
               onClick={() => setKeepAliveExpanded(!keepAliveExpanded)}
             >
               <span className="text-sm font-medium text-cyan-300">
@@ -73,7 +74,7 @@ const HistoryAndNotifications = ({
               <span className="text-cyan-400 text-xs">
                 {keepAliveExpanded ? "▼" : "▶"}
               </span>
-            </div>
+            </button>
             {keepAliveExpanded && (
               <div className="px-3 py-2 space-y-1">
                 {keepAlive.recentPings.slice().reverse().map((ping, i) => (
@@ -102,8 +103,9 @@ const HistoryAndNotifications = ({
                   key={index}
                   className={`text-sm text-foreground bg-secondary py-2 px-3 rounded border-l-4 ${request.isError ? "border-red-500" : "border-transparent"}`}
                 >
-                  <div
-                    className="flex justify-between items-center cursor-pointer"
+                  <button
+                    type="button"
+                    className="flex justify-between items-center w-full cursor-pointer"
                     onClick={() =>
                       toggleRequestExpansion(requestHistory.length - 1 - index)
                     }
@@ -118,7 +120,7 @@ const HistoryAndNotifications = ({
                         ? "▼"
                         : "▶"}
                     </span>
-                  </div>
+                  </button>
                   {expandedRequests[requestHistory.length - 1 - index] && (
                     <>
                       <div className="mt-2">
@@ -179,8 +181,9 @@ const HistoryAndNotifications = ({
                   key={index}
                   className="text-sm text-foreground bg-secondary py-2 px-3 rounded"
                 >
-                  <div
-                    className="flex justify-between items-center cursor-pointer"
+                  <button
+                    type="button"
+                    className="flex justify-between items-center w-full cursor-pointer"
                     onClick={() =>
                       toggleNotificationExpansion(
                         serverNotifications.length - 1 - index,
@@ -198,7 +201,7 @@ const HistoryAndNotifications = ({
                         ? "▼"
                         : "▶"}
                     </span>
-                  </div>
+                  </button>
                   {expandedNotifications[
                     serverNotifications.length - 1 - index
                   ] && (

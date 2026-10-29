@@ -1149,7 +1149,7 @@ class InspectorUiIT {
 				.findBy(Condition.and("failed tools/call entry", text("tools/call"),
 						attributeMatching("class", ".*border-red-500.*")))
 				.shouldBe(visible, Duration.ofSeconds(15));
-			errorCall.$("div.cursor-pointer").click();
+			errorCall.$("button.cursor-pointer").click();
 			SelenideElement responseBlock = errorCall.$(byText("Response:")).closest(".mt-2").shouldBe(visible);
 			responseBlock.shouldHave(text("intentional demo failure"), Duration.ofSeconds(10));
 			int wireOccurrences = countOccurrences(responseBlock.innerText(), "intentional demo failure");
