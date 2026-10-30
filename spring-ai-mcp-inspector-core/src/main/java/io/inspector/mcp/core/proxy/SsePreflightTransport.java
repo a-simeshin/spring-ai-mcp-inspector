@@ -24,6 +24,7 @@ import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Flow.Subscription;
 import java.util.concurrent.TimeoutException;
@@ -65,15 +66,13 @@ import reactor.util.context.ContextView;
  * semantics. The body handler completes on the response headers and immediately cancels
  * the subscription, so the probe exchange is closed; that close is asynchronous and is
  * observed by the server some time after the headers arrive, not necessarily before the
- * delegate opens the real stream. A status the probe cannot interpret as a verdict on the
- * SSE endpoint (anything other than a clean 2xx or the definitive {@code 404 Not Found})
- * is <strong>passed through</strong>: the wrapper lets the delegate try and keeps
- * whatever error or behaviour the SDK transport produces. Only a definitive {@code 404}
- * (the endpoint does not exist) fails fast. This is deliberately conservative: the probe
- * runs on the connect path of every proxy session, and a false negative here would reject
- * upstreams that connect fine today. HTTP HEAD is not used: Starlette and Spring MVC
- * auto-map HEAD onto the GET handler, so a HEAD probe creates the very server-side SSE
- * session it is meant to avoid.
+ * delegate opens the real stream. Any non-2xx status fails fast with the real handshake
+ * status embedded in the error (D3): the inspector's auth profiles make 401/403 the
+ * everyday case, and on this SDK line the delegate's own connect would hang on the
+ * non-SSE body, so surfacing the status here is the only way the user learns why the
+ * connect was rejected. HTTP HEAD is not used: Starlette and Spring MVC auto-map HEAD
+ * onto the GET handler, so a HEAD probe creates the very server-side SSE session it is
+ * meant to avoid.
  *
  * <p>
  * The probe reuses the delegate's {@link HttpClient} (see
@@ -171,22 +170,11 @@ final class SsePreflightTransport implements McpClientTransport {
 	}
 
 	/**
-	 * Sends the header-only {@code GET} probe and interprets the status.
-	 *
-	 * <p>
-	 * Status handling is intentionally minimal:
-	 * <ul>
-	 * <li>2xx: the endpoint answers, the delegate may connect.</li>
-	 * <li>404: the endpoint does not exist on this server. Fails fast so the user sees
-	 * the real reason instead of the SDK hanging on a non-SSE body.</li>
-	 * <li>anything else (401, 403, 405, 5xx, 3xx, ...): not a verdict this probe can
-	 * defend. The status is passed through to the delegate, which performs the real
-	 * handshake with its own (redirect, server-error) semantics. Hard-failing here would
-	 * regress upstreams that connect today: develop/1.x had no preflight, so a server
-	 * answering 501 to a probe while its GET works would stop connecting.</li>
-	 * </ul>
-	 * @return a {@link Mono} completing when the endpoint is confirmed reachable, or
-	 * erroring with {@link McpTransportException} on a definitive rejection or timeout
+	 * Sends the header-only {@code GET} probe and interprets the status: the connect
+	 * completes on a 2xx and errors with the real handshake status embedded in the
+	 * message on any other status (D3).
+	 * @return a {@link Mono} completing on a 2xx probe, erroring with
+	 * {@link McpTransportException} on any other status or on timeout
 	 */
 	private Mono<Void> preflight() {
 		return Mono.deferContextual((context) -> {
@@ -217,15 +205,17 @@ final class SsePreflightTransport implements McpClientTransport {
 				if (status >= 200 && status < 300) {
 					return Mono.<Void>empty();
 				}
-				if (status == 404) {
-					return Mono.<Void>error(new McpTransportException(
-							"SSE endpoint not found on upstream (HTTP status " + status + ")"));
+				return Mono.<Void>error(
+						new McpTransportException("SSE handshake rejected by upstream with HTTP status " + status));
+			}).onErrorResume((e) -> {
+				// The probe request inherits the per-request SSE timeout from the shared
+				// request template, so two budget timers race: the HTTP-level request
+				// timeout and the reactor budget above. Whichever fires first must
+				// surface as the same preflight timeout error, never as a raw
+				// HttpTimeoutException.
+				if (!(e instanceof TimeoutException) && !isHttpTimeout(e)) {
+					return Mono.error(e);
 				}
-				// Not a definitive verdict on the endpoint: let the delegate try with
-				// its own auth/redirect semantics. The probe exchange has already been
-				// closed by the header-only body handler.
-				return Mono.<Void>empty();
-			}).onErrorResume(TimeoutException.class, (e) -> {
 				SsePreflightTransport.this.cancelPendingProbe();
 				return Mono
 					.error(new McpTransportException("SSE preflight probe timed out after " + this.probeTimeout));
@@ -250,6 +240,27 @@ final class SsePreflightTransport implements McpClientTransport {
 			this.requestCustomizer.customize(builder, "GET", this.targetUri, null, transportContext);
 		}
 		return builder.build();
+	}
+
+	/**
+	 * Detects a {@link java.net.http.HttpTimeoutException} carried directly or inside a
+	 * {@link CompletionException}, as delivered by {@link java.net.http.HttpClient} when
+	 * the request-level timeout elapses.
+	 * @param error the failure to inspect
+	 * @return whether the failure is an HTTP request timeout
+	 */
+	private static boolean isHttpTimeout(final Throwable error) {
+		Throwable current = error;
+		while (current != null) {
+			if (current instanceof java.net.http.HttpTimeoutException) {
+				return true;
+			}
+			if (!(current instanceof CompletionException)) {
+				return false;
+			}
+			current = current.getCause();
+		}
+		return false;
 	}
 
 	/**

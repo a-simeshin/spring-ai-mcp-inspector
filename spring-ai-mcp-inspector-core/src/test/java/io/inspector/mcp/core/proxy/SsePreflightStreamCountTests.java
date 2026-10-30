@@ -175,28 +175,30 @@ class SsePreflightStreamCountTests {
 	}
 
 	@Test
-	@Story("Pass-through status does not block the connect")
+	@Story("Non-2xx status fails fast without a stream")
 	@Severity(SeverityLevel.CRITICAL)
-	@Description("When the probe is answered with a non-definitive status (501, the RFC 9110 status for an "
-			+ "unimplemented method), the transport does NOT hard-fail: the delegate still connects and "
-			+ "the real SSE stream opens. This is the round-6 owner review regression: the HEAD design "
-			+ "hard-failed exactly this server while the no-preflight base connected it.")
-	@DisplayName("Probe 501: pass-through, delegate still connects")
-	void probeNonDefinitiveStatus_passesThroughAndConnects() throws Exception {
-		// given: the stub answers the FIRST GET with 501 (the probe), then 200 (the
-		// delegate)
+	@Description("When the probe is answered with a non-2xx status (501, the RFC 9110 status for an "
+			+ "unimplemented method), the transport fails fast with the status in the message: no SSE "
+			+ "stream is opened and the delegate never connects (D3, the auth-profiles port: the real "
+			+ "handshake status is the feature, and on this SDK line the delegate's own connect would "
+			+ "hang on the non-SSE body; replaces the earlier pass-through contract this test pinned)")
+	@DisplayName("Probe 501: fail fast, zero streams, delegate never connects")
+	void probeNonDefinitiveStatus_failsFastNoStreamNoDelegate() throws Exception {
+		// given: the stub answers the FIRST GET with 501 (the probe)
 		this.stub = new SseStreamCountingStub();
 		this.stub.setSseRejection(501, 1);
 		final ProxyTransportFactory factory = new ProxyTransportFactory(new ObjectMapper());
 		this.transport = factory.buildSse(URI.create(this.stub.sseUrl()));
 
 		// when
-		connectAndHold();
+		assertThatThrownBy(() -> this.transport.connect((inbound) -> inbound).block(Duration.ofSeconds(5)))
+			.isInstanceOf(McpTransportException.class)
+			.hasMessageContaining("501");
 
-		// then: probe answered 501 but the connect went through to the delegate
-		assertThat(this.stub.rejectedGetCount()).as("Probe GET answered with a non-definitive status").isEqualTo(1);
-		assertThat(this.stub.sseStreamCount()).as("Real delegate streams opened").isEqualTo(1);
-		assertThat(this.stub.activeExchangeCount()).as("Active exchanges (the real SSE stream)").isEqualTo(1);
+		// then: the probe was answered 501, no real SSE stream opened, nothing leaked
+		assertThat(this.stub.rejectedGetCount()).as("Probe GET answered with 501").isEqualTo(1);
+		assertThat(this.stub.sseStreamCount()).as("Real delegate streams opened").isEqualTo(0);
+		assertThat(this.stub.activeExchangeCount()).as("Active exchanges").isEqualTo(0);
 	}
 
 	@Test

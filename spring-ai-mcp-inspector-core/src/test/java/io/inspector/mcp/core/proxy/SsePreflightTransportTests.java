@@ -55,6 +55,12 @@ import static org.mockito.Mockito.verify;
  * lightweight {@link HttpServer} on a random port so the preflight performs real HTTP
  * requests. The server records every request method it saw. The server is shut down after
  * each test.
+ *
+ * <p>
+ * Verdict policy (D3): any non-2xx probe status fails fast with the real handshake status
+ * embedded in the error. With auth profiles, 401/403 are the everyday rejection, and on
+ * this SDK line the delegate's own connect would hang on a non-SSE body, so the probe is
+ * the only place the status can surface.
  */
 @Epic("MCP Inspector Core")
 @Feature("SSE preflight transport")
@@ -191,84 +197,103 @@ class SsePreflightTransportTests {
 	}
 
 	@Nested
-	@DisplayName("Status pass-through")
-	class StatusPassThrough {
+	@DisplayName("Non-2xx fails fast (D3)")
+	class Non2xxFailsFast {
 
 		@Test
-		@Story("401 passes through to the delegate")
+		@Story("401 fails fast with status")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("A 401 probe answer is not a verdict the probe can defend (auth refresh, reverse-proxy "
-				+ "behaviour): the connect delegates instead of hard-failing, so upstreams that connect "
-				+ "today keep connecting")
-		void status401_passesThroughToDelegate() {
+		@Description("A 401 probe answer fails fast with the status in the message and the delegate is "
+				+ "never called: with auth profiles 401 is the everyday rejection, and on this SDK line "
+				+ "the delegate's own connect would hang on the non-SSE body, so the status must surface "
+				+ "here (D3)")
+		void status401_failsFastWithStatus() {
 			answerEveryMethodWith(401);
 			SsePreflightTransportTests.this.transport = createTransport(SsePreflightTransportTests.this.delegate,
 					SsePreflightTransportTests.this.sseUri());
 			StepVerifier.create(SsePreflightTransportTests.this.transport.connect((msg) -> Mono.empty()))
-				.expectComplete()
+				.expectErrorSatisfies((error) -> {
+					assertThat(error).isInstanceOf(McpTransportException.class);
+					assertThat(error).hasMessageContaining("401");
+				})
 				.verify(TEST_TIMEOUT);
-			verify(SsePreflightTransportTests.this.delegate).connect(any());
-			assertThat(SsePreflightTransportTests.this.methods).containsExactly("GET");
+			verify(SsePreflightTransportTests.this.delegate, never()).connect(any());
 		}
 
 		@Test
-		@Story("403 passes through to the delegate")
+		@Story("403 fails fast with status")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("A 403 probe answer is passed through to the delegate, matching the no-preflight base "
-				+ "behaviour where such servers still connect")
-		void status403_passesThroughToDelegate() {
+		@Description("A 403 probe answer fails fast with the status in the message: the user's token lacks "
+				+ "permission for this endpoint and no amount of delegating changes that, so the reason "
+				+ "surfaces immediately (D3)")
+		void status403_failsFastWithStatus() {
 			answerEveryMethodWith(403);
 			SsePreflightTransportTests.this.transport = createTransport(SsePreflightTransportTests.this.delegate,
 					SsePreflightTransportTests.this.sseUri());
 			StepVerifier.create(SsePreflightTransportTests.this.transport.connect((msg) -> Mono.empty()))
-				.expectComplete()
+				.expectErrorSatisfies((error) -> {
+					assertThat(error).isInstanceOf(McpTransportException.class);
+					assertThat(error).hasMessageContaining("403");
+				})
 				.verify(TEST_TIMEOUT);
-			verify(SsePreflightTransportTests.this.delegate).connect(any());
+			verify(SsePreflightTransportTests.this.delegate, never()).connect(any());
 		}
 
 		@Test
-		@Story("405 passes through to the delegate")
+		@Story("405 fails fast with status")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("A 405 probe answer (server rejects the method on the probe path) is passed through")
-		void status405_passesThroughToDelegate() {
+		@Description("A 405 probe answer (the server rejects the method on the probe path) fails fast with "
+				+ "the status in the message: the real handshake uses the same GET, so it cannot succeed "
+				+ "where the probe was rejected")
+		void status405_failsFastWithStatus() {
 			answerEveryMethodWith(405);
 			SsePreflightTransportTests.this.transport = createTransport(SsePreflightTransportTests.this.delegate,
 					SsePreflightTransportTests.this.sseUri());
 			StepVerifier.create(SsePreflightTransportTests.this.transport.connect((msg) -> Mono.empty()))
-				.expectComplete()
+				.expectErrorSatisfies((error) -> {
+					assertThat(error).isInstanceOf(McpTransportException.class);
+					assertThat(error).hasMessageContaining("405");
+				})
 				.verify(TEST_TIMEOUT);
-			verify(SsePreflightTransportTests.this.delegate).connect(any());
+			verify(SsePreflightTransportTests.this.delegate, never()).connect(any());
 		}
 
 		@Test
-		@Story("501 passes through to the delegate")
-		@Severity(SeverityLevel.CRITICAL)
-		@Description("RFC 9110 'not implemented' (e.g. a gateway that answers 501 to probes) is not a verdict "
-				+ "on the SSE endpoint: passes through, the round-6 owner review verified this exact status "
-				+ "hard-failed a working upstream before the rework")
-		void status501_passesThroughToDelegate() {
+		@Story("501 fails fast with status")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("RFC 9110 'not implemented' (e.g. a gateway that answers 501 to the probe path) fails "
+				+ "fast with the status in the message: the delegate would hang on the non-SSE body on "
+				+ "this SDK line, so the status surfaces here (D3)")
+		void status501_failsFastWithStatus() {
 			answerEveryMethodWith(501);
 			SsePreflightTransportTests.this.transport = createTransport(SsePreflightTransportTests.this.delegate,
 					SsePreflightTransportTests.this.sseUri());
 			StepVerifier.create(SsePreflightTransportTests.this.transport.connect((msg) -> Mono.empty()))
-				.expectComplete()
+				.expectErrorSatisfies((error) -> {
+					assertThat(error).isInstanceOf(McpTransportException.class);
+					assertThat(error).hasMessageContaining("501");
+				})
 				.verify(TEST_TIMEOUT);
-			verify(SsePreflightTransportTests.this.delegate).connect(any());
+			verify(SsePreflightTransportTests.this.delegate, never()).connect(any());
 		}
 
 		@Test
-		@Story("3xx passes through to the delegate")
+		@Story("3xx fails fast with status")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("A redirect answer is passed through: the SDK transport applies its own redirect policy "
-				+ "on the real connect")
-		void status302_passesThroughToDelegate() {
+		@Description("A redirect answer fails fast with the status in the message: the header-only probe "
+				+ "follows no redirects (it must not create the server-side session a redirect target "
+				+ "would open), and the status in the error tells the user the endpoint moved")
+		void status302_failsFastWithStatus() {
 			answerEveryMethodWith(302);
 			SsePreflightTransportTests.this.transport = createTransport(SsePreflightTransportTests.this.delegate,
 					SsePreflightTransportTests.this.sseUri());
 			StepVerifier.create(SsePreflightTransportTests.this.transport.connect((msg) -> Mono.empty()))
-				.expectComplete()
+				.expectErrorSatisfies((error) -> {
+					assertThat(error).isInstanceOf(McpTransportException.class);
+					assertThat(error).hasMessageContaining("302");
+				})
 				.verify(TEST_TIMEOUT);
-			verify(SsePreflightTransportTests.this.delegate).connect(any());
+			verify(SsePreflightTransportTests.this.delegate, never()).connect(any());
 		}
 
 	}
