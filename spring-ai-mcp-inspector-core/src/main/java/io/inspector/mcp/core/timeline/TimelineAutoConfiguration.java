@@ -82,6 +82,21 @@ public class TimelineAutoConfiguration {
 	}
 
 	/**
+	 * The exception-leak detector. Absent when
+	 * {@code spring.ai.mcp.inspector.timeline.leak-detector.enabled=false}; the timeline
+	 * query endpoints then return events without the {@code _leak} annotation and nothing
+	 * else changes (issue #251).
+	 * @return a new {@link ExceptionLeakDetector}
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline.leak-detector", name = "enabled",
+			havingValue = "true", matchIfMissing = true)
+	public ExceptionLeakDetector mcpInspectorExceptionLeakDetector() {
+		return new ExceptionLeakDetector();
+	}
+
+	/**
 	 * Registers the {@link TimelineAppender} with Logback's root logger, wrapped in an
 	 * {@link AsyncAppender} for non-blocking behaviour.
 	 * @param timelineService the timeline service to forward events to

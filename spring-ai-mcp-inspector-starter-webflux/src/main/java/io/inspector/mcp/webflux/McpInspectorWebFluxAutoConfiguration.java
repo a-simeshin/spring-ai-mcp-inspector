@@ -54,6 +54,7 @@ import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.shutdown.McpServerTransportDrain;
 import io.inspector.mcp.core.task.TaskService;
+import io.inspector.mcp.core.timeline.ExceptionLeakDetector;
 import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 import io.inspector.mcp.core.timeline.TimelineService;
 import io.inspector.mcp.core.transport.TransportDetector;
@@ -302,14 +303,18 @@ public class McpInspectorWebFluxAutoConfiguration {
 	 * Reactive handler for {@code GET ${path}/api/timeline}, mirroring the WebMVC
 	 * {@code TimelineController}: active only when the timeline subsystem is enabled (the
 	 * same {@code spring.ai.mcp.inspector.timeline.enabled} flag gates the
-	 * {@link TimelineService} bean in the core auto-configuration).
+	 * {@link TimelineService} bean in the core auto-configuration). The exception-leak
+	 * detector is optional: when its bean is absent (detector disabled) the endpoint
+	 * serves events without {@code _leak} annotations.
 	 * @param timelineService the shared timeline service
+	 * @param leakDetector the optional exception-leak detector
 	 * @return the timeline handler
 	 */
 	@Bean
 	@ConditionalOnBean(TimelineService.class)
-	public TimelineHandler mcpInspectorTimelineHandler(final TimelineService timelineService) {
-		return new TimelineHandler(timelineService);
+	public TimelineHandler mcpInspectorTimelineHandler(final TimelineService timelineService,
+			final ObjectProvider<ExceptionLeakDetector> leakDetector) {
+		return new TimelineHandler(timelineService, leakDetector.getIfAvailable());
 	}
 
 	@Bean

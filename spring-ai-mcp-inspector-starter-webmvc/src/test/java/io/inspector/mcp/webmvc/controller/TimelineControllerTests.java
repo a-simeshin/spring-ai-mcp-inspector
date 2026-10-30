@@ -30,7 +30,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.JsonNodeFactory;
+import tools.jackson.databind.node.ObjectNode;
 
+import io.inspector.mcp.core.timeline.ExceptionLeakDetector;
 import io.inspector.mcp.core.timeline.TimelineEvent;
 import io.inspector.mcp.core.timeline.TimelineEventType;
 import io.inspector.mcp.core.timeline.TimelineQuery;
@@ -58,7 +62,7 @@ class TimelineControllerTests {
 	@BeforeEach
 	void setUp() {
 		this.timelineService = mock(TimelineService.class);
-		this.controller = new TimelineController(this.timelineService);
+		this.controller = new TimelineController(this.timelineService, null);
 	}
 
 	@Nested
@@ -214,6 +218,93 @@ class TimelineControllerTests {
 			// then
 			verify(TimelineControllerTests.this.timelineService)
 				.query(argThat((q) -> q.limit() == TimelineQuery.MAX_LIMIT));
+		}
+
+	}
+
+	@Nested
+	@DisplayName("Exception leak enrichment")
+	class LeakEnrichment {
+
+		private static final String E11000 = "E11000 duplicate key error collection: db.app index: tenant_name_idx dup key: { name: \"acme\" }";
+
+		/**
+		 * W1/W2: the canonical serialized {@code _leak} node for the fixed E11000 sample;
+		 * both starters must serve exactly these bytes.
+		 */
+		private static final String CANONICAL_LEAK_JSON = "{\"matchType\":\"EXACT\",\"verbatim\":true,"
+				+ "\"logEventId\":\"log-1\",\"logTimestamp\":\"2026-01-01T09:59:59Z\","
+				+ "\"logMessage\":\"insert failed\","
+				+ "\"logThrowableClass\":\"org.springframework.dao.DuplicateKeyException\","
+				+ "\"multipleCandidates\":false,\"droppedCandidates\":0}";
+
+		@Test
+		@Story("Detector present")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("query() enriches error tool results with the _leak marker when the detector bean is present")
+		void query_withDetector_annotatesLeak() {
+			// given: an error tool result and its matching APP_LOG inside the window
+			// (fixed instant: W1/W2 pin the canonical _leak JSON byte-identically
+			// across both starters, so the timestamp must be deterministic)
+			final Instant now = Instant.parse("2026-01-01T10:00:00Z");
+			final TimelineEvent response = new TimelineEvent("resp-1", null, null,
+					TimelineEventType.MCP_JSONRPC_RESPONSE, now, responsePayload(E11000 + "\n" + E11000));
+			final TimelineEvent log = new TimelineEvent("log-1", null, null, TimelineEventType.APP_LOG,
+					now.minusSeconds(1), logPayload());
+			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of(response, log));
+			final TimelineController enriched = new TimelineController(TimelineControllerTests.this.timelineService,
+					new ExceptionLeakDetector());
+
+			// when
+			final List<TimelineEvent> result = enriched.query(null, null, null, null, null, 100);
+
+			// then
+			assertThat(result).hasSize(2);
+			assertThat(result.get(0).id()).isEqualTo("resp-1");
+			assertThat(result.get(0).payload().get("_leak").get("matchType").asString()).isEqualTo("EXACT");
+			assertThat(result.get(0).payload().get("_leak").get("logEventId").asString()).isEqualTo("log-1");
+			// W1: canonical serialized _leak node, byte-identical to the WebFlux W2
+			assertThat(new JsonMapper().writeValueAsString(result.get(0).payload().get("_leak")))
+				.isEqualTo(CANONICAL_LEAK_JSON);
+			// the stored payload is not mutated
+			assertThat(response.payload().has("_leak")).isFalse();
+		}
+
+		@Test
+		@Story("Detector absent")
+		@Severity(SeverityLevel.MINOR)
+		@Description("query() serves events as-is when the detector bean is absent (feature disabled)")
+		void query_withoutDetector_servesEventsAsIs() {
+			// given
+			final Instant now = Instant.now();
+			final TimelineEvent response = new TimelineEvent("resp-2", null, null,
+					TimelineEventType.MCP_JSONRPC_RESPONSE, now, responsePayload(E11000 + "\n" + E11000));
+			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of(response));
+
+			// when: this.controller was built with a null detector in setUp()
+			final List<TimelineEvent> result = TimelineControllerTests.this.controller.query(null, null, null, null,
+					null, 100);
+
+			// then
+			assertThat(result).containsExactly(response);
+			assertThat(response.payload().has("_leak")).isFalse();
+		}
+
+		private static ObjectNode responsePayload(final String text) {
+			final ObjectNode payload = JsonNodeFactory.instance.objectNode();
+			final ObjectNode result = payload.putObject("result");
+			result.put("isError", true);
+			result.putArray("content").addObject().put("type", "text").put("text", text);
+			return payload;
+		}
+
+		private static ObjectNode logPayload() {
+			final ObjectNode payload = JsonNodeFactory.instance.objectNode();
+			payload.put("logLevel", "ERROR");
+			payload.put("message", "insert failed");
+			payload.put("throwable", "org.springframework.dao.DuplicateKeyException: " + E11000
+					+ "\n\tat org.example.Foo.bar(Foo.java:10)");
+			return payload;
 		}
 
 	}
