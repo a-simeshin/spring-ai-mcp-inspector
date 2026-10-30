@@ -178,9 +178,8 @@ public class SseProxyController {
 		if (session == null) {
 			return ResponseEntity.notFound().build();
 		}
-		final Sinks.EmitResult result = session.browserToTarget().tryEmitNext(body);
-		if (result.isFailure()) {
-			LOG.warn("proxy[{}] /message emit failure: {}", sessionId, result.name());
+		if (!session.emitFromBrowser(body)) {
+			LOG.warn("proxy[{}] /message emit failure", sessionId);
 			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
 		}
 		session.touch();
