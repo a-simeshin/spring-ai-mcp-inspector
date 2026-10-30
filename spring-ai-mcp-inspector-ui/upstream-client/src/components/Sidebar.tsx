@@ -16,6 +16,7 @@ import {
   CheckCheck,
   Server,
   AlertTriangle,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,7 +36,7 @@ import { ConnectionStatus } from "@/lib/constants";
 import {
   humanReadableReason,
   type ConnectFailure,
-} from "@/lib/connectErrors";
+} from "@/lib/connectionErrors";
 import useTheme from "../lib/hooks/useTheme";
 // Vendored: upstream imports version from monorepo root package.json
 // (../../../package.json). In our vendored layout we point at the client's
@@ -52,6 +53,11 @@ import { useToast } from "../lib/hooks/useToast";
 import IconDisplay, { WithIcons } from "./IconDisplay";
 // [spring-ai-mcp-inspector PATCH] validateServerUrl for client-side URL format validation (see NOTICE.d/url-validation.txt).
 import { validateRedirectUrl, validateServerUrl } from "@/utils/urlValidation";
+// [spring-ai-mcp-inspector PATCH] Named auth profiles + D3 error banner
+// (issue #54).
+import AuthProfiles from "./AuthProfiles";
+import { AuthProfileSummary } from "@/lib/auth-profiles";
+import { ProxyErrorDto } from "@/lib/connectionErrors";
 
 interface SidebarProps {
   connectionStatus: ConnectionStatus;
@@ -75,6 +81,15 @@ interface SidebarProps {
   setOauthClientSecret: (secret: string) => void;
   oauthScope: string;
   setOauthScope: (scope: string) => void;
+  // [spring-ai-mcp-inspector PATCH] Named auth profiles (issue #54).
+  profiles?: AuthProfileSummary[];
+  onProfilesChange?: (profiles: AuthProfileSummary[]) => void;
+  activeProfileId?: string | null;
+  onActiveProfileChange?: (profileId: string | null) => void;
+  /** D3 structured error DTO surfaced by the proxy (issue #54). */
+  // D3 authorization DTO (issue #54): the server answered and refused.
+  // Distinct from connectionError, which means the server was never reached.
+  authError?: ProxyErrorDto | null;
   onConnect: () => void;
   onDisconnect: () => void;
   logLevel: LoggingLevel;
@@ -110,6 +125,11 @@ const Sidebar = ({
   setOauthClientSecret,
   oauthScope,
   setOauthScope,
+  profiles,
+  onProfilesChange,
+  activeProfileId,
+  onActiveProfileChange,
+  authError,
   onConnect,
   onDisconnect,
   logLevel,
@@ -308,6 +328,24 @@ const Sidebar = ({
               </SelectContent>
             </Select>
           </div>
+
+          {/* [spring-ai-mcp-inspector PATCH] Warn that header and env
+              values are not persisted, only their names. Combined into
+              one <p>; text explains what IS stored vs what gets lost.
+              Check any enabled header name or env key presence, not
+              value: after restore, values are stripped empty and the
+              warning must still show. */}
+          {(customHeaders.some(
+            (h) =>
+              h.enabled &&
+              h.name.trim() !== "",
+          ) ||
+            (env && Object.keys(env).length > 0)) && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 px-1">
+              Header and environment variable values are not saved, only
+              their names; re-enter them after restoring.
+            </p>
+          )}
 
           {transportType === "stdio" ? (
             <>
@@ -575,6 +613,22 @@ const Sidebar = ({
             </Tooltip>
           </div>
 
+          {/* [spring-ai-mcp-inspector PATCH] Named auth profiles panel
+              (issue #54): editor/selector for the four profile kinds, list /
+              rename / delete, prefill selection, auth-code PKCE flow. */}
+          {profiles && onProfilesChange && onActiveProfileChange && (
+            <div className="space-y-2 p-3 rounded border">
+              <AuthProfiles
+                config={config}
+                profiles={profiles}
+                onProfilesChange={onProfilesChange}
+                activeProfileId={activeProfileId ?? null}
+                onActiveProfileChange={onActiveProfileChange}
+                transportType={transportType}
+              />
+            </div>
+          )}
+
           <div className="space-y-2">
             <Button
               variant="outline"
@@ -771,38 +825,81 @@ const Sidebar = ({
           {/* [spring-ai-mcp-inspector PATCH] Surface connect failures with a
               human-readable reason and a Retry button instead of only
               logging them (see NOTICE.d/connect-error-alert.txt). */}
-          {connectionError && (
-            <div
-              role="alert"
-              className="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200 rounded-lg p-3 mb-4"
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                <span className="text-sm font-medium">
-                  Failed to connect to the MCP server
-                </span>
-              </div>
-              <p className="text-xs mb-2">
-                {humanReadableReason(connectionError.reason)}
-                {connectionError.message && (
-                  <>
+          {connectionError && (() => {
+            if (connectionError.reason === "unauthorized") {
+              return (
+                <div
+                  role="alert"
+                  className="bg-amber-50 dark:bg-amber-950 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 rounded-lg p-3 mb-4"
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <Lock className="w-4 h-4 flex-shrink-0" />
+                    <span className="text-sm font-medium">
+                      Authentication Required
+                    </span>
+                  </div>
+                  <p className="text-xs mb-2">
+                    The inspector server requires authentication via the{" "}
+                    <code className="text-xs bg-amber-100 dark:bg-amber-900 px-1 rounded">
+                      X-MCP-Inspector-Auth
+                    </code>{" "}
+                    header. The auth token is generated at server start.
                     <br />
-                    {connectionError.message}
-                  </>
-                )}
-              </p>
-              <Button
-                data-testid="retry-connect-button"
-                size="sm"
-                variant="outline"
-                className="w-full"
-                onClick={onConnect}
+                    Find it in the server log or configuration, then add it as a
+                    custom header in the Configuration panel below.
+                    {connectionError.message && (
+                      <>
+                        <br />
+                        {connectionError.message}
+                      </>
+                    )}
+                  </p>
+                  <Button
+                    data-testid="retry-connect-button"
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={onConnect}
+                  >
+                    <RotateCcw className="w-4 h-4 mr-2" />
+                    Retry
+                  </Button>
+                </div>
+              );
+            }
+            return (
+              <div
+                role="alert"
+                className="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200 rounded-lg p-3 mb-4"
               >
-                <RotateCcw className="w-4 h-4 mr-2" />
-                Retry
-              </Button>
-            </div>
-          )}
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span className="text-sm font-medium">
+                    Failed to connect to the MCP server
+                  </span>
+                </div>
+                <p className="text-xs mb-2">
+                  {humanReadableReason(connectionError.reason)}
+                  {connectionError.message && (
+                    <>
+                      <br />
+                      {connectionError.message}
+                    </>
+                  )}
+                </p>
+                <Button
+                  data-testid="retry-connect-button"
+                  size="sm"
+                  variant="outline"
+                  className="w-full"
+                  onClick={onConnect}
+                >
+                  <RotateCcw className="w-4 h-4 mr-2" />
+                  Retry
+                </Button>
+              </div>
+            );
+          })()}
 
           <div className="space-y-2">
             {connectionStatus === "connected" && (
@@ -862,16 +959,19 @@ const Sidebar = ({
                 })()}`}
               />
               <span className="text-sm text-gray-600 dark:text-gray-400">
+                {/* [spring-ai-mcp-inspector PATCH] Status text depends on error reason
+                    instead of proxy token presence: unauthorized shows token hint,
+                    connection_refused/dns show reachability hint, timeout shows
+                    server-not-responding (see NOTICE.d/connect-error-alert.txt). */}
                 {(() => {
                   switch (connectionStatus) {
                     case "connected":
                       return "Connected";
-                    // [spring-ai-mcp-inspector PATCH] Reason-dependent status
-                    // text: connection_refused/dns shows "URL is reachable",
-                    // timeout shows "not responding", unknown shows
-                    // "MCP server is running". Refs #134/#135.
                     case "error": {
                       const reason = connectionError?.reason;
+                      if (reason === "unauthorized") {
+                        return "Connection Error - Check if your proxy token is correct";
+                      }
                       if (reason === "connection_refused" || reason === "dns") {
                         return "Connection Error - Check if your MCP server is running and the URL is reachable";
                       }
@@ -888,6 +988,32 @@ const Sidebar = ({
                 })()}
               </span>
             </div>
+
+            {/* [spring-ai-mcp-inspector PATCH] D3 structured error banner
+                (issue #54): exact code/reason/guidance/url from the proxy's
+                `ProxyErrorDto` (SSE named `error` event / streamable body). */}
+            {authError && (
+              <div
+                role="alert"
+                data-testid="connection-error-dto"
+                className="mb-4 rounded border border-red-300 bg-red-50 dark:bg-red-950 dark:border-red-800 p-3 text-xs space-y-1"
+              >
+                <div className="font-semibold text-red-700 dark:text-red-300">
+                  {authError.status} {authError.code}
+                </div>
+                <div className="text-red-700 dark:text-red-300">
+                  {authError.reason}
+                </div>
+                <div className="text-red-600 dark:text-red-400">
+                  {authError.guidance}
+                </div>
+                {authError.url && (
+                  <div className="break-all font-mono text-red-600 dark:text-red-400">
+                    URL: {authError.url}
+                  </div>
+                )}
+              </div>
+            )}
 
             {connectionStatus === "connected" &&
               serverImplementation &&
