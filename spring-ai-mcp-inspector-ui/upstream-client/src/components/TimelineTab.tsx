@@ -1,5 +1,12 @@
 import { TabsContent } from "@/components/ui/tabs";
 import { useEffect, useState, useCallback, useRef } from "react";
+import {
+  LeakInfo,
+  LeakMatchType,
+  capLeakText,
+  onTimelineScrollTo,
+  parseLeakAnnotation,
+} from "@/lib/leakAnnotations";
 
 // [spring-ai-mcp-inspector PATCH] New TimelineTab — MCP event timeline panel (#112).
 // [spring-ai-mcp-inspector PATCH] Protocol-version negotiation badge on initialize
@@ -8,6 +15,10 @@ import { useEffect, useState, useCallback, useRef } from "react";
 // [spring-ai-mcp-inspector PATCH] Error highlighting for CallToolResult frames
 // with isError=true (#184). Renders the row with a distinct error color, a
 // "tool error" badge, and the server error text in the tooltip and expanded row.
+// [spring-ai-mcp-inspector PATCH] Exception-leak badge on error tool-result
+// rows (#251). Renders the _leak enrichment from ExceptionLeakDetector next to
+// the tool-error badge with three visually distinct styles (EXACT / NORMALIZED /
+// PARTIAL); the badge jumps to the correlated APP_LOG row in this timeline.
 
 type TimelineEventType =
   | "MCP_JSONRPC_REQUEST"
@@ -64,6 +75,15 @@ const SEVERITY_BADGE: Record<ProtocolNegotiation["severity"], { text: string; co
   DOWNGRADE: { text: "v (downgrade)", color: "bg-amber-800 text-amber-200" },
   INCOMPATIBLE: { text: "! (incompatible)", color: "bg-red-800 text-red-200" },
   UNKNOWN: { text: "? (unknown)", color: "bg-gray-700 text-gray-400 border border-gray-500" },
+};
+
+// [spring-ai-mcp-inspector PATCH] Leak badge style per match tier (#251): the
+// three tiers must stay visually distinct at a glance (U2): EXACT is solid red
+// (the strongest claim), NORMALIZED is solid amber, PARTIAL is dashed gray.
+const LEAK_BADGE: Record<LeakMatchType, { text: string; color: string }> = {
+  EXACT: { text: "leak: exact", color: "bg-red-950 text-red-300 border border-red-500" },
+  NORMALIZED: { text: "leak: normalized", color: "bg-amber-950 text-amber-300 border border-amber-500" },
+  PARTIAL: { text: "leak: partial", color: "bg-gray-800 text-gray-300 border border-dashed border-gray-500" },
 };
 
 function formatTimestamp(ts: string): string {
@@ -178,7 +198,85 @@ function ToolErrorBlock({ text }: { text: string | null }) {
   );
 }
 
-function TimelineEventRow({ event }: { event: TimelineEvent }) {
+// [spring-ai-mcp-inspector PATCH] Leak badge on error tool-result rows (#251):
+// clickable, jumps to the correlated APP_LOG row. The tooltip carries the tier
+// and the log message, capped at 200 chars so long payloads never bloat it.
+function LeakBadge({ leak, onJumpToLog }: { leak: LeakInfo; onJumpToLog: (eventId: string) => void }) {
+  const badge = LEAK_BADGE[leak.matchType] ?? LEAK_BADGE.PARTIAL;
+  const title = capLeakText(
+    `Error text leaked a logged exception (match: ${leak.matchType.toLowerCase()}${leak.verbatim ? ", verbatim" : ""}). ` +
+      `Click to jump to the log entry. ${leak.logMessage}`,
+  );
+  return (
+    <button
+      type="button"
+      data-testid={`timeline-leak-badge-${leak.matchType.toLowerCase()}`}
+      className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono cursor-pointer ${badge.color}`}
+      title={title}
+      onClick={(e) => {
+        // The row toggles its expanded state on click; the badge click is a jump.
+        e.stopPropagation();
+        onJumpToLog(leak.logEventId);
+      }}
+    >
+      {badge.text}
+    </button>
+  );
+}
+
+// [spring-ai-mcp-inspector PATCH] Expanded leak detail (#251): the matched log
+// metadata above the raw JSON dump. The log message is line-clamped and the
+// block never renders raw stack traces (only the engine-capped first line).
+function LeakDetailBlock({ leak, onJumpToLog }: { leak: LeakInfo; onJumpToLog: (eventId: string) => void }) {
+  return (
+    <div className="mb-1 p-2 border border-amber-700 rounded bg-amber-950/40 text-amber-200">
+      <div className="font-semibold text-amber-100 mb-1">
+        Exception leak (match: {leak.matchType.toLowerCase()}
+        {leak.verbatim ? ", verbatim" : ""}):
+      </div>
+      <div className="font-mono text-amber-200/90">
+        <div>logged at: {leak.logTimestamp}</div>
+        {leak.logThrowableClass && <div>exception: {leak.logThrowableClass}</div>}
+        <div
+          data-testid="timeline-leak-log-message"
+          className="whitespace-pre-wrap break-words line-clamp-2"
+          title={capLeakText(leak.logMessage)}
+        >
+          {leak.logMessage}
+        </div>
+        {leak.droppedCandidates > 0 && (
+          <div className="opacity-70">
+            +{leak.droppedCandidates} more matching log{" "}
+            {leak.droppedCandidates === 1 ? "entry" : "entries"} in the window
+          </div>
+        )}
+        <div className="mt-1">
+          <button
+            type="button"
+            data-testid="timeline-leak-jump-link"
+            className="underline text-amber-300 cursor-pointer"
+            onClick={(e) => {
+              e.stopPropagation();
+              onJumpToLog(leak.logEventId);
+            }}
+          >
+            Jump to log entry
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TimelineEventRow({
+  event,
+  onJumpToLog,
+  rowRef,
+}: {
+  event: TimelineEvent;
+  onJumpToLog: (eventId: string) => void;
+  rowRef?: (el: HTMLDivElement | null) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const type = event.type;
   const payload = event.payload ?? {};
@@ -189,6 +287,10 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
   // [spring-ai-mcp-inspector PATCH] Error highlighting for CallToolResult isError=true (#184).
   const isError = type === "MCP_JSONRPC_RESPONSE" && isCallToolError(payload);
   const errorText = isError ? errorTextOf(payload) : null;
+
+  // [spring-ai-mcp-inspector PATCH] Exception-leak annotation on error tool
+  // results (#251): parsed defensively, so a malformed node renders as absent.
+  const leak = isError ? parseLeakAnnotation(payload) : null;
 
   const colorClass = isError ? ERROR_COLOR : (EVENT_COLORS[type] || "text-gray-400");
   const bgClass = isError ? ERROR_BG : (EVENT_BG[type] || "bg-gray-950/30");
@@ -202,6 +304,7 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
 
   return (
     <div
+      ref={rowRef}
       className={`border-l-2 pl-3 py-1.5 mb-1 rounded-r cursor-pointer hover:opacity-80 ${bgClass} ${colorClass}`}
       onClick={() => setExpanded(!expanded)}
     >
@@ -219,6 +322,7 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
             tool error
           </span>
         )}
+        {leak && <LeakBadge leak={leak} onJumpToLog={onJumpToLog} />}
         {event.correlationId && (
           <span className="opacity-50 ml-auto shrink-0 font-mono text-[10px]">
             {event.correlationId.substring(0, 8)}
@@ -229,6 +333,7 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
         <div className="mt-1 text-[11px] font-mono opacity-80 overflow-x-auto whitespace-pre-wrap max-h-40 overflow-y-auto">
           {negotiation && <ProtocolNegotiationBlock negotiation={negotiation} />}
           {isError && <ToolErrorBlock text={errorText} />}
+          {leak && <LeakDetailBlock leak={leak} onJumpToLog={onJumpToLog} />}
           {Object.keys(payload).length > 0 ? (
             <div className="mb-1">{JSON.stringify(payload, null, 2)}</div>
           ) : (
@@ -245,6 +350,40 @@ const TimelineTab = () => {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // [spring-ai-mcp-inspector PATCH] Exception-leak jump (#251): row refs by
+  // event id so a badge click (this tab) or a Tool Result pane link (other tab,
+  // delivered through the leakAnnotations broker) can scroll the correlated
+  // APP_LOG row into view. A jump that arrives before the row is rendered is
+  // retried on every fetched page, then silently dropped when evicted.
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  const pendingJumpRef = useRef<string | null>(null);
+
+  const registerRow = useCallback((id: string, el: HTMLDivElement | null) => {
+    if (el) {
+      rowRefs.current.set(id, el);
+    } else {
+      rowRefs.current.delete(id);
+    }
+  }, []);
+
+  const scrollToEvent = useCallback((eventId: string) => {
+    const el = rowRefs.current.get(eventId);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      pendingJumpRef.current = null;
+    } else {
+      pendingJumpRef.current = eventId;
+    }
+  }, []);
+
+  useEffect(() => onTimelineScrollTo(scrollToEvent), [scrollToEvent]);
+
+  useEffect(() => {
+    if (pendingJumpRef.current !== null && events.length > 0) {
+      scrollToEvent(pendingJumpRef.current);
+    }
+  }, [events, scrollToEvent]);
 
   const fetchTimeline = useCallback(async () => {
     const token = sessionStorage.getItem("inspectorConfig_v1_ephemeral");
@@ -309,7 +448,14 @@ const TimelineTab = () => {
           {events.length === 0 ? (
             <div className="opacity-50 text-center mt-8">No timeline events yet</div>
           ) : (
-            events.map((event) => <TimelineEventRow key={event.id} event={event} />)
+            events.map((event) => (
+              <TimelineEventRow
+                key={event.id}
+                event={event}
+                onJumpToLog={scrollToEvent}
+                rowRef={(el) => registerRow(event.id, el)}
+              />
+            ))
           )}
         </div>
       </div>

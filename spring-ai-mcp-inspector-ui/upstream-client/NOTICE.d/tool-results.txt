@@ -1,0 +1,11 @@
+src/components/ToolResults.tsx, __tests__/ToolResults.leak.test.tsx -
+exception-leak note for error tool results (#251). The upstream ToolResults
+component showed the raw error text only. Local addition: when the timeline
+carries a `_leak` annotation for the displayed error text (resolved through the
+shared src/lib/leakAnnotations.ts lookup against /api/timeline), the pane renders
+a note above the content: an EXACT/verbatim match states "The client model
+received this text verbatim"; NORMALIZED/PARTIAL matches use the softer
+"matches an exception logged at HH:MM:SS" wording without the verbatim claim.
+Both notes link to the Timeline tab and scroll to the correlated log entry via
+the leakAnnotations broker. Without an annotation the pane is unchanged
+(zero noise); the log message is line-clamped and titles are capped at 200 chars.
