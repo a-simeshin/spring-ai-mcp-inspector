@@ -29,6 +29,7 @@ import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.webflux.auth.AuthProfileHandler;
 import io.inspector.mcp.webflux.proxy.ProxyHandler;
 
 import static org.springframework.web.reactive.function.server.RequestPredicates.DELETE;
@@ -122,6 +123,18 @@ public class InspectorRouterConfig {
 			.andRoute(POST(proxyBase + "/mcp"), proxy::postMcp)
 			.andRoute(GET(proxyBase + "/mcp"), proxy::getMcp)
 			.andRoute(DELETE(proxyBase + "/mcp"), proxy::deleteMcp);
+	}
+
+	@Bean
+	public RouterFunction<ServerResponse> authProfileRouter(final AuthProfileHandler authProfileHandler,
+			final McpInspectorProperties properties) {
+		final String apiPath = properties.getPath() + "/api";
+		return route(POST(apiPath + "/auth-profile"), authProfileHandler::register)
+			.andRoute(GET(apiPath + "/auth-profile"), authProfileHandler::list)
+			.andRoute(GET(apiPath + "/auth-profile/prefill"), authProfileHandler::prefill)
+			.andRoute(PUT(apiPath + "/auth-profile/{profileId}"), authProfileHandler::update)
+			.andRoute(DELETE(apiPath + "/auth-profile/{profileId}"), authProfileHandler::delete)
+			.andRoute(POST(apiPath + "/auth-profile/{profileId}/exchange"), authProfileHandler::exchange);
 	}
 
 	/**
