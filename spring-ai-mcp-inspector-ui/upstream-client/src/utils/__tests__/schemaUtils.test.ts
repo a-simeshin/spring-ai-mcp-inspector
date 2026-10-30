@@ -694,10 +694,7 @@ describe("findUnresolvedRefs", () => {
       type: "object",
       properties: {
         value: {
-          anyOf: [
-            { type: "string" },
-            { $ref: "#/$defs/Missing" },
-          ],
+          anyOf: [{ type: "string" }, { $ref: "#/$defs/Missing" }],
         },
       },
     };
@@ -709,10 +706,7 @@ describe("findUnresolvedRefs", () => {
       type: "object",
       properties: {
         result: {
-          oneOf: [
-            { $ref: "#/$defs/Success" },
-            { $ref: "#/$defs/Error" },
-          ],
+          oneOf: [{ $ref: "#/$defs/Success" }, { $ref: "#/$defs/Error" }],
         },
       },
       $defs: {
@@ -945,10 +939,7 @@ describe("findUnresolvedRefs - schema keyword traversal", () => {
   test("detects unresolved ref inside prefixItems", () => {
     const schema: JsonSchemaType = {
       type: "array",
-      prefixItems: [
-        { type: "string" },
-        { $ref: "#/$defs/MissingPrefixItem" },
-      ],
+      prefixItems: [{ type: "string" }, { $ref: "#/$defs/MissingPrefixItem" }],
     };
     expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingPrefixItem"]);
   });
@@ -1038,16 +1029,15 @@ describe("findUnresolvedRefs - $ref sibling, legacy, and JSON Pointer fixes", ()
   test("traverses items as array (tuple items)", () => {
     const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
       type: "array",
-      items: [
-        { type: "string" },
-        { $ref: "#/$defs/MissingTupleItem" },
-      ],
+      items: [{ type: "string" }, { $ref: "#/$defs/MissingTupleItem" }],
     };
     expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingTupleItem"]);
   });
 
   test("traverses legacy definitions keyword", () => {
-    const schema: JsonSchemaType & { definitions: Record<string, JsonSchemaType> } = {
+    const schema: JsonSchemaType & {
+      definitions: Record<string, JsonSchemaType>;
+    } = {
       type: "object",
       definitions: {
         RealDef: {
@@ -1061,13 +1051,13 @@ describe("findUnresolvedRefs - $ref sibling, legacy, and JSON Pointer fixes", ()
         value: { $ref: "#/definitions/RealDef" },
       },
     };
-    expect(findUnresolvedRefs(schema)).toEqual([
-      "#/definitions/AlsoMissing",
-    ]);
+    expect(findUnresolvedRefs(schema)).toEqual(["#/definitions/AlsoMissing"]);
   });
 
   test("traverses legacy dependencies schema form", () => {
-    const schema: JsonSchemaType & { dependencies: Record<string, JsonSchemaType | string[]> } = {
+    const schema: JsonSchemaType & {
+      dependencies: Record<string, JsonSchemaType | string[]>;
+    } = {
       type: "object",
       properties: {
         a: { type: "string" },
@@ -1080,7 +1070,9 @@ describe("findUnresolvedRefs - $ref sibling, legacy, and JSON Pointer fixes", ()
   });
 
   test("skips property-name form of dependencies", () => {
-    const schema: JsonSchemaType & { dependencies: Record<string, JsonSchemaType | string[]> } = {
+    const schema: JsonSchemaType & {
+      dependencies: Record<string, JsonSchemaType | string[]>;
+    } = {
       type: "object",
       properties: {
         a: { type: "string" },
@@ -1227,5 +1219,283 @@ describe("findUnresolvedRefs - malformed percent escapes", () => {
     ];
     expect(() => resolveRef(refSchema, schema)).not.toThrow();
     expect(resolveRef(refSchema, schema)).toBe(refSchema);
+  });
+});
+
+// [spring-ai-mcp-inspector PATCH] missing-output-schema-warning (#6773)
+import { findMissingOutputSchemaWarning } from "../schemaUtils";
+
+describe("findMissingOutputSchemaWarning", () => {
+  const schemalessTool = { name: "echo" };
+
+  const textResult = (text: string) => ({
+    content: [{ type: "text", text }],
+  });
+
+  // ---- positive: the result itself encodes a JSON primitive ----
+
+  test("fires for a JSON-encoded string result on a schema-less tool", () => {
+    const warning = findMissingOutputSchemaWarning(
+      schemalessTool,
+      textResult('"hello"'),
+    );
+    expect(warning).not.toBeNull();
+    expect(warning).toContain("echo");
+    expect(warning).toContain("6773");
+  });
+
+  test("fires for a JSON integer result", () => {
+    expect(
+      findMissingOutputSchemaWarning({ name: "sum" }, textResult("42")),
+    ).not.toBeNull();
+  });
+
+  test("fires for a JSON float result with surrounding whitespace", () => {
+    expect(
+      findMissingOutputSchemaWarning({ name: "sum" }, textResult("  8.5  ")),
+    ).not.toBeNull();
+  });
+
+  test("fires for JSON true", () => {
+    expect(
+      findMissingOutputSchemaWarning({ name: "toggle" }, textResult("true")),
+    ).not.toBeNull();
+  });
+
+  test("fires for JSON false", () => {
+    expect(
+      findMissingOutputSchemaWarning({ name: "toggle" }, textResult("false")),
+    ).not.toBeNull();
+  });
+
+  test("treats JSON null as a primitive", () => {
+    expect(
+      findMissingOutputSchemaWarning({ name: "echo" }, textResult("null")),
+    ).not.toBeNull();
+  });
+
+  test("fires for primitive structuredContent", () => {
+    expect(
+      findMissingOutputSchemaWarning(schemalessTool, {
+        structuredContent: 42,
+        content: [],
+      }),
+    ).not.toBeNull();
+  });
+
+  test("falls back to text blocks when structuredContent is null", () => {
+    expect(
+      findMissingOutputSchemaWarning(schemalessTool, {
+        structuredContent: null,
+        content: [{ type: "text", text: '"hello"' }],
+      }),
+    ).not.toBeNull();
+  });
+
+  // ---- negative: plain text is the normal case, never flagged ----
+
+  test("does NOT fire for plain text (regression: over-trigger on every String tool)", () => {
+    expect(
+      findMissingOutputSchemaWarning(
+        schemalessTool,
+        textResult("hello primitive world"),
+      ),
+    ).toBeNull();
+  });
+
+  test("does NOT fire for the task-polling status text", () => {
+    expect(
+      findMissingOutputSchemaWarning(
+        schemalessTool,
+        textResult("Polling task status for task 123..."),
+      ),
+    ).toBeNull();
+  });
+
+  test("does NOT fire for prose with punctuation that is not valid JSON", () => {
+    expect(
+      findMissingOutputSchemaWarning(
+        schemalessTool,
+        textResult("User: Alice (admin)"),
+      ),
+    ).toBeNull();
+  });
+
+  test("does NOT fire for empty text blocks or missing content", () => {
+    expect(
+      findMissingOutputSchemaWarning(schemalessTool, textResult("   ")),
+    ).toBeNull();
+    expect(
+      findMissingOutputSchemaWarning(schemalessTool, { content: [] }),
+    ).toBeNull();
+    expect(findMissingOutputSchemaWarning(schemalessTool, {})).toBeNull();
+  });
+
+  test("does NOT fire when content only has non-text blocks", () => {
+    expect(
+      findMissingOutputSchemaWarning(schemalessTool, {
+        content: [{ type: "image", data: "aGk=", mimeType: "image/png" }],
+      }),
+    ).toBeNull();
+  });
+
+  // ---- negative: structured results are out of scope ----
+
+  test("does NOT fire for a JSON object text block", () => {
+    expect(
+      findMissingOutputSchemaWarning(schemalessTool, textResult('{"a":1}')),
+    ).toBeNull();
+  });
+
+  test("does NOT fire for a JSON array text block", () => {
+    expect(
+      findMissingOutputSchemaWarning(schemalessTool, textResult("[1,2]")),
+    ).toBeNull();
+  });
+
+  test("does NOT fire when another block is a JSON object", () => {
+    expect(
+      findMissingOutputSchemaWarning(schemalessTool, {
+        content: [
+          { type: "text", text: '"str"' },
+          { type: "text", text: '{"a":1}' },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  test("does NOT fire when another block is a JSON array", () => {
+    expect(
+      findMissingOutputSchemaWarning(schemalessTool, {
+        content: [
+          { type: "text", text: "42" },
+          { type: "text", text: "[1,2]" },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  test("does NOT fire for object structuredContent", () => {
+    expect(
+      findMissingOutputSchemaWarning(schemalessTool, {
+        structuredContent: { a: 1 },
+        content: [],
+      }),
+    ).toBeNull();
+  });
+
+  // ---- advertised schemas suppress the warning ----
+
+  test("does NOT fire when outputSchema declares a type", () => {
+    expect(
+      findMissingOutputSchemaWarning(
+        { name: "echo", outputSchema: { type: "object" } as JsonSchemaType },
+        textResult("42"),
+      ),
+    ).toBeNull();
+  });
+
+  test("does NOT fire when outputSchema has properties but no type", () => {
+    expect(
+      findMissingOutputSchemaWarning(
+        {
+          name: "echo",
+          outputSchema: {
+            properties: { result: { type: "string" } },
+          } as JsonSchemaType,
+        },
+        textResult("42"),
+      ),
+    ).toBeNull();
+  });
+
+  test("does NOT fire when outputSchema is an anyOf without type", () => {
+    expect(
+      findMissingOutputSchemaWarning(
+        {
+          name: "echo",
+          outputSchema: {
+            anyOf: [{ type: "string" }, { type: "number" }],
+          } as JsonSchemaType,
+        },
+        textResult("42"),
+      ),
+    ).toBeNull();
+  });
+
+  test("does NOT fire when outputSchema is a $ref", () => {
+    expect(
+      findMissingOutputSchemaWarning(
+        {
+          name: "echo",
+          outputSchema: { $ref: "#/$defs/Result" } as JsonSchemaType,
+        },
+        textResult("42"),
+      ),
+    ).toBeNull();
+  });
+
+  test("fires when outputSchema is a shapeless empty object", () => {
+    expect(
+      findMissingOutputSchemaWarning(
+        { name: "echo", outputSchema: {} as JsonSchemaType },
+        textResult('"hello"'),
+      ),
+    ).not.toBeNull();
+  });
+
+  // ---- error and null guards ----
+
+  test("does NOT fire for error results", () => {
+    expect(
+      findMissingOutputSchemaWarning(schemalessTool, {
+        content: [{ type: "text", text: '"boom"' }],
+        isError: true,
+      }),
+    ).toBeNull();
+  });
+
+  test("returns null for null tool or null result", () => {
+    expect(findMissingOutputSchemaWarning(null, textResult("42"))).toBeNull();
+    expect(
+      findMissingOutputSchemaWarning(
+        null as unknown as { name: string },
+        textResult("42"),
+      ),
+    ).toBeNull();
+    expect(findMissingOutputSchemaWarning(schemalessTool, null)).toBeNull();
+  });
+
+  // ---- shared predicate: cache and detector must agree ----
+
+  test("cacheToolOutputSchemas and the detector agree on anyOf (no type)", () => {
+    const tools = [
+      {
+        name: "unionTool",
+        outputSchema: { anyOf: [{ type: "string" }] },
+      },
+    ] as unknown as Tool[];
+    cacheToolOutputSchemas(tools);
+    expect(hasOutputSchema("unionTool")).toBe(true);
+    expect(
+      findMissingOutputSchemaWarning(
+        tools[0] as { name: string },
+        textResult("42"),
+      ),
+    ).toBeNull();
+  });
+
+  test("cacheToolOutputSchemas and the detector agree on shapeless {}", () => {
+    const tools = [
+      { name: "emptyTool", outputSchema: {} },
+    ] as unknown as Tool[];
+    cacheToolOutputSchemas(tools);
+    expect(hasOutputSchema("emptyTool")).toBe(false);
+    expect(
+      findMissingOutputSchemaWarning(
+        tools[0] as { name: string },
+        textResult("42"),
+      ),
+    ).not.toBeNull();
   });
 });

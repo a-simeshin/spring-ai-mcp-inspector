@@ -8,6 +8,8 @@ import {
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { validateToolOutput, hasOutputSchema } from "@/utils/schemaUtils";
+// [spring-ai-mcp-inspector PATCH] missing-output-schema-warning (#6773)
+import { findMissingOutputSchemaWarning } from "@/utils/schemaUtils";
 import useCopy from "@/lib/hooks/useCopy";
 import { useToast } from "@/lib/hooks/useToast";
 
@@ -104,6 +106,15 @@ const ToolResults = ({
             (c.text?.includes("Polling") || c.text?.includes("Task status")),
         ));
 
+    // [spring-ai-mcp-inspector PATCH] missing-output-schema-warning (#6773):
+    // surface a best-effort warning when the tool advertises no output
+    // schema but the observed result itself encodes a JSON primitive
+    // (quoted JSON string, number, boolean, null). Plain text output is the
+    // normal case for a schema-less String tool and is not flagged.
+    const missingSchemaWarning = selectedTool
+      ? findMissingOutputSchemaWarning(selectedTool, structuredResult)
+      : null;
+
     let validationResult = null;
     const toolHasOutputSchema =
       selectedTool && hasOutputSchema(selectedTool.name);
@@ -143,6 +154,22 @@ const ToolResults = ({
     // copies the complete un-truncated output to clipboard.
     return (
       <>
+        {missingSchemaWarning && (
+          <div
+            className="mb-2 p-2 rounded text-sm bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200"
+            data-testid="missing-output-schema-warning"
+          >
+            {missingSchemaWarning}{" "}
+            <a
+              href="https://github.com/spring-projects/spring-ai/issues/6773"
+              target="_blank"
+            rel="noopener noreferrer"
+              className="underline"
+            >
+              spring-ai#6773
+            </a>
+          </div>
+        )}
         <div className="flex items-center justify-between mb-2">
           <h4 className="font-semibold">
             Tool Result:{" "}
