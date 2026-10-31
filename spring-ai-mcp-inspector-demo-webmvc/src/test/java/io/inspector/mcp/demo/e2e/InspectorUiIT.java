@@ -2190,10 +2190,11 @@ class InspectorUiIT {
 	// =====================================================================
 	// N. TasksTab — the demo server does NOT advertise the `tasks` capability
 	// (see TabsAvailability and the omission from `spring-ai-mcp-inspector-demo`
-	// server config), so the tasks tab trigger is rendered as disabled. We
-	// document the contract here and skip the active/cancelled scenarios via
-	// Assumptions when the capability is missing — flipping these tests on
-	// requires server-side `serverCapabilities.tasks` plumbing first.
+	// server config), so the tasks tab shows the issue #212 capability-gap body
+	// (the trigger stays enabled; PR #214). We document the contract here and
+	// skip the active/cancelled scenarios via Assumptions when the capability
+	// is missing: flipping these tests on requires server-side
+	// `serverCapabilities.tasks` plumbing first.
 	// =====================================================================
 
 	@Nested
@@ -2217,12 +2218,17 @@ class InspectorUiIT {
 			if (!trigger.exists()) {
 				return false;
 			}
-			// App.tsx sets `disabled={!serverCapabilities?.tasks}` on the TabsTrigger —
-			// Radix reflects disabled state on data-disabled / aria-disabled and the
-			// underlying <button disabled> attribute.
-			String disabled = trigger.getAttribute("disabled");
-			String ariaDisabled = trigger.getAttribute("aria-disabled");
-			return !(disabled != null || "true".equals(ariaDisabled));
+			// After PR #214 the tasks tab trigger is always enabled; clicking it shows
+			// the capability-gap body when tasks is absent. The reliable probe is the
+			// Tools tab "Run as task" checkbox (gated on serverSupportsTaskRequests)
+			// which only renders when the server actually advertises tasks.
+			SelenideElement toolsTrigger = $("[role=tab][id$='-trigger-tools']");
+			toolsTrigger.click();
+			SelenideElement runAsTaskCheckbox = $("#run-as-task");
+			boolean exists = runAsTaskCheckbox.exists();
+			// Restore the tasks tab so the calling tests start from a consistent state.
+			trigger.click();
+			return exists;
 		}
 
 		@Test
@@ -2233,8 +2239,8 @@ class InspectorUiIT {
 		void tasksTab_runSlowEchoAsTask_showsActiveAndCompleted() {
 			// given
 			Assumptions.assumeTrue(tasksCapabilityAdvertised(),
-					"demo server does not advertise the `tasks` capability — TasksTab trigger is "
-							+ "disabled (UPSTREAM_DOM_MAP.md §3). Skip until server-side capability is wired.");
+					"demo server does not advertise the `tasks` capability: the Tasks tab shows "
+							+ "the capability-gap body. Skip until server-side capability is wired.");
 
 			// when
 			// Run slowEcho as a task from the Tools tab (the "Run as task" checkbox is
