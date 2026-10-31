@@ -196,6 +196,12 @@ class ProxyHandlerAuthProfileTests {
 				.willReturn(Optional.of(new BearerProfile("prod", "tok")));
 			given(ProxyHandlerAuthProfileTests.this.authProfileStore.bind(eq(OWNER), eq(PROFILE_ID), any()))
 				.willReturn(false);
+			// The rejected-bind check runs after the session transport is built and
+			// wrapped
+			// with the keep-alive tracker, so the factory must hand out a real mock here.
+			given(ProxyHandlerAuthProfileTests.this.transportFactory.buildSseWithAuth(any(URI.class),
+					any(AuthHeaders.class), any()))
+				.willReturn(mock(McpClientTransport.class));
 
 			// when
 			final ServerResponse response = ProxyHandlerAuthProfileTests.this.handler()
@@ -295,6 +301,12 @@ class ProxyHandlerAuthProfileTests {
 				.willReturn(Optional.of(new BearerProfile("prod", "tok")));
 			given(ProxyHandlerAuthProfileTests.this.authProfileStore.bind(eq(OWNER), eq(PROFILE_ID), any()))
 				.willReturn(false);
+			// Same as the SSE case: the one-time bind check follows the keep-alive
+			// transport
+			// wrap, so the factory must return a mock transport.
+			given(ProxyHandlerAuthProfileTests.this.transportFactory.openStreamableWithAuth(any(URI.class),
+					any(AuthHeaders.class), any()))
+				.willReturn(mock(McpClientTransport.class));
 
 			// when
 			final ServerResponse response = ProxyHandlerAuthProfileTests.this.handler()

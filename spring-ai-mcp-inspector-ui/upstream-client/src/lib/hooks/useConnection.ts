@@ -207,6 +207,13 @@ export function useConnection({
   >([]);
   const [completionsSupported, setCompletionsSupported] = useState(false);
   const [mcpSessionId, setMcpSessionId] = useState<string | null>(null);
+
+  // [spring-ai-mcp-inspector PATCH] Session id the inspector's proxy assigned to
+  // this UI connection (SSE/stdio endpoint URL or the streamable mcp-session-id
+  // response header). The keep-alive endpoints resolve THIS id; the upstream
+  // mcpSessionId captured in direct mode belongs to the target server and is
+  // unknown to the inspector (#235).
+  const [proxySessionId, setProxySessionId] = useState<string | null>(null);
   const [mcpProtocolVersion, setMcpProtocolVersion] = useState<string | null>(
     null,
   );
@@ -604,6 +611,35 @@ export function useConnection({
       return response;
     });
 
+  // [spring-ai-mcp-inspector PATCH] The SDK POSTs proxied frames to the endpoint
+  // URL the proxy announced (...?sessionId=<proxy session id>), so the id is
+  // tapped out of the request URL here rather than guessed from headers.
+  const captureProxySessionIdFromUrl = (
+    url: string | URL | globalThis.Request,
+  ): void => {
+    try {
+      const resolved =
+        typeof url === "string"
+          ? new URL(url, window.location.href)
+          : url instanceof URL
+            ? url
+            : new URL(url.url, window.location.href);
+      const sid = resolved.searchParams.get("sessionId");
+      if (sid) {
+        setProxySessionId((prev) => (prev === sid ? prev : sid));
+      }
+    } catch {
+      // Malformed URL: nothing to capture.
+    }
+  };
+
+  const captureProxySessionIdFromResponse = (response: Response): void => {
+    const sid = response.headers.get("mcp-session-id");
+    if (sid) {
+      setProxySessionId((prev) => (prev === sid ? prev : sid));
+    }
+  };
+
   /**
    * Wraps the streamable transport fetch: a 401/403 response body carries the
    * D3 DTO (any other status is the legacy contract, no DTO per D3).
@@ -873,6 +909,22 @@ export function useConnection({
                     ),
                   }),
               },
+              // [spring-ai-mcp-inspector PATCH] tap the proxy session id from the
+              // POST endpoint URL (see captureProxySessionIdFromUrl)
+              fetch: async (
+                url: string | URL | globalThis.Request,
+                init?: RequestInit,
+              ) => {
+                captureProxySessionIdFromUrl(url);
+                return fetch(url, {
+                  ...init,
+                  headers: mergeRequestHeaders(
+                    init?.headers,
+                    headers,
+                    proxyHeaders,
+                  ),
+                });
+              },
               requestInit: {
                 headers: { ...headers, ...proxyHeaders },
               },
@@ -906,6 +958,22 @@ export function useConnection({
                       proxyHeaders,
                     ),
                   }),
+              },
+              // [spring-ai-mcp-inspector PATCH] tap the proxy session id from the
+              // POST endpoint URL (see captureProxySessionIdFromUrl)
+              fetch: async (
+                url: string | URL | globalThis.Request,
+                init?: RequestInit,
+              ) => {
+                captureProxySessionIdFromUrl(url);
+                return fetch(url, {
+                  ...init,
+                  headers: mergeRequestHeaders(
+                    init?.headers,
+                    headers,
+                    proxyHeaders,
+                  ),
+                });
               },
               requestInit: {
                 headers: { ...headers, ...proxyHeaders },
@@ -946,6 +1014,10 @@ export function useConnection({
                     proxyHeaders,
                   ),
                 });
+                // [spring-ai-mcp-inspector PATCH] POST /mcp answers a fresh
+                // session with the mcp-session-id response header; that id (not
+                // the upstream server's) resolves on the keep-alive endpoints.
+                captureProxySessionIdFromResponse(response);
                 if (!response.ok) {
                   const failure = await parseConnectFailureResponse(response);
                   if (failure) {
@@ -1509,6 +1581,9 @@ export function useConnection({
     setServerCapabilities(null);
     setServerImplementation(null);
     setMcpSessionId(null);
+    // [spring-ai-mcp-inspector PATCH] reset the proxy session id with the
+    // rest of the per-connection state
+    setProxySessionId(null);
     setMcpProtocolVersion(null);
   };
 
@@ -1526,6 +1601,9 @@ export function useConnection({
     serverCapabilities,
     serverImplementation,
     mcpClient,
+    mcpSessionId,
+    // [spring-ai-mcp-inspector PATCH] proxy-side session id for keep-alive
+    proxySessionId,
     requestHistory,
     clearRequestHistory,
     makeRequest,

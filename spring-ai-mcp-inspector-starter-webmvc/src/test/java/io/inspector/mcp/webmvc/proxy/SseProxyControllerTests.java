@@ -18,6 +18,7 @@ package io.inspector.mcp.webmvc.proxy;
 
 import java.lang.reflect.Method;
 import java.net.URI;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -33,6 +34,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -50,11 +52,13 @@ import io.inspector.mcp.core.auth.BearerProfile;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.keepalive.PingDetectingClientTransport;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
+import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -882,6 +886,58 @@ class SseProxyControllerTests {
 
 			// then — the structured unauthorized DTO is emitted
 			assertThat(bufferedFrames(emitter)).contains("unauthorized");
+		}
+
+	}
+
+	@Nested
+	@DisplayName("keep-alive wiring")
+	class KeepAliveWiring {
+
+		@Test
+		@Story("Proxy keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() wraps the target transport with ping detection so inbound pings reach the tracker")
+		void openSse_wrapsTargetTransportWithPingDetection() {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final ArgumentCaptor<ProxySession> captor = ArgumentCaptor.forClass(ProxySession.class);
+
+			// when
+			SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null, null, null, REQUEST);
+
+			// then
+			verify(SseProxyControllerTests.this.registry).put(captor.capture());
+			final ProxySession session = captor.getValue();
+			assertThat(session.targetTransport()).isInstanceOf(PingDetectingClientTransport.class);
+			assertThat(session.keepAliveTracker()).isNotNull();
+		}
+
+		@Test
+		@Story("Proxy keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a recorded proxy ping is broadcast to UI subscribers as mcp:keepalive-ping with an {at} payload")
+		void recordedPing_broadcastsKeepAliveEventToEmitterRegistry() {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final InspectorSseEmitterRegistry emitters = mock(InspectorSseEmitterRegistry.class);
+			final SseProxyController wired = new SseProxyController(SseProxyControllerTests.this.registry,
+					SseProxyControllerTests.this.transportFactory, SseProxyControllerTests.this.mcpProxy,
+					SseProxyControllerTests.this.objectMapper, SseProxyControllerTests.this.properties, null, emitters);
+			final ArgumentCaptor<ProxySession> captor = ArgumentCaptor.forClass(ProxySession.class);
+
+			// when
+			wired.openSse("sse", "http://target/sse", null, null, null, REQUEST);
+			verify(SseProxyControllerTests.this.registry).put(captor.capture());
+			final ProxySession session = captor.getValue();
+			session.keepAliveTracker().recordPing(Instant.parse("2026-09-20T10:00:00Z"));
+
+			// then
+			final ArgumentCaptor<Map<String, String>> payload = ArgumentCaptor.forClass(Map.class);
+			verify(emitters).broadcast(eq(session.sessionId()), eq("mcp:keepalive-ping"), payload.capture());
+			assertThat(payload.getValue()).containsEntry("at", "2026-09-20T10:00:00Z");
 		}
 
 	}

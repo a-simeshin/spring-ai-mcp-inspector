@@ -27,6 +27,9 @@ import io.modelcontextprotocol.client.transport.SseMessageEndpointValidator;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema;
 
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
+import io.inspector.mcp.core.keepalive.PingDetectingClientTransport;
+
 /**
  * Builds {@link McpSyncClient} instances that connect to the <strong>same JVM</strong>
  * via the loopback HTTP interface ({@code http://host:port}).
@@ -73,7 +76,7 @@ public class LoopbackMcpClientFactory {
 	 */
 	public McpSyncClient forSse(final String host, final int port, final String sseEndpoint,
 			final InspectorClientHandlers handlers) {
-		return forSse(host, port, sseEndpoint, handlers, null);
+		return forSse(host, port, sseEndpoint, handlers, null, null);
 	}
 
 	/**
@@ -90,14 +93,55 @@ public class LoopbackMcpClientFactory {
 	 */
 	public McpSyncClient forSse(final String host, final int port, final String sseEndpoint,
 			final InspectorClientHandlers handlers, final AtomicReference<InitializeResultCapturingTransport> capture) {
+		return forSse(host, port, sseEndpoint, handlers, capture, null);
+	}
+
+	/**
+	 * Variant of {@link #forSse(String, int, String, InspectorClientHandlers)} that
+	 * additionally taps inbound keep-alive pings into {@code keepAliveTracker}. Pass
+	 * {@code null} to skip decoration.
+	 * @param host loopback host
+	 * @param port loopback port
+	 * @param sseEndpoint the SSE endpoint path
+	 * @param handlers inspector client handlers; may be {@code null}
+	 * @param keepAliveTracker tracker receiving inbound ping timestamps; may be
+	 * {@code null} to skip decoration
+	 * @return a connected-ready {@link McpSyncClient} for SSE with handlers and
+	 * (optionally) ping detection applied
+	 */
+	public McpSyncClient forSse(final String host, final int port, final String sseEndpoint,
+			final InspectorClientHandlers handlers, final KeepAliveTracker keepAliveTracker) {
+		return forSse(host, port, sseEndpoint, handlers, null, keepAliveTracker);
+	}
+
+	/**
+	 * Variant of {@link #forSse(String, int, String, InspectorClientHandlers)} that both
+	 * captures the raw initialize result frame for SEP-2640 extension detection and taps
+	 * inbound keep-alive pings into {@code keepAliveTracker}.
+	 * @param host loopback host
+	 * @param port loopback port
+	 * @param sseEndpoint the SSE endpoint path, deployment prefix included; defaults to
+	 * {@code /sse} when blank
+	 * @param handlers inspector client handlers to register; may be {@code null}
+	 * @param capture receives the {@link InitializeResultCapturingTransport} wrapper;
+	 * {@code null} skips the wrapping
+	 * @param keepAliveTracker tracker receiving inbound ping timestamps; may be
+	 * {@code null} to skip decoration
+	 * @return a connected-ready {@link McpSyncClient} for SSE with handlers and
+	 * (optionally) ping detection applied
+	 */
+	public McpSyncClient forSse(final String host, final int port, final String sseEndpoint,
+			final InspectorClientHandlers handlers, final AtomicReference<InitializeResultCapturingTransport> capture,
+			final KeepAliveTracker keepAliveTracker) {
 		final String baseUri = buildBaseUri(host, port);
 		final String ssePath = (sseEndpoint == null || sseEndpoint.isBlank() || "/".equals(sseEndpoint))
 				? DEFAULT_SSE_PATH : sseEndpoint;
 
-		final HttpClientSseClientTransport transport = HttpClientSseClientTransport.builder(baseUri)
+		McpClientTransport transport = HttpClientSseClientTransport.builder(baseUri)
 			.sseEndpoint(ssePath)
 			.messageEndpointValidator(loopbackNoopValidator())
 			.build();
+		transport = decorateForKeepAlive(transport, keepAliveTracker);
 
 		return applyHandlers(McpClient.sync(wrap(transport, capture)), handlers).build();
 	}
@@ -110,7 +154,7 @@ public class LoopbackMcpClientFactory {
 	 * @return a connected-ready {@link McpSyncClient} for streamable-HTTP
 	 */
 	public McpSyncClient forStreamable(final String host, final int port, final String endpoint) {
-		return buildStreamable(host, port, endpoint, InspectorClientHandlers.none(), null);
+		return buildStreamable(host, port, endpoint, InspectorClientHandlers.none(), null, null);
 	}
 
 	/**
@@ -124,7 +168,7 @@ public class LoopbackMcpClientFactory {
 	 */
 	public McpSyncClient forStreamable(final String host, final int port, final String endpoint,
 			final InspectorClientHandlers handlers) {
-		return buildStreamable(host, port, endpoint, handlers, null);
+		return buildStreamable(host, port, endpoint, handlers, null, null);
 	}
 
 	/**
@@ -142,7 +186,45 @@ public class LoopbackMcpClientFactory {
 	 */
 	public McpSyncClient forStreamable(final String host, final int port, final String endpoint,
 			final InspectorClientHandlers handlers, final AtomicReference<InitializeResultCapturingTransport> capture) {
-		return buildStreamable(host, port, endpoint, handlers, capture);
+		return buildStreamable(host, port, endpoint, handlers, capture, null);
+	}
+
+	/**
+	 * Variant of {@link #forStreamable(String, int, String, InspectorClientHandlers)}
+	 * that additionally taps inbound keep-alive pings into {@code keepAliveTracker}.
+	 * @param host loopback host
+	 * @param port loopback port
+	 * @param endpoint the MCP endpoint path
+	 * @param handlers inspector client handlers; may be {@code null}
+	 * @param keepAliveTracker tracker receiving inbound ping timestamps; may be
+	 * {@code null} to skip decoration
+	 * @return a connected-ready {@link McpSyncClient} for streamable-HTTP with handlers
+	 * and (optionally) ping detection applied
+	 */
+	public McpSyncClient forStreamable(final String host, final int port, final String endpoint,
+			final InspectorClientHandlers handlers, final KeepAliveTracker keepAliveTracker) {
+		return buildStreamable(host, port, endpoint, handlers, null, keepAliveTracker);
+	}
+
+	/**
+	 * Variant of {@link #forStreamable(String, int, String, InspectorClientHandlers)}
+	 * that both captures the raw initialize result frame for SEP-2640 extension detection
+	 * and taps inbound keep-alive pings into {@code keepAliveTracker}.
+	 * @param host loopback host
+	 * @param port loopback port
+	 * @param endpoint the MCP endpoint path
+	 * @param handlers inspector client handlers; may be {@code null}
+	 * @param capture receives the {@link InitializeResultCapturingTransport} wrapper;
+	 * {@code null} skips the wrapping
+	 * @param keepAliveTracker tracker receiving inbound ping timestamps; may be
+	 * {@code null} to skip decoration
+	 * @return a connected-ready {@link McpSyncClient} for streamable-HTTP with handlers,
+	 * raw-initialize capture and (optionally) ping detection applied
+	 */
+	public McpSyncClient forStreamable(final String host, final int port, final String endpoint,
+			final InspectorClientHandlers handlers, final AtomicReference<InitializeResultCapturingTransport> capture,
+			final KeepAliveTracker keepAliveTracker) {
+		return buildStreamable(host, port, endpoint, handlers, capture, keepAliveTracker);
 	}
 
 	/**
@@ -157,7 +239,7 @@ public class LoopbackMcpClientFactory {
 	 * @return a connected-ready {@link McpSyncClient} for stateless-HTTP
 	 */
 	public McpSyncClient forStateless(final String host, final int port, final String endpoint) {
-		return buildStreamable(host, port, endpoint, InspectorClientHandlers.none(), null);
+		return buildStreamable(host, port, endpoint, InspectorClientHandlers.none(), null, null);
 	}
 
 	/**
@@ -171,7 +253,7 @@ public class LoopbackMcpClientFactory {
 	 */
 	public McpSyncClient forStateless(final String host, final int port, final String endpoint,
 			final InspectorClientHandlers handlers) {
-		return buildStreamable(host, port, endpoint, handlers, null);
+		return buildStreamable(host, port, endpoint, handlers, null, null);
 	}
 
 	/**
@@ -188,15 +270,17 @@ public class LoopbackMcpClientFactory {
 	 */
 	public McpSyncClient forStateless(final String host, final int port, final String endpoint,
 			final InspectorClientHandlers handlers, final AtomicReference<InitializeResultCapturingTransport> capture) {
-		return buildStreamable(host, port, endpoint, handlers, capture);
+		return buildStreamable(host, port, endpoint, handlers, capture, null);
 	}
 
 	private McpSyncClient buildStreamable(final String host, final int port, final String endpoint,
-			final InspectorClientHandlers handlers, final AtomicReference<InitializeResultCapturingTransport> capture) {
+			final InspectorClientHandlers handlers, final AtomicReference<InitializeResultCapturingTransport> capture,
+			final KeepAliveTracker keepAliveTracker) {
 		final String baseUri = buildBaseUri(host, port);
 		final String path = (endpoint == null || endpoint.isBlank()) ? "/mcp" : endpoint;
 
-		final McpClientTransport transport = HttpClientStreamableHttpTransport.builder(baseUri).endpoint(path).build();
+		McpClientTransport transport = HttpClientStreamableHttpTransport.builder(baseUri).endpoint(path).build();
+		transport = decorateForKeepAlive(transport, keepAliveTracker);
 
 		return applyHandlers(McpClient.sync(wrap(transport, capture)), handlers).build();
 	}
@@ -210,6 +294,23 @@ public class LoopbackMcpClientFactory {
 	private static McpClientTransport wrap(final McpClientTransport transport,
 			final AtomicReference<InitializeResultCapturingTransport> capture) {
 		return InitializeResultCapturingTransport.wrapIfObserved(transport, capture);
+	}
+
+	/**
+	 * Wraps {@code delegate} in a {@link PingDetectingClientTransport} so inbound
+	 * {@code ping} requests are recorded against the given {@link KeepAliveTracker}. When
+	 * {@code keepAliveTracker} is {@code null}, the delegate is returned unchanged so
+	 * production paths pay no decoration cost.
+	 * @param delegate the transport to wrap
+	 * @param keepAliveTracker the tracker to feed; {@code null} skips decoration
+	 * @return the decorated transport, or the delegate when no tracker is provided
+	 */
+	private static McpClientTransport decorateForKeepAlive(final McpClientTransport delegate,
+			final KeepAliveTracker keepAliveTracker) {
+		if (keepAliveTracker == null) {
+			return delegate;
+		}
+		return new PingDetectingClientTransport(delegate, keepAliveTracker);
 	}
 
 	/**

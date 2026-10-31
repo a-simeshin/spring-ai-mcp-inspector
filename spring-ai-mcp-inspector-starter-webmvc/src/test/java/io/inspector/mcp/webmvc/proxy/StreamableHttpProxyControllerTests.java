@@ -36,6 +36,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -62,6 +63,7 @@ import io.inspector.mcp.core.task.TaskNotFoundException;
 import io.inspector.mcp.core.task.TaskService;
 import io.inspector.mcp.webmvc.InspectorServerPortHolder;
 import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
+import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -1903,6 +1905,50 @@ class StreamableHttpProxyControllerTests {
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
 			verify(StreamableHttpProxyControllerTests.this.registry, never()).removeAndClose(any());
+		}
+
+	}
+
+	@Nested
+	@DisplayName("Proxy keep-alive")
+	class KeepAlive {
+
+		@Test
+		@Story("Proxy keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a recorded streamable proxy ping is broadcast as mcp:keepalive-ping with the unified {at} payload")
+		void recordedPing_broadcastsKeepAliveEventToEmitterRegistry() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final InspectorSseEmitterRegistry emitters = mock(InspectorSseEmitterRegistry.class);
+			final StreamableHttpProxyController wired = new StreamableHttpProxyController(
+					StreamableHttpProxyControllerTests.this.registry,
+					StreamableHttpProxyControllerTests.this.transportFactory,
+					StreamableHttpProxyControllerTests.this.mcpProxy,
+					StreamableHttpProxyControllerTests.this.objectMapper, null, null, null, null, null, null, null,
+					emitters);
+			final JsonNode answer = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}");
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(answer);
+				return Mono.empty();
+			});
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
+
+			// when
+			wired.postMcp(null, null, body);
+			final ArgumentCaptor<ProxySession> session = ArgumentCaptor.forClass(ProxySession.class);
+			verify(StreamableHttpProxyControllerTests.this.registry).put(session.capture());
+			session.getValue().keepAliveTracker().recordPing(Instant.parse("2026-09-20T10:00:00Z"));
+
+			// then: the same {"at": "<ISO>"} shape the SSE proxy and WebFlux stacks emit
+			final ArgumentCaptor<Map<String, String>> payload = ArgumentCaptor.forClass(Map.class);
+			verify(emitters).broadcast(eq(session.getValue().sessionId()), eq("mcp:keepalive-ping"), payload.capture());
+			assertThat(payload.getValue()).containsEntry("at", "2026-09-20T10:00:00Z");
 		}
 
 	}

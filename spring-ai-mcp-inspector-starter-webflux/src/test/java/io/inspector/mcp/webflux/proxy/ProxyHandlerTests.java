@@ -33,12 +33,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.boot.web.server.WebServer;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.boot.web.server.context.WebServerInitializedEvent;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.web.reactive.function.server.EntityResponse;
@@ -46,8 +48,10 @@ import org.springframework.web.reactive.function.server.HandlerStrategies;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
+import reactor.test.StepVerifier;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -55,6 +59,7 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.keepalive.PingDetectingClientTransport;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
 import io.inspector.mcp.core.proxy.ProxySession;
@@ -64,6 +69,7 @@ import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.core.transport.TransportType;
 import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
+import io.inspector.mcp.webflux.router.KeepAliveEventRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -2739,6 +2745,75 @@ class ProxyHandlerTests {
 				.as("session-id header must be present on first POST response")
 				.isNotEmpty();
 			verify(this.taskService, never()).getTask(any());
+		}
+
+	}
+
+	@Nested
+	@DisplayName("keep-alive wiring")
+	class KeepAliveWiring {
+
+		@Test
+		@Story("Proxy keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() wraps the target transport with ping detection and registers the tracker for /keepalive polling")
+		void openSse_wrapsTargetTransportAndRegistersTracker() {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(java.net.URI.class))).willReturn(target);
+			final KeepAliveEventRegistry keepAliveEvents = new KeepAliveEventRegistry();
+			final ProxyHandler wired = new ProxyHandler(ProxyHandlerTests.this.registry,
+					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
+					ProxyHandlerTests.this.transportDetector, ProxyHandlerTests.this.objectMapper,
+					ProxyHandlerTests.this.properties, null, keepAliveEvents);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?url=http://target/sse").build());
+			final ArgumentCaptor<ProxySession> captor = ArgumentCaptor.forClass(ProxySession.class);
+
+			// when
+			final ServerResponse response = wired.openSse(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			verify(ProxyHandlerTests.this.registry).put(captor.capture());
+			final ProxySession session = captor.getValue();
+			assertThat(session.targetTransport()).isInstanceOf(PingDetectingClientTransport.class);
+			assertThat(session.keepAliveTracker()).isNotNull();
+			assertThat(keepAliveEvents.tracker(session.sessionId())).isSameAs(session.keepAliveTracker());
+		}
+
+		@Test
+		@Story("Proxy keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a recorded proxy ping is emitted to the session sink as mcp:keepalive-ping with an {\"at\"} JSON payload")
+		void recordedPing_emitsJsonKeepAliveEventToRegisteredSink() {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(java.net.URI.class))).willReturn(target);
+			final KeepAliveEventRegistry keepAliveEvents = new KeepAliveEventRegistry();
+			final ProxyHandler wired = new ProxyHandler(ProxyHandlerTests.this.registry,
+					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
+					ProxyHandlerTests.this.transportDetector, ProxyHandlerTests.this.objectMapper,
+					ProxyHandlerTests.this.properties, null, keepAliveEvents);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?url=http://target/sse").build());
+			final ArgumentCaptor<ProxySession> captor = ArgumentCaptor.forClass(ProxySession.class);
+			wired.openSse(request).block();
+			verify(ProxyHandlerTests.this.registry).put(captor.capture());
+			final ProxySession session = captor.getValue();
+			final Sinks.Many<ServerSentEvent<String>> sink = keepAliveEvents.sink(session.sessionId());
+			assertThat(sink).isNotNull();
+
+			// when + then
+			StepVerifier.create(sink.asFlux())
+				.then(() -> session.keepAliveTracker().recordPing(java.time.Instant.parse("2026-09-20T10:00:00Z")))
+				.assertNext((event) -> {
+					assertThat(event.event()).isEqualTo("mcp:keepalive-ping");
+					assertThat(event.data()).isEqualTo("{\"at\":\"2026-09-20T10:00:00Z\"}");
+				})
+				.thenCancel()
+				.verify(Duration.ofSeconds(5));
 		}
 
 	}

@@ -16,6 +16,8 @@
 
 package io.inspector.mcp.core.client;
 
+import java.util.concurrent.atomic.AtomicReference;
+
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -26,6 +28,9 @@ import io.qameta.allure.Story;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
+import io.inspector.mcp.core.keepalive.PingDetectingClientTransport;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -294,6 +299,60 @@ class LoopbackMcpClientFactoryTests {
 			assertThat(caps.elicitation().form()).isNotNull();
 			assertThat(caps.elicitation().url()).isNotNull();
 			closeQuietly(client);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("keep-alive decoration")
+	class KeepAliveDecoration {
+
+		@Test
+		@Story("Keep-alive tracking")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("forSse() decorates the loopback transport with ping detection bound to the given tracker")
+		void forSse_decoratesTransportWithPingDetection() {
+			// given
+			final KeepAliveTracker tracker = new KeepAliveTracker();
+			final AtomicReference<InitializeResultCapturingTransport> capture = new AtomicReference<>();
+
+			// when
+			final McpSyncClient client = LoopbackMcpClientFactoryTests.this.factory.forSse("127.0.0.1", 8080, "/sse",
+					null, capture, tracker);
+
+			// then: InitializeResultCapturingTransport renders its wrapped delegate, so
+			// the
+			// ping-detecting decoration is observable without extra accessors
+			try {
+				assertThat(capture.get()).isNotNull();
+				assertThat(capture.get().toString()).contains(PingDetectingClientTransport.class.getSimpleName());
+			}
+			finally {
+				closeQuietly(client);
+			}
+		}
+
+		@Test
+		@Story("Keep-alive tracking")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("forStreamable() decorates the loopback transport with ping detection bound to the given tracker")
+		void forStreamable_decoratesTransportWithPingDetection() {
+			// given
+			final KeepAliveTracker tracker = new KeepAliveTracker();
+			final AtomicReference<InitializeResultCapturingTransport> capture = new AtomicReference<>();
+
+			// when
+			final McpSyncClient client = LoopbackMcpClientFactoryTests.this.factory.forStreamable("127.0.0.1", 8080,
+					"/mcp", null, capture, tracker);
+
+			// then: same rendering seam as the SSE variant
+			try {
+				assertThat(capture.get()).isNotNull();
+				assertThat(capture.get().toString()).contains(PingDetectingClientTransport.class.getSimpleName());
+			}
+			finally {
+				closeQuietly(client);
+			}
 		}
 
 	}
