@@ -148,12 +148,14 @@ public class DemoAdvancedToolsProvider {
 	}
 
 	/**
-	 * Always throws — exercises the error-path rendering in ToolResults panel.
+	 * Always fails the tool call: returns an error CallToolResult with a single
+	 * TextContent, exercising the error-path rendering in the ToolResults panel.
 	 */
-	@McpTool(name = "errorTool", description = "Always throws — exercises the ToolResults error rendering",
+	@McpTool(name = "errorTool", description = "Always fails: exercises the ToolResults error rendering",
 			annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false))
-	public String errorTool() {
-		throw new RuntimeException("intentional demo failure");
+	public CallToolResult errorTool() {
+		List<Content> contents = List.<Content>of(new TextContent("intentional demo failure"));
+		return CallToolResult.builder().content(contents).isError(true).build();
 	}
 
 	/**
