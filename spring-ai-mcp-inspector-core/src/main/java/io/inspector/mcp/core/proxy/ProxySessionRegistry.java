@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.Consumer;
 
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
@@ -191,6 +192,16 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	 */
 	public int size() {
 		return this.sessions.size();
+	}
+
+	/**
+	 * Performs the given action for each session currently in the registry. The action
+	 * iterates the live {@link ConcurrentHashMap} values: callers must be prepared for
+	 * concurrent modification.
+	 * @param action the action to perform on each session (never {@code null})
+	 */
+	public void forEachSession(final Consumer<? super ProxySession> action) {
+		this.sessions.values().forEach(action);
 	}
 
 }
