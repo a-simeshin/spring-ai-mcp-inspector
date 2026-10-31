@@ -26,6 +26,8 @@ import io.modelcontextprotocol.spec.McpSchema.ResourceLink;
 import io.modelcontextprotocol.spec.McpSchema.Role;
 import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import io.modelcontextprotocol.spec.McpSchema.TextResourceContents;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.stereotype.Component;
@@ -54,6 +56,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class DemoAdvancedToolsProvider {
+
+	private static final Logger LOGGER = LoggerFactory.getLogger(DemoAdvancedToolsProvider.class);
 
 	/** 10×10 PNG (a 1×1 transparent stub blown up; minimal valid base64-encoded PNG). */
 	private static final String TINY_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
@@ -89,6 +93,24 @@ public class DemoAdvancedToolsProvider {
 			return "";
 		}
 		return String.join(separator == null ? "" : separator, parts);
+	}
+
+	/**
+	 * Exception-leak demo for the timeline detector (issue #251): logs the failure the
+	 * way an infrastructure layer would, then rethrows, so the tool result carries the
+	 * exact E11000 text the application log already contains. The timeline marks such
+	 * results with a {@code _leak} annotation.
+	 * @param name the tenant name to "insert"; {@code acme} reproduces the spec sample
+	 * @return never returns normally; always throws
+	 */
+	@McpTool(name = "leakyInsert", description = "Insert a tenant row; duplicates fail with a leaked E11000 error",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = false))
+	public String leakyInsert(@McpToolParam(description = "tenant name", required = true) String name) {
+		final RuntimeException duplicateKey = new RuntimeException(
+				"E11000 duplicate key error collection: db.app index: tenant_name_idx dup key: { name: \"" + name
+						+ "\" }");
+		LOGGER.error("leakyInsert failed for tenant {}", name, duplicateKey);
+		throw duplicateKey;
 	}
 
 	/**
