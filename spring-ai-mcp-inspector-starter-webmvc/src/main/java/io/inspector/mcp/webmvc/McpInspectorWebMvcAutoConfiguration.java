@@ -192,8 +192,9 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxyTransportFactory mcpInspectorProxyTransportFactory(final ObjectMapper objectMapper) {
-		return new ProxyTransportFactory(objectMapper);
+	public ProxyTransportFactory mcpInspectorProxyTransportFactory(final ObjectMapper objectMapper,
+			final McpInspectorProperties properties) {
+		return new ProxyTransportFactory(objectMapper, properties.getTimeouts().getSsePreflight());
 	}
 
 	@Bean

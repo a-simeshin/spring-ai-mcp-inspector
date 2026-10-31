@@ -113,11 +113,11 @@ import MetadataTab from "./components/MetadataTab";
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
 
 // [spring-ai-mcp-inspector PATCH] MCP Tasks are an experimental/extension
-// capability (SEP-1686). Spring AI / MCP Java SDK 2.0.0 servers structurally
-// cannot advertise them, so the Tasks tab is always disabled and the user
-// cannot infer why. The hint text below is attached to the Tooltip wrapper span
-// (title + aria-label), NOT to the disabled trigger: tabs.tsx applies
-// `disabled:pointer-events-none`, which blocks hover on the trigger itself.
+// capability (SEP-1686). When the server advertises the 'tasks' capability the
+// tab is enabled; otherwise a tooltip explains why and links to the proposal.
+// The hint lives on the wrapper (title + aria-label), NOT on the disabled
+// trigger: tabs.tsx applies `disabled:pointer-events-none`, which blocks hover
+// on the trigger itself.
 const MCP_TASKS_DOCS_URL = "https://modelcontextprotocol.io/seps/1686-tasks";
 const MCP_TASKS_DISABLED_HINT =
   "This server does not support MCP Tasks. See the SEP-1686 proposal.";
@@ -1380,6 +1380,20 @@ const App = () => {
     await sendNotification({ method: "notifications/roots/list_changed" });
   };
 
+  // [spring-ai-mcp-inspector PATCH] Per-task polling via tasks/get MCP
+  // method. Used by TasksTab to poll individual 'working' tasks at their
+  // own pollInterval. Wired through sendMCPRequest like other MCP methods.
+  const getTask = async (taskId: string) => {
+    const response = await sendMCPRequest(
+      {
+        method: "tasks/get",
+        params: { taskId },
+      },
+      GetTaskResultSchema,
+    );
+    return response;
+  };
+
   const handleClearNotifications = () => {
     setNotifications([]);
   };
@@ -1458,7 +1472,20 @@ const App = () => {
           rects to fit the viewport at scrollY=0, and a 50vh sidebar leaves
           less than 200px for the stacked Tools panes below the wrapped tab
           bar — too little for the list and detail to both be usable with
-          their internal scrolling. */}
+          their internal scrolling. [spring-ai-mcp-inspector PATCH] Mobile
+          pre-connect sidebar (issue #230): before the first connect BOTH
+          compact caps are dropped (h-[30vh] and sm:h-[50vh]), so the sidebar
+          grows to its natural height and the URL input and the Connect
+          button sit in normal flow instead of a capped inner scroll area
+          (at 375x812 the 30vh scroll area showed 113px of a 500px column:
+          URL top 193 and Connect top 481 were out of view and a real click
+          at Connect's centre hit the floating theme bar; at 812x375
+          landscape the sm:h-[50vh] cap squashed the pane to about 187px and
+          trapped the same controls inside its inner scroll). Once connected
+          the caps return (h-[30vh] sm:h-[50vh]) so the #58 contract
+          (config/list/detail rects inside the first 667px viewport at
+          scrollY=0) keeps holding; the caps only matter with tab content
+          mounted, which never happens pre-connect. */}
       <div
         style={
           isCompactLayout
@@ -1470,7 +1497,9 @@ const App = () => {
                 transition: isSidebarDragging ? "none" : "width 0.15s",
               }
         }
-        className="bg-card border-border flex flex-col relative w-full lg:w-auto lg:border-r border-b lg:border-b-0 h-[30vh] sm:h-[50vh] lg:h-auto overflow-y-auto lg:overflow-y-visible"
+        className={`bg-card border-border flex flex-col relative w-full lg:w-auto lg:border-r border-b lg:border-b-0 ${
+          mcpClient ? "h-[30vh] sm:h-[50vh]" : ""
+        } lg:h-auto overflow-y-auto lg:overflow-y-visible`}
         data-testid="config-pane"
       >
         <Sidebar
@@ -1533,7 +1562,7 @@ const App = () => {
               value={activeTab}
               className="w-full p-4"
               onValueChange={(value) => {
-                setActiveTab(value);
+                // [spring-ai-mcp-inspector PATCH] Tab state flows through the hashchange listener only (#200): the redundant synchronous setActiveTab is removed, the listener is the single source of truth. A controlled reproduction on the base commit (real Chromium, real clicks, CPU throttling up to 20x) found no trigger/panel divergence, so no race is claimed.
                 window.location.hash = value;
               }}
             >
@@ -1806,25 +1835,36 @@ const App = () => {
                         readResource(uri);
                       }}
                     />
-                    <TasksTab
-                      tasks={tasks}
-                      listTasks={() => {
-                        clearError("tasks");
-                        listTasks();
-                      }}
-                      clearTasks={() => {
-                        setTasks([]);
-                        setNextTaskCursor(undefined);
-                      }}
-                      cancelTask={cancelTask}
-                      selectedTask={selectedTask}
-                      setSelectedTask={(task) => {
-                        clearError("tasks");
-                        setSelectedTask(task);
-                      }}
-                      error={errors.tasks}
-                      nextCursor={nextTaskCursor}
-                    />
+                    {!!serverCapabilities?.tasks && (
+                      <TasksTab
+                        activeTab={activeTab}
+                        tasks={tasks}
+                        listTasks={() => {
+                          clearError("tasks");
+                          listTasks();
+                        }}
+                        clearTasks={() => {
+                          setTasks([]);
+                          setNextTaskCursor(undefined);
+                        }}
+                        cancelTask={cancelTask}
+                        getTask={getTask}
+                        selectedTask={selectedTask}
+                        setSelectedTask={(task) => {
+                          clearError("tasks");
+                          setSelectedTask(task);
+                        }}
+                        error={errors.tasks}
+                        nextCursor={nextTaskCursor}
+                        updateTask={(task) => {
+                          setTasks((prev) =>
+                            prev.map((t) =>
+                              t.taskId === task.taskId ? task : t,
+                            ),
+                          );
+                        }}
+                      />
+                    )}
                     <AppsTab
                       sandboxPath={`${getMCPProxyAddress(config)}/sandbox`}
                       tools={tools}
