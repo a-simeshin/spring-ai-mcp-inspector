@@ -52,6 +52,7 @@ import io.inspector.mcp.core.auth.BearerProfile;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
@@ -223,6 +224,68 @@ class StreamableHttpProxyControllerTests {
 				.path("error");
 			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
 			assertThat(error.path("reason").asText()).isEqualTo("connection_refused");
+			assertThat(error.path("retryable").asBoolean()).isTrue();
+		}
+
+		@Test
+		@Story("New session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() surfaces the offending header name and JDK reason when a restricted "
+				+ "custom header name is rejected at transport build time")
+		void postMcp_whenRestrictedCustomHeaderRejected_surfacesHeaderNameAndReason() throws Exception {
+			// given - inbound custom headers route the controller onto the header-aware
+			// overload; the factory throws the value-safe IllegalArgumentException built
+			// by validateHeaderNames(), which the controller must not collapse into the
+			// generic "failed to connect" message
+			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
+			request.addHeader("x-custom-auth-headers", "[\"X-Tenant\"]");
+			request.addHeader("X-Tenant", "acme");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class), any(), any()))
+				.willThrow(new InvalidProxyRequestException(
+						"custom header 'host' is not allowed by the JDK HTTP client: restricted header name"));
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
+
+			// when
+			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", body);
+
+			// then - the header name and the JDK reason reach the caller
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(response.getBody())
+				.path("error");
+			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.path("reason").asText()).isEqualTo("invalid_request");
+			assertThat(error.path("message").asText())
+				.isEqualTo("custom header 'host' is not allowed by the JDK HTTP client: restricted header name");
+			assertThat(error.path("retryable").asBoolean()).isFalse();
+		}
+
+		@Test
+		@Story("New session")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() keeps a foreign IllegalArgumentException (NumberFormatException) unknown "
+				+ "and never copies its raw message into the response body")
+		void postMcp_whenForeignIllegalArgument_returnsUnknownWithoutRawMessage() throws Exception {
+			// given - a JDK parser blow-up is NOT a proxy rejection; its message may
+			// quote user input, so it must not travel to the browser
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willThrow(new RuntimeException(new NumberFormatException("For input string: \"pw-123\"")));
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
+
+			// when
+			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", body);
+
+			// then - classified unknown, generic message, retryable stays true
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(response.getBody())
+				.path("error");
+			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.path("reason").asText()).isEqualTo("unknown");
+			assertThat(error.path("message").asText()).doesNotContain("pw-123");
 			assertThat(error.path("retryable").asBoolean()).isTrue();
 		}
 
@@ -653,7 +716,7 @@ class StreamableHttpProxyControllerTests {
 			// given
 			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
 			request.addHeader("Authorization", "Bearer tok");
-			request.addHeader("x-custom-auth-headers", "X-Tenant, X-Trace");
+			request.addHeader("x-custom-auth-headers", "[\"X-Tenant\", \"X-Trace\"]");
 			request.addHeader("X-Tenant", "acme");
 			request.addHeader("X-Trace", "abc123");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
@@ -699,6 +762,33 @@ class StreamableHttpProxyControllerTests {
 
 		@Test
 		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSession() with a malformed x-custom-auth-headers payload returns 400 and opens no session")
+		void openSession_withMalformedCustomHeaderList_returns400() throws Exception {
+			// given
+			// the legacy comma-separated shape the UI never sent
+			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
+			request.addHeader("x-custom-auth-headers", "X-Tenant, X-Trace");
+			request.addHeader("X-Tenant", "acme");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"method\":\"notify\"}");
+
+			// when
+			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", body);
+
+			// then
+			// explicit 400, no session opened, no transport built
+			assertThat(response).isNotNull();
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			verify(StreamableHttpProxyControllerTests.this.transportFactory, never()).openStreamable(any(URI.class));
+			verify(StreamableHttpProxyControllerTests.this.transportFactory, never()).openStreamable(any(URI.class),
+					any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
 		@Severity(SeverityLevel.MINOR)
 		@Description("openSession() with a blank x-custom-auth-headers list forwards only the Authorization header")
 		void openSession_withBlankCustomHeaderList_forwardsAuthorizationOnly() throws Exception {
@@ -728,7 +818,7 @@ class StreamableHttpProxyControllerTests {
 		void openSession_skipsBlankAndAbsentCustomHeaderNames() throws Exception {
 			// given — empty token, a present header and a named-but-absent header
 			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
-			request.addHeader("x-custom-auth-headers", "X-Present, , X-Missing");
+			request.addHeader("x-custom-auth-headers", "[\"X-Present\", \" \", \"X-Missing\"]");
 			request.addHeader("X-Present", "yes");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
 			final McpClientTransport target = mock(McpClientTransport.class);

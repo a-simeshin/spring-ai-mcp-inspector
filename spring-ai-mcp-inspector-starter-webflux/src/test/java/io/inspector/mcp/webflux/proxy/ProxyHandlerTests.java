@@ -55,6 +55,7 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
 import io.inspector.mcp.core.proxy.ProxySession;
@@ -539,6 +540,88 @@ class ProxyHandlerTests {
 		@Test
 		@Story("SSE proxy open")
 		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() maps a failed proxy start into a structured SSE error event and tears the session down")
+		void openSse_startFailure_emitsStructuredErrorEventAndRemovesSession() {
+			// given - the proxy start fails with a mappable authz failure, but only after
+			// the response stream is subscribed (mirroring the async production
+			// handshake)
+			final reactor.core.publisher.Sinks.Empty<Void> startGate = reactor.core.publisher.Sinks.empty();
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willReturn(startGate.asMono()
+				.then(reactor.core.publisher.Mono.error(new RuntimeException("[401 Unauthorized] GET http://up/sse"))));
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then - the stream carries the endpoint prologue, then the D3 structured
+			// error event (the DTO, not a silent cut), and the failed session is removed
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			reactor.test.StepVerifier.create(body)
+				.assertNext((sse) -> assertThat(sse.event()).isEqualTo("endpoint"))
+				.then(() -> startGate.tryEmitEmpty())
+				.assertNext((sse) -> {
+					assertThat(sse.event()).isEqualTo("error");
+					assertThat(sse.data()).contains("\"code\":\"unauthorized\"");
+					assertThat(sse.data()).contains("\"url\":\"http://up/sse\"");
+				})
+				.then(() -> captured[0].targetToBrowser().tryEmitComplete())
+				.verifyComplete();
+			verify(ProxyHandlerTests.this.registry, org.mockito.Mockito.atLeastOnce())
+				.removeAndClose(captured[0].sessionId());
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with an unmappable proxy start failure emits no error event and still tears the session down")
+		void openSse_startFailureWithoutHttpStatus_emitsNoErrorEventAndRemovesSession() {
+			// given - a start failure the D3 mapper cannot turn into a DTO (no HTTP
+			// status in the message)
+			given(ProxyHandlerTests.this.mcpProxy.start(any()))
+				.willReturn(reactor.core.publisher.Mono.error(new IllegalStateException("connection reset")));
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+
+			// when - the failure fires during assembly, so no DTO is fabricated
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then - the stream carries only the prologue and ends (verifyComplete would
+			// fail on any extra error event), and the failed session is removed
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			reactor.test.StepVerifier.create(body)
+				.assertNext((sse) -> assertThat(sse.event()).isEqualTo("endpoint"))
+				.then(() -> captured[0].targetToBrowser().tryEmitComplete())
+				.verifyComplete();
+			verify(ProxyHandlerTests.this.registry, org.mockito.Mockito.atLeastOnce())
+				.removeAndClose(captured[0].sessionId());
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.CRITICAL)
 		@Description("openSse() under a base path emits a prologue carrying the prefix so the first browser frame is routable")
 		void openSse_underBasePath_prologueCarriesPrefix() {
 			// given
@@ -880,6 +963,59 @@ class ProxyHandlerTests {
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
 			assertThat(entityBody(response).get("error").toString()).contains("MCP_CONNECT_FAILED");
 			assertThat(entityBody(response).get("error").toString()).contains("connection_refused");
+		}
+
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() maps the proxy's InvalidProxyRequestException onto 502 invalid_request with "
+				+ "retryable=false and the value-safe message")
+		void postMcp_newSessionInvalidProxyRequest_returns502InvalidRequestNotRetryable() {
+			// given - the factory rejected a restricted custom header name at build time
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willThrow(new InvalidProxyRequestException(
+						"custom header 'host' is not allowed by the JDK HTTP client: restricted header name"));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://up/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then - 502 invalid_request, retryable=false: an identical retry fails
+			// identically
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			assertThat(entityBody(response).get("error").toString()).contains("invalid_request");
+			assertThat(entityBody(response).get("error").toString()).contains("retryable=false");
+		}
+
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() keeps a foreign IllegalArgumentException (NumberFormatException) unknown and never "
+				+ "copies its raw message into the response body")
+		void postMcp_newSessionForeignIllegalArgument_returnsUnknownWithoutRawMessage() {
+			// given - a JDK parser blow-up is NOT a proxy rejection; its message may
+			// quote user input, so it must not travel to the browser
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willThrow(new RuntimeException(new NumberFormatException("For input string: \"pw-123\"")));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://up/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then - classified unknown, generic message, retryable stays true
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			assertThat(entityBody(response).get("error").toString()).contains("MCP_CONNECT_FAILED");
+			assertThat(entityBody(response).get("error").toString()).contains("reason=unknown");
+			assertThat(entityBody(response).get("error").toString()).doesNotContain("pw-123");
+			assertThat(entityBody(response).get("error").toString()).contains("retryable=true");
 		}
 
 		@Test
@@ -1841,6 +1977,55 @@ class ProxyHandlerTests {
 		@Test
 		@Story("Header forwarding")
 		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with a malformed x-custom-auth-headers payload returns 400 and builds no transport")
+		void openSse_withMalformedCustomHeaderList_returns400() {
+			// given
+			// the legacy comma-separated shape the UI never sent
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
+						.header("x-custom-auth-headers", "X-Tenant, X-Trace")
+						.header("X-Tenant", "acme")
+						.build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then
+			// explicit 400, no transport built
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			verify(ProxyHandlerTests.this.transportFactory, never()).buildSse(any(URI.class));
+			verify(ProxyHandlerTests.this.transportFactory, never()).buildSse(any(URI.class), any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with a malformed x-custom-auth-headers payload returns 400 and opens no session")
+		void postMcp_withMalformedCustomHeaderList_returns400() {
+			// given
+			// a new-session POST whose payload is not a JSON array
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://up/mcp")
+						.header("x-custom-auth-headers", "{\"names\":[]}")
+						.header("X-Tenant", "acme")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"method\":\"notify\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then
+			// explicit 400, no transport built
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			verify(ProxyHandlerTests.this.transportFactory, never()).openStreamable(any(URI.class));
+			verify(ProxyHandlerTests.this.transportFactory, never()).openStreamable(any(URI.class), any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() without any inbound auth headers uses the bare single-arg openSse factory overload")
 		void openSse_withoutHeaders_usesBareSseFactory() {
 			// given — no Authorization, no x-custom-auth-headers: inboundAuthorization
@@ -1875,7 +2060,7 @@ class ProxyHandlerTests {
 			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class), any(), any())).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
-						.header("x-custom-auth-headers", " X-Tenant , , X-Absent ,X-Trace")
+						.header("x-custom-auth-headers", "[\" X-Tenant \", \" \", \"X-Absent\", \"X-Trace\"]")
 						.header("X-Tenant", "acme")
 						.header("X-Trace", "t-1")
 						.build());
@@ -1934,7 +2119,7 @@ class ProxyHandlerTests {
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/stdio?command=node")
 						.header("Authorization", "Bearer abc")
-						.header("x-custom-auth-headers", "X-Tenant")
+						.header("x-custom-auth-headers", "[\"X-Tenant\"]")
 						.header("X-Tenant", "acme")
 						.build());
 
@@ -1950,6 +2135,29 @@ class ProxyHandlerTests {
 		@Test
 		@Story("Header forwarding")
 		@Severity(SeverityLevel.NORMAL)
+		@Description("openStdio() with a malformed x-custom-auth-headers payload returns 400 and builds no transport")
+		void openStdio_withMalformedCustomHeaderList_returns400() {
+			// given
+			// the legacy comma-separated shape the UI never sent
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/stdio?command=node")
+						.header("x-custom-auth-headers", "X-Tenant, X-Trace")
+						.header("X-Tenant", "acme")
+						.build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openStdio(request).block();
+
+			// then
+			// explicit 400, no transport built
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			verify(ProxyHandlerTests.this.transportFactory, never()).openStdio(any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() opening a new session forwards the inbound Authorization header into the header-aware openStreamable overload")
 		void postMcp_newSessionWithAuthorizationHeader_usesHeaderAwareStreamableFactory() {
 			// given
@@ -1959,7 +2167,7 @@ class ProxyHandlerTests {
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://up/mcp")
 						.header("Authorization", "Bearer abc")
-						.header("x-custom-auth-headers", "X-Tenant")
+						.header("x-custom-auth-headers", "[\"X-Tenant\"]")
 						.header("X-Tenant", "acme")
 						.contentType(MediaType.APPLICATION_JSON)
 						.body("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"));

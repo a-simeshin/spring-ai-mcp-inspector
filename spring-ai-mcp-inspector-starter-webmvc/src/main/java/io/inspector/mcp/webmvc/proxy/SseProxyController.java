@@ -36,6 +36,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -44,6 +45,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
@@ -55,8 +57,12 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.CustomHeaderNames;
+import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyConnectFailure;
+import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
 import io.inspector.mcp.core.proxy.ProxyErrorMapper;
 import io.inspector.mcp.core.proxy.ProxySession;
@@ -88,6 +94,18 @@ import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
  * browser-side {@code SSEClientTransport} where to POST messages. Subsequent frames from
  * the target are streamed as {@code event: message}.
  *
+ * <p>
+ * A target that cannot be brought up is answered before the stream starts: the handler
+ * throws {@link ProxyConnectFailureException} and the {@link #connectFailure} advice maps
+ * it onto the same structured {@code MCP_CONNECT_FAILED} JSON body the streamable
+ * controller serves. A plain {@code ResponseStatusException} would delegate to Boot's
+ * {@code /error} dispatch, whose default {@code include-message=never} drops the message
+ * from both the status line and the body - exactly what this advice exists to avoid. A
+ * malformed {@code x-custom-auth-headers} payload is answered the same way: the handler
+ * throws {@code ResponseStatusException(400)} and the {@link #statusException} advice
+ * maps it onto the same explicit {@code error} JSON body the streamable controller serves
+ * for the same client bug.
+ *
  * @author Artem Simeshin
  */
 @RestController
@@ -95,6 +113,12 @@ import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
 public class SseProxyController {
 
 	private static final Logger LOG = LoggerFactory.getLogger(SseProxyController.class);
+
+	/**
+	 * Error code of the structured connect-failure payload (mirrors
+	 * {@code StreamableHttpProxyController#connectFailureResponse}).
+	 */
+	private static final String ERROR_CODE_MCP_CONNECT_FAILED = "MCP_CONNECT_FAILED";
 
 	private final ProxySessionRegistry registry;
 
@@ -223,7 +247,17 @@ public class SseProxyController {
 			@RequestParam(value = "env", required = false) final String env,
 			@RequestParam(value = "profileId", required = false) final String profileId,
 			final HttpServletRequest request) {
-		return openProxiedSession(transportType, url, command, args, env, profileId, contextPath(request));
+		final Map<String, String> customHeaders;
+		try {
+			customHeaders = inboundCustomHeaders(request);
+		}
+		catch (final IllegalArgumentException ex) {
+			// 400 before any SSE stream is opened: a malformed payload must be a visible
+			// client error, not a session that silently forwards no custom headers.
+			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+		}
+		return openProxiedSession(transportType, url, command, args, env, profileId, customHeaders,
+				contextPath(request));
 	}
 
 	/**
@@ -238,7 +272,14 @@ public class SseProxyController {
 	public SseEmitter openStdio(@RequestParam("command") final String command,
 			@RequestParam(value = "args", required = false) final String args,
 			@RequestParam(value = "env", required = false) final String env, final HttpServletRequest request) {
-		return openProxiedSession("stdio", null, command, args, env, null, contextPath(request));
+		final Map<String, String> customHeaders;
+		try {
+			customHeaders = inboundCustomHeaders(request);
+		}
+		catch (final IllegalArgumentException ex) {
+			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+		}
+		return openProxiedSession("stdio", null, command, args, env, null, customHeaders, contextPath(request));
 	}
 
 	/**
@@ -256,7 +297,14 @@ public class SseProxyController {
 			@RequestParam(value = "env", required = false) final String env,
 			@RequestParam(value = "profileId", required = false) final String profileId,
 			final HttpServletRequest request) {
-		return openProxiedSession("stdio", null, command, args, env, profileId, contextPath(request));
+		final Map<String, String> customHeaders;
+		try {
+			customHeaders = inboundCustomHeaders(request);
+		}
+		catch (final IllegalArgumentException ex) {
+			throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+		}
+		return openProxiedSession("stdio", null, command, args, env, profileId, customHeaders, contextPath(request));
 	}
 
 	/**
@@ -294,7 +342,8 @@ public class SseProxyController {
 	}
 
 	private SseEmitter openProxiedSession(final String transportType, final String url, final String command,
-			final String args, final String env, final String profileId, final String contextPath) {
+			final String args, final String env, final String profileId, final Map<String, String> customHeaders,
+			final String contextPath) {
 		final String sessionId = UUID.randomUUID().toString();
 		final SseEmitter emitter = new SseEmitter(resolveTimeouts().getSseSession().toMillis());
 
@@ -323,12 +372,17 @@ public class SseProxyController {
 				(headers != null) ? headers.authorization() : null);
 		final McpClientTransport target;
 		try {
-			target = buildTargetTransport(transportType, url, command, args, env, headers, authorizationRef);
+			target = buildTargetTransport(transportType, url, command, args, env, headers, customHeaders,
+					authorizationRef);
 		}
 		catch (final Exception ex) {
-			LOG.warn("proxy[{}] failed to build target transport: {}", sessionId, ex.toString());
-			emitter.completeWithError(ex);
-			return emitter;
+			// classify() maps transport-build rejections onto a message the browser
+			// can read; completeWithError(ex) would answer a bodyless 500 and lose the
+			// offending header name entirely.
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
+			LOG.warn("proxy[{}] failed to build target transport ({}): {}", sessionId, failure.reason().wire(),
+					ex.toString());
+			throw new ProxyConnectFailureException(failure, ex);
 		}
 
 		// browserToTarget stays unicast (single consumer in McpProxy);
@@ -504,32 +558,56 @@ public class SseProxyController {
 	}
 
 	private McpClientTransport buildTargetTransport(final String transportType, final String url, final String command,
-			final String args, final String env, final AuthHeaders headers,
+			final String args, final String env, final AuthHeaders headers, final Map<String, String> customHeaders,
 			final AtomicReference<String> authorizationRef) throws Exception {
 		final String type = (transportType != null) ? transportType.toLowerCase() : "sse";
 		return switch (type) {
 			case "sse" -> {
 				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/sse");
 				yield (headers != null) ? this.transportFactory.buildSseWithAuth(target, headers, authorizationRef)
-						: openSseWithInboundHeaders(target);
+						: openSseWithInboundHeaders(target, customHeaders);
 			}
 			case "streamable-http" -> {
 				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
 				yield (headers != null)
 						? this.transportFactory.openStreamableWithAuth(target, headers, authorizationRef)
-						: openStreamableWithInboundHeaders(target);
+						: openStreamableWithInboundHeaders(target, customHeaders);
 			}
 			case "stdio" -> {
 				if (command == null || command.isBlank()) {
-					throw new IllegalArgumentException(
+					throw new InvalidProxyRequestException(
 							"missing required 'command' query parameter for stdio transport");
 				}
 				final List<String> argv = parseArgv(command, args);
 				final Map<String, String> environment = parseEnv(env);
 				yield this.transportFactory.openStdio(argv, environment);
 			}
-			default -> throw new IllegalArgumentException("unsupported transportType: " + transportType);
+			default -> throw new InvalidProxyRequestException("unsupported transportType: " + transportType);
 		};
+	}
+
+	/**
+	 *
+	 * Answers a failed session bring-up with the structured {@code MCP_CONNECT_FAILED}
+	 * payload: 504 Gateway Timeout for {@link ProxyConnectFailure.Reason#TIMEOUT}, 502
+	 * Bad Gateway for every other reason. The body is written by this controller itself
+	 * (same contract as {@code StreamableHttpProxyController#connectFailureResponse})
+	 * because the container error page a thrown status exception would delegate to drops
+	 * the message on the wire (Boot's default
+	 * {@code server.error.include-message=never}); the cause stays server-side in the
+	 * log.
+	 * @param ex the connect failure signalled by the session bring-up
+	 * @return the HTTP response entity carrying the structured error body
+	 */
+	@ExceptionHandler(ProxyConnectFailureException.class)
+	private ResponseEntity<Object> connectFailure(final ProxyConnectFailureException ex) {
+		final ProxyConnectFailure failure = ex.failure();
+		final HttpStatus status = (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT) ? HttpStatus.GATEWAY_TIMEOUT
+				: HttpStatus.BAD_GATEWAY;
+		return ResponseEntity.status(status)
+			.contentType(MediaType.APPLICATION_JSON)
+			.body(Map.of("error", Map.of("code", ERROR_CODE_MCP_CONNECT_FAILED, "reason", failure.reason().wire(),
+					"message", failure.message(), "retryable", failure.retryable())));
 	}
 
 	/**
@@ -537,11 +615,12 @@ public class SseProxyController {
 	 * headers named by {@code x-custom-auth-headers} (legacy no-profile path); falls back
 	 * to the single-arg overload when nothing needs forwarding.
 	 * @param target the resolved target URI
+	 * @param customHeaders the custom headers (named by {@code x-custom-auth-headers}) to
+	 * forward upstream, may be empty
 	 * @return a configured SSE transport
 	 */
-	private McpClientTransport openSseWithInboundHeaders(final URI target) {
+	private McpClientTransport openSseWithInboundHeaders(final URI target, final Map<String, String> customHeaders) {
 		final String authorization = inboundAuthorization();
-		final Map<String, String> customHeaders = inboundCustomHeaders();
 		final boolean noHeaders = authorization == null && customHeaders.isEmpty();
 		return noHeaders ? this.transportFactory.buildSse(target)
 				: this.transportFactory.buildSse(target, authorization, customHeaders);
@@ -552,14 +631,31 @@ public class SseProxyController {
 	 * and the headers named by {@code x-custom-auth-headers} (legacy no-profile path);
 	 * falls back to the single-arg overload when nothing needs forwarding.
 	 * @param target the resolved target URI
+	 * @param customHeaders the custom headers (named by {@code x-custom-auth-headers}) to
+	 * forward upstream, may be empty
 	 * @return a configured streamable transport
 	 */
-	private McpClientTransport openStreamableWithInboundHeaders(final URI target) {
+	private McpClientTransport openStreamableWithInboundHeaders(final URI target,
+			final Map<String, String> customHeaders) {
 		final String authorization = inboundAuthorization();
-		final Map<String, String> customHeaders = inboundCustomHeaders();
 		final boolean noHeaders = authorization == null && customHeaders.isEmpty();
 		return noHeaders ? this.transportFactory.openStreamable(target)
 				: this.transportFactory.openStreamable(target, authorization, customHeaders);
+	}
+
+	/**
+	 * Maps the malformed-payload {@code 400}s onto the same explicit {@code error} JSON
+	 * body the streamable and webflux endpoints serve. Without this advice Boot's
+	 * {@code /error} dispatch answers with an empty body and the offending header shape
+	 * never reaches the browser.
+	 * @param ex the rejected request's status exception carrying the message
+	 * @return the HTTP response entity carrying the explicit error body
+	 */
+	@ExceptionHandler(ResponseStatusException.class)
+	private ResponseEntity<Object> statusException(final ResponseStatusException ex) {
+		return ResponseEntity.status(ex.getStatusCode())
+			.contentType(MediaType.APPLICATION_JSON)
+			.body(Map.of("error", String.valueOf(ex.getReason())));
 	}
 
 	/**
@@ -573,31 +669,16 @@ public class SseProxyController {
 
 	/**
 	 * Reads the custom headers named by the {@code x-custom-auth-headers} request header
-	 * (comma-separated header names) and returns their inbound values, so they can be
-	 * forwarded verbatim to the upstream MCP server.
+	 * (a JSON array of header names, see {@link CustomHeaderNames}) and returns their
+	 * inbound values, so they can be forwarded verbatim to the upstream MCP server.
+	 * @param request the incoming request
 	 * @return a map of custom header name → value (never {@code null})
+	 * @throws IllegalArgumentException when the payload is present but malformed; the
+	 * endpoints translate it into a 400 before any stream is opened
 	 */
-	private static Map<String, String> inboundCustomHeaders() {
-		final HttpServletRequest request = currentRequest();
-		if (request == null) {
-			return Map.of();
-		}
-		final String named = request.getHeader("x-custom-auth-headers");
-		if (named == null || named.isBlank()) {
-			return Map.of();
-		}
-		final Map<String, String> out = new LinkedHashMap<>();
-		for (final String raw : named.split(",")) {
-			final String name = raw.trim();
-			if (name.isEmpty()) {
-				continue;
-			}
-			final String value = request.getHeader(name);
-			if (value != null) {
-				out.put(name, value);
-			}
-		}
-		return out;
+	private static Map<String, String> inboundCustomHeaders(final HttpServletRequest request) {
+		return CustomHeaderNames.resolve((request != null) ? request.getHeader(CustomHeaderNames.HEADER) : null,
+				(name) -> (request != null) ? request.getHeader(name) : null);
 	}
 
 	private static HttpServletRequest currentRequest() {
