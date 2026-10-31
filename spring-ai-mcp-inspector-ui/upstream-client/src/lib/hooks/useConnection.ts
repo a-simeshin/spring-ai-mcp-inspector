@@ -128,25 +128,43 @@ interface UseConnectionOptions {
  * it as `{...init.headers}` silently yields an empty object, so a naive merge
  * would drop every SDK header. Normalizing each source first keeps the SDK
  * headers and lets our auth + proxy headers win on collision.
+ *
+ * Collision matching is case-insensitive (issue #299): `Headers` normalizes
+ * names to lowercase while our record sources keep the original spelling, so
+ * a case-sensitive merge emitted two names differing only in case
+ * (x-mcp-proxy-auth + X-MCP-Proxy-Auth) and the browser joined the pair into
+ * "Bearer t, Bearer t", which the proxy rejects with 401. The later source
+ * replaces both the value and the name spelling.
  */
 const mergeRequestHeaders = (
   ...sources: Array<HeadersInit | undefined>
 ): Record<string, string> => {
   const merged: Record<string, string> = {};
+  const nameByLowercase = new Map<string, string>();
+  const putHeader = (name: string, value: string): void => {
+    const previousName = nameByLowercase.get(name.toLowerCase());
+    if (previousName !== undefined && previousName !== name) {
+      delete merged[previousName];
+    }
+    nameByLowercase.set(name.toLowerCase(), name);
+    merged[name] = value;
+  };
   for (const source of sources) {
     if (!source) {
       continue;
     }
     if (typeof Headers !== "undefined" && source instanceof Headers) {
       source.forEach((value, key) => {
-        merged[key] = value;
+        putHeader(key, value);
       });
     } else if (Array.isArray(source)) {
       for (const [key, value] of source) {
-        merged[key] = value;
+        putHeader(key, value);
       }
     } else {
-      Object.assign(merged, source);
+      for (const [key, value] of Object.entries(source)) {
+        putHeader(key, value);
+      }
     }
   }
   return merged;
