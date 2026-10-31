@@ -529,6 +529,11 @@ export function useConnection({
     setMcpSessionId(null);
     setMcpProtocolVersion(null);
     setCompletionsSupported(false);
+    // [spring-ai-mcp-inspector PATCH] Also clear the stale server info: a
+    // failed attempt that never reaches a catch path (the proxy health check
+    // early return, the proxy auth branch) kept the previous session's
+    // serverImplementation/serverCapabilities in state next to an error
+    // status. See NOTICE.d/stale-connect-status-fix.txt.
     setServerCapabilities(null);
     setServerImplementation(null);
 
@@ -973,6 +978,11 @@ export function useConnection({
         if (isConnectionAuthError(error)) {
           // Don't set error state if we're about to redirect for auth
 
+          // [spring-ai-mcp-inspector PATCH] Still clear the server info this
+          // attempt may have set before the late failure: a late
+          // unauthorized failure must not leave it in state. See
+          // NOTICE.d/stale-connect-status-fix.txt.
+          setServerImplementation(null);
           return;
         }
         // [spring-ai-mcp-inspector PATCH] Surface connection failures in the
@@ -984,6 +994,12 @@ export function useConnection({
         // about. Before this patch the rethrow reached the outer catch, which
         // set the same "error" status; only the toast is dropped, since the
         // alert now carries the reason in place.
+        // [spring-ai-mcp-inspector PATCH] Also clear serverImplementation
+        // (this attempt may have set it at the setServerImplementation call
+        // above before the late failure). serverCapabilities needs no clear
+        // here: on this line it is only set after the try/catch block
+        // (below), so it cannot hold this attempt's stale value yet.
+        setServerImplementation(null);
         setConnectionError(connectionFailureFromError(error));
         setConnectionStatus("error");
         return;
@@ -1364,7 +1380,12 @@ export function useConnection({
         });
       }
       console.error(e);
+      // [spring-ai-mcp-inspector PATCH] Also clear the server info (whatever
+      // this attempt set or what survived from a previous session) so none of
+      // it lingers in state after a failed attempt.
       setConnectionStatus("error");
+      setServerImplementation(null);
+      setServerCapabilities(null);
     }
 
     } finally {
@@ -1441,6 +1462,14 @@ export function useConnection({
     setConnectionStatus("disconnected");
     setCompletionsSupported(false);
     setServerCapabilities(null);
+    // [spring-ai-mcp-inspector PATCH] Clear the session-scoped
+    // serverImplementation on disconnect too. connectionError is deliberately
+    // NOT cleared here: the sidebar Reconnect button calls onDisconnect();
+    // onConnect() without awaiting, so a clear after these awaits would land
+    // after a fast-failing new connect and wipe that attempt's failure (the
+    // BLOCK removed from the 2.x review of the sibling fix). See
+    // NOTICE.d/stale-connect-status-fix.txt.
+    setServerImplementation(null);
     setMcpSessionId(null);
     setMcpProtocolVersion(null);
   };

@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] App-level Tasks tab capability-gate regression tests (#182).
 // Must run before react-dom loads (jsdom lacks PointerEvent; React only
 // attaches pointermove listeners when the constructor exists).
 import "../testUtils/pointerEventsPolyfill";
@@ -281,6 +282,49 @@ describe("App - Tasks tab disabled-state tooltip", () => {
       expect(
         screen.queryByRole("link", { name: /MCP Tasks documentation/i }),
       ).not.toBeInTheDocument();
+    });
+  });
+});
+
+
+describe("App - Tasks tab capability gate", () => {
+  const mockUseConnection = jest.mocked(useConnection);
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("does not mount TasksTab when the server does not advertise the tasks capability", () => {
+    // Regression (owner review on 0a41ca9, mutation a): replacing the
+    // serverCapabilities?.tasks mount gate with {true && } must be caught
+    // here. TasksTab is mocked to a div with the literal text, so mounting
+    // is observable without its polling internals.
+    mockUseConnection.mockReturnValue(
+      connectionState({ tools: { listChanged: true } }),
+    );
+
+    render(<App />);
+
+    expect(screen.queryByText("TasksTab")).not.toBeInTheDocument();
+  });
+
+  it("mounts TasksTab when the server advertises the tasks capability", async () => {
+    // resources is included so App renders the real tab content area (it
+    // falls back to a "no capabilities" pane without resources/prompts/tools)
+    mockUseConnection.mockReturnValue(
+      connectionState({
+        resources: { listChanged: true },
+        tasks: { listChanged: true },
+      }),
+    );
+
+    render(<App />);
+
+    // TabsContent only renders the active tab, so open the Tasks tab first.
+    fireEvent.click(screen.getByRole("tab", { name: /^Tasks$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("TasksTab")).toBeInTheDocument();
     });
   });
 });

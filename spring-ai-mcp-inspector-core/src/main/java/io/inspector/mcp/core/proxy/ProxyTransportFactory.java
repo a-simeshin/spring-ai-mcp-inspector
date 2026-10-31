@@ -17,6 +17,9 @@
 package io.inspector.mcp.core.proxy;
 
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -85,39 +88,72 @@ public class ProxyTransportFactory {
 		this(new ObjectMapper());
 	}
 
+	private static final Duration DEFAULT_SSE_PREFLIGHT_TIMEOUT = Duration.ofSeconds(10);
+
+	/**
+	 * Wall-clock budget for the SSE preflight probe (see {@link SsePreflightTransport}).
+	 * Bound to {@code spring.ai.mcp.inspector.timeouts.*} when the factory is wired by
+	 * the auto-configurations.
+	 */
+	private final Duration ssePreflightTimeout;
+
 	public ProxyTransportFactory(final ObjectMapper objectMapper) {
-		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
+		this(objectMapper, DEFAULT_SSE_PREFLIGHT_TIMEOUT);
 	}
 
 	/**
-	 * Builds an SSE client transport that targets the supplied {@code sseUri}.
+	 * Creates a factory whose SSE preflight probe is bounded by
+	 * {@code ssePreflightTimeout}.
+	 * @param objectMapper the JSON mapper backing the transports (may be {@code null})
+	 * @param ssePreflightTimeout the preflight probe budget (never {@code null})
+	 */
+	public ProxyTransportFactory(final ObjectMapper objectMapper, final Duration ssePreflightTimeout) {
+		this.objectMapper = (objectMapper != null) ? objectMapper : new ObjectMapper();
+		this.ssePreflightTimeout = (ssePreflightTimeout != null) ? ssePreflightTimeout : DEFAULT_SSE_PREFLIGHT_TIMEOUT;
+	}
+
+	/**
+	 * Builds an SSE client transport wrapped in a single header-only preflight probe.
 	 *
 	 * <p>
 	 * The URI's scheme/host/port form the transport's base URI; the URI's path is the SSE
-	 * endpoint. Example: {@code http://127.0.0.1:8080/sse} → base
-	 * {@code http://127.0.0.1:8080}, SSE endpoint {@code /sse}.
+	 * endpoint. Example: {@code http://127.0.0.1:8080/sse} means base
+	 * {@code http://127.0.0.1:8080}, SSE endpoint {@code /sse}. The returned transport
+	 * performs one cancelled {@code GET} probe before delegating to the inner
+	 * {@link HttpClientSseClientTransport} (see {@link SsePreflightTransport}). The probe
+	 * reuses the delegate's {@link HttpClient} through a {@link SharedHttpClientBuilder},
+	 * so no second client (and no second selector thread) is allocated per proxy session.
 	 * @param sseUri the full SSE endpoint URI (must not be {@code null})
-	 * @return a configured {@link McpClientTransport} for SSE
+	 * @return a configured {@link McpClientTransport} for SSE with preflight
+	 * @see SsePreflightTransport
 	 */
-	public McpClientTransport openSse(final URI sseUri) {
+	public McpClientTransport buildSse(final URI sseUri) {
 		if (sseUri == null) {
 			throw new IllegalArgumentException("sseUri must not be null");
 		}
 		final String baseUri = stripPath(sseUri);
 		final String ssePath = (sseUri.getRawPath() == null || sseUri.getRawPath().isBlank()) ? "/sse"
 				: sseUri.getRawPath();
-		return HttpClientSseClientTransport.builder(baseUri)
+		final HttpClient sharedClient = HttpClient.newBuilder()
+			.executor(SHARED_HTTP_EXECUTOR)
+			.version(HttpClient.Version.HTTP_1_1)
+			.connectTimeout(Duration.ofSeconds(10))
+			.build();
+		final HttpClientSseClientTransport.Builder builder = HttpClientSseClientTransport.builder(baseUri)
 			.sseEndpoint(ssePath)
 			.messageEndpointValidator(noopValidator())
-			.customizeClient((client) -> client.executor(SHARED_HTTP_EXECUTOR))
-			.build();
+			.clientBuilder(new SharedHttpClientBuilder(sharedClient));
+		final McpClientTransport delegate = builder.build();
+		final HttpRequest.Builder requestTemplate = HttpRequest.newBuilder();
+		return new SsePreflightTransport(delegate, normalizeSseUri(sseUri), requestTemplate, null, sharedClient,
+				this.ssePreflightTimeout);
 	}
 
 	/**
 	 * Builds a streamable-HTTP transport that targets the supplied {@code mcpUri}.
 	 *
 	 * <p>
-	 * Same URI breakdown semantics as {@link #openSse(URI)}.
+	 * Same URI breakdown semantics as {@link #buildSse(URI)}.
 	 * @param mcpUri the full MCP endpoint URI (must not be {@code null})
 	 * @return a configured {@link McpClientTransport} for streamable-HTTP
 	 */
@@ -154,6 +190,20 @@ public class ProxyTransportFactory {
 		}
 		final ServerParameters parameters = builder.build();
 		return new StdioClientTransport(parameters, new JacksonMcpJsonMapper(this.objectMapper));
+	}
+
+	/**
+	 * Normalizes an SSE URI by ensuring the path is non-empty, defaulting to {@code /sse}
+	 * when the supplied URI has no path.
+	 * @param uri the source URI (may have an empty or null path)
+	 * @return a URI with the same scheme, host and port, but with a non-empty path
+	 */
+	private static URI normalizeSseUri(final URI uri) {
+		final String rawPath = uri.getRawPath();
+		if (rawPath != null && !rawPath.isBlank()) {
+			return uri;
+		}
+		return URI.create(stripPath(uri) + "/sse");
 	}
 
 	/**
