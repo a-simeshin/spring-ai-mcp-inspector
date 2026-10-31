@@ -78,11 +78,15 @@ class ProxyConcurrentToolCallsIT {
 	 * baseline would be 20s. Measured: webmvc 2.2s (4-core runner) / 2.0s (CI); webflux
 	 * 8.2s (4-core runner) / 10.1s (2-core CI), of which ~6.3s is the demo server itself
 	 * executing the same 10 direct /mcp calls without the proxy, i.e. the webflux tool
-	 * pipeline is not fully parallel before the proxy is even involved. The 14s ceiling
-	 * keeps ~39% headroom above the slowest measured run while staying 30% under the 20s
-	 * serial baseline, so a serializing proxy still fails loudly.
+	 * pipeline is not fully parallel before the proxy is even involved. On the
+	 * develop/2.x@06e1b0a base (auth profiles, tasks, preflight rework) the 2-core CI
+	 * webflux leg runs the same parallel staircase in 14.04s twice in a row while the
+	 * 4-core runner stays at 8.2s, so the slowdown is the heavier base on small runners,
+	 * not serialization. The 16s ceiling keeps ~14% headroom above the slowest measured
+	 * CI run while staying 20% under the 20s serial baseline, so a serializing proxy
+	 * still fails loudly.
 	 */
-	private static final Duration TEN_SLOW_ECHO_BUDGET = Duration.ofSeconds(14);
+	private static final Duration TEN_SLOW_ECHO_BUDGET = Duration.ofSeconds(16);
 
 	private static final int CALLS = 10;
 
@@ -111,7 +115,7 @@ class ProxyConcurrentToolCallsIT {
 	@Story("Parallel execution through the proxy")
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Opens one proxy session, sends 10 concurrent 2s slowEcho tools/call POSTs through "
-			+ "/mcp-inspector-api/mcp and asserts wall time <= 14s, well below the 20s sequential baseline, "
+			+ "/mcp-inspector-api/mcp and asserts wall time <= 16s, well below the 20s sequential baseline, "
 			+ "on both stacks")
 	void tenConcurrentSlowEchoes_throughProxy_onSameSession_runInParallel() throws Exception {
 		// given
@@ -172,7 +176,7 @@ class ProxyConcurrentToolCallsIT {
 					.isEqualTo("echo-" + i);
 			}
 			assertThat(elapsed)
-				.as("10 x slowEcho through the proxy must finish in <14s on %s - sequential 20s baseline "
+				.as("10 x slowEcho through the proxy must finish in <16s on %s - sequential 20s baseline "
 						+ "would prove the proxy serializes one session", ProxyAppHarness.stack())
 				.isLessThanOrEqualTo(TEN_SLOW_ECHO_BUDGET);
 		}
