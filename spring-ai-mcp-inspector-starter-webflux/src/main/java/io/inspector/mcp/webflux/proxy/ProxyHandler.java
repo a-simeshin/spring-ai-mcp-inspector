@@ -410,10 +410,9 @@ public class ProxyHandler {
 			return ServerResponse.notFound().build();
 		}
 		return readJsonBody(request).flatMap((body) -> {
-			final Sinks.EmitResult er = session.browserToTarget().tryEmitNext(body);
-			if (er.isFailure()) {
+			if (!session.emitFromBrowser(body)) {
 				return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
-					.bodyValue(Map.of("error", "emit failed: " + er.name()));
+					.bodyValue(Map.of("error", "emit failed"));
 			}
 			session.touch();
 			return ServerResponse.accepted().build();
@@ -801,10 +800,9 @@ public class ProxyHandler {
 			final boolean includeSessionHeader) {
 		final JsonNode idNode = extractRequestId(body);
 		if (idNode == null) {
-			final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
-			if (emitResult.isFailure()) {
+			if (!session.emitFromBrowser(body)) {
 				return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
-					.bodyValue(Map.of("error", "emit failed: " + emitResult.name()));
+					.bodyValue(Map.of("error", "emit failed"));
 			}
 			session.touch();
 			final ServerResponse.BodyBuilder accepted = ServerResponse.accepted();
@@ -843,10 +841,8 @@ public class ProxyHandler {
 			.timeout(requestTimeout)
 			.subscribe(awaiterSink::tryEmitValue, awaiterSink::tryEmitError, () -> awaiterSink.tryEmitEmpty());
 		final Mono<JsonNode> awaiter = awaiterSink.asMono();
-		final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
-		if (emitResult.isFailure()) {
-			return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
-				.bodyValue(Map.of("error", "emit failed: " + emitResult.name()));
+		if (!session.emitFromBrowser(body)) {
+			return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR).bodyValue(Map.of("error", "emit failed"));
 		}
 		session.touch();
 		return awaiter.flatMap((node) -> {
