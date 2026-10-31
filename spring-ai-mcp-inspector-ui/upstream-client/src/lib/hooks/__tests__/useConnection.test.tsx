@@ -1065,6 +1065,61 @@ describe("useConnection", () => {
       ).toHaveProperty("X-MCP-Proxy-Auth", "Bearer test-proxy-token");
     });
 
+    // [spring-ai-mcp-inspector PATCH] case-insensitive header merge regression
+    // (#299): the SDK materializes requestInit.headers into a Headers instance
+    // (lowercase names) before invoking eventSourceInit.fetch, so merging that
+    // source with the proxy auth record via Object.assign produced two names
+    // differing only in case (x-mcp-proxy-auth + X-MCP-Proxy-Auth). The
+    // browser joined the pair into "Bearer t, Bearer t" and the proxy
+    // answered 401. NOTICE.d/proxy-header-case-merge.txt.
+    test("merges Headers source and proxy auth record into one case-insensitive key", async () => {
+      const propsWithProxyAuth = {
+        ...defaultProps,
+        connectionType: "proxy" as const,
+        config: {
+          ...DEFAULT_INSPECTOR_CONFIG,
+          MCP_PROXY_AUTH_TOKEN: {
+            ...DEFAULT_INSPECTOR_CONFIG.MCP_PROXY_AUTH_TOKEN,
+            value: "test-proxy-token",
+          },
+        },
+      };
+
+      const { result } = renderHook(() => useConnection(propsWithProxyAuth));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const transportFetch = mockSSETransport.options?.eventSourceInit?.fetch;
+      expect(transportFetch).toBeDefined();
+
+      (global.fetch as jest.Mock).mockClear();
+      await transportFetch?.("http://test.com", {
+        // What the SDK really passes: a Headers instance built from
+        // requestInit.headers, so every name arrives lowercased.
+        headers: new Headers({
+          accept: "text/event-stream",
+          "x-mcp-proxy-auth": "Bearer test-proxy-token",
+        }),
+        cache: "no-store",
+        mode: "cors",
+        signal: new AbortController().signal,
+        redirect: "follow",
+        credentials: "include",
+      });
+
+      const outgoing = (global.fetch as jest.Mock).mock.calls[
+        (global.fetch as jest.Mock).mock.calls.length - 1
+      ];
+      const outgoingHeaders = outgoing[1].headers as Record<string, string>;
+      const authKeys = Object.keys(outgoingHeaders).filter(
+        (key) => key.toLowerCase() === "x-mcp-proxy-auth",
+      );
+      expect(authKeys).toHaveLength(1);
+      expect(outgoingHeaders[authKeys[0]]).toBe("Bearer test-proxy-token");
+    });
+
     test("does NOT send X-MCP-Proxy-Auth header when proxy auth token is configured for direct connectionType", async () => {
       const propsWithProxyAuth = {
         ...defaultProps,
