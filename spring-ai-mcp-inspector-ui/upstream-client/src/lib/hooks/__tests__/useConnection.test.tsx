@@ -2413,6 +2413,73 @@ describe("PR #166 round 4 regression tests", () => {
     expect(result.current.connectionError).toBeNull();
   });
 
+  test("stale OAuth success does not restart a retry over the live session (post-auth generation guard)", async () => {
+    // Regression (PR #166 rework): attempt A fails with 401 and waits inside
+    // auth(); while it waits, attempt B (reset) connects successfully. When
+    // A's auth() then RESOLVES AUTHORIZED, handleAuthError returns true and,
+    // without the generation re-check after the await, A would run
+    // connect(undefined, retryCount + 1): the retry bumps a new generation,
+    // clears B's session state and builds a third client over B's live
+    // session. The guard must stop the stale attempt before the retry.
+    const { Client } = jest.requireMock(
+      "@modelcontextprotocol/sdk/client/index.js",
+    );
+    const mockErrorEvent = new ErrorEvent("error", {
+      message: "Mock error event",
+    });
+    mockClient.connect.mockRejectedValueOnce(
+      new SseError(401, "Unauthorized", mockErrorEvent),
+    );
+
+    const { result } = renderHook(() => useConnection(defaultProps));
+
+    // Make auth() hang so attempt A waits inside handleAuthError.
+    let resolveAuth: (value: string) => void;
+    const authPromise = new Promise<string>((resolve) => {
+      resolveAuth = resolve;
+    });
+    // Gate on A actually entering auth() (resolving is not an unhandled
+    // rejection risk, but starting B before A is inside auth() would race
+    // the very ordering under test).
+    let enteredAuth = false;
+    mockAuth.mockImplementationOnce(() => {
+      enteredAuth = true;
+      return authPromise;
+    });
+
+    const aPromise = result.current.connect();
+    await act(async () => {
+      const deadline = Date.now() + 1000;
+      while (!enteredAuth && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(enteredAuth).toBe(true);
+    });
+
+    // Attempt B: reset and let it fully connect. Two clients exist now:
+    // A's (rejected handshake) and B's.
+    mockClient.connect.mockResolvedValue(undefined);
+    await act(async () => {
+      await result.current.resetSessionAndConnect();
+    });
+    expect(result.current.connectionStatus).toBe("connected");
+    expect(Client.mock.calls.length).toBe(2);
+
+    // Now the stale attempt A's auth() resolves AUTHORIZED.
+    resolveAuth!("AUTHORIZED");
+    await act(async () => {
+      await aPromise;
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // B's session survived: no retry generation was started, so no third
+    // client was built and no third handshake ran.
+    expect(Client.mock.calls.length).toBe(2);
+    expect(mockClient.connect).toHaveBeenCalledTimes(2);
+    expect(result.current.connectionStatus).toBe("connected");
+    expect(result.current.connectionError).toBeNull();
+  });
+
   test("stale attempt does not release connectingRef (A/B/C sequence)", async () => {
     // Regression (PR #166): attempt A2 hangs mid-handshake (inside the
     // try whose finally owns the guard release), reset starts B, then A2
