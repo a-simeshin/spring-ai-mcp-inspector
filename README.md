@@ -312,6 +312,15 @@ spring:
         upstream-liveness-probe-enabled: false
 ```
 
+Known limitation: a half-open stream is not detected. If the upstream accepts the ping
+POST but its SSE stream is silently dead, the accepted POST counts as a live transport and
+the session stays open. Failing a session on a missing probe answer was tried and removed:
+a spec-compliant MCP SDK server parks every request, ping included, until `initialize`,
+so its probes stay unanswered while the session is perfectly healthy. A possible follow-up
+(not implemented) is an answer deadline applied only to sessions that have already answered
+at least one probe, which would catch half-open streams while keeping uninitialized
+sessions safe.
+
 ### Upstream connection stalls
 
 On rare occasions a request through a pooled `java.net.http.HttpClient` connection parks
