@@ -1171,6 +1171,25 @@ export function useConnection({
         // covered too.
         terminalReconnectCloser.close = () => {
           void transport.close();
+          // [spring-ai-mcp-inspector PATCH] block2: closing the transport
+          // preempts the EventSource error the block1 onerror wrapper
+          // relies on, so drive the same error transition here: the
+          // sidebar leaves Connected and shows the Retry banner instead
+          // of silently hanging on a dead upstream. A stale attempt (a
+          // newer connect already started) must not clobber the active
+          // session's state. Refs #157.
+          if (generation !== connectAttemptRef.current) {
+            return;
+          }
+          setConnectionError(
+            connectionFailureFromError(
+              new Error(
+                "The proxy closed the session because the upstream server is no longer reachable.",
+              ),
+            ),
+          );
+          setConnectionStatus("error");
+          setServerImplementation(null);
         };
 
         await client.connect(transport as Transport);
