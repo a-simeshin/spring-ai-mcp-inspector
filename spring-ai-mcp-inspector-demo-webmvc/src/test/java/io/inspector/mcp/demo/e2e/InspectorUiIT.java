@@ -16,7 +16,9 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
@@ -27,6 +29,7 @@ import com.codeborne.selenide.Condition;
 import com.codeborne.selenide.Configuration;
 import com.codeborne.selenide.Selenide;
 import com.codeborne.selenide.SelenideElement;
+import com.codeborne.selenide.WebDriverRunner;
 import io.github.bonigarcia.wdm.WebDriverManager;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -47,6 +50,7 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
 import org.openqa.selenium.logging.LogEntries;
 import org.openqa.selenium.logging.LogEntry;
@@ -59,6 +63,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import io.inspector.mcp.demo.DemoApplication;
 
 import static com.codeborne.selenide.Condition.attributeMatching;
+import static com.codeborne.selenide.Condition.disabled;
 import static com.codeborne.selenide.Condition.exactText;
 import static com.codeborne.selenide.Condition.text;
 import static com.codeborne.selenide.Condition.visible;
@@ -897,6 +902,26 @@ class InspectorUiIT {
 			// then
 			// ToolResults block prints the result somewhere — assert visible text "15".
 			activePanel().shouldHave(text("15"), Duration.ofSeconds(15));
+		}
+
+		@Test
+		@Story("Tool call validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Sum tool with empty required fields: submit button disabled, hint shown.")
+		@DisplayName("sumToolEmptyRequired: submit disabled, hint shown")
+		void sumToolEmptyRequired_submitDisabled_hintShown() {
+			// given
+			selectRow("sum");
+
+			// then
+			// Run Tool button should be disabled when required fields are empty
+			SelenideElement runButton = activePanel().$("[data-testid='run-tool-button']");
+			runButton.shouldBe(disabled);
+
+			// Blurring a required field should show a hint: focus then tab out
+			$("#a").shouldBe(visible).click();
+			$("#b").shouldBe(visible).click();
+			activePanel().shouldHave(text("This field is required"));
 		}
 
 		@Test
@@ -4136,10 +4161,10 @@ class InspectorUiIT {
 			$("[data-testid=tools-detail-pane]").shouldBe(visible, Duration.ofSeconds(10));
 			SelenideElement runTool = $("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofSeconds(10));
 
-			// then: the Run Tool button is not intercepted at 375px.
+			// then: the Run Tool button fits inside the viewport at 375px.
 			scrollIntoView(runTool);
-			Assertions.assertTrue(ResponsiveTestHelpers.elementAtCenter("run-tool-button"),
-					"elementFromPoint at the Run Tool centre must return the button itself at 375x667");
+			Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("run-tool-button"),
+					"The Run Tool button must be visible inside the viewport at 375x667");
 
 			// when: 7 + 8 through the DynamicJsonForm inputs (id=a / id=b), then a
 			// real click on Run Tool
@@ -4256,24 +4281,32 @@ class InspectorUiIT {
 
 	// =====================================================================
 	// Mobile viewport (375x812) regression test: issue #230 companion.
-	// Proves the part of the mobile contract that is fixed today: after
-	// connect, History and Server Notifications stack vertically at 375px
-	// and the document does not overflow horizontally.
+	// Two halves of the mobile contract, both asserted for real:
 	//
-	// Deliberately NOT asserted: URL input / Connect button reachability.
-	// At 375px the sidebar IS in compact mode (matchMedia max-width
-	// 1023.98px, no UA sniffing involved), but in compact mode the config
-	// pane is capped at 30vh with an inner scroll area, and on the live
-	// head both the URL input (top ~193) and the Connect button (top
-	// ~481) sit inside that scroll area (clientHeight 113 vs scrollHeight
-	// 500), out of view at scrollY=0. Verified live on this head with a
-	// full device-metrics override (375x812, DPR 2, mobile=true, iPhone
-	// UA): geometry identical to a plain resize, so no emulation makes
-	// them reachable. Selenide scrolls elements into view before a
-	// visibility probe or click, so an "URL/Connect visible" assertion
-	// here would be a false guarantee. Fixing their visibility is a
-	// product change (compact sidebar layout) tracked as the open
-	// remainder of issue #230.
+	// 1. Pre-connect (fixed by the mobile pre-connect sidebar height
+	// patch, see NOTICE.d/mobile-preconnect-sidebar-height.txt): the
+	// below-sm 30vh cap is dropped until a client exists, so the URL
+	// input and the Connect button sit in normal flow. The scenario
+	// runs under a REAL device emulation (CDP Emulation.
+	// setDeviceMetricsOverride 375x812, DPR 3, mobile=true, plus an
+	// iPhone UA override), not a plain window resize: the card
+	// demands real-device emulation so a viewport that only a phone
+	// UA/DPR combination could break is actually exercised. Geometry
+	// is probed at scrollY=0 with elementFromPoint (Selenide's own
+	// shouldBe(visible) would scrollIntoView first and hide a clip).
+	//
+	// 2. Post-connect: the 30vh cap is back (the issue #58 / plan v10
+	// contract), History and Server Notifications stack vertically at
+	// 375px and the document does not overflow horizontally.
+	//
+	// History note (why the URL/Connect assertions live here): before
+	// the product fix both controls sat inside the sidebar's inner
+	// scroll area (clientHeight 113 vs scrollHeight 500 at 375x812),
+	// out of view at scrollY=0 under every emulation; a device-metrics
+	// override was verified NOT to change that geometry. Selenide
+	// scrolls elements into view before a visibility probe or click, so
+	// the old "URL/Connect visible" claim was a false guarantee; the
+	// assertions below probe elementFromPoint at scrollY=0 instead.
 	// =====================================================================
 
 	@Nested
@@ -4308,22 +4341,271 @@ class InspectorUiIT {
 			return Boolean.TRUE.equals(result);
 		}
 
+		/** The session's original user agent, captured before the override. */
+		private static String originalUserAgent;
+
+		/**
+		 * Applies a real mobile device emulation (not a window resize): CDP
+		 * {@code Emulation.setDeviceMetricsOverride} with the given width/height
+		 * (portrait 375x812 or landscape 812x375), deviceScaleFactor=3, mobile=true, plus
+		 * an iPhone-class user agent via {@code Emulation.setUserAgentOverride}. The
+		 * override stays active until {@link #clearDeviceEmulation()} clears it.
+		 */
+		private static void emulateIphoneViewport(final int width, final int height) {
+			WebDriver driver = WebDriverRunner.getWebDriver();
+			if (driver instanceof ChromeDriver chrome) {
+				originalUserAgent = (String) Selenide.executeJavaScript("return navigator.userAgent;");
+				Map<String, Object> metrics = new HashMap<>();
+				metrics.put("width", width);
+				metrics.put("height", height);
+				metrics.put("deviceScaleFactor", 3);
+				metrics.put("mobile", true);
+				chrome.executeCdpCommand("Emulation.setDeviceMetricsOverride", metrics);
+				Map<String, Object> ua = new HashMap<>();
+				ua.put("userAgent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
+						+ "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1");
+				chrome.executeCdpCommand("Emulation.setUserAgentOverride", ua);
+			}
+			else {
+				// Non-Chrome drivers cannot run the CDP emulation: the scenario
+				// degrades to the compensated window resize so it still runs.
+				ResponsiveTestHelpers.setViewportExactly(width, height);
+			}
+		}
+
+		/**
+		 * Clears the device emulation applied by
+		 * {@link #emulateIphoneViewport(int, int)}. The UA override has no CDP clear
+		 * command, so it is restored by setting the session's original user agent back.
+		 */
+		private static void clearDeviceEmulation() {
+			WebDriver driver = WebDriverRunner.getWebDriver();
+			if (driver instanceof ChromeDriver chrome) {
+				chrome.executeCdpCommand("Emulation.clearDeviceMetricsOverride", Map.of());
+				if (originalUserAgent != null) {
+					Map<String, Object> ua = new HashMap<>();
+					ua.put("userAgent", originalUserAgent);
+					chrome.executeCdpCommand("Emulation.setUserAgentOverride", ua);
+					originalUserAgent = null;
+				}
+			}
+		}
+
+		/**
+		 * True when the element's bounding box lies fully inside the inner viewport (no
+		 * clip) AND {@code document.elementFromPoint} at its centre returns the element
+		 * or a descendant (nothing overlays it): the real tappability condition at the
+		 * current scroll position. Probed at the position the caller pinned (scrollY=0
+		 * for the initial frame, or a plain window.scrollTo for landscape reachability),
+		 * never after a Selenide scrollIntoView.
+		 */
+		private static boolean visibleAndUncovered(final SelenideElement element) {
+			Object result = Selenide.executeJavaScript("const el = arguments[0];"
+					+ "const r = el.getBoundingClientRect();"
+					+ "if (r.width === 0 || r.height === 0) { return 'zero-size'; }"
+					+ "if (r.top < -1 || r.bottom > window.innerHeight + 1 || r.left < -1"
+					+ "|| r.right > window.innerWidth + 1) { return 'clipped: ' + JSON.stringify(r) + ', inner '"
+					+ "+ window.innerWidth + 'x' + window.innerHeight; }"
+					+ "const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);"
+					+ "if (hit && (hit === el || el.contains(hit))) { return true; }"
+					+ "const d = (n) => n ? n.tagName + (n.id ? '#' + n.id : '') + '.'"
+					+ "  + String(n.className || '').slice(0, 60) + ' top=' + Math.round(n.getBoundingClientRect().top)"
+					+ "  + ' pe=' + getComputedStyle(n).pointerEvents : 'none';"
+					+ "return 'covered: ' + d(hit) + ' probeAt=' + Math.round(r.left + r.width / 2) + ','"
+					+ "  + Math.round(r.top + r.height / 2) + ' elTop=' + Math.round(r.top) + ' viewport='"
+					+ "  + window.innerWidth + 'x' + window.innerHeight;" + "return true;", element);
+			if (result instanceof String) {
+				Assertions.fail((String) result);
+			}
+			return Boolean.TRUE.equals(result);
+		}
+
+		/**
+		 * True when the element, wherever it sits in the document flow, becomes tappable
+		 * after a plain document scroll alone: one window.scrollTo pins the element near
+		 * the top of the viewport (no Selenide scrollIntoView, no inner pane drill-down),
+		 * two rAF let the scroll land, and the elementFromPoint probe at the element's
+		 * fresh centre returns the element or a descendant.
+		 */
+		private static boolean reachableByDocumentScroll(final SelenideElement element) {
+			Object hit = Selenide.executeAsyncJavaScript("const callback = arguments[arguments.length - 1];"
+					+ "const el = arguments[0];" + "const r0 = el.getBoundingClientRect();"
+					+ "window.scrollTo(0, Math.max(0, r0.top + window.scrollY - 8));"
+					+ "requestAnimationFrame(() => requestAnimationFrame(() => {"
+					+ "  const r = el.getBoundingClientRect();"
+					+ "  const probe = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);"
+					+ "  const describe = (n) => n ? n.tagName + (n.id ? '#' + n.id : '') + '.'"
+					+ "+ String(n.className || '').slice(0, 40) + ' @'"
+					+ "+ Math.round(n.getBoundingClientRect().top) : 'none';"
+					+ "  callback({probeAt: [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)],"
+					+ "    hit: describe(probe), hitInside: probe === el || el.contains(probe),"
+					+ "    rect: {top: Math.round(r.top), bottom: Math.round(r.bottom)},"
+					+ "    scrollY: Math.round(window.scrollY), viewport: window.innerWidth + 'x' + window.innerHeight});"
+					+ "}));", element);
+			if (hit instanceof Map<?, ?> probe && Boolean.TRUE.equals(probe.get("hitInside"))) {
+				return true;
+			}
+			Assertions.fail("not reachable by document scroll: " + hit);
+			return false;
+		}
+
+		/**
+		 * Waits until the toast stack (the fixed ol the toaster renders into) is empty
+		 * again. The demo app runs without auth profiles, so the UI shows an "Auth
+		 * Profile Error" toast right after load that auto-dismisses after a few seconds;
+		 * while it is up it legitimately overlays part of the viewport (top of the screen
+		 * below sm, bottom in the sm..lg band) and would fail the elementFromPoint
+		 * probes. First waits briefly for the stack to appear (the fetch can lose the
+		 * race with this check), then for it to drain.
+		 */
+		private static void awaitInitialToastsDismissed() {
+			long appearDeadline = System.currentTimeMillis() + 5_000;
+			while (System.currentTimeMillis() < appearDeadline && toastCount() == 0) {
+				Selenide.sleep(200);
+			}
+			long drainDeadline = System.currentTimeMillis() + 15_000;
+			while (System.currentTimeMillis() < drainDeadline && toastCount() > 0) {
+				Selenide.sleep(250);
+			}
+			Assertions.assertEquals(0, toastCount(), "initial toasts must auto-dismiss before the reachability probes");
+		}
+
+		private static int toastCount() {
+			Object count = Selenide.executeJavaScript(
+					"const stack = document.querySelector('ol.fixed'); return stack ? stack.children.length : 0;");
+			return count instanceof Number number ? number.intValue() : 0;
+		}
+
 		@Test
 		@Story("Mobile viewport")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("At 375x812 the History and Server Notifications panes stack vertically (top of Notifications >= bottom of History) and the document has no horizontal overflow. Connect-form reachability at this viewport is intentionally NOT asserted: see the group comment above and the open remainder of issue #230.")
+		@Description("Pre-connect at a real 375x812 device emulation (CDP device metrics DPR 3 mobile=true + iPhone UA, issue #230 AC): the URL input is not trapped in any inner scroll area (with the vh caps the whole form column sat inside an overflow-y-auto DIV), the URL input is fully inside the viewport at scrollY=0 with nothing overlaying its centre, and Connect, which sits below the fold of the auth-aware form the UI gained with the auth profile section, is reachable by document scroll alone: after a plain window.scrollTo the elementFromPoint probe at its fresh centre returns the button. A real click on Connect then connects (the connected Restart/Reconnect control mounts). Before the mobile pre-connect sidebar height patch both controls sat inside the sidebar's capped inner scroll area, out of view.")
+		@DisplayName("urlAndConnectReachable_preConnect_375x812: device emulation, URL and Connect reachable")
+		void urlAndConnectReachable_preConnect_375x812() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+			emulateIphoneViewport(375, 812);
+			try {
+				ResponsiveTestHelpers.scrollToTop();
+				Assertions.assertEquals(0, ResponsiveTestHelpers.scrollY(),
+						"pre-connect reachability must be asserted at scrollY=0");
+
+				// given: the sidebar rendered pre-connect and the transient
+				// "Auth Profile Error" toast (the demo runs without auth
+				// profiles) auto-dismissed, so it cannot overlay the probes.
+				connectButton().shouldBe(visible, Duration.ofSeconds(15));
+				awaitInitialToastsDismissed();
+				ResponsiveTestHelpers.scrollToTop();
+
+				// then: no vh cap is applied below lg pre-connect: no inner scroll
+				// area traps the URL input, it sits in normal flow fully inside the
+				// initial frame, and nothing overlays its centre: the AC of
+				// issue #230 (URL fully visible).
+				Assertions.assertTrue(noInnerScrollOnConfigPane(),
+						"URL input must not be trapped in an inner scroll area at 375x812 pre-connect");
+				Assertions.assertTrue(visibleAndUncovered($("#sse-url-input")),
+						"URL input must be fully visible and uncovered at 375x812 scrollY=0");
+				Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+						"document.documentElement must not overflow horizontally at 375px pre-connect");
+
+				// and: Connect sits below the fold of the grown form but is
+				// reachable by document scroll alone (no inner pane drill-down):
+				// the second AC of issue #230.
+				Assertions.assertTrue(reachableByDocumentScroll(connectButton()),
+						"Connect must be uncovered after document scroll at 375x812");
+
+				// when: a real click on the Connect button (Selenide scrolls the
+				// document itself to reach it)
+				connectButton().click();
+
+				// then: the connected branch mounts the Restart/Reconnect control:
+				// the click really connected.
+				$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			}
+			finally {
+				clearDeviceEmulation();
+			}
+		}
+
+		/**
+		 * True when the config-pane wrapper carries no clipped inner scroll area:
+		 * {@code scrollHeight} fits {@code clientHeight}. A vh cap class (h-[30vh] below
+		 * sm, sm:h-[50vh] in the sm..lg band) is exactly what makes scrollHeight exceed
+		 * clientHeight pre-connect, so this fails while any cap is still applied before
+		 * the first connect.
+		 */
+		private static boolean noInnerScrollOnConfigPane() {
+			Object result = Selenide.executeJavaScript("const url = document" + ".getElementById('sse-url-input');"
+					+ "if (!url) { return 'sse-url-input not found'; }" + "let node = url.parentElement;"
+					+ "while (node && node !== document.body) {" + "  const style = window.getComputedStyle(node);"
+					+ "  if ((style.overflowY === 'auto' || style.overflowY === 'scroll')"
+					+ "    && node.scrollHeight > node.clientHeight + 1) {"
+					+ "    return 'URL input trapped in inner scroll: ' + node.tagName + ' '"
+					+ "    + node.scrollHeight + ' > ' + node.clientHeight"
+					+ "    + ' (viewport ' + window.innerWidth + 'x' + window.innerHeight + ')'; }"
+					+ "  node = node.parentElement; }" + "return true;");
+			if (result instanceof String) {
+				Assertions.fail((String) result);
+			}
+			return Boolean.TRUE.equals(result);
+		}
+
+		@Test
+		@Story("Mobile viewport")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Pre-connect at a real 812x375 landscape phone emulation (CDP device metrics DPR 3 mobile=true + iPhone UA): the sm:h-[50vh] cap must not apply before the first connect either. The config-pane wrapper has no clipped inner scroll area (scrollHeight fits clientHeight, so the pane renders at natural height and the page, not the pane, scrolls), the URL input is fully visible and uncovered at scrollY=0, and Connect, which sits below the fold of a 375px-tall viewport, is reachable by document scroll alone: after a plain window.scrollTo the elementFromPoint probe at its centre returns the button, with no inner pane drill-down.")
+		@DisplayName("urlAndConnectReachable_preConnect_812x375_landscape: no sm: cap, Connect reachable by document scroll")
+		void urlAndConnectReachable_preConnect_812x375_landscape() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+			emulateIphoneViewport(812, 375);
+			try {
+				ResponsiveTestHelpers.scrollToTop();
+				Assertions.assertEquals(0, ResponsiveTestHelpers.scrollY(),
+						"landscape reachability must be asserted at scrollY=0");
+
+				// given: the sidebar rendered pre-connect and the transient
+				// "Auth Profile Error" toast (the demo runs without auth
+				// profiles) auto-dismissed: in the sm..lg band that toast docks to
+				// the bottom of the screen and would overlay the URL probe below.
+				connectButton().shouldBe(visible, Duration.ofSeconds(15));
+				awaitInitialToastsDismissed();
+				ResponsiveTestHelpers.scrollToTop();
+
+				// then: no vh cap is applied below lg pre-connect: no inner scroll
+				// area traps the URL input (with the sm:h-[50vh] cap the pane was
+				// clientHeight ~187 vs scrollHeight ~500 at this viewport) and the
+				// URL input sits in normal flow inside the initial frame.
+				Assertions.assertTrue(noInnerScrollOnConfigPane(),
+						"URL input must not be trapped in an inner scroll area at 812x375 pre-connect");
+				Assertions.assertTrue(visibleAndUncovered($("#sse-url-input")),
+						"URL input must be fully visible and uncovered at 812x375 scrollY=0");
+				Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+						"document.documentElement must not overflow horizontally at 812x375 pre-connect");
+
+				// and: Connect sits below the fold of a 375px-tall viewport but is
+				// reachable by document scroll alone: a plain window.scrollTo (not a
+				// Selenide scrollIntoView), one rAF for the scroll to land, then the
+				// elementFromPoint probe at the button's fresh centre must return the
+				// button itself.
+				Assertions.assertTrue(reachableByDocumentScroll(connectButton()),
+						"Connect must be uncovered after document scroll at 812x375 (no inner pane scroll)");
+			}
+			finally {
+				clearDeviceEmulation();
+			}
+		}
+
+		@Test
+		@Story("Mobile viewport")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At 375x812 the History and Server Notifications panes stack vertically (top of Notifications >= bottom of History) and the document has no horizontal overflow. Connect-form reachability at this viewport is covered by urlAndConnectReachable_preConnect_375x812; the 30vh connected-state cap of issue #58 stays in force here (the mobile pre-connect sidebar height patch drops the cap only before the first connect).")
 		@DisplayName("historyAndNotificationsStack_375x812: panes stack vertically, no horizontal overflow")
 		void historyAndNotificationsStack_375x812() {
 			startApp(new Combo("sse"));
 			open("/mcp-inspector/index.html");
 
-			// Set the exact mobile viewport right after opening. Note: reachability
-			// of the URL input / Connect button is NOT asserted at this viewport.
-			// In compact mode the config pane is capped at 30vh with an inner
-			// scroll area and both controls sit inside it out of view (see the
-			// group comment above); Selenide would scroll them into view before
-			// any probe, making a visibility assertion a false guarantee. That
-			// part of the mobile contract (issue #230) is tracked separately.
+			// Set the exact mobile viewport right after opening.
 			ResponsiveTestHelpers.setViewportExactly(375, 812);
 
 			// Wait for the sidebar to render at mobile viewport
@@ -4332,7 +4614,7 @@ class InspectorUiIT {
 			// Connect (History/Notifications pane mounts after connect).
 			// Selenide scrolls the button into the sidebar's inner scroll
 			// area before clicking: this is a layout drill-down, not a
-			// tap-reachability proof.
+			// tap-reachability proof (that is the pre-connect scenario above).
 			connectButton().click();
 			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
 			ResponsiveTestHelpers.scrollToTop();

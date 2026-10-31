@@ -1229,3 +1229,65 @@ describe("findUnresolvedRefs - malformed percent escapes", () => {
     expect(resolveRef(refSchema, schema)).toBe(refSchema);
   });
 });
+
+// RFC 6901 section 6 fragment decode order (follow-up to the #211/#264 owner
+// review, issue #261): for a URI fragment ref, percent-decode FIRST, then
+// unescape ~1/~0. The previous order unescaped first, so a ref like
+// "#/properties/a%7E1b" looked up the key "a~1b" instead of "a/b".
+describe("findUnresolvedRefs - RFC 6901 fragment decode order", () => {
+  test("resolves percent-encoded ~1 to a slash key (a%7E1b -> a/b)", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a/b": { type: "string" },
+        ok: { $ref: "#/properties/a%7E1b" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("resolves percent-encoded ~0 to a tilde key (a%7E0b -> a~b)", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a~b": { type: "string" },
+        ok: { $ref: "#/properties/a%7E0b" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("resolves double-escaped key (a%7E01b -> a~1b, not a/b or a~01b)", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a~1b": { type: "string" },
+        ok: { $ref: "#/properties/a%7E01b" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("raw unpercent-encoded ~1/~0 tokens still resolve (a~1b -> a/b)", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a/b": { type: "string" },
+        ok: { $ref: "#/properties/a~1b" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("resolveRef follows the same order: a%7E1b resolves to the a/b subschema", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a/b": { type: "string" },
+        ok: { $ref: "#/properties/a%7E1b" },
+      },
+    };
+    const props = schema.properties as Record<string, JsonSchemaType>;
+    expect(resolveRef(props.ok, schema)).toBe(props["a/b"]);
+  });
+});
