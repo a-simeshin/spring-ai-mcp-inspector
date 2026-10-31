@@ -18,6 +18,7 @@ package io.inspector.mcp.webmvc.proxy;
 
 import java.io.IOException;
 import java.net.URI;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -36,6 +37,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -57,6 +59,9 @@ import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyConnectTimeoutException;
+import io.inspector.mcp.core.proxy.ProxyConnectionBudgets;
+import io.inspector.mcp.core.proxy.ProxyConnectionBudgets.ProxyConnectionBudgetException;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
 import io.inspector.mcp.core.proxy.ProxyErrorMapper;
 import io.inspector.mcp.core.proxy.ProxySession;
@@ -187,6 +192,8 @@ public class SseProxyController {
 	 * @param command the executable for stdio transport
 	 * @param args the arguments for stdio transport
 	 * @param env the environment variables for stdio transport as JSON
+	 * @param connectionTimeout optional per-phase budget as raw query-parameter text
+	 * (whole seconds); when absent the configured default (30s) applies
 	 * @param request the current request, read for its context path
 	 * @return the {@link SseEmitter} for the opened session
 	 */
@@ -196,8 +203,10 @@ public class SseProxyController {
 			@RequestParam(value = "url", required = false) final String url,
 			@RequestParam(value = "command", required = false) final String command,
 			@RequestParam(value = "args", required = false) final String args,
-			@RequestParam(value = "env", required = false) final String env, final HttpServletRequest request) {
-		return openSse(transportType, url, command, args, env, null, request);
+			@RequestParam(value = "env", required = false) final String env,
+			@RequestParam(value = "connectionTimeout", required = false) final String connectionTimeout,
+			final HttpServletRequest request) {
+		return openSse(transportType, url, command, args, env, null, connectionTimeout, request);
 	}
 
 	/**
@@ -211,6 +220,8 @@ public class SseProxyController {
 	 * @param args the arguments for stdio transport
 	 * @param env the environment variables for stdio transport as JSON
 	 * @param profileId the owner-scoped auth profile id, or {@code null}
+	 * @param connectionTimeout optional per-phase budget as raw query-parameter text
+	 * (whole seconds); when absent the configured default (30s) applies
 	 * @param request the current request, read for its context path
 	 * @return the {@link SseEmitter} for the opened session
 	 */
@@ -222,8 +233,15 @@ public class SseProxyController {
 			@RequestParam(value = "args", required = false) final String args,
 			@RequestParam(value = "env", required = false) final String env,
 			@RequestParam(value = "profileId", required = false) final String profileId,
+			@RequestParam(value = "connectionTimeout", required = false) final String connectionTimeout,
 			final HttpServletRequest request) {
-		return openProxiedSession(transportType, url, command, args, env, profileId, contextPath(request));
+		// An invalid value propagates to the @ExceptionHandler below: the servlet stack
+		// answers a real HTTP 400 with the structured JSON body, matching the reactive
+		// stack's badRequest() on the same endpoints.
+		final Duration connectionBudget = ProxyConnectionBudgets.parseOrDefault(connectionTimeout,
+				resolveTimeouts().getConnection());
+		return openProxiedSession(transportType, url, command, args, env, profileId, contextPath(request),
+				connectionBudget);
 	}
 
 	/**
@@ -231,14 +249,18 @@ public class SseProxyController {
 	 * @param command the executable for stdio transport
 	 * @param args the arguments for stdio transport
 	 * @param env the environment variables for stdio transport as JSON
+	 * @param connectionTimeout optional per-phase budget as raw query-parameter text
+	 * (whole seconds); when absent the configured default (30s) applies
 	 * @param request the current request, read for its context path
 	 * @return the {@link SseEmitter} for the opened session
 	 */
 	@GetMapping(path = "/stdio", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
 	public SseEmitter openStdio(@RequestParam("command") final String command,
 			@RequestParam(value = "args", required = false) final String args,
-			@RequestParam(value = "env", required = false) final String env, final HttpServletRequest request) {
-		return openProxiedSession("stdio", null, command, args, env, null, contextPath(request));
+			@RequestParam(value = "env", required = false) final String env,
+			@RequestParam(value = "connectionTimeout", required = false) final String connectionTimeout,
+			final HttpServletRequest request) {
+		return openStdio(command, args, env, null, connectionTimeout, request);
 	}
 
 	/**
@@ -247,6 +269,8 @@ public class SseProxyController {
 	 * @param args the arguments for stdio transport
 	 * @param env the environment variables for stdio transport as JSON
 	 * @param profileId the owner-scoped auth profile id, or {@code null}
+	 * @param connectionTimeout optional per-phase budget as raw query-parameter text
+	 * (whole seconds); when absent the configured default (30s) applies
 	 * @param request the current request, read for its context path
 	 * @return the {@link SseEmitter} for the opened session
 	 */
@@ -255,8 +279,14 @@ public class SseProxyController {
 			@RequestParam(value = "args", required = false) final String args,
 			@RequestParam(value = "env", required = false) final String env,
 			@RequestParam(value = "profileId", required = false) final String profileId,
+			@RequestParam(value = "connectionTimeout", required = false) final String connectionTimeout,
 			final HttpServletRequest request) {
-		return openProxiedSession("stdio", null, command, args, env, profileId, contextPath(request));
+		// An invalid value propagates to the @ExceptionHandler below: the servlet stack
+		// answers a real HTTP 400 with the structured JSON body, matching the reactive
+		// stack's badRequest() on the same endpoints.
+		final Duration connectionBudget = ProxyConnectionBudgets.parseOrDefault(connectionTimeout,
+				resolveTimeouts().getConnection());
+		return openProxiedSession("stdio", null, command, args, env, profileId, contextPath(request), connectionBudget);
 	}
 
 	/**
@@ -294,7 +324,8 @@ public class SseProxyController {
 	}
 
 	private SseEmitter openProxiedSession(final String transportType, final String url, final String command,
-			final String args, final String env, final String profileId, final String contextPath) {
+			final String args, final String env, final String profileId, final String contextPath,
+			final Duration connectionBudget) {
 		final String sessionId = UUID.randomUUID().toString();
 		final SseEmitter emitter = new SseEmitter(resolveTimeouts().getSseSession().toMillis());
 
@@ -322,6 +353,7 @@ public class SseProxyController {
 		final AtomicReference<String> authorizationRef = new AtomicReference<>(
 				(headers != null) ? headers.authorization() : null);
 		final McpClientTransport target;
+		final long connectStartNanos = System.nanoTime();
 		try {
 			target = buildTargetTransport(transportType, url, command, args, env, headers, authorizationRef);
 		}
@@ -376,7 +408,18 @@ public class SseProxyController {
 			.takeUntilOther(session.closeSignal())
 			.subscribe((frame) -> sendMessageEvent(emitter, sessionId, frame), (err) -> {
 				LOG.warn("proxy[{}] target stream errored: {}", sessionId, err.toString());
-				completeWithMappedError(emitter, err, TransportKind.SSE, targetUri(transportType, url));
+				// Surface the structured payload (connect-phase timeout carried via
+				// failUpstream, or a classified transport failure) instead of a bare
+				// stream abort the browser cannot read. Budget overruns keep the
+				// proxy-error budget contract; other upstream failures map to the D3
+				// error DTO.
+				if (asConnectTimeout(err) != null) {
+					sendErrorEvent(emitter, err);
+					emitter.complete();
+				}
+				else {
+					completeWithMappedError(emitter, err, TransportKind.SSE, targetUri(transportType, url));
+				}
 			}, () -> emitter.complete());
 
 		emitter.onCompletion(() -> this.registry.removeAndClose(sessionId));
@@ -384,15 +427,33 @@ public class SseProxyController {
 		emitter.onError((ex) -> this.registry.removeAndClose(sessionId));
 
 		// Kick off the proxy. This call subscribes the browser->target pump
-		// and registers the inbound handler on the target transport.
-		this.mcpProxy.start(session).subscribe((ignored) -> {
+		// and registers the inbound handler on the target transport. The budget bounds
+		// the bring-up; an overrun fails the session sink (so awaiters fail fast) and
+		// is surfaced to the browser as a structured error event instead of a bare
+		// stream abort the client cannot read.
+		this.mcpProxy.start(session).timeout(connectionBudget).subscribe((ignored) -> {
 		}, (err) -> {
-			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
-			// D3: the structured error event must land BEFORE the session teardown —
-			// removeAndClose fires the close signal, which completes the emitter, and
-			// a completed emitter can no longer send the error frame (same ordering
-			// rule the webflux handler documents).
-			completeWithMappedError(emitter, err, TransportKind.SSE, targetUri(transportType, url));
+			if (err instanceof java.util.concurrent.TimeoutException) {
+				final long elapsedMs = (System.nanoTime() - connectStartNanos) / 1_000_000L;
+				final ProxyConnectTimeoutException timeoutEx = new ProxyConnectTimeoutException(
+						ProxyConnectTimeoutException.Phase.CONNECT, elapsedMs, connectionBudget.toMillis());
+				LOG.warn("proxy[{}] connect phase timed out after {}ms of {}ms budget", sessionId, elapsedMs,
+						connectionBudget.toMillis());
+				session.failUpstream(timeoutEx);
+				this.registry.removeAndClose(sessionId);
+				sendErrorEvent(emitter, err);
+				emitter.complete();
+			}
+			else {
+				LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+				// D3: the structured error event must land BEFORE the session teardown,
+				// because
+				// removeAndClose fires the close signal, which completes the emitter, and
+				// a completed emitter can no longer send the error frame (same ordering
+				// rule the webflux handler documents).
+				completeWithMappedError(emitter, err, TransportKind.SSE, targetUri(transportType, url));
+				this.registry.removeAndClose(sessionId);
+			}
 			this.registry.removeAndClose(sessionId);
 		});
 
@@ -491,6 +552,62 @@ public class SseProxyController {
 			case "streamable-http" -> ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
 			default -> null;
 		};
+	}
+
+	/**
+	 * Answers a rejected {@code connectionTimeout} value with a real HTTP 400 and the
+	 * structured {@code MCP_CONNECT_FAILED} JSON body, matching the reactive stack's
+	 * {@code badRequest()} on the same endpoints. Spring resolves the handler before the
+	 * emitter return type commits the response, so the status code reaches the client.
+	 * @param ex the validation failure raised while parsing the query parameter
+	 * @return the 400 response entity
+	 */
+	@ExceptionHandler(ProxyConnectionBudgetException.class)
+	public ResponseEntity<Object> handleInvalidConnectionTimeout(final ProxyConnectionBudgetException ex) {
+		return ResponseEntity.badRequest()
+			.contentType(MediaType.APPLICATION_JSON)
+			.body(ProxyConnectionBudgets.invalidParameterBody(ex.rawValue(), ex.getMessage()));
+	}
+
+	/**
+	 * Best-effort structured terminal error for a failed session bring-up: a
+	 * {@code proxy-error} event with the JSON payload, falling back to the exception
+	 * message when the payload cannot be serialized.
+	 * @param emitter the browser-facing emitter
+	 * @param err the failure that ended the bring-up
+	 */
+	private static void sendErrorEvent(final SseEmitter emitter, final Throwable err) {
+		final ProxyConnectTimeoutException timeoutEx = asConnectTimeout(err);
+		final Map<String, Object> payload = (timeoutEx != null) ? ProxyConnectionBudgets.timeoutBody(timeoutEx)
+				: Map.of("error", Map.of("code", "MCP_CONNECT_FAILED", "reason", "unknown", "message",
+						String.valueOf(err.getMessage()), "retryable", Boolean.TRUE));
+		try {
+			emitter.send(SseEmitter.event()
+				.name("proxy-error")
+				.data(JsonMapper.builder().build().writeValueAsString(payload)));
+		}
+		catch (final IOException ex) {
+			LOG.warn("proxy: failed to send proxy-error event, falling back to error completion: {}", ex.toString());
+			emitter.completeWithError(err);
+		}
+	}
+
+	/**
+	 * Unwraps a {@link ProxyConnectTimeoutException} carried by (or equal to) the given
+	 * failure, if any.
+	 * @param err the failure to inspect
+	 * @return the connect-phase timeout, or {@code null} when the failure is something
+	 * else
+	 */
+	private static ProxyConnectTimeoutException asConnectTimeout(final Throwable err) {
+		Throwable current = err;
+		while (current != null) {
+			if (current instanceof ProxyConnectTimeoutException connectTimeout) {
+				return connectTimeout;
+			}
+			current = current.getCause();
+		}
+		return null;
 	}
 
 	private void sendMessageEvent(final SseEmitter emitter, final String sessionId, final JsonNode frame) {
