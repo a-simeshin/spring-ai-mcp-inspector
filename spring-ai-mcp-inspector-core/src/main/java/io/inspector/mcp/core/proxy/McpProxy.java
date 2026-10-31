@@ -288,10 +288,10 @@ public final class McpProxy {
 				final JsonNode body = toJsonNode(message);
 				if (body != null) {
 					recordInbound(session, message, body);
-					final Sinks.EmitResult er = session.targetToBrowser().tryEmitNext(body);
-					if (er.isFailure()) {
-						LOG.debug("proxy[{}] target->browser emit failure: {}", session.sessionId(), er.name());
-					}
+					// Concurrent responses arrive on different transport threads; a
+					// dropped
+					// frame here strands the per-request awaiter until the timeout.
+					session.emitFromTarget(body);
 					session.touch();
 				}
 				return Mono.<JSONRPCMessage>empty();
