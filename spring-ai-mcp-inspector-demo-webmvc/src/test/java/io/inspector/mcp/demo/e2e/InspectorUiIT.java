@@ -657,6 +657,82 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
+	// A2. Version badge (negotiated MCP protocol revision in the connect
+	// zone). The badge is fed by the client's own initialize handshake
+	// observed in useConnection (NOTICE.d/version-badge.txt), so it must
+	// render in every connection type and transport. Both live tests assert
+	// the real negotiated revision: the UI SDK (0.22.0) requests its LATEST
+	// 2025-11-25 and the demo's Spring AI server negotiates 2025-11-25, so
+	// the severity is OK. The downgrade/incompatible/unknown branches are
+	// covered by the unit suites (VersionBadge.test.tsx,
+	// protocolRevision.test.ts, useConnection.test.tsx).
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Version badge")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class VersionBadge {
+
+		/** Each Version badge test boots a fresh app: clean up after every method. */
+		@AfterEach
+		void tearDown() {
+			stopApp();
+		}
+
+		@Test
+		@Story("Connect")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("After a Via Proxy + SSE connect (the default demo combo) the sidebar shows the version badge with the negotiated protocol revision.")
+		@DisplayName("versionBadgeViaProxySse: badge renders with the negotiated revision after proxy connect")
+		void versionBadge_viaProxySse_rendersNegotiatedRevision() {
+			// given
+			startApp(new Combo("sse"));
+			openAndConnect();
+
+			// then
+			SelenideElement badge = $("[data-testid=version-badge]");
+			badge.shouldBe(visible, Duration.ofSeconds(10));
+			// The demo's SSE flavour negotiates the legacy 2024-11-05 revision
+			// (its server stack predates the 2025 revisions; the UI SDK requested
+			// its LATEST 2025-11-25). 2024-11-05 is not in the known-revision
+			// matrix (mirroring the server-side ProtocolRevision, PR #129), so
+			// the badge honestly reports UNKNOWN severity while still showing
+			// the revision that was actually negotiated on the wire.
+			badge.shouldHave(Condition.attribute("data-severity", "UNKNOWN"));
+			badge.shouldHave(text("2024-11-05"));
+		}
+
+		@Test
+		@Story("Connect")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("After a Direct + Streamable HTTP connect the badge also renders: the handshake capture is route- and transport-independent.")
+		@DisplayName("versionBadgeDirectStreamable: badge renders after direct streamable connect")
+		void versionBadge_directStreamable_rendersNegotiatedRevision() {
+			// given
+			startApp(new Combo("streamable"));
+			open("/mcp-inspector/index.html");
+
+			// when: Streamable HTTP transport, Direct connection type (no
+			// inspector proxy on the wire; the browser talks straight to the
+			// demo's /mcp endpoint).
+			$("#transport-type-select").shouldBe(visible).click();
+			$$("[role=option]").findBy(text("Streamable HTTP")).click();
+			$("#connection-type-select").shouldBe(visible).click();
+			$$("[role=option]").findBy(text("Direct")).click();
+			setReactInputValue("#sse-url-input", Configuration.baseUrl + "/mcp");
+			connectButton().shouldBe(visible).click();
+
+			// then: connected branch + badge with the negotiated revision.
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			SelenideElement badge = $("[data-testid=version-badge]");
+			badge.shouldBe(visible, Duration.ofSeconds(10));
+			badge.shouldHave(Condition.attribute("data-severity", "OK"));
+			badge.shouldHave(text("2025-11-25"));
+		}
+
+	}
+
+	// =====================================================================
 	// B. Sidebar server-info panel.
 	//
 	// The upstream "Metadata" tab is actually a per-request metadata editor
