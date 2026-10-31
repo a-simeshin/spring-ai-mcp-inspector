@@ -194,7 +194,7 @@ class SseProxyControllerTests {
 		void openSse_withSseUrl_registersSessionAndStartsProxy() {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 
 			// when
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
@@ -202,7 +202,7 @@ class SseProxyControllerTests {
 
 			// then
 			assertThat(emitter).isNotNull();
-			verify(SseProxyControllerTests.this.transportFactory).openSse(URI.create("http://target/sse"));
+			verify(SseProxyControllerTests.this.transportFactory).buildSse(URI.create("http://target/sse"));
 			verify(SseProxyControllerTests.this.registry).put(any(ProxySession.class));
 			verify(SseProxyControllerTests.this.mcpProxy).start(any(ProxySession.class));
 		}
@@ -229,9 +229,10 @@ class SseProxyControllerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() with a missing (null) url resolves to the loopback /sse endpoint and registers a session")
 		void openSse_withMissingUrl_resolvesToLoopbackAndRegistersSession() {
-			// given — no url stub: the mock returns null from openSse(URI), which is a
-			// valid (if inert) target for the session in unit-test context
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class)))
+			// given: the url is null and the factory stub returns a mock transport from
+			// buildSse(URI), a valid (if inert) target for the session in unit-test
+			// context
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
 				.willReturn(mock(McpClientTransport.class));
 
 			// when — null url is now resolved to http://127.0.0.1:8080/sse by
@@ -242,7 +243,7 @@ class SseProxyControllerTests {
 
 			// then — the resolver succeeds, a session IS opened and registered
 			assertThat(emitter).isNotNull();
-			verify(SseProxyControllerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
+			verify(SseProxyControllerTests.this.transportFactory).buildSse(URI.create("http://127.0.0.1:8080/sse"));
 			verify(SseProxyControllerTests.this.registry).put(any(ProxySession.class));
 			verify(SseProxyControllerTests.this.mcpProxy).start(any(ProxySession.class));
 		}
@@ -268,7 +269,7 @@ class SseProxyControllerTests {
 		void openSse_underContextPath_prologueCarriesPrefix() throws Exception {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final MockHttpServletRequest request = new MockHttpServletRequest();
 			request.setContextPath("/app");
 
@@ -288,7 +289,7 @@ class SseProxyControllerTests {
 		void openSse_withoutContextPath_prologueHasNoPrefix() throws Exception {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 
 			// when
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
@@ -305,7 +306,7 @@ class SseProxyControllerTests {
 		void openSse_withRootContextPath_prologueHasNoDoubleSlash() throws Exception {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final MockHttpServletRequest request = new MockHttpServletRequest();
 			request.setContextPath("/");
 
@@ -372,14 +373,14 @@ class SseProxyControllerTests {
 		@Description("openSse() with a null transportType defaults to the SSE transport")
 		void openSse_withNullType_defaultsToSse() {
 			// given
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class)))
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
 				.willReturn(mock(McpClientTransport.class));
 
 			// when
 			SseProxyControllerTests.this.controller.openSse(null, "http://target/sse", null, null, null, REQUEST);
 
 			// then
-			verify(SseProxyControllerTests.this.transportFactory).openSse(URI.create("http://target/sse"));
+			verify(SseProxyControllerTests.this.transportFactory).buildSse(URI.create("http://target/sse"));
 		}
 
 		@Test

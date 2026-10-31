@@ -48,48 +48,50 @@ class ProxyTransportFactoryTests {
 	private final ProxyTransportFactory factory = new ProxyTransportFactory(new ObjectMapper());
 
 	@Nested
-	@DisplayName("openSse()")
-	class OpenSse {
+	@DisplayName("buildSse()")
+	class BuildSse {
 
 		@Test
-		@Story("Build SSE transport")
+		@Story("Build SSE transport with preflight wrapper")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("openSse() builds an HttpClientSseClientTransport for a URI with host, port and path")
-		void openSse_withFullUri_buildsSseTransport() {
+		@Description("buildSse() returns an SsePreflightTransport wrapping an HttpClientSseClientTransport")
+		void buildSse_withFullUri_wrapsInPreflightTransport() {
 			// given
 			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
 
 			// when
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri);
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri);
 
 			// then
-			assertThat(transport).isInstanceOf(HttpClientSseClientTransport.class);
-		}
-
-		@Test
-		@Story("Default endpoint branch")
-		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() falls back to /sse and omits the port when the URI has no path or port")
-		void openSse_withNoPathAndNoPort_buildsTransportWithDefaults() {
-			// given
-			final URI sseUri = URI.create("http://localhost");
-
-			// when
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri);
-
-			// then
-			assertThat(transport).isInstanceOf(HttpClientSseClientTransport.class);
+			assertThat(transport).isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 		@Test
 		@Story("Validation")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() rejects a null URI")
-		void openSse_withNullUri_throwsIllegalArgument() {
+		@Description("buildSse() rejects a null URI")
+		void buildSse_withNullUri_throwsIllegalArgument() {
 			// when & then
-			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openSse(null))
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.buildSse(null))
 				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("sseUri");
+		}
+
+		@Test
+		@Story("Normalization")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("buildSse() with a URI that has no path normalizes to /sse in the preflight")
+		void buildSse_withNoPath_normalizesToSse() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri);
+
+			// then
+			assertThat(transport).isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
 		}
 
 	}
