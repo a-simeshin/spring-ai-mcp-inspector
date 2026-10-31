@@ -8,7 +8,7 @@ import type { ConnectFailure } from "@/lib/connectErrors";
 import { LoggingLevel } from "@modelcontextprotocol/sdk/types.js";
 
 jest.mock("@/lib/hooks/useToast", () => ({
-  useToast: () => ({ toast: jest.fn() }),
+  useToast: () => ({ toast: jest.fn().mockReturnValue({ dismiss: jest.fn() }) }),
 }));
 
 beforeAll(() => {
@@ -49,6 +49,7 @@ const baseProps = {
   setOauthScope: jest.fn(),
   onConnect: jest.fn(),
   onDisconnect: jest.fn(),
+  onResetSession: jest.fn(),
   logLevel: "debug" as LoggingLevel,
   sendLogLevelRequest: jest.fn(),
   loggingSupported: false,
@@ -181,6 +182,56 @@ describe("Sidebar connect-failure alert", () => {
       });
       expect(screen.getByText(/MCP server is running/i)).toBeInTheDocument();
       expect(screen.queryByText(/proxy token/i)).not.toBeInTheDocument();
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Reset session button tests.
+    it("shows Reset session button for timeout errors", () => {
+      renderSidebar({
+        ...statusTextProps,
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          message: "Connection timed out after 5000ms",
+          retryable: true,
+        },
+      });
+
+      expect(screen.getByTestId("reset-session-button")).toBeInTheDocument();
+      expect(screen.getByTestId("retry-connect-button")).toBeInTheDocument();
+    });
+
+    it("does not show Reset session button for non-timeout errors", () => {
+      renderSidebar({
+        ...statusTextProps,
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "connection_refused",
+          message: "Connection refused: connect ECONNREFUSED",
+          retryable: true,
+        },
+      });
+
+      expect(
+        screen.queryByTestId("reset-session-button"),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId("retry-connect-button")).toBeInTheDocument();
+    });
+
+    it("calls onResetSession when Reset session is clicked", () => {
+      const onResetSession = jest.fn();
+      renderSidebar({
+        onResetSession,
+        ...statusTextProps,
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          message: "Connection timed out after 5000ms",
+          retryable: true,
+        },
+      });
+
+      fireEvent.click(screen.getByTestId("reset-session-button"));
+      expect(onResetSession).toHaveBeenCalledTimes(1);
     });
   });
 });

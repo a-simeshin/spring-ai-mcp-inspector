@@ -7,6 +7,7 @@ import {
   parseConnectFailureResponse,
   type ConnectFailure,
 } from "../connectErrors";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
 /** Minimal Response-shaped object; the parser only touches clone().json(). */
 const responseWithBody = (body: unknown): Response => {
@@ -129,11 +130,28 @@ describe("connectionFailureFromError", () => {
       retryable: true,
     });
   });
+
+  // [spring-ai-mcp-inspector PATCH] -32001 is the SDK request-timeout code;
+  // classifying it as 'timeout' is what makes the Reset session button
+  // appear. Refs #157.
+  it("maps McpError with code -32001 to timeout reason", () => {
+    const timeoutError = new McpError(ErrorCode.RequestTimeout, "Request timed out");
+    const failure = connectionFailureFromError(timeoutError);
+    expect(failure.reason).toBe("timeout");
+    expect(failure.message).toContain("Request timed out");
+    expect(failure.retryable).toBe(true);
+  });
+
+  it("keeps unknown reason for other McpError codes", () => {
+    const otherError = new McpError(ErrorCode.InternalError, "Internal error");
+    const failure = connectionFailureFromError(otherError);
+    expect(failure.reason).toBe("unknown");
+  });
 });
 
 describe("humanReadableReason", () => {
   it("maps every reason to a human-readable label", () => {
-    expect(humanReadableReason("timeout")).toContain("timed out");
+    expect(humanReadableReason("timeout")).toBe("POST /mcp request timed out");
     expect(humanReadableReason("connection_refused")).toContain("refused");
     expect(humanReadableReason("dns")).toContain("DNS");
     expect(humanReadableReason("unknown")).toContain("Unknown");

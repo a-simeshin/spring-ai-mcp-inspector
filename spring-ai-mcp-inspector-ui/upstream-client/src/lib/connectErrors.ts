@@ -1,3 +1,5 @@
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+
 /**
  * Structured connect-failure contract shared with the backend.
  *
@@ -119,6 +121,18 @@ export function connectionFailureFromError(error: unknown): ConnectFailure {
       retryable: error.retryable,
     };
   }
+  // [spring-ai-mcp-inspector PATCH] Classify SDK request-timeout errors
+  // (ErrorCode.RequestTimeout = -32001) as 'timeout' so the UI renders
+  // the Reset session button (it only shows for reason === "timeout").
+  // Refs #157.
+  if (error instanceof McpError && error.code === ErrorCode.RequestTimeout) {
+    return {
+      code: CONNECT_FAILED_ERROR_CODE,
+      reason: "timeout",
+      message: error instanceof Error ? error.message : String(error),
+      retryable: true,
+    };
+  }
   return {
     code: CONNECT_FAILED_ERROR_CODE,
     reason: "unknown",
@@ -130,8 +144,10 @@ export function connectionFailureFromError(error: unknown): ConnectFailure {
 /** Human-readable label for a failure reason (shown in the sidebar alert). */
 export function humanReadableReason(reason: ConnectFailureReason): string {
   switch (reason) {
+    // [spring-ai-mcp-inspector PATCH] User-facing wording: say which
+    // request timed out instead of the generic label. Refs #157.
     case "timeout":
-      return "Connection timed out (timeout)";
+      return "POST /mcp request timed out";
     case "connection_refused":
       return "Connection refused (connection_refused)";
     case "dns":
