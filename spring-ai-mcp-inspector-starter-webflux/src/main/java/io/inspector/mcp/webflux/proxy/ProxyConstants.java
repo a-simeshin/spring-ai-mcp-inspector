@@ -21,6 +21,10 @@ package io.inspector.mcp.webflux.proxy;
  * {@code ProxyConstants}; duplicated to keep the two starters dependency-free of each
  * other.
  *
+ * <p>
+ * Endpoint layout (kept in lock-step with the upstream
+ * {@code modelcontextprotocol/inspector} server):
+ *
  * @author Artem Simeshin
  */
 public final class ProxyConstants {

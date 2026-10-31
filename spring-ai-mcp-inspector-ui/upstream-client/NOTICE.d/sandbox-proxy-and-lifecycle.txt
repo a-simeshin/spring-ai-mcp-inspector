@@ -1,0 +1,128 @@
+sandbox-proxy-and-lifecycle.txt
+
+Sandboxed iframe renderer with SEP-1865 lifecycle bridge (t_cca2f271):
+- Added sandbox-proxy.html static resource: outer sandbox proxy page that relays
+  postMessage between host and opaque-origin inner view iframe.
+- Added SandboxProxyController (webmvc) and SandboxProxyHandler (webflux) serving
+  GET /mcp-inspector-api/sandbox with restrictive CSP and Cache-Control: no-store.
+- Added /sandbox to auth filter allowlists (both stacks) alongside /health.
+- Updated ProxyConstants.java javadoc (both stacks): added /sandbox to the endpoint
+  list, removed "minus the /sandbox route" note.
+- AppRenderer.tsx: added traffic tap (window.addEventListener + postMessage wrap),
+  lifecycle state machine, and onAppTraffic/onLifecycleChange callbacks.
+  PATCH marker [spring-ai-mcp-inspector PATCH] applied to AppRenderer.tsx.
+  The tap captures guest->host frames via addEventListener and host->guest frames
+  by wrapping the outer iframe's contentWindow.postMessage.
+  Lifecycle: idle -> loading-resource -> sandbox-waiting -> initializing -> ready -> error -> torn-down.
+
+Security fixes (t_e6c85c96):
+- Added csp-serializer.ts (src/lib/csp-serializer.ts, later deleted by the
+  minor-findings sweep below): serializes
+  McpUiResourceCsp JSON objects to Content-Security-Policy header strings with
+  restrictive defaults (all-'none' baseline when absent).
+- sandbox-proxy.html: always emits a CSP meta tag. The page reads the csp object
+  from the sandbox-resource-ready postMessage params (not from the URL: the
+  ?csp= query param is consumed server-side for the HTTP response header) and
+  serializes it with the inline serializer; a malformed, absent or oversized
+  param produces the all-'none' baseline.
+- SandboxProxyController (webmvc) and SandboxProxyHandler (webflux): parse the
+  csp query param as JSON, serialize via the shared SandboxCspSerializer (core
+  module, one copy for both stacks), set as HTTP response header. Cap param at
+  4 KB (400 on overflow). Malformed JSON -> all-'none' default.
+- AppRenderer.tsx: passes sandbox.csp (McpUiResourceCsp object read from the UI
+  resource meta: resources/read content _meta first, resources/list entry as
+  fallback; never from tool _meta.ui.csp, which ext-apps types as `never`) to
+  @mcp-ui/client AppRenderer; adds onCallTool handler that
+  rejects tools/call for tools whose _meta.ui.visibility lacks "app"
+  (default: ["model","app"]).
+- AppsTab.tsx: bounds the traffic ingress queue (max 500 pending entries,
+  singleton dropped-N marker per flush window); truncates params/result > 64 KB
+  to {truncated: true, bytes: N}.
+Origin-trust hardening (t_81f6d85b, PR #199 owner review BLOCK 1):
+- sandbox-proxy.html: the inner view iframe sandbox is now a hardcoded
+  'allow-scripts' token set; the parent-supplied params.sandbox value is
+  ignored entirely (the legit @mcp-ui/client host sends only {html, csp}).
+  allow-same-origin can never be granted to the srcdoc guest.
+- sandbox-proxy.html: host messages are additionally rejected when
+  event.origin differs from the page's own origin; cross-origin framing
+  parents are dropped silently.
+- SandboxProxyController (webmvc) and SandboxProxyHandler (webflux):
+  DEFAULT_CSP now carries frame-ancestors 'self' so no other origin can
+  frame the sandbox endpoint.
+- Origin model: the SEP-1865 draft (specification/draft/apps.mdx, "Sandbox
+  proxy", item 1) requires host and sandbox on different origins. This
+  deployment serves the sandbox from the host origin because the vendored
+  @mcp-ui/client hardcodes the outer iframe sandbox to
+  "allow-scripts allow-same-origin allow-forms" and expects to load the
+  proxy from the deployment it manages; see the in-page comment for why the
+  same-origin deviation is safe with the three fixes above.
+- New test: src/lib/__tests__/sandbox-proxy-page.test.ts (loads the page
+  script into jsdom, asserts hardcoded sandbox and origin rejection).
+CSP merge into one effective policy (t_5f7281e4, PR #199 owner review BLOCK 2):
+- SandboxProxyController (webmvc) and SandboxProxyHandler (webflux) no longer
+  concatenate the page baseline with a serialized App policy: CSP3 parsing
+  ignores repeated directives, so the baseline occurrences (connect-src 'none',
+  the page script-src) always won and the App-declared domains never applied.
+  The csp query param is now merged into ONE policy at the directive level:
+  App connectDomains become the single connect-src (or 'none' when the App
+  declares none), resourceDomains broaden the same script/style/img/font/media
+  directives, frame-src keeps 'self' so the page can still host its srcdoc view
+  iframe, and malformed JSON or javascript:/data: origins return the page
+  baseline (previously a second concatenated all-'none' policy).
+- object-src 'none' added on every path and both stacks plus the page's inline
+  serializer and the then-present csp-serializer.ts (SEP-1865 draft,
+  "Sandbox proxy", item 5).
+- The then-present csp-serializer.ts and the page's inline serializer tests now
+  parse the policy
+  and assert the EFFECTIVE directive (first occurrence wins) and that no
+  directive appears twice, instead of substring presence. SandboxProxyIT gains
+  a served-header case: an App declaring api.example.com gets exactly that as
+  the single effective connect-src, with object-src 'none'.
+
+Minor-findings sweep (t_e6c2a15d, PR #199 owner review):
+- src/lib/csp-serializer.ts deleted: it was imported only by its own test. The
+  single TypeScript serializer is the page's inline one (the page is served
+  standalone, without the bundle); its tests live in
+  src/lib/__tests__/sandbox-proxy-page.test.ts. On the Java side the two
+  per-starter CspSerializer inner classes are replaced by ONE shared
+  io.inspector.mcp.core.proxy.SandboxCspSerializer used by both stacks.
+- App-supplied csp domain values are now validated as strict CSP host-source
+  expressions on every side (Java serializer, page inline serializer): values
+  with ';', whitespace, scheme sources (javascript:, data:), or quoted keywords
+  ('unsafe-eval') are dropped and never reach a policy.
+- The 4 KB cap is consistent: SandboxCspSerializer.CSP_PARAM_MAX_LENGTH (4096)
+  is the single Java constant used by both stacks (400 on overflow), and the
+  page enforces the same 4096 limit on the postMessage csp param; a page cannot
+  answer 400 to a postMessage, so an oversized csp falls back to the baseline.
+- sandbox-proxy.html: a stale inner iframe is removed before a new one is
+  appended on sandbox-resource-ready; the dead forwardToHost helper is deleted;
+  view->host and proxy-ready relays postMessage to location.origin instead of
+  '*' (host->guest keeps '*' because the opaque-origin srcdoc guest never
+  matches a tuple origin).
+- AppRenderer.tsx checkToolVisibility guards _meta.ui.visibility with
+  Array.isArray: a bare string no longer passes includes('app') and a malformed
+  object no longer throws.
+- ProxyAuthFilter/ProxyAuthWebFilter (both stacks): /health and /sandbox are
+  exempted by exact path comparison against the configured proxy prefix, not by
+  suffix match.
+
+Round 2 owner review rework (PR #199, review 5663651002):
+- Host-source grammar hardened on both sides (SandboxCspSerializer.HOST_SOURCE
+  and the page's mirror): path segments may no longer contain ';', ',' or "'"
+  (the CSP source-list separators), closing directive injection through joined
+  policies: connectDomains=["example.com/;frame-ancestors","evil.com"] used to
+  yield an effective `frame-ancestors evil.com`. Payload regressions without any
+  whitespace are covered in SandboxCspSerializerTests and
+  sandbox-proxy-page.test.ts.
+- The same grammar now accepts the spec's own host-source examples it used to
+  reject: wss:// and ws:// schemes, wildcard hosts (https://*.cloudflare.com)
+  and the any-port form (example.com:*).
+- AppRenderer.tsx reads the App CSP from the UI resource meta (resources/read
+  content _meta, resources/list entry as fallback), not from tool
+  _meta.ui.csp: McpUiToolMeta.csp is `never` in @modelcontextprotocol/ext-apps
+  1.7.2, so an App declaring CSP per the spec used to get connect-src 'none'.
+- WebMVC ProxyAuthFilter strips the servlet context path before the exact
+  /health and /sandbox comparison (both used to 401 under
+  server.servlet.context-path with auth enabled, which an LB reads as a dead
+  instance), mirroring WebFlux's pathWithinApplication; covered by
+  WebMvcContextPathAuthIT with auth-enabled=true.

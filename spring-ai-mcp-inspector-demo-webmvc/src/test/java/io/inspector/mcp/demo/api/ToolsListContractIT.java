@@ -60,13 +60,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>
  * Contract under test:
  * <ul>
- * <li>26 tool entries (the 2.x line includes {@code authorizeViaUrl}, which needs SDK 2.0
- * URL-mode elicitation);</li>
- * <li>21 entries with {@code annotations.readOnlyHint=true, destructiveHint=false} (echo,
+ * <li>29 tool entries (the 2.x line includes {@code authorizeViaUrl}, which needs SDK 2.0
+ * URL-mode elicitation, plus the four task-emulating tools from
+ * {@code DemoTaskEmulatingToolsProvider} and the three MCP Apps fixtures from
+ * {@code DemoUiAppsProvider});</li>
+ * <li>24 entries with {@code annotations.readOnlyHint=true, destructiveHint=false} (echo,
  * sum, currentTime, addNumbers, concatenate, lookupUser, chooseColor, toggleFlag,
  * optionalGreeting, errorTool, largeOutput, structuredOutput, multiContent, deepJson,
  * blobAttachment, findFiles, listMyRoots, generateReport, getTaskStatus, cancelTask,
- * keepAliveTask);</li>
+ * keepAliveTask, formApp, dashboardApp, malformedAppTool);</li>
  * <li>4 entries with {@code annotations.readOnlyHint=false, destructiveHint=false}
  * (askLlm, askUser, deployService, authorizeViaUrl);</li>
  * <li>{@code slowEcho} carries NO {@code annotations} field at all — it is registered as
@@ -91,7 +93,8 @@ class ToolsListContractIT {
 	private static final List<String> READ_ONLY_TOOLS = List.of("echo", "sum", "currentTime", "addNumbers",
 			"concatenate", "lookupUser", "chooseColor", "toggleFlag", "optionalGreeting", "errorTool", "largeOutput",
 			"structuredOutput", "multiContent", "deepJson", "blobAttachment", "findFiles", "listMyRoots",
-			"generateReport", "getTaskStatus", "cancelTask", "keepAliveTask");
+			"generateReport", "getTaskStatus", "cancelTask", "keepAliveTask", "formApp", "dashboardApp",
+			"malformedAppTool");
 
 	private static final List<String> INTERACTIVE_TOOLS = List.of("askLlm", "askUser", "deployService",
 			"authorizeViaUrl");
@@ -111,11 +114,13 @@ class ToolsListContractIT {
 	@Test
 	@Story("tools/list contract")
 	@Severity(SeverityLevel.CRITICAL)
-	@DisplayName("toolsList26Entries - 26 entries; 21 read-only + 4 interactive annotated; no declared destructive")
-	@Description("tools/list through the relay returns 26 tools; 21 carry readOnlyHint=true/destructiveHint=false, "
-			+ "4 (askLlm, askUser, deployService, authorizeViaUrl) carry readOnlyHint=false/destructiveHint=false, "
-			+ "and no entry declares destructiveHint=true.")
-	void toolsList26EntriesWithExplicitAnnotations() throws Exception {
+	@DisplayName("toolsList29Entries - 29 entries; 24 read-only + 4 interactive annotated; no declared destructive")
+	@Description("tools/list through the relay returns 29 tools; 24 carry readOnlyHint=true/destructiveHint=false "
+			+ "(the four task-emulating tools generateReport, getTaskStatus, cancelTask, keepAliveTask plus the "
+			+ "three MCP Apps fixtures formApp, dashboardApp, malformedAppTool included), 4 (askLlm, askUser, "
+			+ "deployService, authorizeViaUrl) carry readOnlyHint=false/destructiveHint=false, and no entry "
+			+ "declares destructiveHint=true.")
+	void toolsList29EntriesWithExplicitAnnotations() throws Exception {
 		// given: a connected proxy session
 		final String sessionId = connect();
 		try {
@@ -124,8 +129,8 @@ class ToolsListContractIT {
 			final JsonNode tools = result.path("tools");
 			assertThat(tools.isArray()).as("tools/list must return a tools array").isTrue();
 
-			// then: 26 entries, exact matrix
-			assertThat(tools.size()).as("demo must advertise exactly 26 tools").isEqualTo(26);
+			// then: 29 entries, exact matrix
+			assertThat(tools.size()).as("demo must advertise exactly 29 tools").isEqualTo(29);
 
 			final List<String> names = new ArrayList<>();
 			for (final JsonNode tool : tools) {

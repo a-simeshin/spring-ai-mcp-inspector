@@ -42,8 +42,10 @@ import io.inspector.mcp.core.config.McpInspectorProperties;
  * does the same).
  *
  * <p>
- * {@code /mcp-inspector-api/health} is intentionally <em>not</em> protected so
- * load-balancer probes can hit it without credentials.
+ * {@code /mcp-inspector-api/health} and {@code /mcp-inspector-api/sandbox} are
+ * intentionally <em>not</em> protected: load-balancer probes hit health without
+ * credentials, and the sandbox proxy page is loaded into an iframe whose document carries
+ * no headers. Both are matched by exact path, never by suffix.
  *
  * <p>
  * Skipped entirely when {@code spring.ai.mcp.inspector.auth-enabled=false}.
@@ -56,9 +58,21 @@ public class ProxyAuthFilter extends OncePerRequestFilter {
 
 	private final InspectorAuthTokenProvider tokenProvider;
 
+	/**
+	 * Exact paths of the intentionally open endpoints (health probe and sandbox proxy
+	 * page), derived from the configured inspector path. Compared for equality, not by
+	 * suffix: a suffix match would also exempt any other endpoint that merely ends with
+	 * /health or /sandbox.
+	 */
+	private final String healthPath;
+
+	private final String sandboxPath;
+
 	public ProxyAuthFilter(final McpInspectorProperties properties, final InspectorAuthTokenProvider tokenProvider) {
 		this.properties = properties;
 		this.tokenProvider = tokenProvider;
+		this.healthPath = (properties != null) ? properties.getProxyPath() + "/health" : "/mcp-inspector-api/health";
+		this.sandboxPath = (properties != null) ? properties.getProxyPath() + "/sandbox" : "/mcp-inspector-api/sandbox";
 	}
 
 	@Override
@@ -77,8 +91,17 @@ public class ProxyAuthFilter extends OncePerRequestFilter {
 			return;
 		}
 
-		final String path = request.getRequestURI();
-		if (path != null && path.endsWith("/health")) {
+		// Application-relative path, never the raw request URI: getRequestURI()
+		// carries the servlet context path, so under server.servlet.context-path=/app
+		// the raw /app/mcp-inspector-api/health never equals the unprefixed healthPath
+		// and the open health probe and sandbox page would 401 (owner review PR #199,
+		// round 2, BLOCK 3: an LB would mark the instance dead). Mirrors the WebFlux
+		// filter, which compares pathWithinApplication().
+		final String requestUri = request.getRequestURI();
+		final String contextPath = request.getContextPath();
+		final String path = (contextPath != null && !contextPath.isEmpty() && requestUri.startsWith(contextPath))
+				? requestUri.substring(contextPath.length()) : requestUri;
+		if (this.healthPath.equals(path) || this.sandboxPath.equals(path)) {
 			chain.doFilter(request, response);
 			return;
 		}

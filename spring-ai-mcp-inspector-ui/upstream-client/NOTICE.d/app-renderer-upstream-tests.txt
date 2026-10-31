@@ -1,0 +1,18 @@
+app-renderer-upstream-tests.txt
+
+Restored upstream AppRenderer component tests and added visibility wiring
+coverage (PR #199 owner review findings 3 and 4):
+- src/components/__tests__/AppRenderer.test.tsx: restored the 7 upstream
+  component test cases (waiting state when mcpClient is null; renders
+  McpUiAppRenderer when client ready; min-height container; toast on
+  ui/message; tool input + result delivery after app initialization; no
+  result event when toolResult is null; compatibility wrapper result
+  normalization) that a previous security-fix commit had replaced with
+  pure-function tests. Added a wiring test that captures the onCallTool
+  handler the component passes to @mcp-ui/client and asserts a model-only
+  tool (visibility without "app") is denied without reaching the MCP
+  client, while an app-visible tool is forwarded; the test fails if
+  handleCallTool's checkToolVisibility guard is stubbed to allowed.
+- Pure-function checkToolVisibility coverage lives only in
+  src/components/__tests__/AppRendererVisibility.test.tsx; the duplicate
+  block that had lived in AppRenderer.test.tsx is gone.

@@ -49,9 +49,10 @@ import static io.inspector.mcp.demo.stress.StressTestSupport.quietClose;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Stress: resource listing/reading at scale — the demo exposes 6 static resources
- * (greeting, large-text, readme.md, config.json, logo.png, clock) + 30 templated entries
- * under {@code demo://item/{id}} (ids 0..29).
+ * Stress: resource listing/reading at scale: the demo exposes 8 static resources
+ * (greeting, large-text, readme.md, config.json, logo.png, clock, plus the two MCP Apps
+ * ui:// fixtures from {@code DemoUiAppsProvider}) + 30 templated entries under
+ * {@code demo://item/{id}} (ids 0..29).
  *
  * <p>
  * Hard ceiling: 30 sequential reads complete in {@code ≤ 15s}.
@@ -66,7 +67,7 @@ class ManyResourcesIT {
 	/** Matches {@code STATIC_ITEM_COUNT} in {@code DemoAdvancedResourcesProvider}. */
 	private static final int TEMPLATED_ITEM_COUNT = 30;
 
-	private static final int STATIC_RESOURCE_COUNT = 6;
+	private static final int STATIC_RESOURCE_COUNT = 8;
 
 	private static final Duration THIRTY_READ_BUDGET = Duration.ofSeconds(15);
 
@@ -98,7 +99,7 @@ class ManyResourcesIT {
 		@Test
 		@Story("Resource discovery")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("Verifies all 6 static resources and both templates are advertised and every templated id resolves")
+		@Description("Verifies all 8 static resources and both templates are advertised and every templated id resolves")
 		@DisplayName("list returns all static and templated items")
 		void list_atScale_returnsAllStaticAndTemplatedItems() {
 			// given & when
@@ -106,7 +107,7 @@ class ManyResourcesIT {
 			ListResourceTemplatesResult templates = client.listResourceTemplates();
 
 			// then
-			assertThat(resources.resources()).as("6 static resources are advertised").hasSize(STATIC_RESOURCE_COUNT);
+			assertThat(resources.resources()).as("8 static resources are advertised").hasSize(STATIC_RESOURCE_COUNT);
 			// Templates are returned as a separate list — the inspector renders them
 			// in their own section. The demo provider declares two: demo://item/{id}
 			// and demo://users/{id}. We exercise demo://item below.

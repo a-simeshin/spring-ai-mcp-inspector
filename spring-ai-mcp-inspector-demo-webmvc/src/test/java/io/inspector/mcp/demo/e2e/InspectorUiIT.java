@@ -130,12 +130,16 @@ class InspectorUiIT {
 	}
 
 	/**
-	 * Every demo tool advertised by {@code tools/list} (22 entries).
+	 * Every demo tool advertised by {@code tools/list} (29 entries): the 22 core tools,
+	 * the four task-emulating tools from {@code DemoTaskEmulatingToolsProvider}
+	 * (generateReport, getTaskStatus, cancelTask, keepAliveTask), and the three MCP Apps
+	 * fixtures from {@code DemoUiAppsProvider} (formApp, dashboardApp, malformedAppTool).
 	 */
 	private static final String[] ALL_DEMO_TOOLS = { "echo", "sum", "currentTime", "addNumbers", "concatenate",
 			"lookupUser", "chooseColor", "toggleFlag", "optionalGreeting", "errorTool", "largeOutput",
 			"structuredOutput", "multiContent", "slowEcho", "deepJson", "blobAttachment", "askLlm", "askUser",
-			"deployService", "findFiles", "authorizeViaUrl", "listMyRoots" };
+			"deployService", "findFiles", "authorizeViaUrl", "listMyRoots", "generateReport", "getTaskStatus",
+			"cancelTask", "keepAliveTask", "formApp", "dashboardApp", "malformedAppTool" };
 
 	/**
 	 * Connect matrix actually exposed by the upstream UI: only the three transport
@@ -752,9 +756,9 @@ class InspectorUiIT {
 		@Test
 		@Story("Tool list")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("After listing tools, every one of the 22 demo tools is present in the tool list.")
-		@DisplayName("toolsListShowsAll22Tools — every demo tool appears in the list")
-		void toolsList_afterListTools_showsAll22Tools() {
+		@Description("After listing tools, every one of the 29 demo tools is present in the tool list.")
+		@DisplayName("toolsListShowsAll29Tools - every demo tool appears in the list")
+		void toolsList_afterListTools_showsAll29Tools() {
 			// given
 			String[] expected = ALL_DEMO_TOOLS;
 
@@ -2169,20 +2173,25 @@ class InspectorUiIT {
 		@Test
 		@Story("Apps tab")
 		@Severity(SeverityLevel.MINOR)
-		@Description("With no app tools registered, the Apps tab renders the empty-state 'No MCP Apps available' message.")
-		@DisplayName("appsTabRendersAtLeastEmptyState — empty MCP Apps message visible")
-		void appsTab_noAppTools_rendersEmptyState() {
+		@Description("The demo registers three MCP Apps fixtures (DemoUiAppsProvider), so the Apps tab "
+				+ "lists them and shows the placeholder right pane until one is selected.")
+		@DisplayName("appsTabListsFixtureApps - fixture app tools listed, placeholder right pane")
+		void appsTab_fixtureApps_rendersAppList() {
 			// given & when
 			clickTab("apps");
 
 			// then
 			// Refresh Apps trigger must be visible — proves the list pane rendered.
 			activePanel().$(byText("Refresh Apps")).shouldBe(visible, Duration.ofSeconds(10));
-			// Demo registers 22 tools but none with _meta.ui.resourceUri, so the right
-			// pane shows the "No MCP Apps available..." copy. We match a stable substring
-			// to insulate the assertion from upstream wording tweaks like the trailing
-			// "_meta.ui.resourceUri" code span.
-			activePanel().shouldHave(text("No MCP Apps available"), Duration.ofSeconds(10));
+			// DemoUiAppsProvider registers three tools carrying _meta.ui.resourceUri, so
+			// the Apps tab lists them as MCP Apps. The empty-state copy ("No MCP Apps
+			// available") stays covered by the AppsTab jest suite, which renders the
+			// component with a tool list that has no UI metadata.
+			activePanel().shouldHave(text("dashboardApp"), Duration.ofSeconds(10));
+			activePanel().shouldHave(text("formApp"));
+			activePanel().shouldHave(text("malformedAppTool"));
+			// Right pane shows the placeholder until an app is selected.
+			activePanel().shouldHave(text("Select an app from the list to get started"));
 		}
 
 	}
