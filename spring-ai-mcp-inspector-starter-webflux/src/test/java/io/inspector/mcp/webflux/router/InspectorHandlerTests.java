@@ -55,6 +55,8 @@ import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.web.reactive.function.server.HandlerStrategies;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
+import reactor.core.Scannable.Attr;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
@@ -1892,11 +1894,13 @@ class InspectorHandlerTests {
 		@Test
 		@Story("Concurrent frame emit")
 		@Severity(SeverityLevel.MINOR)
-		@Description("a frame emitted after the session sink terminated is reported as rejected, "
-				+ "not silently swallowed")
+		@Description("a frame emitted after the session sink terminated is reported as rejected "
+				+ "without a retry, not silently swallowed")
 		void emitSessionEvent_afterSinkTerminated_returnsFalse() {
-			// given
-			final Sinks.Many<ServerSentEvent<String>> sink = newSessionSink();
+			// given: the completed sink is wrapped to count raw tryEmitNext probes, so a
+			// retry-on-any-failure loop cannot hide: it would probe the terminated sink
+			// for the full EMIT_SPIN_BUDGET instead of reporting at once
+			final CountingTryEmitSink sink = new CountingTryEmitSink(newSessionSink());
 			assertThat(sink.tryEmitComplete().isSuccess()).as("sink completes without subscribers").isTrue();
 
 			// when
@@ -1904,6 +1908,7 @@ class InspectorHandlerTests {
 
 			// then
 			assertThat(accepted).as("emit after termination must be rejected without retry").isFalse();
+			assertThat(sink.tryEmitNextCount()).as("terminal rejection must not be retried").isEqualTo(1);
 		}
 
 		private static Sinks.Many<ServerSentEvent<String>> newSessionSink() {
@@ -1913,6 +1918,73 @@ class InspectorHandlerTests {
 
 		private static ServerSentEvent<String> serverSentEvent(final String eventName) {
 			return ServerSentEvent.<String>builder().event(eventName).data(eventName).build();
+		}
+
+		/**
+		 * Delegates to the wrapped session sink and counts {@code tryEmitNext} probes, so
+		 * a test can prove a terminal rejection is reported at once instead of being
+		 * retried against the emit budget.
+		 */
+		private static final class CountingTryEmitSink implements Sinks.Many<ServerSentEvent<String>> {
+
+			private final Sinks.Many<ServerSentEvent<String>> delegate;
+
+			private final AtomicInteger tryEmitNextCount = new AtomicInteger();
+
+			private CountingTryEmitSink(final Sinks.Many<ServerSentEvent<String>> delegate) {
+				this.delegate = delegate;
+			}
+
+			int tryEmitNextCount() {
+				return this.tryEmitNextCount.get();
+			}
+
+			@Override
+			public Sinks.EmitResult tryEmitNext(final ServerSentEvent<String> event) {
+				this.tryEmitNextCount.incrementAndGet();
+				return this.delegate.tryEmitNext(event);
+			}
+
+			@Override
+			public Sinks.EmitResult tryEmitComplete() {
+				return this.delegate.tryEmitComplete();
+			}
+
+			@Override
+			public Sinks.EmitResult tryEmitError(final Throwable error) {
+				return this.delegate.tryEmitError(error);
+			}
+
+			@Override
+			public void emitNext(final ServerSentEvent<String> event, final Sinks.EmitFailureHandler failureHandler) {
+				this.delegate.emitNext(event, failureHandler);
+			}
+
+			@Override
+			public void emitComplete(final Sinks.EmitFailureHandler failureHandler) {
+				this.delegate.emitComplete(failureHandler);
+			}
+
+			@Override
+			public void emitError(final Throwable error, final Sinks.EmitFailureHandler failureHandler) {
+				this.delegate.emitError(error, failureHandler);
+			}
+
+			@Override
+			public int currentSubscriberCount() {
+				return this.delegate.currentSubscriberCount();
+			}
+
+			@Override
+			public Flux<ServerSentEvent<String>> asFlux() {
+				return this.delegate.asFlux();
+			}
+
+			@Override
+			public Object scanUnsafe(final Attr key) {
+				return this.delegate.scanUnsafe(key);
+			}
+
 		}
 
 	}
