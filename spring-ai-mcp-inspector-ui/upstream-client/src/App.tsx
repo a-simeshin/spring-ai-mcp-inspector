@@ -499,6 +499,7 @@ const App = () => {
     completionsSupported,
     connect: connectMcpServer,
     disconnect: disconnectMcpServer,
+    resetSessionAndConnect,
   } = useConnection({
     transportType,
     command,
@@ -1527,6 +1528,7 @@ const App = () => {
           setOauthScope={setOauthScope}
           onConnect={connectMcpServer}
           onDisconnect={disconnectMcpServer}
+          onResetSession={resetSessionAndConnect}
           logLevel={logLevel}
           sendLogLevelRequest={sendLogLevelRequest}
           loggingSupported={!!serverCapabilities?.logging || false}
