@@ -6,6 +6,7 @@
 import {
   isProxyErrorDto,
   parseProxyErrorDto,
+  parseTerminalReconnectMillis,
 } from "../connectionErrors";
 
 describe("isProxyErrorDto", () => {
@@ -37,7 +38,14 @@ describe("isProxyErrorDto", () => {
     expect(isProxyErrorDto("401")).toBe(false);
     expect(isProxyErrorDto([1, 2])).toBe(false);
     expect(isProxyErrorDto({ status: 401 })).toBe(false);
-    expect(isProxyErrorDto({ status: "401", code: "unauthorized", reason: "r", guidance: "g" })).toBe(false);
+    expect(
+      isProxyErrorDto({
+        status: "401",
+        code: "unauthorized",
+        reason: "r",
+        guidance: "g",
+      }),
+    ).toBe(false);
   });
 });
 
@@ -79,8 +87,10 @@ describe("parseProxyErrorDto", () => {
       JSON.stringify({
         status: 302,
         code: "redirect",
-        reason: "The MCP server redirected the request and it was not followed.",
-        guidance: "Check the server URL; redirects are not followed automatically.",
+        reason:
+          "The MCP server redirected the request and it was not followed.",
+        guidance:
+          "Check the server URL; redirects are not followed automatically.",
         url: "https://server/mcp",
       }),
     );
@@ -89,8 +99,28 @@ describe("parseProxyErrorDto", () => {
       status: 302,
       code: "redirect",
       reason: "The MCP server redirected the request and it was not followed.",
-      guidance: "Check the server URL; redirects are not followed automatically.",
+      guidance:
+        "Check the server URL; redirects are not followed automatically.",
       url: "https://server/mcp",
     });
+  });
+});
+describe("[spring-ai-mcp-inspector PATCH] parseTerminalReconnectMillis (block2 terminal SSE retry)", () => {
+  it("parses the terminal retry the proxy sends for a dead upstream", () => {
+    expect(parseTerminalReconnectMillis("retry:2147483000")).toBe(2147483000);
+  });
+
+  it("ignores ordinary short retry values (transport hiccups keep reconnecting)", () => {
+    expect(parseTerminalReconnectMillis("retry:3000")).toBeNull();
+    expect(parseTerminalReconnectMillis("retry:10000")).toBeNull();
+    expect(parseTerminalReconnectMillis("retry:3599999")).toBeNull();
+  });
+
+  it("ignores malformed values and non-retry lines", () => {
+    expect(parseTerminalReconnectMillis("retry:not-a-number")).toBeNull();
+    expect(parseTerminalReconnectMillis("retry:")).toBeNull();
+    expect(parseTerminalReconnectMillis("event: error")).toBeNull();
+    expect(parseTerminalReconnectMillis("data: {}")).toBeNull();
+    expect(parseTerminalReconnectMillis("")).toBeNull();
   });
 });

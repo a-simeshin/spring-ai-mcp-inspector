@@ -59,6 +59,7 @@ import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
 import io.inspector.mcp.core.proxy.ProxyErrorMapper;
+import io.inspector.mcp.core.proxy.ProxyReconnectPolicy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
@@ -410,14 +411,27 @@ public class SseProxyController {
 	 */
 	private void completeWithMappedError(final SseEmitter emitter, final Throwable err, final TransportKind kind,
 			final URI target) {
+		final boolean upstreamDead = ProxyReconnectPolicy.isUpstreamDeath(err);
 		final ProxyErrorDto dto = ProxyErrorMapper.map(err, kind);
-		if (dto == null) {
+		if (dto == null && !upstreamDead) {
 			emitter.completeWithError(err);
 			return;
 		}
 		try {
-			final ProxyErrorDto withUrl = dto.withUrl(ProxyErrorDto.redactUrl(target));
-			emitter.send(SseEmitter.event().name("error").data(this.objectMapper.writeValueAsString(withUrl)));
+			if (upstreamDead) {
+				// Dead upstream: every browser reconnect would mint a doomed proxy
+				// session
+				// every ~3s. The terminal SSE retry field tells spec-compliant
+				// EventSource
+				// clients (native and the polyfill) to stop reconnecting.
+				emitter.send(SseEmitter.event()
+					.comment("upstream dead: reconnect suppressed")
+					.reconnectTime(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS));
+			}
+			if (dto != null) {
+				final ProxyErrorDto withUrl = dto.withUrl(ProxyErrorDto.redactUrl(target));
+				emitter.send(SseEmitter.event().name("error").data(this.objectMapper.writeValueAsString(withUrl)));
+			}
 			emitter.complete();
 		}
 		catch (final IOException ex) {

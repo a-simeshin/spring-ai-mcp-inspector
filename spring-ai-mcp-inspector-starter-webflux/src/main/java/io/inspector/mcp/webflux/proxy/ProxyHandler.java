@@ -63,6 +63,7 @@ import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
 import io.inspector.mcp.core.proxy.ProxyErrorMapper;
+import io.inspector.mcp.core.proxy.ProxyReconnectPolicy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
@@ -494,28 +495,47 @@ public class ProxyHandler {
 
 		// takeUntilOther: the stream ends when the session closes, whether or not
 		// close() managed to complete the sink (it cannot when another thread owns it).
-		final var flux = Flux.merge(errorEvents.asFlux(),
-				targetToBrowser.asFlux()
-					.takeUntilOther(session.closeSignal())
-					.doOnTerminate(() -> errorEvents.tryEmitComplete())
-					.map((frame) -> {
-						try {
-							return ServerSentEvent.<String>builder()
-								.event("message")
-								.data(this.objectMapper.writeValueAsString(frame))
-								.build();
-						}
-						catch (final Exception ex) {
-							return ServerSentEvent.<String>builder().event("error").data(ex.getMessage()).build();
-						}
-					})
-					.startWith(prologue))
+		final var flux = Flux.merge(errorEvents.asFlux(), targetToBrowser.asFlux()
+			.takeUntilOther(session.closeSignal())
+			// Dead upstream: emit the terminal retry ahead of the teardown so
+			// spec-compliant EventSource clients stop reconnecting instead of
+			// minting a doomed proxy session every ~3s.
+			.onErrorResume((err) -> {
+				if (ProxyReconnectPolicy.isUpstreamDeath(err)) {
+					errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
+						.comment("upstream dead: reconnect suppressed")
+						.retry(Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS))
+						.build());
+				}
+				return Flux.error(err);
+			})
+			.doOnTerminate(() -> errorEvents.tryEmitComplete())
+			.map((frame) -> {
+				try {
+					return ServerSentEvent.<String>builder()
+						.event("message")
+						.data(this.objectMapper.writeValueAsString(frame))
+						.build();
+				}
+				catch (final Exception ex) {
+					return ServerSentEvent.<String>builder().event("error").data(ex.getMessage()).build();
+				}
+			})
+			.startWith(prologue))
 			.doOnCancel(() -> this.registry.removeAndClose(sessionId))
 			.doOnTerminate(() -> this.registry.removeAndClose(sessionId));
 
 		this.mcpProxy.start(session).subscribe((ignored) -> {
 		}, (err) -> {
 			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+			// Dead upstream: the terminal retry stops the browser reconnect loop
+			// before this stream ends (see ProxyReconnectPolicy).
+			if (ProxyReconnectPolicy.isUpstreamDeath(err)) {
+				errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
+					.comment("upstream dead: reconnect suppressed")
+					.retry(Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS))
+					.build());
+			}
 			// D3: emit the structured error event BEFORE the session teardown — the
 			// close signal terminates the merged flux, so the DTO must land first.
 			final ProxyErrorDto dto = ProxyErrorMapper.map(err, TransportKind.SSE);
