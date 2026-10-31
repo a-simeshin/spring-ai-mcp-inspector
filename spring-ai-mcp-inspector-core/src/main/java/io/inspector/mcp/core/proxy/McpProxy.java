@@ -25,7 +25,6 @@ import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
-import reactor.core.publisher.Sinks;
 
 /**
  * Wires a {@link ProxySession}'s two sinks to the target {@link McpClientTransport}.
@@ -115,10 +114,9 @@ public final class McpProxy {
 		return session.targetTransport().connect((inbound) -> inbound.flatMap((message) -> {
 			final JsonNode body = toJsonNode(message);
 			if (body != null) {
-				final Sinks.EmitResult er = session.targetToBrowser().tryEmitNext(body);
-				if (er.isFailure()) {
-					LOG.debug("proxy[{}] target->browser emit failure: {}", session.sessionId(), er.name());
-				}
+				// Concurrent responses arrive on different transport threads; a dropped
+				// frame here strands the per-request awaiter until the timeout.
+				session.emitFromTarget(body);
 				session.touch();
 			}
 			return Mono.<JSONRPCMessage>empty();
