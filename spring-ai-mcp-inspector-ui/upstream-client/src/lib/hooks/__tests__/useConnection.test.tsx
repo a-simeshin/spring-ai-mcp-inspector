@@ -2932,6 +2932,11 @@ describe("useConnection", () => {
         redirectUrl: "http://localhost:3000/oauth/callback",
         clear: jest.fn(),
       }));
+      // Top-level describe: the "useConnection" describe's own cleanup does
+      // not cover these tests, so an assigned setLoggingLevel leaks to tests
+      // that require it absent when randomize: true reorders the file
+      // (port of the 1.x fix, commit 7c48f92).
+      delete (mockClient as { setLoggingLevel?: unknown }).setLoggingLevel;
     });
 
     test("stale setLoggingLevel completion does not append history (exact count)", async () => {
