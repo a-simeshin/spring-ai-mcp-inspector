@@ -1037,6 +1037,25 @@ export function useConnection({
           };
         }
 
+        // [spring-ai-mcp-inspector PATCH] Leave the Connected state when the
+        // transport dies mid-session (see NOTICE.d/transport-death-leaves-connected.txt).
+        // The proxy closes the downstream SSE stream once the upstream liveness
+        // probe fails; on the wire that arrives as an EventSource error (the
+        // eventsource polyfill emits `error` and schedules a reconnect), which
+        // the SDK surfaces through transport.onerror. Nothing else updates
+        // connectionStatus after "connected", so without this wrapper the
+        // sidebar keeps showing Connected for a dead upstream. The wrapper
+        // delegates to the protocol handler first so the SDK's own error path
+        // keeps running; user-initiated disconnects are unaffected, because
+        // close() aborts the eventsource and the abort error is swallowed.
+        const protocolOnError = transport.onerror;
+        transport.onerror = (error: Error) => {
+          protocolOnError?.(error);
+          setConnectionError(connectionFailureFromError(error));
+          setConnectionStatus("error");
+          setServerImplementation(null);
+        };
+
         setClientTransport(transport);
 
         capabilities = client.getServerCapabilities();
