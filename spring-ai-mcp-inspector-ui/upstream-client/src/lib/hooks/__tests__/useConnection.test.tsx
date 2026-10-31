@@ -1,4 +1,5 @@
 // [spring-ai-mcp-inspector PATCH] owner-session isolation and auth-profile tests
+// [spring-ai-mcp-inspector PATCH] Regression tests for connect state hygiene (NOTICE.d/stale-connect-status-fix.txt).
 import { renderHook, act } from "@testing-library/react";
 import { useConnection } from "../useConnection";
 import { z } from "zod/v3";
@@ -29,7 +30,10 @@ import {
   ElicitResult,
   ElicitRequest,
 } from "@modelcontextprotocol/sdk/types.js";
-import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
+import {
+  auth,
+  UnauthorizedError,
+} from "@modelcontextprotocol/sdk/client/auth.js";
 import { discoverScopes } from "../../auth";
 import { CustomHeaders } from "../../types/customHeaders";
 import { ProxyErrorDto } from "../../connectionErrors";
@@ -1061,6 +1065,61 @@ describe("useConnection", () => {
       ).toHaveProperty("X-MCP-Proxy-Auth", "Bearer test-proxy-token");
     });
 
+    // [spring-ai-mcp-inspector PATCH] case-insensitive header merge regression
+    // (#299): the SDK materializes requestInit.headers into a Headers instance
+    // (lowercase names) before invoking eventSourceInit.fetch, so merging that
+    // source with the proxy auth record via Object.assign produced two names
+    // differing only in case (x-mcp-proxy-auth + X-MCP-Proxy-Auth). The
+    // browser joined the pair into "Bearer t, Bearer t" and the proxy
+    // answered 401. NOTICE.d/proxy-header-case-merge.txt.
+    test("merges Headers source and proxy auth record into one case-insensitive key", async () => {
+      const propsWithProxyAuth = {
+        ...defaultProps,
+        connectionType: "proxy" as const,
+        config: {
+          ...DEFAULT_INSPECTOR_CONFIG,
+          MCP_PROXY_AUTH_TOKEN: {
+            ...DEFAULT_INSPECTOR_CONFIG.MCP_PROXY_AUTH_TOKEN,
+            value: "test-proxy-token",
+          },
+        },
+      };
+
+      const { result } = renderHook(() => useConnection(propsWithProxyAuth));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const transportFetch = mockSSETransport.options?.eventSourceInit?.fetch;
+      expect(transportFetch).toBeDefined();
+
+      (global.fetch as jest.Mock).mockClear();
+      await transportFetch?.("http://test.com", {
+        // What the SDK really passes: a Headers instance built from
+        // requestInit.headers, so every name arrives lowercased.
+        headers: new Headers({
+          accept: "text/event-stream",
+          "x-mcp-proxy-auth": "Bearer test-proxy-token",
+        }),
+        cache: "no-store",
+        mode: "cors",
+        signal: new AbortController().signal,
+        redirect: "follow",
+        credentials: "include",
+      });
+
+      const outgoing = (global.fetch as jest.Mock).mock.calls[
+        (global.fetch as jest.Mock).mock.calls.length - 1
+      ];
+      const outgoingHeaders = outgoing[1].headers as Record<string, string>;
+      const authKeys = Object.keys(outgoingHeaders).filter(
+        (key) => key.toLowerCase() === "x-mcp-proxy-auth",
+      );
+      expect(authKeys).toHaveLength(1);
+      expect(outgoingHeaders[authKeys[0]]).toBe("Bearer test-proxy-token");
+    });
+
     test("does NOT send X-MCP-Proxy-Auth header when proxy auth token is configured for direct connectionType", async () => {
       const propsWithProxyAuth = {
         ...defaultProps,
@@ -1996,6 +2055,473 @@ describe("useConnection", () => {
           message: "connection to the MCP server was refused",
         }),
       );
+    });
+
+    // Regression for NOTICE.d/stale-connect-status-fix.txt. No disconnect in
+    // between: on develop/2.x a failed reconnect left serverImplementation
+    // from the previous successful session in state.
+    test("a failed connect after a successful one clears serverImplementation without a disconnect in between", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      // Non-empty capabilities so the test also catches a removed
+      // setServerCapabilities(null) in the catch paths.
+      mockClient.getServerCapabilities.mockReturnValue({
+        completions: {},
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // Successful connect: serverImplementation is set
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("connected");
+      expect(result.current.serverImplementation).toEqual({
+        name: "test-server",
+        version: "1.0.0",
+      });
+
+      // Failed reconnect, no disconnect: the stale values must be gone.
+      // getServerVersion/Capabilities only answer for the first (successful)
+      // attempt; the second client.connect() call rejects before they run.
+      mockClient.getServerVersion.mockReturnValue(undefined);
+      mockClient.getServerCapabilities.mockReturnValue(undefined);
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // Outer catch (:1237 leg of the fix): the transport connect succeeds and
+    // serverImplementation is already set, then a later step in the same
+    // connect() throws. Without the clear in the outer catch the stale server
+    // info from THIS attempt would survive the "error" status.
+    test("a failure after the server info was set clears serverImplementation", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      // capabilities.logging + defaultLoggingLevel drive connect() into
+      // client.setLoggingLevel, which the mock client does not implement:
+      // the resulting TypeError reaches the outer catch after
+      // serverImplementation was already set for this attempt.
+      mockClient.getServerCapabilities.mockReturnValue({
+        logging: {},
+      });
+
+      const { result } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          defaultLoggingLevel: "info",
+        }),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // Inner catch, auth branch (:891 leg of the fix). The transport connect
+    // succeeds and serverImplementation is already set for THIS attempt, then
+    // getInstructions() throws UnauthorizedError while building the history
+    // entry. OAuth recovery gives up (auth() returns a non-AUTHORIZED
+    // result), so the auth branch of the inner catch must clear the server
+    // info set moments earlier by this same attempt.
+    test("a late unauthorized failure clears serverImplementation", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      mockClient.getServerCapabilities.mockReturnValue({
+        completions: {},
+      });
+
+      const { result } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          oauthScope: "read",
+        }),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      mockAuth.mockReset();
+      mockAuth.mockResolvedValue("EMAIL_REQUIRED");
+      mockClient.getInstructions.mockImplementationOnce(() => {
+        throw new UnauthorizedError("auth required");
+      });
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      // connectionFailureFromError maps this mock (no .code) to "unknown";
+      // the auth branch is still the one that ran (auth() was consulted).
+      expect(mockAuth).toHaveBeenCalled();
+      expect(result.current.connectionError).toEqual(
+        expect.objectContaining({ message: "auth required" }),
+      );
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // Inner catch, general branch (:908 leg of the fix). Same setup as above,
+    // but the late failure is a plain error, so the general branch of the
+    // inner catch (not the auth branch) must clear the server info.
+    test("a late failure after the server info was set clears serverImplementation", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      mockClient.getServerCapabilities.mockReturnValue({
+        completions: {},
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      mockClient.getInstructions.mockImplementationOnce(() => {
+        throw new Error("instructions failed");
+      });
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.connectionError).toEqual(
+        expect.objectContaining({ message: "instructions failed" }),
+      );
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // BLOCK 3 replacement, round 2 (see NOTICE.d/stale-connect-status-fix.txt).
+    // The earlier failed-then-failed variant passed on develop/2.x: both
+    // attempts rejected inside client.connect() before :1044 ever set server
+    // info, so the base also ended with serverImplementation=null (verified:
+    // base useConnection.ts + head tests = that test green). For a real
+    // failed-then-failed scenario the second attempt must fail LATE, after
+    // :1044 set this attempt's server info: the transport connects, then
+    // getInstructions() throws while building the history entry. On the base
+    // the general branch of the inner catch does not clear that server info,
+    // so it survives the "error" status; this PR clears it.
+    test("a late-failing second connect clears server info it just set after an earlier failed attempt", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({ completions: {} });
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("first attempt refused"),
+      );
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // First attempt: fails inside client.connect(), nothing set.
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.connectionError).toEqual(
+        expect.objectContaining({ message: "first attempt refused" }),
+      );
+      expect(result.current.serverImplementation).toBeNull();
+
+      // Second attempt: the transport connect succeeds and :1044 sets this
+      // attempt's server info, then getInstructions() throws. The server
+      // info of THIS attempt must not survive the error.
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      mockClient.getInstructions.mockImplementationOnce(() => {
+        throw new Error("instructions failed");
+      });
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.connectionError).toEqual(
+        expect.objectContaining({ message: "instructions failed" }),
+      );
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // Start-of-connect clears (:623-624 legs of the fix). The proxy health
+    // check fails before any catch path runs, so without the clears at the
+    // start of connect() the previous session's serverImplementation and
+    // serverCapabilities would survive an attempt that never reached the
+    // transport. Owner review round 4: the variant of this test on the old
+    // head asserted only serverImplementation, which is why the missing
+    // serverCapabilities clear went unnoticed.
+    test("a proxy health failure clears the stale server info", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      mockClient.getServerCapabilities.mockReturnValue({ completions: {} });
+
+      const { result } = renderHook(() =>
+        useConnection({ ...defaultProps, connectionType: "proxy" as const }),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+      expect(result.current.serverImplementation).toEqual({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      expect(result.current.serverCapabilities).toEqual({ completions: {} });
+
+      // Next attempt: the proxy health endpoint is unreachable.
+      (global.fetch as jest.Mock).mockRejectedValueOnce(
+        new Error("proxy is down"),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe(
+        "error-connecting-to-proxy",
+      );
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // Start-of-connect clears again, second early-return path named by the
+    // owner review: the proxy auth branch (toast + "error" status + return)
+    // never reaches a catch clear either, so the previous session's server
+    // info must already be gone by the time connect() started.
+    test("a proxy auth failure clears the stale server info", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      mockClient.getServerCapabilities.mockReturnValue({ completions: {} });
+
+      const { result } = renderHook(() =>
+        useConnection({ ...defaultProps, connectionType: "proxy" as const }),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      // Next attempt: the proxy rejects the call with the session-token error.
+      mockClient.connect.mockRejectedValueOnce(
+        new Error(
+          "Authentication required. Use the session token from the proxy server console",
+        ),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      expect(mockToast).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Proxy Authentication Required" }),
+      );
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // disconnect() clear (:1286 leg of the fix): on develop/2.x disconnect()
+    // left serverImplementation from the previous session in state.
+    test("a successful connect then disconnect clears serverImplementation", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      mockClient.getServerCapabilities.mockReturnValue({
+        completions: {},
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      await act(async () => {
+        await result.current.disconnect();
+      });
+
+      expect(result.current.connectionStatus).toBe("disconnected");
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // The failure banner is cleared on an explicit Disconnect, but by the
+    // SYNCHRONOUS reset at the top of disconnect() (the issue #54 banner
+    // patch, already on the base), not by anything after the awaits. This PR
+    // deliberately keeps no post-await setConnectionError(null): the next
+    // two tests pin why.
+    test("a disconnect after a failed connect clears the failure", async () => {
+      mockClient.getServerVersion.mockReturnValue(undefined);
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.connectionError).not.toBeNull();
+
+      await act(async () => {
+        await result.current.disconnect();
+      });
+
+      expect(result.current.connectionStatus).toBe("disconnected");
+      expect(result.current.connectionError).toBeNull();
+      expect(result.current.serverImplementation).toBeNull();
+    });
+
+    // The sidebar Reconnect button calls onDisconnect(); onConnect() without
+    // awaiting, so the two run interleaved. Two orderings exist and both must
+    // keep the failure: (a) the failure lands LAST, after the disconnect tail
+    // (this test, gated on the connect rejection), and (b) the failure lands
+    // FIRST and the disconnect tail lands last (the next test, gated on
+    // mcpClient.close()). A post-await setConnectionError(null) in
+    // disconnect() wipes the failure in ordering (b); that clear was removed
+    // after the owner review, and the synchronous banner reset at the top of
+    // disconnect() cannot race because it runs before onConnect() starts.
+    test("a failing reconnect is not wiped by the interleaved disconnect", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      // The reconnect attempt parks inside client.connect() until released.
+      let releaseReconnect: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        releaseReconnect = resolve;
+      });
+      mockClient.connect.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            gate.then(() =>
+              reject(new Error("connection to the MCP server was refused")),
+            );
+          }),
+      );
+
+      let reconnect: Promise<void> | undefined;
+      await act(async () => {
+        // Reconnect button: disconnect first, connect second, not awaited.
+        const d = result.current.disconnect();
+        reconnect = result.current.connect();
+        releaseReconnect();
+        await Promise.all([
+          d,
+          reconnect.catch(() => undefined),
+        ]);
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.connectionError).toEqual(
+        expect.objectContaining({
+          message: "connection to the MCP server was refused",
+        }),
+      );
+      expect(result.current.serverImplementation).toBeNull();
+    });
+
+    // Owner review BLOCK, round 4 (ordering (b) from the comment above): the
+    // REVERSE interleaving, failure first, disconnect tail last. The old head
+    // cleared connectionError at the END of disconnect(), after the awaits;
+    // with the new connect failing fast, that late clear landed after the
+    // failure and wiped it, so the sidebar alert (driven by connectionError
+    // alone) disappeared while the base kept it. Here mcpClient.close() is
+    // parked on a deferred promise, the reconnect rejects and fully settles
+    // while the disconnect is stuck, and only then is the disconnect tail
+    // released. On the pre-rework head this test fails with
+    // connectionError: null; with the post-await clear removed it passes.
+    test("a failing reconnect keeps its error when the failure lands before the disconnect finishes", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      // Park the disconnect mid-flight: for the SSE transport the first await
+      // in disconnect() is mcpClient.close(), so by the time it parks the
+      // synchronous banner reset at the top has already run, but the tail
+      // (status change, server info clears) has not.
+      let resumeDisconnect: () => void = () => {};
+      const disconnectGate = new Promise<void>((resolve) => {
+        resumeDisconnect = resolve;
+      });
+      mockClient.close.mockImplementationOnce(() => disconnectGate);
+
+      // The reconnect fails fast, while the disconnect is parked.
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+
+      await act(async () => {
+        // Reconnect button: disconnect first, connect second, not awaited.
+        const d = result.current.disconnect();
+        const c = result.current.connect();
+        // The failure lands first: the connect fully settles, catch included.
+        await c.catch(() => undefined);
+        // Only now does the disconnect tail run, after the failure.
+        resumeDisconnect();
+        await d;
+      });
+
+      // The failure must survive the disconnect tail: with the removed
+      // post-await clear reintroduced, connectionError would be null here.
+      expect(result.current.connectionError).toEqual(
+        expect.objectContaining({
+          message: "connection to the MCP server was refused",
+        }),
+      );
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
     });
   });
 

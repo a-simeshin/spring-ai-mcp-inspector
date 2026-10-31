@@ -278,6 +278,13 @@ public class McpInspectorProperties {
 		 */
 		private Duration sessionReaper = Duration.ofMinutes(30);
 
+		/**
+		 * Wall-clock budget for the SSE preflight probe the proxy sends before the real
+		 * SSE handshake connect. Generous servers that take a moment to answer the probe
+		 * still connect; only a probe that never answers fails. Default 10s.
+		 */
+		private Duration ssePreflight = Duration.ofSeconds(10);
+
 		public Duration getSseSession() {
 			return this.sseSession;
 		}
@@ -332,6 +339,14 @@ public class McpInspectorProperties {
 
 		public void setSessionReaper(final Duration sessionReaper) {
 			this.sessionReaper = sessionReaper;
+		}
+
+		public Duration getSsePreflight() {
+			return this.ssePreflight;
+		}
+
+		public void setSsePreflight(final Duration ssePreflight) {
+			this.ssePreflight = ssePreflight;
 		}
 
 	}

@@ -62,19 +62,19 @@ class ProxyTransportFactoryTests {
 	private final ProxyTransportFactory factory = new ProxyTransportFactory(new JsonMapper());
 
 	@Nested
-	@DisplayName("openSse()")
-	class OpenSse {
+	@DisplayName("buildSse()")
+	class BuildSse {
 
 		@Test
-		@Story("Build SSE transport")
+		@Story("Build SSE transport with preflight wrapper")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("openSse() builds an HttpClientSseClientTransport for a URI with host, port and path")
-		void openSse_withFullUri_buildsSseTransport() {
+		@Description("buildSse() returns an SsePreflightTransport wrapping an HttpClientSseClientTransport")
+		void buildSse_withFullUri_wrapsInPreflightTransport() {
 			// given
 			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
 
 			// when
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri);
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri);
 
 			// then
 			assertThat(transport).isInstanceOf(SsePreflightTransport.class);
@@ -84,13 +84,13 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Default endpoint branch")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() falls back to /sse and omits the port when the URI has no path or port")
-		void openSse_withNoPathAndNoPort_buildsTransportWithDefaults() {
+		@Description("buildSse() falls back to /sse and omits the port when the URI has no path or port")
+		void buildSse_withNoPathAndNoPort_buildsTransportWithDefaults() {
 			// given
 			final URI sseUri = URI.create("http://localhost");
 
 			// when
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri);
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri);
 
 			// then
 			assertThat(transport).isInstanceOf(SsePreflightTransport.class);
@@ -100,25 +100,41 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Validation")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() rejects a null URI")
-		void openSse_withNullUri_throwsIllegalArgument() {
+		@Description("buildSse() rejects a null URI")
+		void buildSse_withNullUri_throwsIllegalArgument() {
 			// when & then
-			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.openSse(null))
+			assertThatThrownBy(() -> ProxyTransportFactoryTests.this.factory.buildSse(null))
 				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("sseUri");
 		}
 
 		@Test
-		@Story("Header forwarding — auth only")
+		@Story("Normalization")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("openSse() three-arg overload with an authorization value and no custom headers "
-				+ "returns a non-null SSE transport")
-		void openSse_withAuthorizationOnly_returnsSseTransport() {
+		@Description("buildSse() with a URI that has no path normalizes to /sse in the preflight")
+		void buildSse_withNoPath_normalizesToSse() {
+			// given
+			final URI sseUri = URI.create("http://127.0.0.1:8080");
+
+			// when
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri);
+
+			// then
+			assertThat(transport).isInstanceOf(SsePreflightTransport.class);
+			assertThat(((SsePreflightTransport) transport).unwrap()).isInstanceOf(HttpClientSseClientTransport.class);
+		}
+
+		@Test
+		@Story("Header forwarding -- auth only")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("buildSse() three-arg overload with an authorization value and no custom headers "
+				+ "returns a non-null SsePreflightTransport")
+		void buildSse_withAuthorizationOnly_returnsSsePreflightTransport() {
 			// given
 			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
 
 			// when
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri,
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri,
 					"Bearer tok-123", null);
 
 			// then
@@ -127,16 +143,16 @@ class ProxyTransportFactoryTests {
 		}
 
 		@Test
-		@Story("Header forwarding — custom headers only")
+		@Story("Header forwarding -- custom headers only")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("openSse() three-arg overload with no authorization but with custom headers "
-				+ "returns a non-null SSE transport")
-		void openSse_withCustomHeadersOnly_returnsSseTransport() {
+		@Description("buildSse() three-arg overload with no authorization but with custom headers "
+				+ "returns a non-null SsePreflightTransport")
+		void buildSse_withCustomHeadersOnly_returnsSsePreflightTransport() {
 			// given
 			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
 
 			// when
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri, null,
 					Map.of("X-Tenant", "acme"));
 
 			// then
@@ -145,16 +161,16 @@ class ProxyTransportFactoryTests {
 		}
 
 		@Test
-		@Story("Header forwarding — auth and custom headers")
+		@Story("Header forwarding -- auth and custom headers")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("openSse() three-arg overload with both authorization and custom headers "
-				+ "returns a non-null SSE transport")
-		void openSse_withAuthAndCustomHeaders_returnsSseTransport() {
+		@Description("buildSse() three-arg overload with both authorization and custom headers "
+				+ "returns a non-null SsePreflightTransport")
+		void buildSse_withAuthAndCustomHeaders_returnsSsePreflightTransport() {
 			// given
 			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
 
 			// when
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri,
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri,
 					"Bearer tok-abc", Map.of("X-Tenant", "acme"));
 
 			// then
@@ -163,16 +179,16 @@ class ProxyTransportFactoryTests {
 		}
 
 		@Test
-		@Story("Header forwarding — both null/empty")
+		@Story("Header forwarding -- both null/empty")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() three-arg overload with null authorization and empty custom headers "
-				+ "behaves like the single-arg overload and returns a non-null SSE transport")
-		void openSse_withNullAuthAndEmptyCustomHeaders_returnsSseTransport() {
+		@Description("buildSse() three-arg overload with null authorization and empty custom headers "
+				+ "returns a non-null SsePreflightTransport")
+		void buildSse_withNullAuthAndEmptyCustomHeaders_returnsSsePreflightTransport() {
 			// given
 			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
 
 			// when
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri, null,
 					Map.of());
 
 			// then
@@ -183,14 +199,14 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Restricted header swallowed")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() does not propagate an IllegalArgumentException caused by a restricted "
-				+ "custom header name — the transport is still returned")
-		void openSse_withRestrictedCustomHeaderName_doesNotThrow() {
-			// given — "host" is a restricted header in Java's HttpClient
+		@Description("buildSse() does not propagate an IllegalArgumentException caused by a restricted "
+				+ "custom header name -- the transport is still returned")
+		void buildSse_withRestrictedCustomHeaderName_doesNotThrow() {
+			// given
 			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
 
-			// when & then — must not throw
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+			// when & then -- must not throw
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri, null,
 					Map.of("host", "evil.example.com"));
 
 			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
@@ -200,8 +216,8 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Invalid custom header entries swallowed")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() silently skips custom headers with blank names or null values")
-		void openSse_withInvalidCustomHeaderEntries_skipsThemSilently() {
+		@Description("buildSse() silently skips custom headers with blank names or null values")
+		void buildSse_withInvalidCustomHeaderEntries_skipsThemSilently() {
 			// given
 			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
 			final Map<String, String> customHeaders = new HashMap<>();
@@ -209,7 +225,7 @@ class ProxyTransportFactoryTests {
 			customHeaders.put("X-Null", null);
 
 			// when & then — must not throw
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri, null,
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri, null,
 					customHeaders);
 
 			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
@@ -481,17 +497,17 @@ class ProxyTransportFactoryTests {
 	}
 
 	@Nested
-	@DisplayName("openSseWithAuth()")
-	class OpenSseWithAuth {
+	@DisplayName("buildSseWithAuth()")
+	class BuildSseWithAuth {
 
 		@Test
 		@Story("Validation")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSseWithAuth() rejects a null URI")
-		void openSseWithAuth_withNullUri_throwsIllegalArgument() {
+		@Description("buildSseWithAuth() rejects a null URI")
+		void buildSseWithAuth_withNullUri_throwsIllegalArgument() {
 			// when & then
 			assertThatThrownBy(
-					() -> ProxyTransportFactoryTests.this.factory.openSseWithAuth(null, AuthHeaders.none(), null))
+					() -> ProxyTransportFactoryTests.this.factory.buildSseWithAuth(null, AuthHeaders.none(), null))
 				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("sseUri");
 		}
@@ -499,16 +515,16 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Build SSE transport with auth")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("openSseWithAuth() builds an SSE transport and applies authorization, custom headers and "
+		@Description("buildSseWithAuth() builds an SSE transport and applies authorization, custom headers and "
 				+ "multiple query parameters")
-		void openSseWithAuth_withFullUriAndAllHeaders_buildsSseTransport() {
+		void buildSseWithAuth_withFullUriAndAllHeaders_buildsSseTransport() {
 			// given
 			final URI sseUri = URI.create("http://127.0.0.1:8080/events");
 			final AuthHeaders headers = new AuthHeaders("Bearer tok-1", Map.of("X-Tenant", "acme"),
 					Map.of("api_key", "k1", "trace", "t2"));
 
 			// when
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSseWithAuth(sseUri,
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSseWithAuth(sseUri,
 					headers, null);
 
 			// then
@@ -519,14 +535,14 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Default endpoint branch")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSseWithAuth() with no path, no port and empty headers falls back to /sse and skips the "
+		@Description("buildSseWithAuth() with no path, no port and empty headers falls back to /sse and skips the "
 				+ "header customizer")
-		void openSseWithAuth_withNoPathAndEmptyHeaders_buildsTransportWithDefaults() {
+		void buildSseWithAuth_withNoPathAndEmptyHeaders_buildsTransportWithDefaults() {
 			// given
 			final URI sseUri = URI.create("http://localhost");
 
 			// when
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSseWithAuth(sseUri,
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSseWithAuth(sseUri,
 					AuthHeaders.none(), null);
 
 			// then
@@ -537,14 +553,14 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Null query params guard")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSseWithAuth() tolerates null query params and leaves the endpoint path unchanged")
-		void openSseWithAuth_withNullQueryParams_buildsTransportWithDefaults() {
+		@Description("buildSseWithAuth() tolerates null query params and leaves the endpoint path unchanged")
+		void buildSseWithAuth_withNullQueryParams_buildsTransportWithDefaults() {
 			// given
 			final URI sseUri = URI.create("http://localhost/sse");
 			final AuthHeaders headers = new AuthHeaders(null, Map.of(), null);
 
 			// when
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSseWithAuth(sseUri,
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSseWithAuth(sseUri,
 					headers, null);
 
 			// then
@@ -555,15 +571,15 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Live authorization ref")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("openSseWithAuth() reads the authorization value through the AtomicReference when provided")
-		void openSseWithAuth_withAuthorizationRef_readsLiveValue() {
+		@Description("buildSseWithAuth() reads the authorization value through the AtomicReference when provided")
+		void buildSseWithAuth_withAuthorizationRef_readsLiveValue() {
 			// given
 			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
 			final AuthHeaders headers = new AuthHeaders(null, Map.of(), Map.of());
 			final AtomicReference<String> authorizationRef = new AtomicReference<>("Bearer live-token");
 
 			// when
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSseWithAuth(sseUri,
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSseWithAuth(sseUri,
 					headers, authorizationRef);
 
 			// then
@@ -574,14 +590,14 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Blank authorization skipped")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSseWithAuth() with a blank authorization value forwards only the custom headers")
-		void openSseWithAuth_withBlankAuthorizationAndCustomHeaders_skipsAuthHeader() {
+		@Description("buildSseWithAuth() with a blank authorization value forwards only the custom headers")
+		void buildSseWithAuth_withBlankAuthorizationAndCustomHeaders_skipsAuthHeader() {
 			// given
 			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
 			final AuthHeaders headers = new AuthHeaders("   ", Map.of("X-Tenant", "acme"), Map.of());
 
 			// when
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSseWithAuth(sseUri,
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSseWithAuth(sseUri,
 					headers, null);
 
 			// then
@@ -592,9 +608,9 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Invalid custom header entries swallowed")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSseWithAuth() silently skips custom headers with blank names, null values or restricted "
+		@Description("buildSseWithAuth() silently skips custom headers with blank names, null values or restricted "
 				+ "names")
-		void openSseWithAuth_withInvalidCustomHeaderEntries_skipsThemSilently() {
+		void buildSseWithAuth_withInvalidCustomHeaderEntries_skipsThemSilently() {
 			// given
 			final URI sseUri = URI.create("http://127.0.0.1:8080/sse");
 			final Map<String, String> customHeaders = new HashMap<>();
@@ -605,7 +621,7 @@ class ProxyTransportFactoryTests {
 			final AuthHeaders headers = new AuthHeaders(null, customHeaders, Map.of());
 
 			// when & then — must not throw
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSseWithAuth(sseUri,
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSseWithAuth(sseUri,
 					headers, null);
 
 			assertThat(transport).isNotNull().isInstanceOf(SsePreflightTransport.class);
@@ -715,7 +731,7 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Header forwarding — live request")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("a real SSE connect through openSseWithAuth() sends the authorization header, custom headers "
+		@Description("a real SSE connect through buildSseWithAuth() sends the authorization header, custom headers "
 				+ "and query parameters to the upstream server")
 		void sseConnect_withAuthAndCustomHeaders_forwardsAllHeaders() {
 			// given
@@ -723,7 +739,7 @@ class ProxyTransportFactoryTests {
 					Map.of("api_key", "k1", "trace", "t2"));
 
 			// when
-			connectAndClose(ProxyTransportFactoryTests.this.factory.openSseWithAuth(this.sseUri, headers, null));
+			connectAndClose(ProxyTransportFactoryTests.this.factory.buildSseWithAuth(this.sseUri, headers, null));
 
 			// then
 			assertThat(this.lastRequestHeaders.getFirst("Authorization")).isEqualTo("Bearer tok-1");
@@ -746,7 +762,7 @@ class ProxyTransportFactoryTests {
 			final AuthHeaders headers = new AuthHeaders("   ", customHeaders, Map.of());
 
 			// when
-			connectAndClose(ProxyTransportFactoryTests.this.factory.openSseWithAuth(this.sseUri, headers, null));
+			connectAndClose(ProxyTransportFactoryTests.this.factory.buildSseWithAuth(this.sseUri, headers, null));
 
 			// then
 			assertThat(this.lastRequestHeaders.getFirst("Authorization")).isNull();
@@ -765,7 +781,7 @@ class ProxyTransportFactoryTests {
 
 			// when
 			connectAndClose(
-					ProxyTransportFactoryTests.this.factory.openSseWithAuth(this.sseUri, headers, authorizationRef));
+					ProxyTransportFactoryTests.this.factory.buildSseWithAuth(this.sseUri, headers, authorizationRef));
 
 			// then
 			assertThat(this.lastRequestHeaders.getFirst("Authorization")).isEqualTo("Bearer live-token");
@@ -774,11 +790,11 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Legacy header forwarding — live request")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("a real SSE connect through the legacy openSse() overload forwards authorization and custom "
+		@Description("a real SSE connect through the legacy buildSse() overload forwards authorization and custom "
 				+ "headers together")
 		void sseConnect_withLegacyAuthAndCustomHeaders_forwardsBoth() {
 			// when
-			connectAndClose(ProxyTransportFactoryTests.this.factory.openSse(this.sseUri, "Bearer tok-legacy",
+			connectAndClose(ProxyTransportFactoryTests.this.factory.buildSse(this.sseUri, "Bearer tok-legacy",
 					Map.of("X-Tenant", "acme")));
 
 			// then
@@ -789,11 +805,11 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Legacy header forwarding — auth only")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("a real SSE connect through the legacy openSse() overload with no custom headers forwards only "
+		@Description("a real SSE connect through the legacy buildSse() overload with no custom headers forwards only "
 				+ "the authorization header")
 		void sseConnect_withLegacyAuthOnly_forwardsAuthorization() {
 			// when
-			connectAndClose(ProxyTransportFactoryTests.this.factory.openSse(this.sseUri, "Bearer tok-legacy", null));
+			connectAndClose(ProxyTransportFactoryTests.this.factory.buildSse(this.sseUri, "Bearer tok-legacy", null));
 
 			// then
 			assertThat(this.lastRequestHeaders.getFirst("Authorization")).isEqualTo("Bearer tok-legacy");
@@ -803,12 +819,12 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Legacy header forwarding — custom headers only")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("a real SSE connect through the legacy openSse() overload with no authorization forwards only "
+		@Description("a real SSE connect through the legacy buildSse() overload with no authorization forwards only "
 				+ "the custom headers")
 		void sseConnect_withLegacyCustomHeadersOnly_skipsAuthorization() {
 			// when
 			connectAndClose(
-					ProxyTransportFactoryTests.this.factory.openSse(this.sseUri, null, Map.of("X-Tenant", "acme")));
+					ProxyTransportFactoryTests.this.factory.buildSse(this.sseUri, null, Map.of("X-Tenant", "acme")));
 
 			// then
 			assertThat(this.lastRequestHeaders.getFirst("Authorization")).isNull();
@@ -818,7 +834,7 @@ class ProxyTransportFactoryTests {
 		@Test
 		@Story("Legacy header forwarding — invalid entries")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("a real SSE connect through the legacy openSse() overload silently skips custom headers with "
+		@Description("a real SSE connect through the legacy buildSse() overload silently skips custom headers with "
 				+ "blank names, null values or restricted names")
 		void sseConnect_withLegacyInvalidEntries_skipsThem() {
 			// given
@@ -830,7 +846,7 @@ class ProxyTransportFactoryTests {
 
 			// when
 			connectAndClose(
-					ProxyTransportFactoryTests.this.factory.openSse(this.sseUri, "Bearer tok-legacy", customHeaders));
+					ProxyTransportFactoryTests.this.factory.buildSse(this.sseUri, "Bearer tok-legacy", customHeaders));
 
 			// then
 			assertThat(this.lastRequestHeaders.getFirst("Authorization")).isEqualTo("Bearer tok-legacy");
@@ -893,7 +909,7 @@ class ProxyTransportFactoryTests {
 			final URI sseUri = URI.create("http://127.0.0.1:" + this.server.getAddress().getPort() + "/sse");
 
 			// when — the preflight-wrapped transport connects
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri);
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri);
 
 			// then — the connect errors (does not hang), carrying the 401 for the D3
 			// mapper
@@ -923,7 +939,7 @@ class ProxyTransportFactoryTests {
 			final URI sseUri = URI.create("http://127.0.0.1:" + this.server.getAddress().getPort() + "/sse");
 
 			// when
-			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.openSse(sseUri);
+			final McpClientTransport transport = ProxyTransportFactoryTests.this.factory.buildSse(sseUri);
 
 			// then — connect completes (no hang)
 			final Throwable error = catchThrowable(

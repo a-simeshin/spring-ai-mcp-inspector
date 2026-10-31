@@ -273,9 +273,8 @@ public class SseProxyController {
 		if (session == null || !isOwnerOf(session)) {
 			return ResponseEntity.notFound().build();
 		}
-		final Sinks.EmitResult result = session.browserToTarget().tryEmitNext(body);
-		if (result.isFailure()) {
-			LOG.warn("proxy[{}] /message emit failure: {}", sessionId, result.name());
+		if (!session.emitFromBrowser(body)) {
+			LOG.warn("proxy[{}] /message emit failure", sessionId);
 			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
 		}
 		session.touch();
@@ -510,7 +509,7 @@ public class SseProxyController {
 		return switch (type) {
 			case "sse" -> {
 				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/sse");
-				yield (headers != null) ? this.transportFactory.openSseWithAuth(target, headers, authorizationRef)
+				yield (headers != null) ? this.transportFactory.buildSseWithAuth(target, headers, authorizationRef)
 						: openSseWithInboundHeaders(target);
 			}
 			case "streamable-http" -> {
@@ -543,8 +542,8 @@ public class SseProxyController {
 		final String authorization = inboundAuthorization();
 		final Map<String, String> customHeaders = inboundCustomHeaders();
 		final boolean noHeaders = authorization == null && customHeaders.isEmpty();
-		return noHeaders ? this.transportFactory.openSse(target)
-				: this.transportFactory.openSse(target, authorization, customHeaders);
+		return noHeaders ? this.transportFactory.buildSse(target)
+				: this.transportFactory.buildSse(target, authorization, customHeaders);
 	}
 
 	/**

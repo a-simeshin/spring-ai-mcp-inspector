@@ -410,10 +410,9 @@ public class ProxyHandler {
 			return ServerResponse.notFound().build();
 		}
 		return readJsonBody(request).flatMap((body) -> {
-			final Sinks.EmitResult er = session.browserToTarget().tryEmitNext(body);
-			if (er.isFailure()) {
+			if (!session.emitFromBrowser(body)) {
 				return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
-					.bodyValue(Map.of("error", "emit failed: " + er.name()));
+					.bodyValue(Map.of("error", "emit failed"));
 			}
 			session.touch();
 			return ServerResponse.accepted().build();
@@ -604,7 +603,7 @@ public class ProxyHandler {
 		return switch (type) {
 			case "sse" -> {
 				final URI target = ProxyTargetResolver.resolve(url, loopbackPort(), "/sse");
-				yield (headers != null) ? this.transportFactory.openSseWithAuth(target, headers, authorizationRef)
+				yield (headers != null) ? this.transportFactory.buildSseWithAuth(target, headers, authorizationRef)
 						: openSseWithInboundHeaders(target, authorization, customHeaders);
 			}
 			case "streamable-http" -> {
@@ -633,8 +632,8 @@ public class ProxyHandler {
 	private McpClientTransport openSseWithInboundHeaders(final URI target, final String authorization,
 			final Map<String, String> customHeaders) {
 		final boolean noHeaders = authorization == null && (customHeaders == null || customHeaders.isEmpty());
-		return noHeaders ? this.transportFactory.openSse(target)
-				: this.transportFactory.openSse(target, authorization, customHeaders);
+		return noHeaders ? this.transportFactory.buildSse(target)
+				: this.transportFactory.buildSse(target, authorization, customHeaders);
 	}
 
 	private McpClientTransport openStreamableWithInboundHeaders(final URI target, final String authorization,
@@ -801,10 +800,9 @@ public class ProxyHandler {
 			final boolean includeSessionHeader) {
 		final JsonNode idNode = extractRequestId(body);
 		if (idNode == null) {
-			final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
-			if (emitResult.isFailure()) {
+			if (!session.emitFromBrowser(body)) {
 				return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
-					.bodyValue(Map.of("error", "emit failed: " + emitResult.name()));
+					.bodyValue(Map.of("error", "emit failed"));
 			}
 			session.touch();
 			final ServerResponse.BodyBuilder accepted = ServerResponse.accepted();
@@ -843,10 +841,8 @@ public class ProxyHandler {
 			.timeout(requestTimeout)
 			.subscribe(awaiterSink::tryEmitValue, awaiterSink::tryEmitError, () -> awaiterSink.tryEmitEmpty());
 		final Mono<JsonNode> awaiter = awaiterSink.asMono();
-		final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
-		if (emitResult.isFailure()) {
-			return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
-				.bodyValue(Map.of("error", "emit failed: " + emitResult.name()));
+		if (!session.emitFromBrowser(body)) {
+			return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR).bodyValue(Map.of("error", "emit failed"));
 		}
 		session.touch();
 		return awaiter.flatMap((node) -> {
