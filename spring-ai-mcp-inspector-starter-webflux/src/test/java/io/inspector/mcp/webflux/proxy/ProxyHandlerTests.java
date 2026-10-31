@@ -55,6 +55,7 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
 import io.inspector.mcp.core.proxy.ProxySession;
@@ -880,6 +881,59 @@ class ProxyHandlerTests {
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
 			assertThat(entityBody(response).get("error").toString()).contains("MCP_CONNECT_FAILED");
 			assertThat(entityBody(response).get("error").toString()).contains("connection_refused");
+		}
+
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() maps the proxy's InvalidProxyRequestException onto 502 invalid_request with "
+				+ "retryable=false and the value-safe message")
+		void postMcp_newSessionInvalidProxyRequest_returns502InvalidRequestNotRetryable() {
+			// given - the factory rejected a restricted custom header name at build time
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willThrow(new InvalidProxyRequestException(
+						"custom header 'host' is not allowed by the JDK HTTP client: restricted header name"));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://up/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then - 502 invalid_request, retryable=false: an identical retry fails
+			// identically
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			assertThat(entityBody(response).get("error").toString()).contains("invalid_request");
+			assertThat(entityBody(response).get("error").toString()).contains("retryable=false");
+		}
+
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() keeps a foreign IllegalArgumentException (NumberFormatException) unknown and never "
+				+ "copies its raw message into the response body")
+		void postMcp_newSessionForeignIllegalArgument_returnsUnknownWithoutRawMessage() {
+			// given - a JDK parser blow-up is NOT a proxy rejection; its message may
+			// quote user input, so it must not travel to the browser
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willThrow(new RuntimeException(new NumberFormatException("For input string: \"pw-123\"")));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://up/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then - classified unknown, generic message, retryable stays true
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			assertThat(entityBody(response).get("error").toString()).contains("MCP_CONNECT_FAILED");
+			assertThat(entityBody(response).get("error").toString()).contains("reason=unknown");
+			assertThat(entityBody(response).get("error").toString()).doesNotContain("pw-123");
+			assertThat(entityBody(response).get("error").toString()).contains("retryable=true");
 		}
 
 		@Test

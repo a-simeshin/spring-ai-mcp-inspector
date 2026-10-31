@@ -267,9 +267,13 @@ public final class McpProxy {
 			// error when connecting to SSE stream, status code: 400" when the session
 			// id raced) through this handler; that is SDK dirt, not the death of the
 			// appstream - the request/response POST path is still alive and must keep
-			// relaying. Same classification as the browser->target pump: only genuine
-			// transport-level failures (refused / dns / timeout) justify tearing the
-			// session down.
+			// relaying. Same classification as the browser->target pump: genuine
+			// transport-level failures (refused / dns / timeout) and the proxy's own
+			// invalid_request rejection (restricted header name or illegal value: every
+			// further frame fails the same customizer check, the session is unusable)
+			// justify tearing the session down. Foreign IllegalArgumentExceptions stay
+			// UNKNOWN here, so a one-off NumberFormatException no longer kills the
+			// relay.
 			if (ProxyConnectFailure.classify(err).reason() != ProxyConnectFailure.Reason.UNKNOWN) {
 				session.failUpstream(err);
 			}
