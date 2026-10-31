@@ -1,0 +1,8 @@
+src/lib/hooks/useConnection.ts + src/components/Sidebar.tsx: add a "Reset
+session" button on connection timeout errors.  When a connect attempt fails
+with reason "timeout", the sidebar error alert shows a "Reset session" button
+alongside the existing "Retry" button.  Clicking it force-tears-down any
+lingering session state (fire-and-forget close, clears all state synchronously,
+bypasses the connectingRef guard) and immediately retries the connection.
+Wired through App.tsx.  Covered by
+src/components/__tests__/Sidebar.connectFailureAlert.test.tsx.
