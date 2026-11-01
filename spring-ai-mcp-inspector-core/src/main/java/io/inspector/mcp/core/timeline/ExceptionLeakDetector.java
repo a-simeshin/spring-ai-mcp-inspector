@@ -444,8 +444,9 @@ public final class ExceptionLeakDetector {
 
 	/**
 	 * Normalization steps 1 and 2 on a throwable: keep ONLY the throwable first line and
-	 * the FIRST {@code Caused by:} line; every {@code \tat} frame line and every
-	 * subsequent line is dropped (the model text never contains stack frames).
+	 * the DEEPEST {@code Caused by:} line; every {@code \tat} frame line and every other
+	 * header line is dropped (the model text never contains stack frames). The deepest
+	 * cause is the one Spring AI 2.x concatenates onto the error text.
 	 * @param throwable the raw throwable text
 	 * @return the kept significant lines (one or two entries)
 	 */
@@ -460,8 +461,15 @@ public final class ExceptionLeakDetector {
 			if (kept.isEmpty()) {
 				kept.add(line);
 			}
-			else if (kept.size() == 1 && line.startsWith("Caused by:")) {
-				kept.add(line);
+			else if (line.startsWith("Caused by:")) {
+				// Each later "Caused by:" line is deeper in the chain, so it replaces
+				// the earlier one: only the deepest cause survives.
+				if (kept.size() == 1) {
+					kept.add(line);
+				}
+				else {
+					kept.set(1, line);
+				}
 			}
 		}
 		return kept;

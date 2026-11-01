@@ -123,8 +123,8 @@ class ExceptionLeakDetectorTests {
 							+ "\tat org.example.Foo.bar(Foo.java:10)\n"
 							+ "Caused by: com.mongodb.MongoBulkWriteException: " + E11000 + "\n"
 							+ "\tat com.mongodb.internal.Foo.run(Foo.java:99)\n"
-							+ "Caused by: java.lang.IllegalStateException: secondary cause is dropped");
-			final TimelineEvent response = responseEvent("resp-2", T, "insert failed\n" + E11000);
+							+ "Caused by: java.lang.IllegalStateException: deepest cause is kept");
+			final TimelineEvent response = responseEvent("resp-2", T, "insert failed\ndeepest cause is kept");
 
 			final Map<String, LeakMatch> matches = DETECTOR.detect(List.of(response, log));
 
@@ -147,17 +147,33 @@ class ExceptionLeakDetectorTests {
 		}
 
 		@Test
-		void t9NestedCausedByChainUsesFirstTwoLinesOnly() {
+		void t9NestedCausedByChainMatchesDeepestCause() {
 			final TimelineEvent log = logEvent("log-9", T.minusSeconds(1), "WARN", "wrapper",
 					"com.example.ServiceException: top message\n\tat a.B(B.java:1)\n"
 							+ "Caused by: java.lang.IllegalStateException: root message\n\tat c.D(D.java:2)\n"
-							+ "Caused by: java.lang.UnsupportedOperationException: third is dropped\n\tat e.F(F.java:3)");
-			final TimelineEvent response = responseEvent("resp-9", T, "top message\nroot message");
+							+ "Caused by: java.lang.UnsupportedOperationException: deepest wins\n\tat e.F(F.java:3)");
+			final TimelineEvent response = responseEvent("resp-9", T, "top message\ndeepest wins");
 
 			final Map<String, LeakMatch> matches = DETECTOR.detect(List.of(response, log));
 
 			assertThat(matches.get("resp-9").matchType()).isEqualTo(LeakMatch.MatchType.EXACT);
 			assertThat(matches.get("resp-9").logThrowableClass()).isEqualTo("com.example.ServiceException");
+		}
+
+		@Test
+		void t14JpaJdbcChainDepthThreeMatchesDeepestCause() {
+			final TimelineEvent log = logEvent("log-14", T.minusSeconds(1), "ERROR", "commit failed",
+					"jakarta.persistence.RollbackException: commit failed\n\tat a.B(B.java:1)\n"
+							+ "Caused by: jakarta.persistence.PersistenceException: inconsistent constraint state\n\tat c.D(D.java:2)\n"
+							+ "Caused by: org.postgresql.util.PSQLException: ERROR: duplicate key value violates unique constraint");
+			final TimelineEvent response = responseEvent("resp-14", T,
+					"commit failed\nERROR: duplicate key value violates unique constraint");
+
+			final Map<String, LeakMatch> matches = DETECTOR.detect(List.of(response, log));
+
+			assertThat(matches).containsKey("resp-14");
+			assertThat(matches.get("resp-14").matchType()).isEqualTo(LeakMatch.MatchType.EXACT);
+			assertThat(matches.get("resp-14").logThrowableClass()).isEqualTo("jakarta.persistence.RollbackException");
 		}
 
 		@Test
@@ -410,13 +426,13 @@ class ExceptionLeakDetectorTests {
 		}
 
 		@Test
-		void step2KeepsOnlyFirstLineAndFirstCausedBy() {
+		void step2KeepsOnlyFirstLineAndDeepestCausedBy() {
 			final List<String> lines = ExceptionLeakDetector
 				.significantLines("java.lang.RuntimeException: top\n\tat a.B(B.java:1)\n\tat c.D(D.java:2)\n"
 						+ "Caused by: java.lang.IllegalStateException: root\n\tat e.F(F.java:3)\n"
-						+ "Caused by: java.lang.Exception: dropped");
+						+ "Caused by: java.lang.Exception: deepest");
 			assertThat(lines).containsExactly("java.lang.RuntimeException: top",
-					"Caused by: java.lang.IllegalStateException: root");
+					"Caused by: java.lang.Exception: deepest");
 		}
 
 		@Test
