@@ -156,3 +156,80 @@ export function humanReadableReason(reason: ConnectFailureReason): string {
       return "Unknown error (unknown)";
   }
 }
+
+// ===================================================================
+// [spring-ai-mcp-inspector PATCH] block2: terminal SSE `retry` contract
+// (dead upstream, owner review 2026-10-30 on PR #154, twin port)
+// ===================================================================
+
+/**
+ * The proxy precedes the stream close of a dead upstream with the SSE `retry`
+ * field carrying ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS (server side,
+ * core module). Any retry delay of an hour or more is treated as terminal: the
+ * browser must stop reconnecting instead of minting a doomed proxy session
+ * every ~3s.
+ */
+export const TERMINAL_RECONNECT_MILLIS = 2_147_483_000;
+
+const TERMINAL_RECONNECT_THRESHOLD_MILLIS = 3_600_000;
+
+/**
+ * Parses one raw SSE line: returns the retry delay in milliseconds when the
+ * line is a `retry:` field with a terminal (>= 1h) value, otherwise null.
+ * Ordinary short retry values (transport hiccups) stay null so the browser
+ * keeps its normal reconnect cadence.
+ */
+export function parseTerminalReconnectMillis(line: string): number | null {
+  if (!line.startsWith("retry:")) {
+    return null;
+  }
+  const retryMillis = Number.parseInt(line.slice("retry:".length).trim(), 10);
+  if (
+    !Number.isFinite(retryMillis) ||
+    retryMillis < TERMINAL_RECONNECT_THRESHOLD_MILLIS
+  ) {
+    return null;
+  }
+  return retryMillis;
+}
+
+// ===================================================================
+// [spring-ai-mcp-inspector PATCH] block3: readable SSE `error` event
+// (dead upstream, owner review 2026-10-30 on PR #154, twin port; this
+// line has no ProxyErrorDto contract, so the payload is the simple
+// message + reason object, see ProxyErrorFallback in the core module)
+// ===================================================================
+
+/**
+ * Parses the data line of the proxy's terminal SSE `error` event. The 1.x
+ * payload is the simple object `{"message": "...", "reason": "..."}` with the
+ * reason taken from the same vocabulary as ConnectFailureReason; an unknown
+ * reason still parses (mapped to "unknown"), while anything that is not such
+ * an object returns null so the caller keeps its generic failure handling.
+ */
+export function parseProxyErrorEvent(data: string): ConnectFailure | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    return null;
+  }
+  if (!isJsonObject(parsed)) {
+    return null;
+  }
+  const message = typeof parsed.message === "string" && parsed.message.length > 0
+    ? parsed.message
+    : null;
+  if (message === null) {
+    return null;
+  }
+  const reason = (CONNECT_FAILURE_REASONS as readonly string[]).includes(parsed.reason as string)
+    ? (parsed.reason as ConnectFailureReason)
+    : "unknown";
+  return {
+    code: CONNECT_FAILED_ERROR_CODE,
+    reason,
+    message,
+    retryable: true,
+  };
+}
