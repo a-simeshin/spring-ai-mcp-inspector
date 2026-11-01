@@ -275,7 +275,7 @@ class SseProxyControllerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() with a missing (null) url resolves to the loopback /sse endpoint and registers a session")
 		void openSse_withMissingUrl_resolvesToLoopbackAndRegistersSession() {
-			// given — no url stub: the mock returns null from openSse(URI), which is a
+			// given (no url stub): the mock returns null from buildSse(URI), which is a
 			// valid (if inert) target for the session in unit-test context
 			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
 				.willReturn(mock(McpClientTransport.class));

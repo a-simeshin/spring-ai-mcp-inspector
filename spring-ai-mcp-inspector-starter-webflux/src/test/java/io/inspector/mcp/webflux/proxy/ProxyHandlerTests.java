@@ -2003,7 +2003,7 @@ class ProxyHandlerTests {
 		@Test
 		@Story("Header forwarding")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() forwards the inbound Authorization header into the header-aware openSse factory overload")
+		@Description("openSse() forwards the inbound Authorization header into the header-aware buildSse(URI, String, Map) factory overload")
 		void openSse_withAuthorizationHeader_usesHeaderAwareSseFactory() {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
@@ -2026,7 +2026,7 @@ class ProxyHandlerTests {
 		@Test
 		@Story("Header forwarding")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() without any inbound auth headers uses the bare single-arg openSse factory overload")
+		@Description("openSse() without any inbound auth headers uses the bare single-arg buildSse(URI) factory overload")
 		void openSse_withoutHeaders_usesBareSseFactory() {
 			// given — no Authorization, no x-custom-auth-headers: inboundAuthorization
 			// null
