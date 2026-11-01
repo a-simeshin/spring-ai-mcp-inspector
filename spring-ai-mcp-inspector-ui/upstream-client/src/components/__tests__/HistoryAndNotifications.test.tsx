@@ -1,3 +1,4 @@
+// [spring-ai-mcp-inspector PATCH] History panel tests (persistent history).
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { useState } from "react";
 import { describe, it, expect, jest } from "@jest/globals";
@@ -214,6 +215,21 @@ describe("HistoryAndNotifications", () => {
     // The originally expanded request should still show its details
     expect(screen.getByText("Request:")).toBeTruthy();
     expect(screen.getByText("Response:")).toBeTruthy();
+  });
+
+  it("shows the plain-text localStorage storage warning", () => {
+    // PR #218 review: entries (tool arguments and responses) are persisted
+    // unencrypted in browser storage; the panel must say so. RED on the
+    // pre-rework component, which had no warning at all.
+    render(
+      <HistoryAndNotifications
+        requestHistory={mockRequestHistory}
+        serverNotifications={[]}
+      />,
+    );
+    expect(
+      screen.getByText(/saved unencrypted in your browser storage/i),
+    ).toBeTruthy();
   });
 
   it("displays empty state messages when no data is available", () => {
