@@ -177,6 +177,45 @@ class ExceptionLeakDetectorTests {
 		}
 
 		@Test
+		void t15MultilineTopMessageMatchesFullText() {
+			final String violation = "tool.call: validation failed\n"
+					+ "- tenant must not be blank\n- retries must be >= 0";
+			final TimelineEvent log = logEvent("log-15", T.minusSeconds(1), "ERROR", "tool call rejected",
+					"jakarta.validation.ConstraintViolationException: " + violation
+							+ "\n\tat org.example.Tool.call(Tool.java:10)");
+			// No cause: Spring AI duplicates the top message in the error text (spec F1)
+			final TimelineEvent response = responseEvent("resp-15", T, violation + "\n" + violation);
+
+			final Map<String, LeakMatch> matches = DETECTOR.detect(List.of(response, log));
+
+			assertThat(matches).containsKey("resp-15");
+			assertThat(matches.get("resp-15").matchType()).isEqualTo(LeakMatch.MatchType.EXACT);
+			assertThat(matches.get("resp-15").verbatim()).isTrue();
+			assertThat(matches.get("resp-15").logThrowableClass())
+				.isEqualTo("jakarta.validation.ConstraintViolationException");
+		}
+
+		@Test
+		void t16MultilineTopAndDeepestCauseMessagesMatchFullText() {
+			final String top = "tool call rejected\n" + "- tenant must not be blank\n- retries must be >= 0";
+			final String deepest = "argument map invalid\n" + "- tenant key missing\n- retries must be a number";
+			final TimelineEvent log = logEvent("log-16", T.minusSeconds(1), "ERROR", "tool call rejected",
+					"com.example.ToolCallException: " + top + "\n\tat a.B(B.java:1)\n"
+							+ "Caused by: jakarta.validation.ValidationException: constraint violations applied\n"
+							+ "\tat c.D(D.java:2)\n" + "Caused by: java.lang.IllegalArgumentException: " + deepest
+							+ "\n\tat e.F(F.java:3)");
+			// Spring AI error text: top message + lineSeparator + deepest cause message
+			final TimelineEvent response = responseEvent("resp-16", T, top + "\n" + deepest);
+
+			final Map<String, LeakMatch> matches = DETECTOR.detect(List.of(response, log));
+
+			assertThat(matches).containsKey("resp-16");
+			assertThat(matches.get("resp-16").matchType()).isEqualTo(LeakMatch.MatchType.EXACT);
+			assertThat(matches.get("resp-16").verbatim()).isTrue();
+			assertThat(matches.get("resp-16").logThrowableClass()).isEqualTo("com.example.ToolCallException");
+		}
+
+		@Test
 		void e6NpeWithoutMessageKeepsClassNameAsMessagePart() {
 			final TimelineEvent log = logEvent("log-e6", T.minusSeconds(1), "ERROR", "boom",
 					"java.lang.NullPointerException: \n\tat a.B(B.java:1)");
@@ -472,6 +511,18 @@ class ExceptionLeakDetectorTests {
 						+ "Caused by: java.lang.Exception: deepest");
 			assertThat(lines).containsExactly("java.lang.RuntimeException: top",
 					"Caused by: java.lang.Exception: deepest");
+		}
+
+		@Test
+		void step2KeepsFullMultilineMessagesOfTopAndDeepestCause() {
+			final List<String> sections = ExceptionLeakDetector
+				.significantLines("java.lang.RuntimeException: top one\ntop two\n\tat a.B(B.java:1)\n"
+						+ "Caused by: java.lang.IllegalStateException: mid\n\tat c.D(D.java:2)\n"
+						+ "Caused by: java.lang.Exception: deep one\ndeep two\n\tat e.F(F.java:3)\n"
+						+ "Suppressed: java.lang.RuntimeException: suppressed message\n\t\tat g.H(H.java:4)\n"
+						+ "... 3 more");
+			assertThat(sections).containsExactly("java.lang.RuntimeException: top one\ntop two",
+					"Caused by: java.lang.Exception: deep one\ndeep two");
 		}
 
 		@Test

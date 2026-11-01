@@ -57,14 +57,14 @@ import tools.jackson.databind.node.ObjectNode;
  *
  * <p>
  * Normalization order (spec N(), idempotent): (1) whitespace collapse and line-break
- * normalization; (2) stack-frame drop on the log throwable, keeping only the throwable
- * first line and the first {@code Caused by:} line; (2b) strip the {@code Caused by:}
- * marker and the leading {@code FQCN + ": "} prefix, keeping the message part (the class
- * name when the message is empty); (3) strip ISO-8601 and time-of-day timestamp tokens.
- * The Spring AI error text is always the two-line
+ * normalization; (2) stack-frame drop on the log throwable, keeping the full multi-line
+ * message of the top throwable and of the deepest {@code Caused by:} cause; (2b) strip
+ * the {@code Caused by:} marker and the leading {@code FQCN + ": "} prefix, keeping the
+ * message part (the class name when the message is empty); (3) strip ISO-8601 and
+ * time-of-day timestamp tokens. The Spring AI error text is always the two-part
  * {@code topMessage + lineSeparator + rootCauseMessage} form with the message duplicated
- * when the exception has no cause, which is why the two-line candidate form repeats the
- * top message in that case.
+ * when the exception has no cause, which is why the candidate form repeats the top
+ * message in that case.
  *
  * @author Artem Simeshin
  */
@@ -441,36 +441,64 @@ public final class ExceptionLeakDetector {
 	}
 
 	/**
-	 * Normalization steps 1 and 2 on a throwable: keep ONLY the throwable first line and
-	 * the DEEPEST {@code Caused by:} line; every {@code \tat} frame line and every other
-	 * header line is dropped (the model text never contains stack frames). The deepest
+	 * Normalization steps 1 and 2 on a throwable: keep ONLY the full message of the top
+	 * throwable and of the DEEPEST {@code Caused by:} cause, multi-line message
+	 * continuation lines included (the model text carries the whole message). Stack
+	 * frames, the {@code Suppressed:} and {@code ... N more} markers, and the non-deepest
+	 * header lines are dropped (the model text never contains stack frames). The deepest
 	 * cause is the one Spring AI 2.x concatenates onto the error text.
 	 * @param throwable the raw throwable text
-	 * @return the kept significant lines (one or two entries)
+	 * @return the kept significant message sections (one or two entries, each possibly
+	 * multi-line)
 	 */
 	static List<String> significantLines(final String throwable) {
-		final String[] lines = collapseWhitespace(throwable).split("\n", -1);
+		final String[] lines = collapseWhitespace(throwable).split("\\n", -1);
 		final List<String> kept = new ArrayList<>(2);
+		boolean messageOpen = false;
 		for (final String raw : lines) {
 			final String line = raw.trim();
 			if (line.isEmpty()) {
 				continue;
 			}
-			if (kept.isEmpty()) {
-				kept.add(line);
-			}
-			else if (line.startsWith("Caused by:")) {
+			if (line.startsWith("Caused by:")) {
 				// Each later "Caused by:" line is deeper in the chain, so it replaces
-				// the earlier one: only the deepest cause survives.
+				// the earlier one: only the deepest cause survives. The new header
+				// reopens message accumulation for its own continuation lines.
 				if (kept.size() == 1) {
 					kept.add(line);
 				}
 				else {
 					kept.set(1, line);
 				}
+				messageOpen = true;
+			}
+			else if (kept.isEmpty()) {
+				kept.add(line);
+				messageOpen = true;
+			}
+			else if (isStackBoundary(line)) {
+				// The frame run and the markers around it close the current message:
+				// lines after them belong to frames, not to the message text.
+				messageOpen = false;
+			}
+			else if (messageOpen) {
+				// A continuation line of the open section's multi-line message.
+				final int section = kept.size() - 1;
+				kept.set(section, kept.get(section) + "\n" + line);
 			}
 		}
 		return kept;
+	}
+
+	/**
+	 * Stack-trace boundary marker: a {@code \tat} frame line (step 1 collapsed the
+	 * leading tab into a space), the common-frames ellipsis, or a suppressed-exception
+	 * header. Such a line ends the open message section.
+	 * @param line the trimmed throwable line
+	 * @return whether the line is a stack-trace boundary
+	 */
+	private static boolean isStackBoundary(final String line) {
+		return line.startsWith("at ") || line.startsWith("...") || line.startsWith("Suppressed:");
 	}
 
 	/**
