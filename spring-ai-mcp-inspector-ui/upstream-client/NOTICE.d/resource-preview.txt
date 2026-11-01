@@ -1,6 +1,6 @@
 src/App.tsx#readResource + src/components/MediaContentView.tsx (new) +
 src/components/ResourcesTab.tsx + src/components/ResourceLinkView.tsx +
-src/components/ToolResults.tsx — Render MCP resource content by mimeType
+src/components/ToolResults.tsx - Render MCP resource content by mimeType
 instead of dumping raw JSON-stringified ReadResourceResult. New shared
 component MediaContentView dispatches on mimeType: image/* → <img>,
 audio/* → <audio>, other binary → <a download>, text/* → JsonView.
