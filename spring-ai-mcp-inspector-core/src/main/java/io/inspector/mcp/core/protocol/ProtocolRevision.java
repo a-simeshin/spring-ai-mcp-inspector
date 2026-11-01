@@ -44,7 +44,9 @@ import java.util.TreeMap;
  * </ul>
  * <p>
  * Supported revisions and their method deltas are registered in a static table
- * ({@link #KNOWN_REVISIONS}) that is easy to extend with new spec revisions.
+ * ({@link #KNOWN_REVISIONS}) that is easy to extend with new spec revisions. Surface
+ * status is documented in {@code docs/mcp-surface-status.md}; {@link #KNOWN_REVISIONS}
+ * remains the single source of truth for supported revisions.
  *
  * @author Artem Simeshin
  */
