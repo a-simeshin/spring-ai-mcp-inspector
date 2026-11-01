@@ -427,6 +427,15 @@ public class McpInspectorProperties {
 		private boolean trafficEnabled = true;
 
 		/**
+		 * Whether client-side MCP traffic capture is enabled. When true, a
+		 * McpClientTrafficRecorder bean and a RecordingTransportPostProcessor are
+		 * created, wrapping every NamedClientMcpTransport bean with a recording decorator
+		 * that captures outgoing client traffic into the timeline. Defaults to false
+		 * (opt-in). Only has an effect while enabled is true.
+		 */
+		private boolean clientCaptureEnabled = false;
+
+		/**
 		 * Whether Logback appender bridge is enabled. Defaults to {@code true} when
 		 * {@link #enabled} is {@code true}.
 		 */
@@ -469,6 +478,14 @@ public class McpInspectorProperties {
 
 		public void setTrafficEnabled(final boolean trafficEnabled) {
 			this.trafficEnabled = trafficEnabled;
+		}
+
+		public boolean isClientCaptureEnabled() {
+			return this.clientCaptureEnabled;
+		}
+
+		public void setClientCaptureEnabled(final boolean clientCaptureEnabled) {
+			this.clientCaptureEnabled = clientCaptureEnabled;
 		}
 
 		public boolean isLogsEnabled() {

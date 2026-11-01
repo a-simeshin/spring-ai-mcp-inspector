@@ -16,15 +16,26 @@
 
 package io.inspector.mcp.core.timeline;
 
+import java.util.List;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Unit tests for {@link TimelineAutoConfiguration}. */
+/**
+ * Unit tests for {@link TimelineAutoConfiguration}.
+ *
+ * @author Artem Simeshin
+ */
 class TimelineAutoConfigurationTests {
 
 	private final ApplicationContextRunner runner = new ApplicationContextRunner()
@@ -46,6 +57,43 @@ class TimelineAutoConfigurationTests {
 					assertThat(context).hasSingleBean(McpTrafficRecorder.class);
 					assertThat(context.getBean(McpTrafficRecorder.class)).isNotNull();
 				});
+		}
+
+		@Test
+		@DisplayName("no BeanPostProcessorChecker WARN when client-capture-enabled=true")
+		void noBeanPostProcessorCheckerWarn() {
+			final ListAppender<ILoggingEvent> appender = new ListAppender<>();
+			appender.start();
+			final Logger rootLogger = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+			rootLogger.addAppender(appender);
+			try {
+				TimelineAutoConfigurationTests.this.runner
+					.withPropertyValues("spring.ai.mcp.inspector.timeline.enabled=true",
+							"spring.ai.mcp.inspector.timeline.client-capture-enabled=true",
+							"spring.ai.mcp.inspector.timeline.logs-enabled=false",
+							"spring.ai.mcp.inspector.timeline.stdio-capture-enabled=false")
+					.run((context) -> {
+						assertThat(context).hasSingleBean(McpClientTrafficRecorder.class);
+						assertThat(context).hasSingleBean(RecordingTransportPostProcessor.class);
+						// The BPP must not trigger eager instantiation of the recorder
+						// (and its dependencies) during registerBeanPostProcessors.
+						// Spring Framework's BeanPostProcessorChecker logs a WARN on
+						// the root logger when a bean is created early because a
+						// BeanPostProcessor needs it; capturing the root logger and
+						// asserting no such WARN is the regression guard.
+						final List<ILoggingEvent> warnOrHigher = appender.list.stream()
+							.filter((event) -> event.getLevel().isGreaterOrEqual(Level.WARN))
+							.toList();
+						assertThat(warnOrHigher)
+							.noneMatch((event) -> event.getFormattedMessage().contains("BeanPostProcessorChecker"));
+						assertThat(warnOrHigher).noneMatch((event) -> event.getFormattedMessage()
+							.contains("mcpInspectorRecordingTransportPostProcessor"));
+					});
+			}
+			finally {
+				rootLogger.detachAppender(appender);
+				appender.stop();
+			}
 		}
 
 	}
