@@ -63,6 +63,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import io.inspector.mcp.demo.DemoApplication;
 
 import static com.codeborne.selenide.Condition.attributeMatching;
+import static com.codeborne.selenide.Condition.disabled;
 import static com.codeborne.selenide.Condition.exactText;
 import static com.codeborne.selenide.Condition.text;
 import static com.codeborne.selenide.Condition.visible;
@@ -368,12 +369,22 @@ class InspectorUiIT {
 	 * only the transport protocol is left to vary per test.
 	 */
 	private void startApp(Combo combo) {
-		String[] args = new String[] { "--server.port=0",
-				"--spring.ai.mcp.server.protocol=" + combo.protocol.toUpperCase(),
-				"--spring.ai.mcp.inspector.auth-enabled=false", };
-		app = new SpringApplicationBuilder(DemoApplication.class).run(args);
+		startApp(combo, new String[0]);
+	}
 
-		int port = ((WebServerApplicationContext) app).getWebServer().getPort();
+	/**
+	 * Boots {@link DemoApplication} for the given combo on a random port, with extra
+	 * command-line args appended to the standard combo wiring (used by the
+	 * {@code UpstreamDeath} group to enable the fast upstream liveness probe config).
+	 */
+	private void startApp(Combo combo, String... extraArgs) {
+		final List<String> args = new ArrayList<>(
+				List.of("--server.port=0", "--spring.ai.mcp.server.protocol=" + combo.protocol.toUpperCase(),
+						"--spring.ai.mcp.inspector.auth-enabled=false"));
+		args.addAll(List.of(extraArgs));
+		app = new SpringApplicationBuilder(DemoApplication.class).run(args.toArray(String[]::new));
+
+		final int port = ((WebServerApplicationContext) app).getWebServer().getPort();
 		Configuration.baseUrl = "http://localhost:" + port;
 	}
 
@@ -656,6 +667,86 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
+	// A2. Upstream death - the proxy's liveness probe must carry the loss of
+	// the upstream to the browser: the sidebar leaves the Connected branch
+	// and surfaces the connection error banner within the probe window.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Upstream death (SSE liveness)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class UpstreamDeath {
+
+		/**
+		 * The upstream MCP server this group kills mid-session. It is a separate context
+		 * so the inspector app (which owns the proxy under test) keeps serving the UI
+		 * while the upstream is gone.
+		 */
+		private ConfigurableApplicationContext upstreamApp;
+
+		/** Each test boots a fresh pair of apps - clean up after every method. */
+		@AfterEach
+		void tearDown() {
+			if (upstreamApp != null) {
+				try {
+					upstreamApp.close();
+				}
+				catch (Exception ignored) {
+					/* best-effort */
+				}
+				upstreamApp = null;
+			}
+			stopApp();
+		}
+
+		@Test
+		@Story("Connect")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Kill the upstream after a proxied SSE connect: the liveness probe closes the downstream stream and the sidebar must leave the Connected branch within the probe window.")
+		@DisplayName("upstreamDeathLeavesConnected - status leaves Connected within the probe window")
+		void upstreamDeath_leavesConnectedWithinProbeWindow() {
+			// given: inspector app with the fast liveness probe config from
+			// ProxySseLivenessIT (idleThreshold 3s + probeInterval 2s, so the proxy
+			// closes the downstream SSE stream roughly 5s after the upstream dies).
+			startApp(new Combo("sse"), "--spring.ai.mcp.inspector.upstream-liveness-probe-enabled=true",
+					"--spring.ai.mcp.inspector.timeouts.upstream-probe-interval=PT2S",
+					"--spring.ai.mcp.inspector.timeouts.upstream-probe-timeout=PT3S",
+					"--spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold=PT3S");
+
+			// The upstream is a second, independently killable app instance on its
+			// own port; the inspector app's own MCP server stays out of the picture.
+			upstreamApp = new SpringApplicationBuilder(DemoApplication.class).run("--server.port=0",
+					"--spring.ai.mcp.server.protocol=SSE", "--spring.ai.mcp.inspector.auth-enabled=false");
+			final int upstreamPort = ((WebServerApplicationContext) upstreamApp).getWebServer().getPort();
+
+			open("/mcp-inspector/index.html");
+			// Point the URL field at the upstream; Connection Type defaults to
+			// "Via Proxy", so the browser connects through the inspector proxy.
+			setReactInputValue("#sse-url-input", "http://localhost:" + upstreamPort + "/sse");
+			$("#sse-url-input").shouldHave(Condition.value("http://localhost:" + upstreamPort + "/sse"));
+			connectButton().shouldBe(visible, Duration.ofSeconds(15)).click();
+			// The connect-button testid only mounts while connectionStatus ===
+			// "connected"
+			// (see openAndConnect and UPSTREAM_DOM_MAP.md Section 2.6).
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+
+			// when: kill the upstream. Its web server stops, so the next probe POST
+			// is connection-refused - the same signal the owner's kill -9 produced.
+			upstreamApp.close();
+			upstreamApp = null;
+
+			// then: the sidebar must leave the Connected branch within the probe
+			// window (bound ~5s; the 15s Selenide budget mirrors ProxySseLivenessIT's
+			// headroom) and land in the error branch, not merely flip back to idle:
+			// the role=alert banner with the Retry button only renders when
+			// connectionError is set alongside the error status.
+			$("[data-testid=connect-button]").shouldNotBe(visible, Duration.ofSeconds(15));
+			$("[data-testid=retry-connect-button]").shouldBe(visible, Duration.ofSeconds(5));
+		}
+
+	}
+
+	// =====================================================================
 	// B. Sidebar server-info panel.
 	//
 	// The upstream "Metadata" tab is actually a per-request metadata editor
@@ -901,6 +992,26 @@ class InspectorUiIT {
 			// then
 			// ToolResults block prints the result somewhere — assert visible text "15".
 			activePanel().shouldHave(text("15"), Duration.ofSeconds(15));
+		}
+
+		@Test
+		@Story("Tool call validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Sum tool with empty required fields: submit button disabled, hint shown.")
+		@DisplayName("sumToolEmptyRequired: submit disabled, hint shown")
+		void sumToolEmptyRequired_submitDisabled_hintShown() {
+			// given
+			selectRow("sum");
+
+			// then
+			// Run Tool button should be disabled when required fields are empty
+			SelenideElement runButton = activePanel().$("[data-testid='run-tool-button']");
+			runButton.shouldBe(disabled);
+
+			// Blurring a required field should show a hint: focus then tab out
+			$("#a").shouldBe(visible).click();
+			$("#b").shouldBe(visible).click();
+			activePanel().shouldHave(text("This field is required"));
 		}
 
 		@Test
@@ -4140,10 +4251,10 @@ class InspectorUiIT {
 			$("[data-testid=tools-detail-pane]").shouldBe(visible, Duration.ofSeconds(10));
 			SelenideElement runTool = $("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofSeconds(10));
 
-			// then: the Run Tool button is not intercepted at 375px.
+			// then: the Run Tool button fits inside the viewport at 375px.
 			scrollIntoView(runTool);
-			Assertions.assertTrue(ResponsiveTestHelpers.elementAtCenter("run-tool-button"),
-					"elementFromPoint at the Run Tool centre must return the button itself at 375x667");
+			Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("run-tool-button"),
+					"The Run Tool button must be visible inside the viewport at 375x667");
 
 			// when: 7 + 8 through the DynamicJsonForm inputs (id=a / id=b), then a
 			// real click on Run Tool

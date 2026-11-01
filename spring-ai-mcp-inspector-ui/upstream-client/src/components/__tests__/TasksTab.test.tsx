@@ -499,6 +499,91 @@ describe("TasksTab behavior tests", () => {
       await jest.advanceTimersByTimeAsync(1000);
       expect(updateTask).toHaveBeenCalledWith(finished);
     });
+
+    it("shows a visible poll-failure hint on the failing row and clears it on the next clean poll", async () => {
+      // A failed tasks/get used to be swallowed by a silent .catch: the
+      // backoff was invisible. The row must show a hint while a poll failed
+      // and drop it once a poll succeeds again.
+      const getTask = jest
+        .fn()
+        .mockRejectedValueOnce(new Error("tasks/get exploded"))
+        .mockResolvedValue(makeTask({ taskId: "t1", status: "working" }));
+
+      render(
+        <TasksTab
+          {...defaultProps}
+          tasks={[
+            makeTask({ taskId: "t1", status: "working", pollInterval: 1000 }),
+          ]}
+          getTask={getTask}
+        />,
+      );
+
+      expect(
+        screen.queryByTestId("task-poll-failure-t1"),
+      ).not.toBeInTheDocument();
+
+      // t=1000: first poll fails -> backoff doubles and the row shows it.
+      // act-wrapped: the hint state lands from a promise callback, and React
+      // schedules that update on the scheduler queue, which is not drained
+      // by advanceTimersByTimeAsync alone (order-dependent flake otherwise).
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1000);
+      });
+      const hint = screen.getByTestId("task-poll-failure-t1");
+      expect(hint).toBeInTheDocument();
+      expect(hint).toHaveAttribute(
+        "title",
+        "Last tasks/get failed: tasks/get exploded",
+      );
+
+      // t=2000: second poll (scheduled at the base interval before the first
+      // failure landed) succeeds -> the hint disappears.
+      // act-wrapped: the hint state lands from a promise callback, and React
+      // schedules that update on the scheduler queue, which is not drained
+      // by advanceTimersByTimeAsync alone (order-dependent flake otherwise).
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1000);
+      });
+      expect(
+        screen.queryByTestId("task-poll-failure-t1"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("clears the poll-failure hint when the task reaches a terminal status", async () => {
+      const getTask = jest.fn().mockRejectedValue(new Error("boom"));
+
+      const { rerender } = render(
+        <TasksTab
+          {...defaultProps}
+          tasks={[
+            makeTask({ taskId: "t1", status: "working", pollInterval: 1000 }),
+          ]}
+          getTask={getTask}
+        />,
+      );
+
+      // act-wrapped: the hint state lands from a promise callback, and React
+      // schedules that update on the scheduler queue, which is not drained
+      // by advanceTimersByTimeAsync alone (order-dependent flake otherwise).
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1000);
+      });
+      expect(screen.getByTestId("task-poll-failure-t1")).toBeInTheDocument();
+
+      rerender(
+        <TasksTab
+          {...defaultProps}
+          tasks={[
+            makeTask({ taskId: "t1", status: "completed", pollInterval: 1000 }),
+          ]}
+          getTask={getTask}
+        />,
+      );
+      expect(
+        screen.queryByTestId("task-poll-failure-t1"),
+      ).not.toBeInTheDocument();
+    });
   });
 
   describe("per-task poll gating", () => {
@@ -599,6 +684,42 @@ describe("TasksTab behavior tests", () => {
 
       // Math.round on the minutes produced a bogus "3m 30s"
       expect(screen.getByText("TTL: 2m 30s")).toBeInTheDocument();
+    });
+
+    it("floors the seconds part: 119.6 s remaining shows '1m 59s', not '1m 60s'", () => {
+      // Math.round on the seconds rendered "1m 60s" instead of rolling the
+      // remainder into the minutes (owner review follow-up on ea2d2d1).
+      const now = new Date().toISOString();
+      const tasks = [
+        makeTask({
+          taskId: "t1",
+          status: "working",
+          ttl: 119600,
+          createdAt: now,
+          lastUpdatedAt: now,
+        }),
+      ];
+
+      render(<TasksTab {...defaultProps} tasks={tasks} />);
+
+      expect(screen.getByText("TTL: 1m 59s")).toBeInTheDocument();
+    });
+
+    it("floors the sub-minute branch too: 59.9 s remaining shows '59s', not '60s'", () => {
+      const now = new Date().toISOString();
+      const tasks = [
+        makeTask({
+          taskId: "t1",
+          status: "working",
+          ttl: 59900,
+          createdAt: now,
+          lastUpdatedAt: now,
+        }),
+      ];
+
+      render(<TasksTab {...defaultProps} tasks={tasks} />);
+
+      expect(screen.getByText("TTL: 59s")).toBeInTheDocument();
     });
 
     it("shows 'Past TTL' for an active task whose TTL elapsed and 'Expired' only for a terminal one", () => {

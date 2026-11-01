@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -62,7 +63,9 @@ import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
+import io.inspector.mcp.core.proxy.ProxyErrorFallback;
 import io.inspector.mcp.core.proxy.ProxyErrorMapper;
+import io.inspector.mcp.core.proxy.ProxyReconnectPolicy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
@@ -410,10 +413,9 @@ public class ProxyHandler {
 			return ServerResponse.notFound().build();
 		}
 		return readJsonBody(request).flatMap((body) -> {
-			final Sinks.EmitResult er = session.browserToTarget().tryEmitNext(body);
-			if (er.isFailure()) {
+			if (!session.emitFromBrowser(body)) {
 				return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
-					.bodyValue(Map.of("error", "emit failed: " + er.name()));
+					.bodyValue(Map.of("error", "emit failed"));
 			}
 			session.touch();
 			return ServerResponse.accepted().build();
@@ -491,40 +493,57 @@ public class ProxyHandler {
 		// merged into the stream ahead of the session teardown so the browser sees the
 		// DTO, not a silent cut.
 		final Sinks.Many<ServerSentEvent<String>> errorEvents = Sinks.many().multicast().onBackpressureBuffer(8);
+		// Once per death: the terminal frames have two concurrent emission sites (the
+		// pump's onErrorResume below and the start-failure callback), each on its own
+		// thread, racing the sink completion. The CAS picks the single winner and the
+		// monitor keeps the winning pair atomic against that completion, so the
+		// browser never sees the error event without its terminal retry line.
+		final AtomicBoolean deathFramesSent = new AtomicBoolean(false);
+		final Object deathFramesMonitor = new Object();
 
 		// takeUntilOther: the stream ends when the session closes, whether or not
 		// close() managed to complete the sink (it cannot when another thread owns it).
-		final var flux = Flux.merge(errorEvents.asFlux(),
-				targetToBrowser.asFlux()
-					.takeUntilOther(session.closeSignal())
-					.doOnTerminate(() -> errorEvents.tryEmitComplete())
-					.map((frame) -> {
-						try {
-							return ServerSentEvent.<String>builder()
-								.event("message")
-								.data(this.objectMapper.writeValueAsString(frame))
-								.build();
-						}
-						catch (final Exception ex) {
-							return ServerSentEvent.<String>builder().event("error").data(ex.getMessage()).build();
-						}
-					})
-					.startWith(prologue))
+		final var flux = Flux.merge(errorEvents.asFlux(), targetToBrowser.asFlux()
+			.takeUntilOther(session.closeSignal())
+			// Dead upstream: emit the terminal retry ahead of the teardown so
+			// spec-compliant EventSource clients stop reconnecting instead of
+			// minting a doomed proxy session every ~3s.
+			.onErrorResume((err) -> {
+				// Readable error delivery: a classified failure (D3-mapped or an
+				// upstream death) rides a structured error event, so the browser learns
+				// why the stream died instead of a silent cut. The event lands BEFORE
+				// the terminal retry field: the client closes the transport on the
+				// retry line, so a later frame could be lost. An unclassified failure
+				// ends the stream without an event, as before this contract existed.
+				emitDeathFrames(errorEvents, deathFramesSent, deathFramesMonitor, err, targetUri(transportType, url));
+				return Flux.error(err);
+			})
+			.doOnTerminate(() -> completeDeathFrames(errorEvents, deathFramesMonitor))
+			.map((frame) -> {
+				try {
+					return ServerSentEvent.<String>builder()
+						.event("message")
+						.data(this.objectMapper.writeValueAsString(frame))
+						.build();
+				}
+				catch (final Exception ex) {
+					return ServerSentEvent.<String>builder().event("error").data(ex.getMessage()).build();
+				}
+			})
+			.startWith(prologue))
 			.doOnCancel(() -> this.registry.removeAndClose(sessionId))
 			.doOnTerminate(() -> this.registry.removeAndClose(sessionId));
 
 		this.mcpProxy.start(session).subscribe((ignored) -> {
 		}, (err) -> {
 			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
-			// D3: emit the structured error event BEFORE the session teardown — the
-			// close signal terminates the merged flux, so the DTO must land first.
-			final ProxyErrorDto dto = ProxyErrorMapper.map(err, TransportKind.SSE);
-			if (dto != null) {
-				errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
-					.event("error")
-					.data(toErrorJson(dto, targetUri(transportType, url)))
-					.build());
-			}
+			// Readable error delivery: a classified failure (D3-mapped or an
+			// upstream death) rides a structured error event. The event lands BEFORE
+			// the terminal retry field and the session teardown: the client closes
+			// the transport on the retry line, and the close signal terminates the
+			// merged flux, so a later frame could be lost. An unclassified failure
+			// ends the stream without an event, as before this contract existed.
+			emitDeathFrames(errorEvents, deathFramesSent, deathFramesMonitor, err, targetUri(transportType, url));
 			errorEvents.tryEmitComplete();
 			this.registry.removeAndClose(sessionId);
 		});
@@ -561,6 +580,90 @@ public class ProxyHandler {
 		}
 		final String callerOwner = resolveOwner(request);
 		return callerOwner != null && callerOwner.equals(sessionOwner);
+	}
+
+	/**
+	 * Test-only hook invoked after this handler emitted its terminal death frames and
+	 * released the death monitor. Lets regression tests park the winning emission site
+	 * and force the second site (the pump's onErrorResume or the start failure callback)
+	 * to interleave deterministically instead of racing on a timing loop. Never set in
+	 * production.
+	 */
+	private volatile Runnable afterDeathFramesHook = () -> {
+	};
+
+	/**
+	 * Replaces the death-frames hook. Visible for tests only.
+	 * @param hook the hook to run after the terminal death frames (never {@code null})
+	 */
+	void setAfterDeathFramesHook(final Runnable hook) {
+		this.afterDeathFramesHook = (hook != null) ? hook : () -> {
+		};
+	}
+
+	/**
+	 * Emits the terminal death frames (the structured {@code error} event and, for an
+	 * upstream death, the terminal retry line) at most once per session: the CAS picks
+	 * the single winner between the two concurrent emission sites (the pump's
+	 * onErrorResume and the start-failure callback) and the monitor keeps the pair atomic
+	 * against the sink completion, so a concurrent teardown can never split the error
+	 * event from its retry line.
+	 * @param errorEvents the side sink carrying the terminal frames
+	 * @param deathFramesSent the once-per-death CAS guard
+	 * @param deathFramesMonitor the monitor serialising the pair against completion
+	 * @param err the terminal transport failure
+	 * @param target the upstream target URI for the D5-redacted url field
+	 */
+	private void emitDeathFrames(final Sinks.Many<ServerSentEvent<String>> errorEvents,
+			final AtomicBoolean deathFramesSent, final Object deathFramesMonitor, final Throwable err,
+			final URI target) {
+		final ProxyErrorDto terminalDto = resolveTerminalErrorDto(err);
+		if (terminalDto == null) {
+			return;
+		}
+		if (!deathFramesSent.compareAndSet(false, true)) {
+			return;
+		}
+		synchronized (deathFramesMonitor) {
+			errorEvents.tryEmitNext(
+					ServerSentEvent.<String>builder().event("error").data(toErrorJson(terminalDto, target)).build());
+			if (ProxyReconnectPolicy.isUpstreamDeath(err)) {
+				errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
+					.comment("upstream dead: reconnect suppressed")
+					.retry(Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS))
+					.build());
+			}
+		}
+		this.afterDeathFramesHook.run();
+	}
+
+	/**
+	 * Completes the terminal side sink under the death monitor so the completion can
+	 * never land between the two frames of a death pair emitted by the winning site.
+	 * @param errorEvents the side sink carrying the terminal frames
+	 * @param deathFramesMonitor the monitor serialising the pair against completion
+	 */
+	private static void completeDeathFrames(final Sinks.Many<ServerSentEvent<String>> errorEvents,
+			final Object deathFramesMonitor) {
+		synchronized (deathFramesMonitor) {
+			errorEvents.tryEmitComplete();
+		}
+	}
+
+	/**
+	 * Resolves the terminal error DTO: the D3 mapping when the failure classifies, the
+	 * upstream-death fallback when the mapper yields null but the policy recognizes a
+	 * dead upstream, else null (no structured event: the stream simply ends, as before
+	 * this contract existed).
+	 * @param err the terminal transport failure
+	 * @return the DTO for the SSE {@code error} event, or null when nothing classifies
+	 */
+	private static ProxyErrorDto resolveTerminalErrorDto(final Throwable err) {
+		final ProxyErrorDto mapped = ProxyErrorMapper.map(err, TransportKind.SSE);
+		if (mapped != null) {
+			return mapped;
+		}
+		return ProxyReconnectPolicy.isUpstreamDeath(err) ? ProxyErrorFallback.upstreamDeath() : null;
 	}
 
 	/**
@@ -801,10 +904,9 @@ public class ProxyHandler {
 			final boolean includeSessionHeader) {
 		final JsonNode idNode = extractRequestId(body);
 		if (idNode == null) {
-			final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
-			if (emitResult.isFailure()) {
+			if (!session.emitFromBrowser(body)) {
 				return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
-					.bodyValue(Map.of("error", "emit failed: " + emitResult.name()));
+					.bodyValue(Map.of("error", "emit failed"));
 			}
 			session.touch();
 			final ServerResponse.BodyBuilder accepted = ServerResponse.accepted();
@@ -843,10 +945,8 @@ public class ProxyHandler {
 			.timeout(requestTimeout)
 			.subscribe(awaiterSink::tryEmitValue, awaiterSink::tryEmitError, () -> awaiterSink.tryEmitEmpty());
 		final Mono<JsonNode> awaiter = awaiterSink.asMono();
-		final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
-		if (emitResult.isFailure()) {
-			return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
-				.bodyValue(Map.of("error", "emit failed: " + emitResult.name()));
+		if (!session.emitFromBrowser(body)) {
+			return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR).bodyValue(Map.of("error", "emit failed"));
 		}
 		session.touch();
 		return awaiter.flatMap((node) -> {
