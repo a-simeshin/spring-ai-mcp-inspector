@@ -44,8 +44,9 @@ import tools.jackson.databind.node.ObjectNode;
  * costs nothing on the append path. Candidates are matched by TIME WINDOW + TEXT (spec
  * D1): an {@code APP_LOG} event is a candidate only when its timestamp falls within
  * {@code [responseTimestamp - 10s, responseTimestamp + 2s)} (inclusive lower bound,
- * exclusive upper bound) and it either carries a non-blank throwable or was logged at
- * ERROR/WARN level with a non-blank message.
+ * exclusive upper bound) and it carries a non-blank throwable; a bare message without a
+ * throwable is an intentional error message rather than a leaked exception (issue #251)
+ * and never qualifies, regardless of level.
  *
  * <p>
  * Match tiers, first tier that yields a match wins (spec S1-S3): S1 EXACT (normalized
@@ -372,33 +373,30 @@ public final class ExceptionLeakDetector {
 	}
 
 	/**
-	 * Indexes an APP_LOG event when it qualifies as a candidate (spec E8): a non-blank
-	 * throwable at any level, or a non-blank message at ERROR/WARN level.
+	 * Indexes an APP_LOG event when it qualifies as a candidate (spec E8, owner review
+	 * BLOCK 3): a non-blank throwable at any level. A bare WARN/ERROR message is an
+	 * intentional error message rather than a leaked exception (issue #251), so it never
+	 * qualifies regardless of level.
 	 * @param event the APP_LOG event
 	 * @return the indexed candidate, or {@code null} when the log never qualifies
 	 */
 	private static Candidate indexCandidate(final TimelineEvent event) {
 		final String throwable = event.throwable();
-		final String message = event.message();
 		final boolean hasThrowable = throwable != null && !throwable.isBlank();
-		final boolean hasMessage = message != null && !message.isBlank();
-		final String level = event.logLevel();
-		final boolean errorOrWarn = "ERROR".equals(level) || "WARN".equals(level);
-		if (!hasThrowable && !(errorOrWarn && hasMessage)) {
+		if (!hasThrowable) {
 			return null;
 		}
+		final String message = event.message();
+		final boolean hasMessage = message != null && !message.isBlank();
 		final List<Form> forms = new ArrayList<>(3);
-		String throwableClass = null;
-		if (hasThrowable) {
-			final List<String> lines = significantLines(throwable);
-			final String top = stripExceptionPrefix(lines.get(0));
-			final String causedBy = (lines.size() > 1) ? stripExceptionPrefix(lines.get(1)) : null;
-			// The universal Spring AI shape (spec F1): the no-cause form duplicates the
-			// top message on the second line.
-			addForm(forms, top + "\n" + ((causedBy != null) ? causedBy : top));
-			addForm(forms, top);
-			throwableClass = leadingClassName(lines.get(0));
-		}
+		final List<String> lines = significantLines(throwable);
+		final String top = stripExceptionPrefix(lines.get(0));
+		final String causedBy = (lines.size() > 1) ? stripExceptionPrefix(lines.get(1)) : null;
+		// The universal Spring AI shape (spec F1): the no-cause form duplicates the
+		// top message on the second line.
+		addForm(forms, top + "\n" + ((causedBy != null) ? causedBy : top));
+		addForm(forms, top);
+		final String throwableClass = leadingClassName(lines.get(0));
 		if (hasMessage) {
 			addForm(forms, collapseWhitespace(message));
 		}

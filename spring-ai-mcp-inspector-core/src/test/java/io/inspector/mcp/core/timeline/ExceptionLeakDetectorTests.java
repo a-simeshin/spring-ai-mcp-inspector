@@ -223,8 +223,10 @@ class ExceptionLeakDetectorTests {
 
 		@Test
 		void s2MatchesWhitespacePaddedLogMessage() {
+			// The unrelated throwable only qualifies the log as a candidate (spec E8);
+			// the padded MESSAGE still drives the match
 			final TimelineEvent log = logEvent("log-pad", T.minusSeconds(1), "WARN", "failed:   " + E11000 + "  ",
-					null);
+					"java.lang.IllegalStateException: background refresh failed\n\tat a.B(B.java:1)");
 			final TimelineEvent response = responseEvent("resp-pad", T, "failed: " + E11000);
 
 			final Map<String, LeakMatch> matches = DETECTOR.detect(List.of(response, log));
@@ -277,14 +279,16 @@ class ExceptionLeakDetectorTests {
 
 		@Test
 		void s3ContainmentWorksInTheOtherDirection() {
-			// The logged WARN message is the contained fragment, the error text is longer
-			final TimelineEvent log = logEvent("log-s3r", T.minusSeconds(1), "WARN", E11000, null);
+			// The logged WARN message is the contained fragment, the error text is
+			// longer. The unrelated throwable only qualifies the log (spec E8)
+			final TimelineEvent log = logEvent("log-s3r", T.minusSeconds(1), "WARN", E11000,
+					"java.lang.IllegalStateException: background refresh failed\n\tat a.B(B.java:1)");
 			final TimelineEvent response = responseEvent("resp-s3r", T, "failed: " + E11000);
 
 			final Map<String, LeakMatch> matches = DETECTOR.detect(List.of(response, log));
 
 			assertThat(matches.get("resp-s3r").matchType()).isEqualTo(LeakMatch.MatchType.PARTIAL);
-			assertThat(matches.get("resp-s3r").logThrowableClass()).isNull();
+			assertThat(matches.get("resp-s3r").logThrowableClass()).isEqualTo("java.lang.IllegalStateException");
 		}
 
 	}
@@ -306,11 +310,27 @@ class ExceptionLeakDetectorTests {
 
 		@Test
 		void t8ErrorLogWithoutMatchingTextDoesNotAnnotate() {
+			// A qualifying candidate (unrelated throwable) whose text does not match
+			// the error text annotates nothing
 			final TimelineEvent log = logEvent("log-8", T.minusSeconds(1), "ERROR", "unrelated background job failure",
-					null);
+					"java.lang.IllegalStateException: unrelated background job failure\n\tat a.B(B.java:1)");
 			final TimelineEvent response = responseEvent("resp-8", T, E11000 + "\n" + E11000);
 
 			assertThat(DETECTOR.detect(List.of(response, log))).isEmpty();
+		}
+
+		@Test
+		void t8bMessageOnlyLogsNeverQualifyEvenWhenTheTextMatchesExactly() {
+			// Issue #251, owner review BLOCK 3: log.warn("Tenant acme not found") next to
+			// return error("Tenant acme not found") is an intentional error message, not
+			// a leaked exception. No throwable means no candidate, at any level.
+			final TimelineEvent warnNoThrowable = logEvent("log-e8a", T.minusSeconds(1), "WARN",
+					"Tenant acme not found", null);
+			final TimelineEvent errorNoThrowable = logEvent("log-e8b", T.minusSeconds(2), "ERROR", E11000, null);
+			final TimelineEvent tenantError = responseEvent("resp-e8a", T, "Tenant acme not found");
+			final TimelineEvent e11000Error = responseEvent("resp-e8b", T.plusSeconds(1), E11000);
+
+			assertThat(DETECTOR.detect(List.of(tenantError, e11000Error, warnNoThrowable, errorNoThrowable))).isEmpty();
 		}
 
 		@Test
@@ -531,7 +551,9 @@ class ExceptionLeakDetectorTests {
 		@Test
 		void logMessageIsCappedAt200Chars() {
 			final String longMessage = "x".repeat(500);
-			final TimelineEvent log = logEvent("log-cap", T.minusSeconds(1), "ERROR", longMessage, null);
+			// The same long text carried by the throwable qualifies the log (spec E8)
+			final TimelineEvent log = logEvent("log-cap", T.minusSeconds(1), "ERROR", longMessage,
+					"java.lang.IllegalStateException: " + longMessage + "\n\tat a.B(B.java:1)");
 			final TimelineEvent response = responseEvent("resp-cap", T, "x".repeat(250));
 
 			final Map<String, LeakMatch> matches = DETECTOR.detect(List.of(response, log));
