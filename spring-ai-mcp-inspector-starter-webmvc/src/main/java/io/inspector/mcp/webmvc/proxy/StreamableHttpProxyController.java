@@ -535,10 +535,8 @@ public class StreamableHttpProxyController {
 		final JsonNode idNode = extractRequestId(body);
 		// Notification / response — no answer expected from upstream → 202 Accepted.
 		if (idNode == null) {
-			final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
-			if (emitResult.isFailure()) {
-				return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-					.body("emit failed: " + emitResult.name());
+			if (!session.emitFromBrowser(body)) {
+				return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("emit failed");
 			}
 			session.touch();
 			final ResponseEntity.BodyBuilder builder = ResponseEntity.accepted();
@@ -587,9 +585,8 @@ public class StreamableHttpProxyController {
 			.timeout(requestTimeout)
 			.subscribe(awaiterSink::tryEmitValue, awaiterSink::tryEmitError, () -> awaiterSink.tryEmitEmpty());
 		final Mono<JsonNode> awaiter = awaiterSink.asMono();
-		final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
-		if (emitResult.isFailure()) {
-			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("emit failed: " + emitResult.name());
+		if (!session.emitFromBrowser(body)) {
+			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("emit failed");
 		}
 		session.touch();
 		final long initializeStartNanos = System.nanoTime();

@@ -19,7 +19,7 @@
 // ESM-only `pkce-challenge` package, which jest's CJS resolver cannot load.
 // The SDK error classes are therefore matched structurally (code / class
 // name), which is stable because the SDK does not minify its dist output.
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { MCP_PROXY_TRANSPORT_ERROR_CODE } from "./constants";
 
 // ===================================================================
@@ -49,15 +49,49 @@ export function isProxyErrorDto(value: unknown): value is ProxyErrorDto {
 }
 
 /** Parses a D3 error DTO from a JSON string (SSE event data / response body). */
-export function parseProxyErrorDto(
-  json: string,
-): ProxyErrorDto | null {
+export function parseProxyErrorDto(json: string): ProxyErrorDto | null {
   try {
     const parsed: unknown = JSON.parse(json);
     return isProxyErrorDto(parsed) ? parsed : null;
   } catch {
     return null;
   }
+}
+
+// ===================================================================
+// [spring-ai-mcp-inspector PATCH] block2: terminal SSE `retry` contract
+// (dead upstream, owner review 2026-10-30 on PR #154)
+// ===================================================================
+
+/**
+ * The proxy precedes the stream close of a dead upstream with the SSE `retry`
+ * field carrying ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS (server side,
+ * core module). Any retry delay of an hour or more is treated as terminal: the
+ * browser must stop reconnecting instead of minting a doomed proxy session
+ * every ~3s.
+ */
+export const TERMINAL_RECONNECT_MILLIS = 2_147_483_000;
+
+const TERMINAL_RECONNECT_THRESHOLD_MILLIS = 3_600_000;
+
+/**
+ * Parses one raw SSE line: returns the retry delay in milliseconds when the
+ * line is a `retry:` field with a terminal (>= 1h) value, otherwise null.
+ * Ordinary short retry values (transport hiccups) stay null so the browser
+ * keeps its normal reconnect cadence.
+ */
+export function parseTerminalReconnectMillis(line: string): number | null {
+  if (!line.startsWith("retry:")) {
+    return null;
+  }
+  const retryMillis = Number.parseInt(line.slice("retry:".length).trim(), 10);
+  if (
+    !Number.isFinite(retryMillis) ||
+    retryMillis < TERMINAL_RECONNECT_THRESHOLD_MILLIS
+  ) {
+    return null;
+  }
+  return retryMillis;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -118,6 +152,7 @@ export function isConnectionAuthError(error: unknown): boolean {
 // ConnectFailure - structured connect-failure contract (from connectErrors.ts)
 // ===================================================================
 
+
 export type ConnectFailureReason =
   | "timeout"
   | "connection_refused"
@@ -162,7 +197,9 @@ export class ConnectFailedError extends Error {
   }
 }
 
-export function isConnectFailedError(error: unknown): error is ConnectFailedError {
+export function isConnectFailedError(
+  error: unknown,
+): error is ConnectFailedError {
   return error instanceof ConnectFailedError;
 }
 
@@ -251,6 +288,17 @@ export function connectionFailureFromError(error: unknown): ConnectFailure {
       retryable: true,
     };
   }
+  // [spring-ai-mcp-inspector PATCH] Classify SDK request-timeout errors
+  // (ErrorCode.RequestTimeout = -32001) as 'timeout' so the UI renders
+  // the Reset session button (it only shows for reason === "timeout").
+  if (error instanceof McpError && error.code === ErrorCode.RequestTimeout) {
+    return {
+      code: CONNECT_FAILED_ERROR_CODE,
+      reason: "timeout",
+      message: error instanceof Error ? error.message : String(error),
+      retryable: true,
+    };
+  }
   return {
     code: CONNECT_FAILED_ERROR_CODE,
     reason: "unknown",
@@ -263,7 +311,7 @@ export function connectionFailureFromError(error: unknown): ConnectFailure {
 export function humanReadableReason(reason: ConnectFailureReason): string {
   switch (reason) {
     case "timeout":
-      return "Connection timed out";
+      return "POST /mcp request timed out";
     case "connection_refused":
       return "Connection refused";
     case "dns":
