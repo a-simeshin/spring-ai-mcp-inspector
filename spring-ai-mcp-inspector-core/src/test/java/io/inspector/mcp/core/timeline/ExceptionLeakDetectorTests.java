@@ -434,6 +434,25 @@ class ExceptionLeakDetectorTests {
 			assertThat(matches.get("resp-5").logThrowableClass()).isEqualTo("com.other.WrappedException");
 		}
 
+		@Test
+		void t5bEqualTimestampTieBreakPicksLaterScanPosition() {
+			// D4 tie-break: identical timestamps, the later position in the ascending
+			// scan wins
+			final Instant same = T.minusSeconds(2);
+			final TimelineEvent first = logEvent("log-5c", same, "ERROR", "first insert failed",
+					"org.springframework.dao.DuplicateKeyException: " + E11000 + "\n\tat a.B(B.java:1)");
+			final TimelineEvent second = logEvent("log-5d", same, "ERROR", "second insert failed",
+					"com.other.WrappedException: " + E11000 + "\n\tat c.D(D.java:2)");
+			final TimelineEvent response = responseEvent("resp-5b", T, E11000 + "\n" + E11000);
+
+			final Map<String, LeakMatch> matches = DETECTOR.detect(List.of(response, first, second));
+
+			assertThat(matches.get("resp-5b").logEventId()).isEqualTo("log-5d");
+			assertThat(matches.get("resp-5b").logThrowableClass()).isEqualTo("com.other.WrappedException");
+			assertThat(matches.get("resp-5b").multipleCandidates()).isTrue();
+			assertThat(matches.get("resp-5b").droppedCandidates()).isEqualTo(1);
+		}
+
 	}
 
 	@Nested
