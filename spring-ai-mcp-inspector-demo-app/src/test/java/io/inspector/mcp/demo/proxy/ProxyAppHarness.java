@@ -102,6 +102,9 @@ public final class ProxyAppHarness {
 		if (authToken != null) {
 			args.add("--spring.ai.mcp.inspector.auth-token=" + authToken);
 		}
+		// The liveness probe keeps its production default (enabled) here: the
+		// probe never fails a live upstream, and tests may override it via
+		// extraArgs like any other property.
 		java.util.Collections.addAll(args, extraArgs);
 
 		return new SpringApplicationBuilder(DemoApplication.class).run(args.toArray(new String[0]));

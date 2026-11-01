@@ -16,8 +16,17 @@
 
 package io.inspector.mcp.webflux.router;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -33,16 +42,22 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.reactivestreams.Subscriber;
+import org.reactivestreams.Subscription;
 import org.springframework.boot.web.context.WebServerApplicationContext;
 import org.springframework.boot.web.context.WebServerInitializedEvent;
 import org.springframework.boot.web.server.WebServer;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.web.reactive.function.server.HandlerStrategies;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
+import reactor.core.Scannable.Attr;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
@@ -1734,6 +1749,242 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			assertThat(response.headers().getContentType()).isEqualTo(MediaType.TEXT_HTML);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("broadcast()")
+	class Broadcast {
+
+		@Test
+		@Story("Concurrent frame emit")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("concurrent server-initiated broadcasts on one session sink are all accepted, "
+				+ "none is dropped with FAIL_NON_SERIALIZED")
+		void emitSessionEvent_concurrentBroadcasts_allFramesAccepted() throws Exception {
+			// given: 32 parallel server-initiated frames on one session, as overlapping
+			// elicitation, sampling and roots-list-changed requests produce in practice.
+			// A
+			// raw tryEmitNext() on the multicast sink answers FAIL_NON_SERIALIZED to
+			// every
+			// thread that loses the sink's CAS; broadcast() must not lose frames to it.
+			final int threads = 32;
+			final Sinks.Many<ServerSentEvent<String>> sink = newSessionSink();
+			final ExecutorService pool = Executors.newFixedThreadPool(threads);
+			final AtomicInteger rejected = new AtomicInteger();
+			final List<CompletableFuture<Void>> jobs = new ArrayList<>(threads);
+			final CountDownLatch ready = new CountDownLatch(threads);
+			final CountDownLatch start = new CountDownLatch(1);
+			try {
+				for (int i = 0; i < threads; i++) {
+					final int idx = i;
+					jobs.add(CompletableFuture.runAsync(() -> {
+						ready.countDown();
+						try {
+							start.await();
+						}
+						catch (final InterruptedException ex) {
+							Thread.currentThread().interrupt();
+							return;
+						}
+						if (!InspectorHandler.emitSessionEvent(sink, "message", serverSentEvent("frame-" + idx))) {
+							rejected.incrementAndGet();
+						}
+					}, pool));
+				}
+				assertThat(ready.await(5, TimeUnit.SECONDS)).as("all emitters ready").isTrue();
+
+				// when
+				start.countDown();
+				CompletableFuture.allOf(jobs.toArray(new CompletableFuture[0])).get(10, TimeUnit.SECONDS);
+
+				// then
+				assertThat(rejected.get()).as("no frame may be rejected when %d threads emit concurrently", threads)
+					.isZero();
+				StepVerifier.create(sink.asFlux().take(threads)).expectNextCount(threads).verifyComplete();
+			}
+			finally {
+				pool.shutdownNow();
+				pool.awaitTermination(2, TimeUnit.SECONDS);
+			}
+		}
+
+		@Test
+		@Story("Concurrent frame emit")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a frame emitted while another emit holds the session sink is retried until the "
+				+ "sink frees up, not silently dropped")
+		void emitSessionEvent_whileSinkHeldByConcurrentEmit_frameRetriedNotDropped() throws Exception {
+			// given: a subscriber that parks inside the first onNext, so the first emit
+			// provably holds the sink's emit lock while it is blocked
+			final Sinks.Many<ServerSentEvent<String>> sink = newSessionSink();
+			final CountDownLatch firstInFlight = new CountDownLatch(1);
+			final CountDownLatch releaseFirst = new CountDownLatch(1);
+			final List<String> received = Collections.synchronizedList(new ArrayList<>());
+			sink.asFlux().subscribe(new Subscriber<ServerSentEvent<String>>() {
+				@Override
+				public void onSubscribe(final Subscription s) {
+					s.request(Long.MAX_VALUE);
+				}
+
+				@Override
+				public void onNext(final ServerSentEvent<String> event) {
+					received.add(event.event());
+					firstInFlight.countDown();
+					try {
+						releaseFirst.await(5, TimeUnit.SECONDS);
+					}
+					catch (final InterruptedException ex) {
+						Thread.currentThread().interrupt();
+					}
+				}
+
+				@Override
+				public void onError(final Throwable t) {
+					// terminal, nothing to record
+				}
+
+				@Override
+				public void onComplete() {
+					// terminal, nothing to record
+				}
+			});
+			final ExecutorService pool = Executors.newSingleThreadExecutor();
+			try {
+				final Future<Boolean> first = pool
+					.submit(() -> InspectorHandler.emitSessionEvent(sink, "first", serverSentEvent("first")));
+				assertThat(firstInFlight.await(5, TimeUnit.SECONDS)).as("first frame parked in subscriber dispatch")
+					.isTrue();
+				// the sink is provably held at this point: a raw emit attempt is rejected
+				// with FAIL_NON_SERIALIZED and, being rejected, emits nothing
+				assertThat(sink.tryEmitNext(serverSentEvent("probe"))).isEqualTo(Sinks.EmitResult.FAIL_NON_SERIALIZED);
+
+				// a releaser fires the parked subscriber right after this thread enters
+				// the
+				// contended emit; the retried emit spins until the sink frees up
+				final CountDownLatch enteringSecondEmit = new CountDownLatch(1);
+				final Thread releaser = new Thread(() -> {
+					try {
+						enteringSecondEmit.await(5, TimeUnit.SECONDS);
+					}
+					catch (final InterruptedException ex) {
+						Thread.currentThread().interrupt();
+					}
+					releaseFirst.countDown();
+				});
+				releaser.start();
+				enteringSecondEmit.countDown();
+				final boolean secondAccepted = InspectorHandler.emitSessionEvent(sink, "second",
+						serverSentEvent("second"));
+
+				// then
+				assertThat(first.get(5, TimeUnit.SECONDS)).as("first frame accepted").isTrue();
+				assertThat(secondAccepted).as("second frame must be retried to success, not dropped").isTrue();
+				releaser.join(5_000);
+				assertThat(received).as("both frames delivered, the raw probe emitted nothing")
+					.containsExactly("first", "second");
+			}
+			finally {
+				pool.shutdownNow();
+				pool.awaitTermination(2, TimeUnit.SECONDS);
+			}
+		}
+
+		@Test
+		@Story("Concurrent frame emit")
+		@Severity(SeverityLevel.MINOR)
+		@Description("a frame emitted after the session sink terminated is reported as rejected "
+				+ "without a retry, not silently swallowed")
+		void emitSessionEvent_afterSinkTerminated_returnsFalse() {
+			// given: the completed sink is wrapped to count raw tryEmitNext probes, so a
+			// retry-on-any-failure loop cannot hide: it would probe the terminated sink
+			// for the full EMIT_SPIN_BUDGET instead of reporting at once
+			final CountingTryEmitSink sink = new CountingTryEmitSink(newSessionSink());
+			assertThat(sink.tryEmitComplete().isSuccess()).as("sink completes without subscribers").isTrue();
+
+			// when
+			final boolean accepted = InspectorHandler.emitSessionEvent(sink, "message", serverSentEvent("event"));
+
+			// then
+			assertThat(accepted).as("emit after termination must be rejected without retry").isFalse();
+			assertThat(sink.tryEmitNextCount()).as("terminal rejection must not be retried").isEqualTo(1);
+		}
+
+		private static Sinks.Many<ServerSentEvent<String>> newSessionSink() {
+			// the exact sink connect() creates for a session
+			return Sinks.many().multicast().onBackpressureBuffer(256, false);
+		}
+
+		private static ServerSentEvent<String> serverSentEvent(final String eventName) {
+			return ServerSentEvent.<String>builder().event(eventName).data(eventName).build();
+		}
+
+		/**
+		 * Delegates to the wrapped session sink and counts {@code tryEmitNext} probes, so
+		 * a test can prove a terminal rejection is reported at once instead of being
+		 * retried against the emit budget.
+		 */
+		private static final class CountingTryEmitSink implements Sinks.Many<ServerSentEvent<String>> {
+
+			private final Sinks.Many<ServerSentEvent<String>> delegate;
+
+			private final AtomicInteger tryEmitNextCount = new AtomicInteger();
+
+			private CountingTryEmitSink(final Sinks.Many<ServerSentEvent<String>> delegate) {
+				this.delegate = delegate;
+			}
+
+			int tryEmitNextCount() {
+				return this.tryEmitNextCount.get();
+			}
+
+			@Override
+			public Sinks.EmitResult tryEmitNext(final ServerSentEvent<String> event) {
+				this.tryEmitNextCount.incrementAndGet();
+				return this.delegate.tryEmitNext(event);
+			}
+
+			@Override
+			public Sinks.EmitResult tryEmitComplete() {
+				return this.delegate.tryEmitComplete();
+			}
+
+			@Override
+			public Sinks.EmitResult tryEmitError(final Throwable error) {
+				return this.delegate.tryEmitError(error);
+			}
+
+			@Override
+			public void emitNext(final ServerSentEvent<String> event, final Sinks.EmitFailureHandler failureHandler) {
+				this.delegate.emitNext(event, failureHandler);
+			}
+
+			@Override
+			public void emitComplete(final Sinks.EmitFailureHandler failureHandler) {
+				this.delegate.emitComplete(failureHandler);
+			}
+
+			@Override
+			public void emitError(final Throwable error, final Sinks.EmitFailureHandler failureHandler) {
+				this.delegate.emitError(error, failureHandler);
+			}
+
+			@Override
+			public int currentSubscriberCount() {
+				return this.delegate.currentSubscriberCount();
+			}
+
+			@Override
+			public Flux<ServerSentEvent<String>> asFlux() {
+				return this.delegate.asFlux();
+			}
+
+			@Override
+			public Object scanUnsafe(final Attr key) {
+				return this.delegate.scanUnsafe(key);
+			}
+
 		}
 
 	}
