@@ -80,8 +80,10 @@ const formatTtl = (
     return isActive ? "Past TTL" : "Expired";
   }
   if (remaining < 1000) return `${remaining}ms`;
-  if (remaining < 60000) return `${Math.round(remaining / 1000)}s`;
-  return `${Math.floor(remaining / 60000)}m ${Math.round((remaining % 60000) / 1000)}s`;
+  // Both parts use Math.floor: Math.round rendered 119.6 s remaining as
+  // "1m 60s" (and 59.9 s as "60s") instead of rolling into the minutes.
+  if (remaining < 60000) return `${Math.floor(remaining / 1000)}s`;
+  return `${Math.floor(remaining / 60000)}m ${Math.floor((remaining % 60000) / 1000)}s`;
 };
 
 type TaskRowState = {
@@ -122,6 +124,12 @@ const TasksTab = ({
   const [taskRowStates, setTaskRowStates] = useState<
     Record<string, TaskRowState>
   >({});
+  // Visible per-row poll-failure state: a failed tasks/get otherwise only
+  // doubles the backoff delay, invisibly. Cleared by the next clean poll for
+  // the task or when the task leaves the active set (terminal/removed).
+  const [pollFailures, setPollFailures] = useState<Record<string, string>>(
+    {},
+  );
 
   // Track per-task pollers (recursive timeouts with backoff)
   const taskPollersRef = useRef<Map<string, { stop: () => void }>>(new Map());
@@ -279,6 +287,12 @@ const TasksTab = ({
       if (!activeIds.has(taskId)) {
         poller.stop();
         pollers.delete(taskId);
+        setPollFailures((prev) => {
+          if (!(taskId in prev)) return prev;
+          const next = { ...prev };
+          delete next[taskId];
+          return next;
+        });
       }
     }
 
@@ -304,6 +318,12 @@ const TasksTab = ({
           .current(task.taskId)
           .then((updated) => {
             delay = baseInterval;
+            setPollFailures((prev) => {
+              if (!(task.taskId in prev)) return prev;
+              const next = { ...prev };
+              delete next[task.taskId];
+              return next;
+            });
             // A polled task update must reach the tasks list, not only the
             // details pane: otherwise a task that finished between two list
             // polls stays "working" in the list until the next tasks/list.
@@ -315,8 +335,14 @@ const TasksTab = ({
               setSelectedTaskRef.current(updated);
             }
           })
-          .catch(() => {
+          .catch((e) => {
             delay = Math.min(delay * 2, MAX_POLL_BACKOFF_MS);
+            // Visible hint instead of a silent catch: without it the backoff
+            // above is indistinguishable from a healthy poll.
+            setPollFailures((prev) => ({
+              ...prev,
+              [task.taskId]: e instanceof Error ? e.message : String(e),
+            }));
           });
       };
       timeoutId = setTimeout(tick, delay);
@@ -458,6 +484,15 @@ const TasksTab = ({
                             {task.ttl !== null && isActive && (
                               <span className="text-[10px] text-muted-foreground">
                                 TTL: {ttlCountdowns[task.taskId] ?? ""}
+                              </span>
+                            )}
+                            {pollFailures[task.taskId] && (
+                              <span
+                                data-testid={`task-poll-failure-${task.taskId}`}
+                                className="text-[10px] text-amber-600 dark:text-amber-400"
+                                title={`Last tasks/get failed: ${pollFailures[task.taskId]}`}
+                              >
+                                poll failed, retrying
                               </span>
                             )}
                           </span>
