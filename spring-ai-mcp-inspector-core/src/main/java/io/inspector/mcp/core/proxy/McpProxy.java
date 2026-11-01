@@ -105,12 +105,17 @@ public final class McpProxy {
 				return Mono.empty();
 			}
 			recordOutbound(session, typed, frame);
-			return session.targetTransport().sendMessage(typed).doOnError((err) -> {
+			return session.targetTransport().sendMessage(typed).onErrorResume((err) -> {
 				LOG.warn("proxy[{}] sendMessage failed: {}", session.sessionId(), err.toString());
-				// A failed send to a dead upstream must release any per-request awaiter
-				// and the SSE backchannel immediately rather than waiting for the
-				// streamable-request timeout.
+				// onErrorResume instead of doOnError: the SDK's sendMessage Mono
+				// *completes* after its internal onErrorComplete hook dispatched the
+				// error (handleException + deliveredSink.error happen on a side
+				// channel), so doOnError never fired and the per-request awaiter hung
+				// until the streamable-request timeout. Failing the awaiter here is
+				// what lets the [issue #250] connect-hint path answer with the real
+				// upstream failure instead of a synthetic timeout.
 				session.failUpstream(err);
+				return Mono.empty();
 			});
 		}).onErrorContinue((err, obj) -> {
 			final ProxyConnectFailure failure = ProxyConnectFailure.classify(err);
