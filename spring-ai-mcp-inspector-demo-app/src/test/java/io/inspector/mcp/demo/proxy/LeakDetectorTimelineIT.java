@@ -54,6 +54,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * The second test pins the kill switch: with
  * {@code spring.ai.mcp.inspector.timeline.leak-detector.enabled=false} the timeline is
  * still served, but tool results carry no {@code _leak} annotation.
+ *
+ * <p>
+ * The third test drives {@code leakyChainInsert}, a wrapped failure three levels deep
+ * produced by a real library run: the error text the tool result carries is built by
+ * Spring AI from the top message plus the DEEPEST cause message, while the log event
+ * holds the full chain with both {@code Caused by:} lines. Handwritten string fixtures
+ * already cover that shape at unit level; this IT pins it end to end against the real
+ * {@code createSyncErrorResult} behavior.
  */
 @Epic("Inspector Proxy")
 @Feature("Exception leak detection")
@@ -141,6 +149,76 @@ class LeakDetectorTimelineIT {
 	}
 
 	@Test
+	@DisplayName("leak detector: chained leakyChainInsert (depth 3) is annotated _leak EXACT verbatim over /api/timeline")
+	@Story("Leak annotated on the timeline")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Boots the demo with the timeline enabled, calls the leakyChainInsert demo tool "
+			+ "(name=acme), which logs and rethrows an exception chain three levels deep "
+			+ "(IllegalStateException wrapping RuntimeException wrapping ConnectException), and asserts "
+			+ "the Spring AI error text carries the top message plus the deepest cause message only, "
+			+ "then GET /api/timeline returns the error tool result carrying a _leak annotation with "
+			+ "matchType=EXACT, verbatim=true and a non-blank logEventId whose log event holds the "
+			+ "full chain with both Caused by lines")
+	void leakyChainInsertToolResult_isAnnotatedExactVerbatimOverHttpTimeline() throws Exception {
+		// given
+		this.app = ProxyAppHarness.start("STREAMABLE", false, null, "--spring.ai.mcp.inspector.timeline.enabled=true");
+		final int port = ProxyAppHarness.port(this.app);
+		final String targetUrl = "http://127.0.0.1:" + port + "/mcp";
+		final String proxyBase = "http://127.0.0.1:" + port + "/mcp-inspector-api";
+
+		// when: initialize + failing tools/call through the proxy
+		final HttpResponse<String> initResponse = post(
+				proxyBase + "/mcp?url=" + URLEncoder.encode(targetUrl, StandardCharsets.UTF_8), null,
+				initializeFrame());
+		assertThat(initResponse.statusCode())
+			.as("initialize through proxy on %s, body=%s", ProxyAppHarness.stack(), initResponse.body())
+			.isEqualTo(200);
+		final String sessionId = initResponse.headers().firstValue("mcp-session-id").orElse("");
+		assertThat(sessionId).as("mcp-session-id on %s", ProxyAppHarness.stack()).isNotBlank();
+
+		final HttpResponse<String> callResponse = post(proxyBase + "/mcp", sessionId, leakyChainInsertFrame());
+		assertThat(callResponse.statusCode())
+			.as("tools/call through proxy on %s, body=%s", ProxyAppHarness.stack(), callResponse.body())
+			.isEqualTo(200);
+		final JsonNode result = MAPPER.readTree(callResponse.body()).path("result");
+		assertThat(result.path("isError").asBoolean(false))
+			.as("leakyChainInsert returns an error tool result on %s", ProxyAppHarness.stack())
+			.isTrue();
+
+		// and: the library-built error text is the top message plus the DEEPEST cause
+		// message (createSyncErrorResult); the middle cause never reaches the model
+		final String errorText = result.path("content").path(0).path("text").asString("");
+		assertThat(errorText).as("Spring AI error text on %s, text=%s", ProxyAppHarness.stack(), errorText)
+			.contains("tenant insert failed")
+			.contains("Connection refused: db.app:27017")
+			.doesNotContain("storage driver failed");
+
+		// then: the timeline serves the annotated pair matched on the deepest Caused by
+		// line
+		final JsonNode annotated = awaitAnnotatedResponse(port, sessionId);
+		assertThat(annotated).as("annotated tools/call RESPONSE on /api/timeline over %s", ProxyAppHarness.stack())
+			.isNotNull();
+		final JsonNode leak = annotated.path("payload").path("_leak");
+		assertThat(leak.path("matchType").asString("")).as("_leak.matchType on %s", ProxyAppHarness.stack())
+			.isEqualTo("EXACT");
+		assertThat(leak.path("verbatim").asBoolean(false)).as("_leak.verbatim on %s", ProxyAppHarness.stack()).isTrue();
+		final String logEventId = leak.path("logEventId").asString("");
+		assertThat(logEventId).as("_leak.logEventId on %s", ProxyAppHarness.stack()).isNotBlank();
+		assertThat(leak.path("logThrowableClass").asString("")).contains("IllegalStateException");
+
+		// and: the referenced log event exists and carries the FULL chain, both Caused by
+		// lines, exactly as a real run prints it
+		final List<JsonNode> events = timelineEvents(port);
+		final JsonNode logEvent = findByEventId(events, logEventId);
+		assertThat(logEvent).as("referenced APP_LOG event exists on %s", ProxyAppHarness.stack()).isNotNull();
+		final String loggedThrowable = logEvent.path("payload").path("throwable").asString("");
+		assertThat(loggedThrowable)
+			.as("referenced log event carries the full 3-level chain on %s", ProxyAppHarness.stack())
+			.contains("Caused by: java.lang.RuntimeException: storage driver failed")
+			.contains("Caused by: java.net.ConnectException: Connection refused: db.app:27017");
+	}
+
+	@Test
 	@DisplayName("leak detector disabled: timeline served, tool results carry no _leak")
 	@Story("Kill switch")
 	@Severity(SeverityLevel.CRITICAL)
@@ -201,6 +279,18 @@ class LeakDetectorTimelineIT {
 		call.set("params",
 				MAPPER.createObjectNode()
 					.put("name", "leakyInsert")
+					.set("arguments", MAPPER.createObjectNode().put("name", "acme")));
+		return call;
+	}
+
+	private static ObjectNode leakyChainInsertFrame() {
+		final ObjectNode call = MAPPER.createObjectNode();
+		call.put("jsonrpc", "2.0");
+		call.put("method", "tools/call");
+		call.put("id", 2);
+		call.set("params",
+				MAPPER.createObjectNode()
+					.put("name", "leakyChainInsert")
 					.set("arguments", MAPPER.createObjectNode().put("name", "acme")));
 		return call;
 	}

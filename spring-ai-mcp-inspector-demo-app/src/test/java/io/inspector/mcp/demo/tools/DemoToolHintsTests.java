@@ -39,8 +39,8 @@ import org.springframework.ai.mcp.annotation.McpTool.McpAnnotations;
  * optionalGreeting, errorTool, largeOutput, structuredOutput, multiContent, deepJson,
  * blobAttachment, findFiles, listMyRoots, generateReport, getTaskStatus, cancelTask,
  * keepAliveTask</li>
- * <li>5 tools declared with {@code readOnlyHint=false, destructiveHint=false}: askLlm,
- * askUser, deployService, authorizeViaUrl, leakyInsert</li>
+ * <li>6 tools declared with {@code readOnlyHint=false, destructiveHint=false}: askLlm,
+ * askUser, deployService, authorizeViaUrl, leakyInsert, leakyChainInsert</li>
  * <li>1 tool ({@code slowEcho}) deliberately NOT an {@code @McpTool} method: it is
  * registered as a manual {@link org.springframework.ai.tool.ToolCallback} bean (see
  * {@link SlowEchoToolConfiguration}) so that {@code tools/list} omits the
@@ -76,13 +76,14 @@ class DemoToolHintsTests {
 			put("getTaskStatus", new boolean[] { true, false });
 			put("cancelTask", new boolean[] { true, false });
 			put("keepAliveTask", new boolean[] { true, false });
-			// R=F, D=F (5 tools)
+			// R=F, D=F (6 tools)
 			put("askLlm", new boolean[] { false, false });
 			put("askUser", new boolean[] { false, false });
 			put("deployService", new boolean[] { false, false });
 			put("authorizeViaUrl", new boolean[] { false, false });
 			// leak detector demo (issue #251): insert semantics, non-destructive
 			put("leakyInsert", new boolean[] { false, false });
+			put("leakyChainInsert", new boolean[] { false, false });
 		}
 	};
 

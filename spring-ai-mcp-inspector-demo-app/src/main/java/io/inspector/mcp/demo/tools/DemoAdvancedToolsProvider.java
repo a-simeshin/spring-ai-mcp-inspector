@@ -9,6 +9,7 @@
  */
 package io.inspector.mcp.demo.tools;
 
+import java.net.ConnectException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -111,6 +112,30 @@ public class DemoAdvancedToolsProvider {
 						+ "\" }");
 		LOGGER.error("leakyInsert failed for tenant {}", name, duplicateKey);
 		throw duplicateKey;
+	}
+
+	/**
+	 * Chained exception-leak demo for the timeline detector (issue #251): the JPA/JDBC
+	 * shape from the owner review, a wrapped failure three levels deep. The whole chain
+	 * is logged the way an infrastructure layer would, then the top exception is
+	 * rethrown, so Spring AI builds the tool error text from the top message plus the
+	 * DEEPEST cause message while the application log carries the full stack trace with
+	 * both {@code Caused by:} lines. The timeline must still match that pair (S1 EXACT);
+	 * a detector keeping the FIRST {@code Caused by:} line instead of the deepest one
+	 * misses this chain.
+	 * @param name the tenant name to "insert"
+	 * @return never returns normally; always throws
+	 */
+	@McpTool(name = "leakyChainInsert",
+			description = "Insert a tenant row through a failing driver chain; the wrapped 3-level failure leaks through",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = false))
+	public String leakyChainInsert(@McpToolParam(description = "tenant name", required = true) String name) {
+		final ConnectException driverFailure = new ConnectException("Connection refused: db.app:27017");
+		final RuntimeException dataAccessFailure = new RuntimeException("storage driver failed", driverFailure);
+		final IllegalStateException insertFailure = new IllegalStateException("tenant insert failed",
+				dataAccessFailure);
+		LOGGER.error("leakyChainInsert failed for tenant {}", name, insertFailure);
+		throw insertFailure;
 	}
 
 	/**
