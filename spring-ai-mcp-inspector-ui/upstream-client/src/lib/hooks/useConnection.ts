@@ -85,6 +85,7 @@ import { InspectorConfig } from "../configurationTypes";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CustomHeaders } from "../types/customHeaders";
 import { resolveRefsInMessage } from "@/utils/schemaUtils";
+import { noteOutgoingRequestId } from "@/lib/leakAnnotations";
 // [spring-ai-mcp-inspector PATCH] D3 structured error contract (issue #54):
 // the backend proxy emits `ProxyErrorDto` bodies on streamable 401/403 and
 // named SSE `error` events on the SSE path; parsed here for the error banner.
@@ -1034,6 +1035,21 @@ export function useConnection({
           transport.onmessage = (message) => {
             const resolvedMessage = resolveRefsInMessage(message);
             protocolOnMessage(resolvedMessage);
+          };
+        }
+
+        // [spring-ai-mcp-inspector PATCH] Exception-leak join (#251): observe
+        // outgoing JSON-RPC frames so the Tool Result pane can join its
+        // displayed response with the annotated timeline event by request id
+        // (see leakAnnotations.ts); send-side twin of the onmessage wrapper
+        // above.
+        if (transport.send) {
+          const protocolSend = transport.send.bind(transport);
+          transport.send = async (
+            message: Parameters<Transport["send"]>[0],
+          ) => {
+            noteOutgoingRequestId(message);
+            return protocolSend(message);
           };
         }
 

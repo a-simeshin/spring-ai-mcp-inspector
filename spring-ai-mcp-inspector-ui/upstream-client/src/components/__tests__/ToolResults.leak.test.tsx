@@ -7,6 +7,7 @@ import ToolResults from "../ToolResults";
 import TimelineTab from "../TimelineTab";
 import { Tabs } from "@/components/ui/tabs";
 import { CompatibilityCallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { noteOutgoingRequestId } from "@/lib/leakAnnotations";
 
 const LEAK_LOG_MESSAGE = "E11000 duplicate key error collection: db.app";
 // Spec fact F1: without a cause Spring AI duplicates the message
@@ -114,6 +115,8 @@ describe("ToolResults exception-leak note", () => {
   });
 
   it("states the verbatim leak for an EXACT-annotated error result", async () => {
+    // The displayed call went out as JSON-RPC request id 10.
+    noteOutgoingRequestId({ jsonrpc: "2.0", method: "tools/call", id: 10 });
     mockFetch([annotatedResponseEvent("EXACT", true)]);
     renderResults(ERROR_RESULT);
 
@@ -129,6 +132,7 @@ describe("ToolResults exception-leak note", () => {
   });
 
   it("uses the softer wording without a verbatim claim for PARTIAL", async () => {
+    noteOutgoingRequestId({ jsonrpc: "2.0", method: "tools/call", id: 10 });
     mockFetch([annotatedResponseEvent("PARTIAL", false)]);
     renderResults(ERROR_RESULT);
 
@@ -142,6 +146,7 @@ describe("ToolResults exception-leak note", () => {
   });
 
   it("renders no note for an error result without any annotation", async () => {
+    noteOutgoingRequestId({ jsonrpc: "2.0", method: "tools/call", id: 11 });
     const fetchMock = mockFetch([UNANNOTATED_RESPONSE_EVENT]);
     renderResults(ERROR_RESULT);
 
@@ -152,6 +157,31 @@ describe("ToolResults exception-leak note", () => {
     expect(
       screen.queryByTestId("tool-result-leak-note"),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows no note for a repeated failing call whose own response was not annotated", async () => {
+    // The pane displays the SECOND identical failing call (request id 11);
+    // only the first call's frame (request id 10) carries a `_leak`.
+    // The note must not borrow the first call's annotation.
+    noteOutgoingRequestId({ jsonrpc: "2.0", method: "tools/call", id: 11 });
+    const fetchMock = mockFetch([
+      UNANNOTATED_RESPONSE_EVENT,
+      annotatedResponseEvent("EXACT", true),
+    ]);
+    renderResults(ERROR_RESULT);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByText("Error")).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByTestId("tool-result-leak-note"),
+    ).not.toBeInTheDocument();
+
+    // The same timeline joined to the FIRST call's id still shows the note.
+    noteOutgoingRequestId({ jsonrpc: "2.0", method: "tools/call", id: 10 });
+    renderResults(ERROR_RESULT);
+    await screen.findByTestId("tool-result-leak-note");
   });
 
   it("performs no lookup at all for a successful result", async () => {
@@ -169,6 +199,7 @@ describe("ToolResults exception-leak note", () => {
   });
 
   it("stays silent on malformed annotations and failed lookups", async () => {
+    noteOutgoingRequestId({ jsonrpc: "2.0", method: "tools/call", id: 12 });
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       json: async () => [
@@ -176,6 +207,8 @@ describe("ToolResults exception-leak note", () => {
           id: "evt-resp-garbage",
           type: "MCP_JSONRPC_RESPONSE",
           payload: {
+            jsonrpc: "2.0",
+            id: 12,
             result: {
               content: [{ type: "text", text: LEAK_ERROR_TEXT }],
               isError: true,
@@ -198,6 +231,7 @@ describe("ToolResults exception-leak note", () => {
   });
 
   it("jump link switches to the timeline and scrolls to the log entry", async () => {
+    noteOutgoingRequestId({ jsonrpc: "2.0", method: "tools/call", id: 10 });
     mockFetch([LEAK_LOG_EVENT, annotatedResponseEvent("EXACT", true)]);
     renderResults(ERROR_RESULT);
 

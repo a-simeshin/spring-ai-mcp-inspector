@@ -3,9 +3,11 @@
 // cross-tab scroll broker. Garbage inputs must always yield "absent".
 import {
   capLeakText,
+  currentToolCallRequestId,
   fetchTimelineEvents,
   findLeakForToolResult,
   leakClock,
+  noteOutgoingRequestId,
   onTimelineScrollTo,
   parseLeakAnnotation,
   requestTimelineScrollTo,
@@ -121,49 +123,121 @@ describe("toolResultErrorText", () => {
 });
 
 describe("findLeakForToolResult", () => {
-  const annotated = (id: string, text: string, matchType = "EXACT") => ({
-    id,
+  // A timeline response frame: `rpcId` is the JSON-RPC request id the client
+  // put on the wire; `eventId` is the timeline event's own id.
+  const response = (
+    eventId: string,
+    rpcId: number | string,
+    text: string,
+    matchType?: string,
+  ) => ({
+    id: eventId,
     type: "MCP_JSONRPC_RESPONSE",
     payload: {
       jsonrpc: "2.0",
+      id: rpcId,
       result: { content: [{ type: "text", text }], isError: true },
-      _leak: { ...VALID_LEAK, matchType, logEventId: id + "-log" },
+      ...(matchType
+        ? { _leak: { ...VALID_LEAK, matchType, logEventId: rpcId + "-log" } }
+        : {}),
     },
   });
+  const annotated = (rpcId: number | string, text: string) =>
+    response("evt-" + rpcId, rpcId, text, "EXACT");
+  const plain = (rpcId: number | string, text: string) =>
+    response("evt-" + rpcId, rpcId, text);
 
-  it("finds the newest annotated response with equal text", () => {
-    const events = [
-      annotated("newest", "boom\nboom"),
-      annotated("older", "boom\nboom"),
-    ];
-    expect(findLeakForToolResult(events, "boom\nboom")?.logEventId).toBe(
-      "newest-log",
+  it("joins the pane's own frame by request id: a repeated failing call never borrows the older call's note", () => {
+    // Two identical failing calls with the same error text; only the FIRST
+    // response was annotated. Events arrive newest-first, the pane displays
+    // the second call.
+    const events = [plain(2, "boom\nboom"), annotated(1, "boom\nboom")];
+    // The displayed call's own frame carries no `_leak`: no note, even though
+    // an annotated frame with an equal text exists.
+    expect(findLeakForToolResult(events, 2)).toBeNull();
+    // The first call joined to its own frame still resolves its annotation.
+    expect(findLeakForToolResult(events, 1)?.logEventId).toBe("1-log");
+  });
+
+  it("resolves a duplicate request id to the newest frame (reconnect restarts the id counter)", () => {
+    const events = [plain(4, "boom"), annotated(4, "boom")];
+    expect(findLeakForToolResult(events, 4)).toBeNull();
+  });
+
+  it("matches the frame id across number and string encodings", () => {
+    expect(findLeakForToolResult([annotated(7, "boom")], "7")?.logEventId).toBe(
+      "7-log",
+    );
+    expect(findLeakForToolResult([response("evt-s", "7", "boom", "EXACT")], 7)?.logEventId).toBe(
+      "7-log",
     );
   });
 
-  it("matches across whitespace differences introduced by re-encoding", () => {
-    const events = [annotated("e1", "boom   again")];
-    expect(findLeakForToolResult(events, "boom\n again")?.logEventId).toBe(
-      "e1-log",
-    );
-  });
-
-  it("skips non-response events, unannotated responses and different texts", () => {
+  it("skips non-response events and frames with other request ids", () => {
     const events = [
       { id: "l", type: "APP_LOG", payload: { message: "boom" } },
       {
         id: "r",
         type: "MCP_JSONRPC_RESPONSE",
-        payload: { result: { content: [{ type: "text", text: "boom" }] } },
+        payload: {
+          jsonrpc: "2.0",
+          id: 99,
+          result: { content: [{ type: "text", text: "boom" }] },
+        },
       },
-      annotated("r2", "different"),
+      annotated(5, "boom"),
     ];
-    expect(findLeakForToolResult(events, "boom")).toBeNull();
+    expect(findLeakForToolResult(events, 5)?.logEventId).toBe("5-log");
+    expect(findLeakForToolResult(events, 99)).toBeNull();
+    expect(findLeakForToolResult(events, 42)).toBeNull();
   });
 
-  it("returns null for empty lookup text", () => {
-    expect(findLeakForToolResult([annotated("e1", "boom")], "")).toBeNull();
-    expect(findLeakForToolResult([annotated("e1", "boom")], "   ")).toBeNull();
+  it("yields null when the own frame's annotation is malformed", () => {
+    const events = [
+      {
+        id: "evt-x",
+        type: "MCP_JSONRPC_RESPONSE",
+        payload: {
+          jsonrpc: "2.0",
+          id: 3,
+          result: { content: [{ type: "text", text: "boom" }] },
+          _leak: { matchType: "WEIRD" },
+        },
+      },
+    ];
+    expect(findLeakForToolResult(events, 3)).toBeNull();
+  });
+
+  it("returns null for absent or unusable request ids", () => {
+    expect(findLeakForToolResult([annotated(1, "boom")], null)).toBeNull();
+    expect(findLeakForToolResult([annotated(1, "boom")], undefined)).toBeNull();
+    expect(findLeakForToolResult([annotated(1, "boom")], "not-a-number")).toBeNull();
+    expect(findLeakForToolResult([], 1)).toBeNull();
+  });
+});
+
+describe("noteOutgoingRequestId", () => {
+  it("records tools/call and tasks/result ids and keeps the latest", () => {
+    noteOutgoingRequestId({ jsonrpc: "2.0", method: "tools/call", id: 3 });
+    expect(currentToolCallRequestId()).toBe(3);
+    // Task-status polls never displace the id of the call being displayed.
+    noteOutgoingRequestId({ jsonrpc: "2.0", method: "tasks/get", id: 4 });
+    expect(currentToolCallRequestId()).toBe(3);
+    noteOutgoingRequestId({ jsonrpc: "2.0", method: "tasks/result", id: 5 });
+    expect(currentToolCallRequestId()).toBe(5);
+    noteOutgoingRequestId({ jsonrpc: "2.0", method: "tools/call", id: "str" });
+    expect(currentToolCallRequestId()).toBe("str");
+  });
+
+  it("ignores notifications, id-less frames, foreign methods and junk", () => {
+    noteOutgoingRequestId({ jsonrpc: "2.0", method: "tools/call", id: 9 });
+    noteOutgoingRequestId({ jsonrpc: "2.0", method: "notifications/initialized" });
+    noteOutgoingRequestId({ jsonrpc: "2.0", method: "tools/call" });
+    noteOutgoingRequestId({ jsonrpc: "2.0", method: "ping", id: 12 });
+    noteOutgoingRequestId(null);
+    noteOutgoingRequestId("garbage");
+    noteOutgoingRequestId(42);
+    expect(currentToolCallRequestId()).toBe(9);
   });
 });
 

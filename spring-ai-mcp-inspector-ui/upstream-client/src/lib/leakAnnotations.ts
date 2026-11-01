@@ -3,9 +3,10 @@ import { useEffect, useState } from "react";
 // [spring-ai-mcp-inspector PATCH] Exception-leak annotation plumbing (#251):
 // shared parsing of the `_leak` timeline enrichment (spec D5, produced by the
 // server-side ExceptionLeakDetector), a client-side join of an error
-// CallToolResult with its annotated timeline response event, and a small
-// navigation broker that lets the Tool Result pane ask the Timeline tab to
-// scroll to the matched log entry.
+// CallToolResult with its annotated timeline response event (by the JSON-RPC
+// request id the transport observed on the wire, not by payload text), and a
+// small navigation broker that lets the Tool Result pane ask the Timeline tab
+// to scroll to the matched log entry.
 
 export type LeakMatchType = "EXACT" | "NORMALIZED" | "PARTIAL";
 
@@ -80,10 +81,11 @@ export function parseLeakAnnotation(
 }
 
 /**
- * Joined text of the `type=text` content blocks of a CallToolResult: the exact
- * input the detector matched against server-side (spec S1-S3). Accepts both a
- * client-side CompatibilityCallToolResult and the `payload.result` node of a
- * timeline response frame. Returns null when there is no text at all.
+ * Joined text of the `type=text` content blocks of a CallToolResult. Eligibility
+ * gate for the leak note: the note quotes leaked text, so a result without any
+ * text content can never carry one. Accepts both a client-side
+ * CompatibilityCallToolResult and the `payload.result` node of a timeline
+ * response frame. Returns null when there is no text at all.
  */
 export function toolResultErrorText(result: unknown): string | null {
   if (!result || typeof result !== "object") {
@@ -110,37 +112,72 @@ export function toolResultErrorText(result: unknown): string | null {
   return joined.trim().length > 0 ? joined : null;
 }
 
-// Collapse whitespace for the client-side join: the comparison must survive
-// JSON re-encoding differences between the SDK result and the recorded frame.
-function normalizeForJoin(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+// The JSON-RPC request id of the most recent outgoing request whose response
+// becomes the displayed Tool Result: `tools/call` directly, or `tasks/result`
+// for a task-augmented call. The send-side transport wrapper in useConnection
+// records it; the join below resolves the pane's own response frame by this id,
+// so a repeated failing call never borrows the previous call's annotation.
+type ToolCallRequestId = string | number;
+let lastToolCallRequestId: ToolCallRequestId | null = null;
+
+const RESULT_BEARING_METHODS: ReadonlySet<string> = new Set([
+  "tools/call",
+  "tasks/result",
+]);
+
+/**
+ * Observes one outgoing JSON-RPC frame (installed as a send wrapper on the
+ * client transport). Records the request id when the method's response becomes
+ * the displayed Tool Result; everything else (tasks/get polls, notifications,
+ * frames without an id) is ignored.
+ */
+export function noteOutgoingRequestId(message: unknown): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const obj = message as Record<string, unknown>;
+  const method = obj["method"];
+  if (typeof method !== "string" || !RESULT_BEARING_METHODS.has(method)) {
+    return;
+  }
+  const id = obj["id"];
+  if (typeof id === "number" || typeof id === "string") {
+    lastToolCallRequestId = id;
+  }
+}
+
+/** The request id recorded for the call whose result the pane is displaying. */
+export function currentToolCallRequestId(): ToolCallRequestId | null {
+  return lastToolCallRequestId;
 }
 
 /**
- * Finds the leak annotation of the timeline response event that corresponds to
- * the given error text. Events arrive newest-first from the API, so the first
- * annotated response with an equal text wins (same latest-first determinism as
- * the engine's D4 tie-break). Returns null when nothing matches.
+ * Finds the leak annotation of the timeline response event that carries the
+ * given JSON-RPC request id: the pane's own response frame, joined by identity
+ * rather than by comparing payload texts. Events arrive newest-first from the
+ * API, so when a reconnect restarts the client's id counter the current
+ * session's event wins. The matched event decides alone: without a `_leak`
+ * enrichment there is no note, even when an older call with the same error
+ * text was annotated. Returns null when the id is unusable or no frame matches.
  */
 export function findLeakForToolResult(
   events: TimelineLeakEvent[],
-  errorText: string,
+  requestId: unknown,
 ): LeakInfo | null {
-  const wanted = normalizeForJoin(errorText);
-  if (wanted.length === 0) {
+  if (typeof requestId !== "number" && typeof requestId !== "string") {
     return null;
   }
+  const wanted = String(requestId);
   for (const event of events) {
     if (!event || event.type !== "MCP_JSONRPC_RESPONSE" || !event.payload) {
       continue;
     }
-    const leak = parseLeakAnnotation(event.payload);
-    if (!leak) {
-      continue;
-    }
-    const text = toolResultErrorText(event.payload["result"]);
-    if (text !== null && normalizeForJoin(text) === wanted) {
-      return leak;
+    const frameId = event.payload["id"];
+    if (
+      (typeof frameId === "number" || typeof frameId === "string") &&
+      String(frameId) === wanted
+    ) {
+      return parseLeakAnnotation(event.payload);
     }
   }
   return null;
@@ -254,8 +291,10 @@ const LEAK_LOOKUP_RETRY_MS = 3000;
  * Resolves the leak annotation for the error tool result currently displayed in
  * the Tool Result pane. The response frame may reach the timeline ring a moment
  * after the client sees the result (and the log appender flush lags further),
- * so the lookup retries on the Timeline poll cadence before giving up. Absent
- * or malformed annotations yield null: no annotation means no visual noise.
+ * so the lookup retries on the Timeline poll cadence before giving up. The
+ * response frame is matched by the JSON-RPC request id recorded on the wire
+ * (see noteOutgoingRequestId), never by comparing texts. Absent or malformed
+ * annotations yield null: no annotation means no visual noise.
  */
 export function useLeakForToolResult(
   isError: boolean,
@@ -268,10 +307,12 @@ export function useLeakForToolResult(
     if (!isError) {
       return;
     }
-    const errorText = toolResultErrorText(toolResult);
-    if (errorText === null) {
+    // Eligibility gate only: the note quotes leaked text, and a text-less
+    // result can never carry one.
+    if (toolResultErrorText(toolResult) === null) {
       return;
     }
+    const requestId = currentToolCallRequestId();
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let attempts = 0;
@@ -289,7 +330,7 @@ export function useLeakForToolResult(
       if (cancelled) {
         return;
       }
-      const found = findLeakForToolResult(events, errorText);
+      const found = findLeakForToolResult(events, requestId);
       if (found) {
         setLeak(found);
         return;

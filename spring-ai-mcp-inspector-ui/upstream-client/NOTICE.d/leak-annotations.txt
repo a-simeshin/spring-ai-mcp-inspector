@@ -1,10 +1,16 @@
-src/lib/leakAnnotations.ts, src/lib/__tests__/leakAnnotations.test.ts - new
-shared module for the exception-leak feature (#251). No upstream equivalent;
+src/lib/leakAnnotations.ts, src/lib/__tests__/leakAnnotations.test.ts,
+src/lib/hooks/useConnection.ts (send-side wrapper),
+src/components/__tests__/ToolResults.leak.test.tsx - shared module for the
+exception-leak feature (#251). No upstream equivalent;
 this is a Spring AI MCP Inspector extension. Contains: defensive parsing of the
 `_leak` timeline enrichment (D5 wire shape produced by the server-side
 ExceptionLeakDetector; malformed input yields null), the client-side join of an
-error CallToolResult with its annotated timeline response event (whitespace
-normalized, newest-first), a fetch helper for the timeline page (same endpoint,
+error CallToolResult with its annotated timeline response event by the JSON-RPC
+request id (useConnection wraps the client transport's send to record the id of
+tools/call and tasks/result frames; the pane's own response frame decides alone,
+so a repeated failing call whose response carries no `_leak` never borrows the
+previous call's note; duplicate ids across reconnects resolve newest-first),
+a fetch helper for the timeline page (same endpoint,
 auth header and bootstrap-advertised prefix as TimelineTab), the useLeakForToolResult
 hook (retries on the Timeline poll cadence because the log appender flush lags),
 a cross-tab scroll broker (Tool Results pane -> Timeline tab) that holds one
