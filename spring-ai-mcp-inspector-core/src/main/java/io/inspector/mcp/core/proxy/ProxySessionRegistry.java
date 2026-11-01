@@ -19,8 +19,10 @@ package io.inspector.mcp.core.proxy;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -284,6 +286,24 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	 */
 	public int size() {
 		return this.sessions.size();
+	}
+
+	/**
+	 * Returns a snapshot of all active session IDs, intended for tests.
+	 * @return set of session IDs at the time of the call
+	 */
+	public Set<String> sessionIds() {
+		return Set.copyOf(this.sessions.keySet());
+	}
+
+	/**
+	 * Performs the given action for each session currently in the registry. The action
+	 * iterates the live {@link ConcurrentHashMap} values: callers must be prepared for
+	 * concurrent modification.
+	 * @param action the action to perform on each session (never {@code null})
+	 */
+	public void forEachSession(final Consumer<? super ProxySession> action) {
+		this.sessions.values().forEach(action);
 	}
 
 	/**

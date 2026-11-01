@@ -281,6 +281,9 @@ fast). All values use Spring's relaxed `Duration` syntax — e.g. `30s`, `2m`, `
 | `spring.ai.mcp.inspector.timeouts.fetch-connect` | `10s` | Connect timeout for the outbound `/fetch` HTTP client. |
 | `spring.ai.mcp.inspector.timeouts.fetch-request` | `30s` | Per-request timeout for outbound `/fetch` calls. |
 | `spring.ai.mcp.inspector.timeouts.server-request` | `120s` | How long a server→UI request (sampling / elicitation / roots) waits for the browser to answer. |
+| `spring.ai.mcp.inspector.timeouts.upstream-probe-interval` | `10s` | Interval between liveness probes: every idle proxied session is pinged on this cadence. |
+| `spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold` | `15s` | How long a session may see no relayed traffic (browser request or upstream response) before the first probe is sent. |
+| `spring.ai.mcp.inspector.timeouts.upstream-probe-timeout` | `5s` | How long a probe's JSON-RPC answer stays filtered from the browser stream. The probe POST itself carries no deadline: a live upstream that accepts it but never answers (e.g. before `initialize`) keeps its session. Worst-case upstream-death detection is idle-threshold + interval. |
 
 ```yaml
 spring:
@@ -291,6 +294,32 @@ spring:
           streamable-request: 60s
           server-request: 5m
 ```
+
+### Upstream liveness probe
+
+Idle proxied sessions are pinged with a JSON-RPC `ping` so a dead upstream closes the
+downstream stream (the amber `disconnected-remote` banner) instead of hanging until the
+next user action. Probe traffic is internal: its responses never reach the browser and do
+not reset the session's activity clock. Only transport-level failures (connection refused,
+DNS, timeout) tear a session down; a live upstream that rejects the ping (e.g. with an
+HTTP 4xx before `initialize`) keeps its session. Disable with:
+
+```yaml
+spring:
+  ai:
+    mcp:
+      inspector:
+        upstream-liveness-probe-enabled: false
+```
+
+Known limitation: a half-open stream is not detected. If the upstream accepts the ping
+POST but its SSE stream is silently dead, the accepted POST counts as a live transport and
+the session stays open. Failing a session on a missing probe answer was tried and removed:
+a spec-compliant MCP SDK server parks every request, ping included, until `initialize`,
+so its probes stay unanswered while the session is perfectly healthy. A possible follow-up
+(not implemented) is an answer deadline applied only to sessions that have already answered
+at least one probe, which would catch half-open streams while keeping uninitialized
+sessions safe.
 
 ### Upstream connection stalls
 
