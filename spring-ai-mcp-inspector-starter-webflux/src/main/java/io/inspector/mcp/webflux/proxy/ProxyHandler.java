@@ -27,6 +27,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -42,6 +43,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
@@ -49,6 +51,8 @@ import reactor.core.scheduler.Schedulers;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
+import io.inspector.mcp.core.proxy.ProxyErrorFallback;
+import io.inspector.mcp.core.proxy.ProxyReconnectPolicy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
@@ -285,28 +289,110 @@ public class ProxyHandler {
 
 		// takeUntilOther: the stream ends when the session closes, whether or not
 		// close() managed to complete the sink (it cannot when another thread owns it).
-		final var flux = targetToBrowser.asFlux().takeUntilOther(session.closeSignal()).map((frame) -> {
-			try {
-				return ServerSentEvent.<String>builder()
-					.event("message")
-					.data(this.objectMapper.writeValueAsString(frame))
-					.build();
-			}
-			catch (final Exception ex) {
-				return ServerSentEvent.<String>builder().event("error").data(ex.getMessage()).build();
-			}
-		})
-			.startWith(prologue)
+		// errorEvents: side channel for frames the stream must deliver even when
+		// the main pump is about to terminate (dead-upstream signals below).
+		final Sinks.Many<ServerSentEvent<String>> errorEvents = Sinks.many().unicast().onBackpressureBuffer();
+		// The death frames below are emitted from two trigger sites that fire on
+		// different threads for the same failure: the pump's onErrorResume (the
+		// transport error fails targetToBrowser via failUpstream) and the start
+		// failure callback. The flag lets only one site emit; the monitor keeps
+		// the side sink's completion (doOnTerminate below) from slipping between
+		// the error frame and the retry frame - that interleaving completed the
+		// sink mid-pair and dropped the retry frame after the error frame
+		// (observed on a loaded CI runner as [error] without [retry]).
+		final AtomicBoolean deathFramesSent = new AtomicBoolean(false);
+		final Object deathFramesMonitor = new Object();
+		final var flux = Flux.merge(errorEvents.asFlux(), targetToBrowser.asFlux()
+			.takeUntilOther(session.closeSignal())
+			// Dead upstream: emit the terminal retry ahead of the teardown so
+			// spec-compliant EventSource clients stop reconnecting instead of
+			// minting a doomed proxy session every ~3s.
+			.onErrorResume((err) -> {
+				if (ProxyReconnectPolicy.isUpstreamDeath(err)) {
+					// Readable error delivery: the death rides a structured error event
+					// with the simple message+reason payload of this line (no
+					// ProxyErrorDto contract here). The event lands BEFORE the terminal
+					// retry field: the client closes the transport on the retry line, so
+					// a later frame could be lost.
+					emitDeathFrames(errorEvents, deathFramesSent, deathFramesMonitor, err);
+				}
+				return Flux.error(err);
+			})
+			.doOnTerminate(() -> completeDeathFrames(errorEvents, deathFramesMonitor))
+			.map((frame) -> {
+				try {
+					return ServerSentEvent.<String>builder()
+						.event("message")
+						.data(this.objectMapper.writeValueAsString(frame))
+						.build();
+				}
+				catch (final Exception ex) {
+					return ServerSentEvent.<String>builder().event("error").data(ex.getMessage()).build();
+				}
+			})
+			.startWith(prologue))
 			.doOnCancel(() -> this.registry.removeAndClose(sessionId))
 			.doOnTerminate(() -> this.registry.removeAndClose(sessionId));
 
 		this.mcpProxy.start(session).subscribe((ignored) -> {
 		}, (err) -> {
 			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+			// Readable error delivery: a dead upstream rides a structured error event
+			// with the simple message+reason payload of this line (no ProxyErrorDto
+			// contract here). Same single-pair guard as the pump's onErrorResume: the
+			// start error also fails the pump (failUpstream), so whichever site runs
+			// first emits the frames exactly once.
+			if (ProxyReconnectPolicy.isUpstreamDeath(err)) {
+				emitDeathFrames(errorEvents, deathFramesSent, deathFramesMonitor, err);
+			}
+			errorEvents.tryEmitComplete();
 			this.registry.removeAndClose(sessionId);
 		});
 
 		return ServerResponse.ok().contentType(MediaType.TEXT_EVENT_STREAM).body(flux, ServerSentEvent.class);
+	}
+
+	/**
+	 * Emits the readable upstream-death pair (structured {@code error} event, then the
+	 * terminal {@code retry} field) into the side channel, at most once per session
+	 * death. Both emission sites (the pump's {@code onErrorResume} and the start-failure
+	 * callback) share the guard and the monitor, so exactly one site emits the pair and
+	 * the sink cannot be completed between the two frames.
+	 * @param errorEvents the side-channel sink feeding the SSE response
+	 * @param deathFramesSent once-per-death CAS guard shared by both emission sites
+	 * @param deathFramesMonitor monitor serializing the frame pair against the sink
+	 * completion
+	 * @param err the terminal upstream failure
+	 */
+	private void emitDeathFrames(final Sinks.Many<ServerSentEvent<String>> errorEvents,
+			final AtomicBoolean deathFramesSent, final Object deathFramesMonitor, final Throwable err) {
+		if (!deathFramesSent.compareAndSet(false, true)) {
+			return;
+		}
+		synchronized (deathFramesMonitor) {
+			errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
+				.event("error")
+				.data(ProxyErrorFallback.payloadJson(this.objectMapper, err))
+				.build());
+			errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
+				.comment("upstream dead: reconnect suppressed")
+				.retry(Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS))
+				.build());
+		}
+	}
+
+	/**
+	 * Completes the side channel under the death-frames monitor: the pump's own
+	 * termination must not complete the sink while a frame pair is mid-emission.
+	 * @param errorEvents the side-channel sink feeding the SSE response
+	 * @param deathFramesMonitor monitor serializing the frame pair against this
+	 * completion
+	 */
+	private void completeDeathFrames(final Sinks.Many<ServerSentEvent<String>> errorEvents,
+			final Object deathFramesMonitor) {
+		synchronized (deathFramesMonitor) {
+			errorEvents.tryEmitComplete();
+		}
 	}
 
 	private McpClientTransport buildTargetTransport(final String transportType, final String url, final String command,

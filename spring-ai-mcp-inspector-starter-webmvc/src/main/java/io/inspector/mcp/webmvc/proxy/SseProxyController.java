@@ -45,6 +45,8 @@ import reactor.core.publisher.Sinks;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyErrorFallback;
+import io.inspector.mcp.core.proxy.ProxyReconnectPolicy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
@@ -208,7 +210,10 @@ public class SseProxyController {
 		}
 		catch (final Exception ex) {
 			LOG.warn("proxy[{}] failed to build target transport: {}", sessionId, ex.toString());
-			emitter.completeWithError(ex);
+			// Same readable-error contract as every other terminal failure of this
+			// stream: completeWithError would dispatch to Boot /error, whose JSON body
+			// has no converter for the text/event-stream response.
+			completeWithReadableError(emitter, ex);
 			return emitter;
 		}
 
@@ -246,7 +251,7 @@ public class SseProxyController {
 			.takeUntilOther(session.closeSignal())
 			.subscribe((frame) -> sendMessageEvent(emitter, sessionId, frame), (err) -> {
 				LOG.warn("proxy[{}] target stream errored: {}", sessionId, err.toString());
-				emitter.completeWithError(err);
+				completeWithReadableError(emitter, err);
 			}, () -> emitter.complete());
 
 		emitter.onCompletion(() -> this.registry.removeAndClose(sessionId));
@@ -259,7 +264,7 @@ public class SseProxyController {
 		}, (err) -> {
 			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
 			this.registry.removeAndClose(sessionId);
-			emitter.completeWithError(err);
+			completeWithReadableError(emitter, err);
 		});
 
 		return emitter;
@@ -271,6 +276,38 @@ public class SseProxyController {
 		}
 		catch (final IOException ex) {
 			LOG.warn("proxy[{}] failed to send SSE message: {}", sessionId, ex.toString());
+			emitter.completeWithError(ex);
+		}
+	}
+
+	/**
+	 * Completes the emitter with the readable error contract of this line. An upstream
+	 * death rides a structured {@code error} event carrying the simple message+reason
+	 * payload (see ProxyErrorFallback), followed by the terminal retry field so
+	 * spec-compliant EventSource clients stop reconnecting. Any other failure ends the
+	 * stream quietly: the response is already text/event-stream, so completeWithError
+	 * dispatches to Boot's /error, whose JSON body has no converter for this media type
+	 * (HttpMessageNotWritableException in the log) while the browser sees a silent cut
+	 * either way.
+	 * @param emitter the downstream SSE emitter to terminate
+	 * @param err the terminal proxy failure
+	 */
+	private void completeWithReadableError(final SseEmitter emitter, final Throwable err) {
+		final boolean upstreamDead = ProxyErrorFallback.isUpstreamDeath(err);
+		try {
+			if (upstreamDead) {
+				// The error event is sent BEFORE the terminal retry field: the browser
+				// observer processes frames sequentially and closes the transport on the
+				// retry line, so a frame sent after it could be lost.
+				emitter.send(
+						SseEmitter.event().name("error").data(ProxyErrorFallback.payloadJson(this.objectMapper, err)));
+				emitter.send(SseEmitter.event()
+					.comment("upstream dead: reconnect suppressed")
+					.reconnectTime(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS));
+			}
+			emitter.complete();
+		}
+		catch (final IOException ex) {
 			emitter.completeWithError(ex);
 		}
 	}
