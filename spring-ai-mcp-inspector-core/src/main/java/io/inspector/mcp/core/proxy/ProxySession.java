@@ -18,8 +18,11 @@ package io.inspector.mcp.core.proxy;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.modelcontextprotocol.spec.McpClientTransport;
@@ -96,6 +99,15 @@ public final class ProxySession {
 	 */
 	private static final Duration UPSTREAM_CLOSE_TIMEOUT = Duration.ofSeconds(5);
 
+	/**
+	 * Bound on the {@code FAIL_NON_SERIALIZED} retry spin in
+	 * {@link #emitFromBrowser(JsonNode)}. The contended critical section is a CAS (the
+	 * browserToTarget subscriber off-loads the actual send), so the spin resolves in
+	 * microseconds; the bound only stops a pathological holder from pinning a
+	 * non-blocking thread.
+	 */
+	private static final Duration EMIT_SPIN_BUDGET = Duration.ofSeconds(1);
+
 	/** Web-app session identifier. Random UUID by default. */
 	private final String sessionId;
 
@@ -135,6 +147,14 @@ public final class ProxySession {
 	private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
 
 	private final Mono<Void> closeSignal;
+
+	/**
+	 * IDs of active liveness-probe requests that must not be forwarded to the browser.
+	 */
+	private final Set<String> probeIds = ConcurrentHashMap.newKeySet();
+
+	/** Monotonic counter for generating unique probe request IDs. */
+	private static final AtomicLong PROBE_ID_SEQ = new AtomicLong(0);
 
 	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
 			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser) {
@@ -180,6 +200,68 @@ public final class ProxySession {
 	/** Records that a frame was just relayed; called by the proxy controllers. */
 	public void touch() {
 		this.lastActivity = Instant.now();
+	}
+
+	/**
+	 * Pushes a browser-originated frame into the {@code browserToTarget} sink, safe to
+	 * call from any number of threads at once.
+	 *
+	 * <p>
+	 * Concurrent {@code POST}s on one session are legal MCP traffic (the browser fires
+	 * parallel {@code tools/call} requests), but the raw
+	 * {@link Sinks.Many#tryEmitNext(Object)} returns {@code FAIL_NON_SERIALIZED} the
+	 * moment another thread owns the sink's CAS, which used to surface to the browser as
+	 * an HTTP 500. This method retries that concurrency signal instead of failing.
+	 * @param frame the JSON-RPC frame the browser posted (never {@code null})
+	 * @return {@code true} when the frame was accepted; {@code false} on a terminal
+	 * (non-concurrency) emit failure such as a cancelled or completed sink
+	 */
+	public boolean emitFromBrowser(final JsonNode frame) {
+		// FAIL_NON_SERIALIZED means another thread currently owns the sink's CAS: the
+		// frame was NOT emitted, so retrying is safe (no duplication). The contended
+		// critical section is a queue offer (the relay pump off-loads the actual
+		// upstream send), so the spin resolves in nanoseconds; the deadline only stops
+		// a pathological holder from pinning a non-blocking Netty event-loop thread.
+		// Every other result is terminal: a cancelled or completed sink (session
+		// closed) reports the frame as rejected, and the caller answers 5xx/404.
+		Sinks.EmitResult result = this.browserToTarget.tryEmitNext(frame);
+		final long deadline = System.nanoTime() + EMIT_SPIN_BUDGET.toNanos();
+		while (result == Sinks.EmitResult.FAIL_NON_SERIALIZED && System.nanoTime() < deadline) {
+			Thread.onSpinWait();
+			result = this.browserToTarget.tryEmitNext(frame);
+		}
+		if (!result.isSuccess()) {
+			LOG.debug("proxy[{}] browser frame rejected: {}", this.sessionId, result.name());
+		}
+		return result.isSuccess();
+	}
+
+	/**
+	 * Pushes a target-originated frame into the {@code targetToBrowser} sink, safe to
+	 * call from any number of threads at once.
+	 *
+	 * <p>
+	 * Symmetric inbound twin of {@link #emitFromBrowser(JsonNode)}: responses to
+	 * concurrent requests arrive from the upstream transport on different threads, and a
+	 * raw {@link Sinks.Many#tryEmitNext(Object)} that loses the sink's CAS returns
+	 * {@code FAIL_NON_SERIALIZED} (which used to DROP the frame, leaving the matched
+	 * per-request awaiter to run into the streamable-request timeout. The frame was not
+	 * emitted on that result, so retrying is safe (no duplication).
+	 * @param frame the JSON-RPC frame received from the upstream (never {@code null})
+	 * @return {@code true} when the frame was accepted; {@code false} on a terminal
+	 * (non-concurrency) emit failure such as a cancelled or completed sink
+	 */
+	public boolean emitFromTarget(final JsonNode frame) {
+		Sinks.EmitResult result = this.targetToBrowser.tryEmitNext(frame);
+		final long deadline = System.nanoTime() + EMIT_SPIN_BUDGET.toNanos();
+		while (result == Sinks.EmitResult.FAIL_NON_SERIALIZED && System.nanoTime() < deadline) {
+			Thread.onSpinWait();
+			result = this.targetToBrowser.tryEmitNext(frame);
+		}
+		if (!result.isSuccess()) {
+			LOG.debug("proxy[{}] target frame rejected: {}", this.sessionId, result.name());
+		}
+		return result.isSuccess();
 	}
 
 	public boolean isClosed() {
@@ -251,6 +333,63 @@ public final class ProxySession {
 	}
 
 	/**
+	 * Registers a probe request ID so that the proxy's inbound handler can recognise the
+	 * matching response and skip forwarding it to the browser.
+	 * @param id the JSON-RPC request id of the probe
+	 */
+	public void registerProbeId(final String id) {
+		this.probeIds.add(id);
+	}
+
+	/**
+	 * Returns {@code true} if the given JSON-RPC id belongs to an internal liveness probe
+	 * whose response must not be forwarded to the browser.
+	 * @param id the JSON-RPC request/response id to check
+	 * @return {@code true} if this is a probe id
+	 */
+	public boolean isProbeId(final String id) {
+		return this.probeIds.contains(id);
+	}
+
+	/**
+	 * Removes a previously registered probe ID from the set. Called after the matching
+	 * probe response has been filtered out, preventing unbounded growth of the set.
+	 * @param id the probe id to remove
+	 */
+	public void removeProbeId(final String id) {
+		this.probeIds.remove(id);
+	}
+
+	/**
+	 * Removes all registered probe IDs from the set. Called when the session closes or
+	 * when a probe times out, preventing unbounded growth of the set.
+	 */
+	public void clearProbeIds() {
+		this.probeIds.clear();
+	}
+
+	/**
+	 * Number of probe IDs currently awaiting an answer. Exposed for leak assertions in
+	 * tests.
+	 * @return the size of the probe-id set
+	 */
+	public int probeIdCount() {
+		return this.probeIds.size();
+	}
+
+	/**
+	 * Generates the next unique probe request ID. The ID is automatically registered so
+	 * its response will be filtered from the browser stream.
+	 * @return a unique string probe ID (mcpi-probe-N)
+	 */
+	public String nextProbeId() {
+		// Use string IDs with a prefix to avoid collision with normal MCP request IDs
+		final String id = "mcpi-probe-" + PROBE_ID_SEQ.incrementAndGet();
+		this.probeIds.add(id);
+		return id;
+	}
+
+	/**
 	 * Tears the session down. Safe to call from multiple threads — only the first
 	 * invocation does work; subsequent calls are no-ops.
 	 */
@@ -258,6 +397,8 @@ public final class ProxySession {
 		if (!this.closed.compareAndSet(false, true)) {
 			return;
 		}
+		// Clear any pending probe IDs so they do not leak past this session.
+		this.probeIds.clear();
 		// First, and lock-free: this is what actually ends the browser-facing streams.
 		this.closeFuture.complete(null);
 		// Best-effort. Terminates the sinks for anything subscribed straight to them
