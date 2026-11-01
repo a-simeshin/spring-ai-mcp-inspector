@@ -455,6 +455,13 @@ public class McpInspectorProperties {
 		 */
 		private boolean appenderDiscardingPolicy = true;
 
+		/**
+		 * The exception-leak detector. When enabled (the default), the timeline query
+		 * endpoints annotate error tool results with a {@code _leak} marker when the
+		 * error text matches a windowed application-log exception (issue #251).
+		 */
+		private LeakDetector leakDetector = new LeakDetector();
+
 		public boolean isEnabled() {
 			return this.enabled;
 		}
@@ -509,6 +516,37 @@ public class McpInspectorProperties {
 
 		public void setAppenderDiscardingPolicy(final boolean appenderDiscardingPolicy) {
 			this.appenderDiscardingPolicy = appenderDiscardingPolicy;
+		}
+
+		public LeakDetector getLeakDetector() {
+			return this.leakDetector;
+		}
+
+		public void setLeakDetector(final LeakDetector leakDetector) {
+			this.leakDetector = leakDetector;
+		}
+
+		/**
+		 * Exception-leak detector configuration. Bound under
+		 * {@code spring.ai.mcp.inspector.timeline.leak-detector}.
+		 */
+		public static class LeakDetector {
+
+			/**
+			 * Whether the exception-leak detector is enabled. Default {@code true}: the
+			 * detector is active whenever the timeline itself is enabled, and disabling
+			 * it only skips the {@code _leak} annotation, never the timeline itself.
+			 */
+			private boolean enabled = true;
+
+			public boolean isEnabled() {
+				return this.enabled;
+			}
+
+			public void setEnabled(final boolean enabled) {
+				this.enabled = enabled;
+			}
+
 		}
 
 	}

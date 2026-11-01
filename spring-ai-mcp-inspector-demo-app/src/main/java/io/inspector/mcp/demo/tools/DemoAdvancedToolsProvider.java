@@ -9,6 +9,7 @@
  */
 package io.inspector.mcp.demo.tools;
 
+import java.net.ConnectException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +27,8 @@ import io.modelcontextprotocol.spec.McpSchema.ResourceLink;
 import io.modelcontextprotocol.spec.McpSchema.Role;
 import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import io.modelcontextprotocol.spec.McpSchema.TextResourceContents;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.stereotype.Component;
@@ -54,6 +57,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class DemoAdvancedToolsProvider {
+
+	private static final Logger LOGGER = LoggerFactory.getLogger(DemoAdvancedToolsProvider.class);
 
 	/** 10×10 PNG (a 1×1 transparent stub blown up; minimal valid base64-encoded PNG). */
 	private static final String TINY_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
@@ -89,6 +94,48 @@ public class DemoAdvancedToolsProvider {
 			return "";
 		}
 		return String.join(separator == null ? "" : separator, parts);
+	}
+
+	/**
+	 * Exception-leak demo for the timeline detector (issue #251): logs the failure the
+	 * way an infrastructure layer would, then rethrows, so the tool result carries the
+	 * exact E11000 text the application log already contains. The timeline marks such
+	 * results with a {@code _leak} annotation.
+	 * @param name the tenant name to "insert"; {@code acme} reproduces the spec sample
+	 * @return never returns normally; always throws
+	 */
+	@McpTool(name = "leakyInsert", description = "Insert a tenant row; duplicates fail with a leaked E11000 error",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = false))
+	public String leakyInsert(@McpToolParam(description = "tenant name", required = true) String name) {
+		final RuntimeException duplicateKey = new RuntimeException(
+				"E11000 duplicate key error collection: db.app index: tenant_name_idx dup key: { name: \"" + name
+						+ "\" }");
+		LOGGER.error("leakyInsert failed for tenant {}", name, duplicateKey);
+		throw duplicateKey;
+	}
+
+	/**
+	 * Chained exception-leak demo for the timeline detector (issue #251): the JPA/JDBC
+	 * shape from the owner review, a wrapped failure three levels deep. The whole chain
+	 * is logged the way an infrastructure layer would, then the top exception is
+	 * rethrown, so Spring AI builds the tool error text from the top message plus the
+	 * DEEPEST cause message while the application log carries the full stack trace with
+	 * both {@code Caused by:} lines. The timeline must still match that pair (S1 EXACT);
+	 * a detector keeping the FIRST {@code Caused by:} line instead of the deepest one
+	 * misses this chain.
+	 * @param name the tenant name to "insert"
+	 * @return never returns normally; always throws
+	 */
+	@McpTool(name = "leakyChainInsert",
+			description = "Insert a tenant row through a failing driver chain; the wrapped 3-level failure leaks through",
+			annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = false))
+	public String leakyChainInsert(@McpToolParam(description = "tenant name", required = true) String name) {
+		final ConnectException driverFailure = new ConnectException("Connection refused: db.app:27017");
+		final RuntimeException dataAccessFailure = new RuntimeException("storage driver failed", driverFailure);
+		final IllegalStateException insertFailure = new IllegalStateException("tenant insert failed",
+				dataAccessFailure);
+		LOGGER.error("leakyChainInsert failed for tenant {}", name, insertFailure);
+		throw insertFailure;
 	}
 
 	/**

@@ -60,15 +60,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>
  * Contract under test:
  * <ul>
- * <li>26 tool entries (the 2.x line includes {@code authorizeViaUrl}, which needs SDK 2.0
- * URL-mode elicitation);</li>
+ * <li>28 tool entries (the 2.x line includes {@code authorizeViaUrl}, which needs SDK 2.0
+ * URL-mode elicitation, plus the issue #251 leak-detector demos {@code leakyInsert} and
+ * {@code leakyChainInsert});</li>
  * <li>21 entries with {@code annotations.readOnlyHint=true, destructiveHint=false} (echo,
  * sum, currentTime, addNumbers, concatenate, lookupUser, chooseColor, toggleFlag,
  * optionalGreeting, errorTool, largeOutput, structuredOutput, multiContent, deepJson,
  * blobAttachment, findFiles, listMyRoots, generateReport, getTaskStatus, cancelTask,
  * keepAliveTask);</li>
- * <li>4 entries with {@code annotations.readOnlyHint=false, destructiveHint=false}
- * (askLlm, askUser, deployService, authorizeViaUrl);</li>
+ * <li>6 entries with {@code annotations.readOnlyHint=false, destructiveHint=false}
+ * (askLlm, askUser, deployService, authorizeViaUrl, leakyInsert, leakyChainInsert);</li>
  * <li>{@code slowEcho} carries NO {@code annotations} field at all — it is registered as
  * a manual {@code ToolCallback} so the wire omits the object and the UI can mark the
  * chips as MCP spec defaults;</li>
@@ -94,7 +95,7 @@ class ToolsListContractIT {
 			"generateReport", "getTaskStatus", "cancelTask", "keepAliveTask");
 
 	private static final List<String> INTERACTIVE_TOOLS = List.of("askLlm", "askUser", "deployService",
-			"authorizeViaUrl");
+			"authorizeViaUrl", "leakyInsert", "leakyChainInsert");
 
 	private static final JsonMapper MAPPER = new JsonMapper();
 
@@ -111,11 +112,11 @@ class ToolsListContractIT {
 	@Test
 	@Story("tools/list contract")
 	@Severity(SeverityLevel.CRITICAL)
-	@DisplayName("toolsList26Entries - 26 entries; 21 read-only + 4 interactive annotated; no declared destructive")
-	@Description("tools/list through the relay returns 26 tools; 21 carry readOnlyHint=true/destructiveHint=false, "
-			+ "4 (askLlm, askUser, deployService, authorizeViaUrl) carry readOnlyHint=false/destructiveHint=false, "
-			+ "and no entry declares destructiveHint=true.")
-	void toolsList26EntriesWithExplicitAnnotations() throws Exception {
+	@DisplayName("toolsList28Entries - 28 entries; 21 read-only + 6 interactive annotated; no declared destructive")
+	@Description("tools/list through the relay returns 28 tools; 21 carry readOnlyHint=true/destructiveHint=false, "
+			+ "6 (askLlm, askUser, deployService, authorizeViaUrl, leakyInsert, leakyChainInsert) carry "
+			+ "readOnlyHint=false/destructiveHint=false, and no entry declares destructiveHint=true.")
+	void toolsList28EntriesWithExplicitAnnotations() throws Exception {
 		// given: a connected proxy session
 		final String sessionId = connect();
 		try {
@@ -124,8 +125,8 @@ class ToolsListContractIT {
 			final JsonNode tools = result.path("tools");
 			assertThat(tools.isArray()).as("tools/list must return a tools array").isTrue();
 
-			// then: 26 entries, exact matrix
-			assertThat(tools.size()).as("demo must advertise exactly 26 tools").isEqualTo(26);
+			// then: 28 entries, exact matrix
+			assertThat(tools.size()).as("demo must advertise exactly 28 tools").isEqualTo(28);
 
 			final List<String> names = new ArrayList<>();
 			for (final JsonNode tool : tools) {
