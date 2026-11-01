@@ -29,10 +29,13 @@ ALL_TABS / resolveTab(hash, null), which allowed non-ping hashes
 (#apps, #sampling) to become activeTab even though no matching panel
 exists. This left the UI dead: zero visible [role=tabpanel] elements.
 Local fix: in the hashchange handler, when mcpClient is present and
-serverCapabilities is falsy, unconditionally force the hash to "ping".
-The same guard in the capability-gated effect uses the render-identical
-condition (!serverCapabilities?.resources && !serverCapabilities?.prompts
-&& !serverCapabilities?.tools) to short-circuit to "ping" instead of
-calling resolveTab. Covered by App.tabRouterFallback.test.tsx
-(null/empty capabilities describe block, 4 tests). Refs #227/#228,
+serverCapabilities is null, undefined, or a truthy object with no
+capability panels (resources/prompts/tools), unconditionally force the
+hash to "ping". The same guard in the capability-gated effect uses the
+render-identical condition (!serverCapabilities?.resources &&
+!serverCapabilities?.prompts && !serverCapabilities?.tools) to
+short-circuit to "ping" instead of calling resolveTab. Covered by
+App.tabRouterFallback.test.tsx (null/empty capabilities describe block,
+6 tests, including a cold-load case that drains the jsdom-queued
+hashchange before mount so the effect guard alone forces Ping). Refs #227/#228,
 Rework card: t_fdeb9f56, 1.x port: t_b14e7e91.
