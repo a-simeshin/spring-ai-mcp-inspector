@@ -62,6 +62,7 @@ import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
+import io.inspector.mcp.core.proxy.ProxyErrorFallback;
 import io.inspector.mcp.core.proxy.ProxyErrorMapper;
 import io.inspector.mcp.core.proxy.ProxyReconnectPolicy;
 import io.inspector.mcp.core.proxy.ProxySession;
@@ -500,6 +501,19 @@ public class ProxyHandler {
 			// spec-compliant EventSource clients stop reconnecting instead of
 			// minting a doomed proxy session every ~3s.
 			.onErrorResume((err) -> {
+				// Readable error delivery: a classified failure (D3-mapped or an
+				// upstream death) rides a structured error event, so the browser learns
+				// why the stream died instead of a silent cut. The event lands BEFORE
+				// the terminal retry field: the client closes the transport on the
+				// retry line, so a later frame could be lost. An unclassified failure
+				// ends the stream without an event, as before this contract existed.
+				final ProxyErrorDto terminalDto = resolveTerminalErrorDto(err);
+				if (terminalDto != null) {
+					errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
+						.event("error")
+						.data(toErrorJson(terminalDto, targetUri(transportType, url)))
+						.build());
+				}
 				if (ProxyReconnectPolicy.isUpstreamDeath(err)) {
 					errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
 						.comment("upstream dead: reconnect suppressed")
@@ -527,21 +541,25 @@ public class ProxyHandler {
 		this.mcpProxy.start(session).subscribe((ignored) -> {
 		}, (err) -> {
 			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+			// Readable error delivery: a classified failure (D3-mapped or an
+			// upstream death) rides a structured error event. The event lands BEFORE
+			// the terminal retry field and the session teardown: the client closes
+			// the transport on the retry line, and the close signal terminates the
+			// merged flux, so a later frame could be lost. An unclassified failure
+			// ends the stream without an event, as before this contract existed.
+			final ProxyErrorDto startDto = resolveTerminalErrorDto(err);
+			if (startDto != null) {
+				errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
+					.event("error")
+					.data(toErrorJson(startDto, targetUri(transportType, url)))
+					.build());
+			}
 			// Dead upstream: the terminal retry stops the browser reconnect loop
 			// before this stream ends (see ProxyReconnectPolicy).
 			if (ProxyReconnectPolicy.isUpstreamDeath(err)) {
 				errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
 					.comment("upstream dead: reconnect suppressed")
 					.retry(Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS))
-					.build());
-			}
-			// D3: emit the structured error event BEFORE the session teardown — the
-			// close signal terminates the merged flux, so the DTO must land first.
-			final ProxyErrorDto dto = ProxyErrorMapper.map(err, TransportKind.SSE);
-			if (dto != null) {
-				errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
-					.event("error")
-					.data(toErrorJson(dto, targetUri(transportType, url)))
 					.build());
 			}
 			errorEvents.tryEmitComplete();
@@ -580,6 +598,22 @@ public class ProxyHandler {
 		}
 		final String callerOwner = resolveOwner(request);
 		return callerOwner != null && callerOwner.equals(sessionOwner);
+	}
+
+	/**
+	 * Resolves the terminal error DTO: the D3 mapping when the failure classifies, the
+	 * upstream-death fallback when the mapper yields null but the policy recognizes a
+	 * dead upstream, else null (no structured event: the stream simply ends, as before
+	 * this contract existed).
+	 * @param err the terminal transport failure
+	 * @return the DTO for the SSE {@code error} event, or null when nothing classifies
+	 */
+	private static ProxyErrorDto resolveTerminalErrorDto(final Throwable err) {
+		final ProxyErrorDto mapped = ProxyErrorMapper.map(err, TransportKind.SSE);
+		if (mapped != null) {
+			return mapped;
+		}
+		return ProxyReconnectPolicy.isUpstreamDeath(err) ? ProxyErrorFallback.upstreamDeath() : null;
 	}
 
 	/**

@@ -58,6 +58,7 @@ import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
+import io.inspector.mcp.core.proxy.ProxyErrorFallback;
 import io.inspector.mcp.core.proxy.ProxyErrorMapper;
 import io.inspector.mcp.core.proxy.ProxyReconnectPolicy;
 import io.inspector.mcp.core.proxy.ProxySession;
@@ -327,7 +328,10 @@ public class SseProxyController {
 		}
 		catch (final Exception ex) {
 			LOG.warn("proxy[{}] failed to build target transport: {}", sessionId, ex.toString());
-			emitter.completeWithError(ex);
+			// Same readable-error contract as every other terminal failure of this
+			// stream: completeWithError would dispatch to Boot /error, whose JSON body
+			// has no converter for the text/event-stream response.
+			completeWithMappedError(emitter, ex, TransportKind.SSE, targetUri(transportType, url));
 			return emitter;
 		}
 
@@ -400,36 +404,42 @@ public class SseProxyController {
 	}
 
 	/**
-	 * Completes the emitter with the D3 contract: a mappable transport failure emits a
-	 * structured {@code error} event and completes normally; anything else falls back to
-	 * the legacy {@code completeWithError}.
+	 * Completes the emitter with the readable error contract. A mapper-classified failure
+	 * rides a structured error event with the mapped DTO. A terminal failure the mapper
+	 * cannot classify (null: no HTTP status) but the policy recognizes as an upstream
+	 * death rides the same error event with the ProxyErrorFallback upstreamDeath DTO,
+	 * followed by the terminal retry field so EventSource clients stop reconnecting. Any
+	 * other unclassified failure ends the stream quietly: the response is already
+	 * text/event-stream, so the raw completeWithError would dispatch to Boot's /error,
+	 * whose JSON body has no converter for this media type
+	 * (HttpMessageNotWritableException in the log) while the browser sees a silent cut
+	 * either way.
 	 * @param emitter the SSE emitter to complete
 	 * @param err the transport failure
 	 * @param kind the transport kind gating the mapping
-	 * @param target the upstream target URI for the D5-redacted {@code url} field
+	 * @param target the upstream target URI for the D5-redacted url field
 	 */
 	private void completeWithMappedError(final SseEmitter emitter, final Throwable err, final TransportKind kind,
 			final URI target) {
 		final boolean upstreamDead = ProxyReconnectPolicy.isUpstreamDeath(err);
-		final ProxyErrorDto dto = ProxyErrorMapper.map(err, kind);
-		if (dto == null && !upstreamDead) {
-			emitter.completeWithError(err);
-			return;
-		}
+		final ProxyErrorDto mapped = ProxyErrorMapper.map(err, kind);
+		final ProxyErrorDto dto = (mapped != null) ? mapped
+				: (upstreamDead ? ProxyErrorFallback.upstreamDeath() : null);
 		try {
+			if (dto != null) {
+				// The error event is sent BEFORE the terminal retry field: the browser
+				// observer processes frames sequentially and closes the transport on the
+				// retry line, so a frame sent after it could be lost.
+				final ProxyErrorDto withUrl = dto.withUrl(ProxyErrorDto.redactUrl(target));
+				emitter.send(SseEmitter.event().name("error").data(this.objectMapper.writeValueAsString(withUrl)));
+			}
 			if (upstreamDead) {
 				// Dead upstream: every browser reconnect would mint a doomed proxy
-				// session
-				// every ~3s. The terminal SSE retry field tells spec-compliant
-				// EventSource
-				// clients (native and the polyfill) to stop reconnecting.
+				// session every ~3s. The terminal SSE retry field tells spec-compliant
+				// EventSource clients (native and the polyfill) to stop reconnecting.
 				emitter.send(SseEmitter.event()
 					.comment("upstream dead: reconnect suppressed")
 					.reconnectTime(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS));
-			}
-			if (dto != null) {
-				final ProxyErrorDto withUrl = dto.withUrl(ProxyErrorDto.redactUrl(target));
-				emitter.send(SseEmitter.event().name("error").data(this.objectMapper.writeValueAsString(withUrl)));
 			}
 			emitter.complete();
 		}

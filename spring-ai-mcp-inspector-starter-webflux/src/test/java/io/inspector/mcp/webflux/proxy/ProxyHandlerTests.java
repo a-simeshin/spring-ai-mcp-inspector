@@ -570,6 +570,9 @@ class ProxyHandlerTests {
 			assertThat(seen)
 				.anyMatch((sse) -> java.time.Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS)
 					.equals(sse.retry()));
+			// Readable error delivery: the death also rides a structured error event
+			assertThat(seen).anyMatch((sse) -> "error".equals(sse.event()) && sse.data() != null
+					&& sse.data().contains("upstream_unreachable"));
 		}
 
 		@Test
@@ -600,7 +603,8 @@ class ProxyHandlerTests {
 			// when
 			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
 
-			// then: terminal retry event, then the stream completes (no structured DTO
+			// then: the structured upstream_unreachable error event and the terminal
+			// retry event, then the stream completes (merge order is not significant)
 			// for a refused connect; merge order is not significant)
 			@SuppressWarnings("unchecked")
 			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
@@ -611,6 +615,9 @@ class ProxyHandlerTests {
 			assertThat(seen)
 				.anyMatch((sse) -> java.time.Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS)
 					.equals(sse.retry()));
+			// Readable error delivery: the death also rides a structured error event
+			assertThat(seen).anyMatch((sse) -> "error".equals(sse.event()) && sse.data() != null
+					&& sse.data().contains("upstream_unreachable"));
 		}
 
 		@Test
@@ -633,7 +640,8 @@ class ProxyHandlerTests {
 			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
 			captured[0].targetToBrowser().tryEmitError(new IllegalStateException("boom"));
 
-			// then: prologue only, the stream ends with the error and no retry hint
+			// then: prologue, then the plain error terminal - no structured event is
+			// invented for an unclassifiable non-death failure, and no retry hint
 			@SuppressWarnings("unchecked")
 			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
 					response);

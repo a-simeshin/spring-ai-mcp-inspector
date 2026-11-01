@@ -72,6 +72,26 @@ describe("parseProxyErrorDto", () => {
     });
   });
 
+  it("parses the block3 death DTO (502 upstream_unreachable fallback)", () => {
+    const dto = parseProxyErrorDto(
+      JSON.stringify({
+        status: 502,
+        code: "upstream_unreachable",
+        reason: "The upstream MCP server is unreachable.",
+        guidance: "Check the upstream server, then reconnect.",
+        url: "http://127.0.0.1:59900/sse",
+      }),
+    );
+    expect(dto).not.toBeNull();
+    expect(dto).toMatchObject({
+      status: 502,
+      code: "upstream_unreachable",
+      reason: "The upstream MCP server is unreachable.",
+      guidance: "Check the upstream server, then reconnect.",
+      url: "http://127.0.0.1:59900/sse",
+    });
+  });
+
   it("returns null for non-JSON input", () => {
     expect(parseProxyErrorDto("not json")).toBeNull();
   });

@@ -849,9 +849,10 @@ class SseProxyControllerTests {
 		@Test
 		@Story("Proxy start failure")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() whose proxy fails to start with a non-mappable error completes the emitter with that error")
-		void openSse_startFailure_nonMappable_completesWithError() {
-			// given — the proxy pump fails with a failure carrying no HTTP status
+		@Description("openSse() whose proxy fails to start with an unclassifiable non-death failure ends the stream quietly: no structured event, and no completeWithError Boot /error dispatch")
+		void openSse_startFailure_unclassified_endsQuietly() throws Exception {
+			// given: the proxy pump fails with a failure carrying no HTTP status and no
+			// death classification (neither mapped nor upstream death)
 			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
 				.willReturn(mock(McpClientTransport.class));
 			given(SseProxyControllerTests.this.mcpProxy.start(any()))
@@ -861,8 +862,32 @@ class SseProxyControllerTests {
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
 					null, null, REQUEST);
 
-			// then — the legacy completeWithError path is taken (no structured event)
-			assertThat(emitter).isNotNull();
+			// then: no structured event is invented for an unclassified failure, and the
+			// legacy completeWithError (whose Boot /error dispatch cannot render JSON
+			// into
+			// text/event-stream, HttpMessageNotWritableException) is not used either
+			assertThat(bufferedFrames(emitter)).as("unclassified failures emit no DTO frame")
+				.doesNotContain("upstream_");
+		}
+
+		@Test
+		@Story("Proxy start failure")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() whose proxy fails to start against a dead upstream emits the upstream_unreachable error event")
+		void openSse_startFailure_deadUpstream_emitsUpstreamUnreachableEvent() throws Exception {
+			// given: the upstream connect is refused; no HTTP status, classified as death
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
+				.willReturn(mock(McpClientTransport.class));
+			given(SseProxyControllerTests.this.mcpProxy.start(any()))
+				.willReturn(Mono.error(new java.net.ConnectException("Connection refused")));
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, REQUEST);
+
+			// then: the browser learns WHY the stream died: the fallback death DTO rides
+			// the named error event before the stream closes
+			assertThat(bufferedFrames(emitter)).contains("upstream_unreachable");
 		}
 
 		@Test

@@ -39,6 +39,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -56,6 +57,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <li>{@code upstreamDeath_closesDownstreamSseWithinBound}: killing the target closes the
  * downstream stream within the probe-based bound (the next probe POST fails with a
  * transport-level connection refused).</li>
+ * <li>{@code openSse_againstDeadUpstream_deliversReadableErrorEvent}: opening the proxy
+ * SSE stream against an already dead upstream delivers the named {@code error} event (502
+ * {@code upstream_unreachable} DTO) before the terminal retry line, and the logs carry no
+ * HttpMessageNotWritableException / "No converter" for the path.</li>
  * <li>{@code upstreamDeath_probeDisabled_streamStaysOpen}: red control - with probing
  * disabled the same kill leaves the stream open, proving the probe is what detects the
  * dead upstream.</li>
@@ -376,6 +381,78 @@ class ProxySseLivenessIT {
 			.as("proxy sessions opened within %s of the upstream death on %s (ids: %s)", RECONNECT_WINDOW,
 					ProxyAppHarness.stack(), browser.sessionIds)
 			.isLessThanOrEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("Opening the SSE stream against an already dead upstream delivers a readable error event")
+	@Story("SSE liveness detection")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Kills the upstream BEFORE the client opens the proxy SSE stream (the owner live-run "
+			+ "scenario) and verifies the stream delivers the named error event with the 502 "
+			+ "upstream_unreachable DTO followed by the terminal retry line, and that the log carries no "
+			+ "HttpMessageNotWritableException / No converter for LinkedHashMap (the legacy "
+			+ "completeWithError dispatched the JSON error body into the committed text/event-stream "
+			+ "response and the browser saw a silent cut). Red on ff6dcdf: no error event was ever "
+			+ "delivered and the converter failure was logged.")
+	void openSse_againstDeadUpstream_deliversReadableErrorEvent(final CapturedOutput output) throws Exception {
+		// given: a live inspector and an upstream that dies before any client stream
+		// opens
+		inspectorApp = ProxyAppHarness.start("SSE", false, null);
+		targetApp = ProxyAppHarness.start("SSE", false, null);
+		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
+		final int targetPort = ProxyAppHarness.port(targetApp);
+		final String proxyBase = "http://127.0.0.1:" + inspectorPort + "/mcp-inspector-api";
+		final String targetUrl = "http://127.0.0.1:" + targetPort + "/sse";
+		targetApp.close();
+		targetApp = null;
+		// The refused verdict must be deterministic before the client connects: while the
+		// target's graceful shutdown is still draining, a connect can be accepted and
+		// then
+		// cut ("header parser received no bytes") instead of refused.
+		Awaitility.await("target port refuses connections on " + ProxyAppHarness.stack())
+			.atMost(BUDGET)
+			.pollInterval(Duration.ofMillis(200))
+			.until(() -> {
+				try (final java.net.Socket socket = new java.net.Socket()) {
+					socket.connect(new java.net.InetSocketAddress("127.0.0.1", targetPort), 500);
+					return false;
+				}
+				catch (final java.io.IOException ex) {
+					return true;
+				}
+			});
+		final String logBaseline = output.getAll();
+
+		// when: the browser opens the proxy SSE stream (deterministic connect refusal)
+		final SseStream stream = new SseStream(proxyBase, targetUrl,
+				"sse-error-delivery-reader-" + ProxyAppHarness.stack());
+		Awaitility.await("SSE stream ended after refused connect on " + ProxyAppHarness.stack())
+			.atMost(BUDGET)
+			.pollInterval(Duration.ofMillis(100))
+			.until(() -> stream.closed.get() || stream.error.get() != null);
+
+		// then: readable error delivery - exactly one named error event carrying the
+		// fallback death DTO (status 502, code upstream_unreachable, redacted url).
+		assertThat(stream.errorFrames).as("error frames on %s", ProxyAppHarness.stack()).hasSize(1);
+		final JsonNode dto = MAPPER.readTree(stream.errorFrames.get(0));
+		assertThat(dto.get("status").asInt()).as("dto status on %s", ProxyAppHarness.stack()).isEqualTo(502);
+		assertThat(dto.get("code").asText()).as("dto code on %s", ProxyAppHarness.stack())
+			.isEqualTo("upstream_unreachable");
+		assertThat(dto.get("reason").asText()).as("dto reason on %s", ProxyAppHarness.stack()).isNotBlank();
+		assertThat(dto.get("guidance").asText()).as("dto guidance on %s", ProxyAppHarness.stack()).isNotBlank();
+		assertThat(dto.get("url").asText()).as("dto url on %s", ProxyAppHarness.stack()).isEqualTo(targetUrl);
+
+		// and: the error event arrived before the terminal retry line - the browser
+		// observer closes the transport on the retry, so a later frame could be lost.
+		assertThat(stream.markers).as("terminal markers on %s", ProxyAppHarness.stack())
+			.containsExactly("error", "retry");
+
+		// and: no unwritable-error dispatch on this path - the log must be free of the
+		// converter failure the raw completeWithError used to produce.
+		final String logSinceOpen = output.getAll().substring(logBaseline.length());
+		assertThat(logSinceOpen).as("log since open on %s", ProxyAppHarness.stack())
+			.doesNotContain("HttpMessageNotWritableException")
+			.doesNotContain("No converter for LinkedHashMap");
 	}
 
 	@Test
@@ -904,6 +981,15 @@ class ProxySseLivenessIT {
 
 		final List<String> frames = Collections.synchronizedList(new ArrayList<>());
 
+		/** Named error event payloads, in arrival order. */
+		final List<String> errorFrames = Collections.synchronizedList(new ArrayList<>());
+
+		/** Raw retry lines, in arrival order. */
+		final List<String> retryLines = Collections.synchronizedList(new ArrayList<>());
+
+		/** Arrival order of terminal markers: error event vs retry. */
+		final List<String> markers = Collections.synchronizedList(new ArrayList<>());
+
 		SseStream(final String proxyBase, final String targetUrl, final String threadName) {
 			final Thread reader = new Thread(() -> {
 				try {
@@ -934,6 +1020,10 @@ class ProxySseLivenessIT {
 								else if ("message".equals(eventName) && dataBuf.length() > 0) {
 									SseStream.this.frames.add(dataBuf.toString());
 								}
+								else if ("error".equals(eventName) && dataBuf.length() > 0) {
+									SseStream.this.errorFrames.add(dataBuf.toString());
+									SseStream.this.markers.add("error");
+								}
 								eventName = null;
 								dataBuf.setLength(0);
 								continue;
@@ -946,6 +1036,10 @@ class ProxySseLivenessIT {
 									dataBuf.append('\n');
 								}
 								dataBuf.append(line.substring(5).trim());
+							}
+							else if (line.startsWith("retry:")) {
+								SseStream.this.retryLines.add(line);
+								SseStream.this.markers.add("retry");
 							}
 						}
 					}
