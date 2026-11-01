@@ -74,6 +74,7 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -1008,6 +1009,266 @@ class ProxyHandlerTests {
 	}
 
 	@Nested
+	@DisplayName("postMcp(): connection timeout budget")
+	class ConnectionTimeoutBudget {
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() with connectionTimeout=1s and a bring-up that times out before initialize returns a 504 whose payload names the connect phase")
+		void postMcp_connectPhaseOverrun_namesConnectPhase() throws Exception {
+			// given: the bring-up hangs and its timeout fires at 400ms, well before the
+			// 1s initialize budget, so the connect-phase overrun is routed to the
+			// awaiter through the session sink without racing the initialize timer
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any()))
+				.willAnswer((inv) -> reactor.core.publisher.Mono.<Void>never().timeout(Duration.ofMillis(400)));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?connectionTimeout=1")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then: 504 with the existing MCP_CONNECT_FAILED contract, reason=timeout,
+			// phase=connect, and elapsed within the budget plus scheduling slack
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> bodyMap = (Map<String, Object>) ((EntityResponse<Object>) response).entity();
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> error = (Map<String, Object>) bodyMap.get("error");
+			assertThat(error.get("code")).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.get("reason")).isEqualTo("timeout");
+			assertThat(error.get("phase")).isEqualTo("connect");
+			assertThat(((Number) error.get("budgetMs")).longValue()).isEqualTo(1000L);
+			assertThat(((Number) error.get("elapsedMs")).longValue()).isLessThan(1000L + 5000L);
+			assertThat(error.get("retryable")).isEqualTo(Boolean.TRUE);
+			verify(ProxyHandlerTests.this.registry, timeout(5000).atLeastOnce()).removeAndClose(any(String.class));
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() with connectionTimeout=1s and an initialize that never answers returns a 504 whose payload names the initialize phase")
+		void postMcp_initializePhaseOverrun_namesInitializePhase() throws Exception {
+			// given: the bring-up completes instantly but the initialize answer never
+			// arrives, so the initialize-phase budget fires
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willReturn(Mono.empty());
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?connectionTimeout=1")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then: 504 with the MCP_CONNECT_FAILED contract and the initialize phase
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> bodyMap = (Map<String, Object>) ((EntityResponse<Object>) response).entity();
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> error = (Map<String, Object>) bodyMap.get("error");
+			assertThat(error.get("code")).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.get("reason")).isEqualTo("timeout");
+			assertThat(error.get("phase")).isEqualTo("initialize");
+			assertThat(((Number) error.get("budgetMs")).longValue()).isEqualTo(1000L);
+			assertThat(((Number) error.get("elapsedMs")).longValue()).isLessThan(1000L + 5000L);
+			assertThat(error.get("retryable")).isEqualTo(Boolean.TRUE);
+			verify(ProxyHandlerTests.this.registry, timeout(5000).atLeastOnce()).removeAndClose(any(String.class));
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("absent connectionTimeout falls back to timeouts.connection, not to streamable-request (distinct values)")
+		void postMcp_withoutParameter_usesConfiguredConnectionTimeout() throws Exception {
+			// given: connection=200ms (the fallback under test) and a much longer
+			// streamable-request so a legacy-path wait would be plainly slower
+			final McpInspectorProperties props = new McpInspectorProperties();
+			props.getTimeouts().setConnection(Duration.ofMillis(200));
+			props.getTimeouts().setStreamableRequest(Duration.ofSeconds(30));
+			final ProxyHandler budgetHandler = new ProxyHandler(ProxyHandlerTests.this.registry,
+					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
+					ProxyHandlerTests.this.transportDetector, ProxyHandlerTests.this.objectMapper, props);
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willReturn(Mono.empty());
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when: no connectionTimeout parameter
+			final long startedAt = System.nanoTime();
+			final ServerResponse response = budgetHandler.postMcp(request).block();
+			final long waitedMs = (System.nanoTime() - startedAt) / 1_000_000L;
+
+			// then: the wait matches the 200ms connection budget, not the 30s
+			// streamable-request
+			assertThat(waitedMs).isLessThan(5000L);
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> bodyMap = (Map<String, Object>) ((EntityResponse<Object>) response).entity();
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> error = (Map<String, Object>) bodyMap.get("error");
+			assertThat(error.get("reason")).isEqualTo("timeout");
+			assertThat(((Number) error.get("budgetMs")).longValue()).isEqualTo(200L);
+			assertThat(((Number) error.get("elapsedMs")).longValue()).isLessThan(200L + 5000L);
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("out-of-range or malformed connectionTimeout values answer 400 with the structured error body and open no session")
+		void postMcp_invalidParameter_answers400structuredBody() throws Exception {
+			// given: a request body and a list of invalid raw values (non-numeric,
+			// decimal, zero, negative, huge)
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final String[] invalid = { "abc", "1.5", "0", "-5", "9223372036854775807", "9300000000000", "10000000000",
+					"601" };
+			for (final String raw : invalid) {
+				// when
+				final ServerRequest request = toServerRequest(
+						MockServerHttpRequest.post("/mcp-inspector-api/mcp?connectionTimeout=" + raw)
+							.contentType(MediaType.APPLICATION_JSON)
+							.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+				final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+				// then: 400 with the structured MCP_CONNECT_FAILED body, no session
+				assertThat(response).as("raw value %s", raw).isNotNull();
+				assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+				assertThat(entityBody(response).get("error").toString()).as("raw value %s", raw)
+					.contains("MCP_CONNECT_FAILED")
+					.contains("validation")
+					.contains("retryable=false")
+					.contains(raw);
+			}
+			verify(ProxyHandlerTests.this.registry, org.mockito.Mockito.never()).put(any(ProxySession.class));
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with an invalid connectionTimeout answers 400 with the structured error body instead of silently ignoring it")
+		void openSse_invalidParameter_answers400structuredBody() {
+			// given
+			final ServerRequest request = toServerRequest(MockServerHttpRequest
+				.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse&connectionTimeout=abc")
+				.build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then: the parameter is validated on the SSE endpoint too
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(entityBody(response).get("error").toString()).contains("MCP_CONNECT_FAILED").contains("abc");
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openStdio() with a valid connectionTimeout opens normally and with an invalid one answers 400 (parameter honoured on stdio)")
+		void openStdio_parameterValidated() {
+			// given: a valid 5s budget
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStdio(any(), any())).willReturn(target);
+			final ServerRequest valid = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/stdio?command=node&connectionTimeout=5").build());
+
+			// when
+			final ServerResponse ok = ProxyHandlerTests.this.handler.openStdio(valid).block();
+
+			// then: opens
+			assertThat(ok).isNotNull();
+			assertThat(ok.statusCode()).isEqualTo(HttpStatus.OK);
+
+			// and when: an invalid value is rejected with the structured body
+			final ServerRequest invalid = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/stdio?command=node&connectionTimeout=1.5").build());
+			final ServerResponse bad = ProxyHandlerTests.this.handler.openStdio(invalid).block();
+			assertThat(bad).isNotNull();
+			assertThat(bad.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(entityBody(bad).get("error").toString()).contains("MCP_CONNECT_FAILED").contains("1.5");
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() with connectionTimeout=1s and a start() that never completes emits a proxy-error event with the connect phase")
+		void openSse_connectPhaseOverrun_emitsStructuredProxyErrorEvent() {
+			// given: an SSE open whose bring-up never completes; the 1s budget is the
+			// only timer on this path
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willReturn(reactor.core.publisher.Mono.never());
+			final ServerRequest request = toServerRequest(MockServerHttpRequest
+				.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse&connectionTimeout=1")
+				.build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then: the stream carries a structured proxy-error event naming the
+			// connect phase, budget and elapsed
+			assertThat(response).isNotNull();
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			final org.springframework.http.codec.ServerSentEvent<String> errorEvent = body
+				.filter((event) -> "proxy-error".equals(event.event()))
+				.next()
+				.block(java.time.Duration.ofSeconds(10));
+			assertThat(errorEvent).isNotNull();
+			assertThat(errorEvent.data()).contains("MCP_CONNECT_FAILED")
+				.contains("\"phase\":\"connect\"")
+				.contains("\"budgetMs\":1000");
+			verify(ProxyHandlerTests.this.registry, timeout(5000).atLeastOnce()).removeAndClose(any(String.class));
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() bring-up failing with a non-timeout error emits a proxy-error event with the generic MCP_CONNECT_FAILED payload")
+		void openSse_nonTimeoutFailure_emitsGenericProxyErrorEvent() {
+			// given: the bring-up fails immediately with a plain exception (not a
+			// budget overrun), exercising the generic arm of the error event mapping
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any()))
+				.willReturn(Mono.error(new IllegalStateException("spawn failed")));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then: the stream carries the generic structured payload
+			assertThat(response).isNotNull();
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			final org.springframework.http.codec.ServerSentEvent<String> errorEvent = body
+				.filter((event) -> "proxy-error".equals(event.event()))
+				.next()
+				.block(java.time.Duration.ofSeconds(10));
+			assertThat(errorEvent).isNotNull();
+			assertThat(errorEvent.data()).contains("MCP_CONNECT_FAILED")
+				.contains("\"reason\":\"unknown\"")
+				.contains("spawn failed");
+			verify(ProxyHandlerTests.this.registry, timeout(5000).atLeastOnce()).removeAndClose(any(String.class));
+		}
+
+	}
+
+	@Nested
 	@DisplayName("postMcp() — Streamable-HTTP")
 	class PostMcp {
 
@@ -1921,14 +2182,18 @@ class ProxyHandlerTests {
 		@Test
 		@Story("Streamable-HTTP relay")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("postMcp() opening a new session whose upstream never replies times out with a 504 and tears down the orphaned session")
+		@Description("postMcp() opening a new session whose upstream never replies times out on the 200ms connection budget (streamable-request stays 30s), answers a 504 naming the initialize phase, and tears down the orphaned session")
 		void postMcp_newSessionTimeout_returnsGatewayTimeoutAndRemovesSession() {
-			// given — a fast streamable request timeout so the awaiter trips quickly, and
-			// a
-			// brand-new session (includeSessionHeader == true) whose upstream stays
-			// silent
+			// given: a fast connection budget so the new-session initialize awaiter trips
+			// quickly, and a brand-new session (includeSessionHeader == true) whose
+			// upstream
+			// stays silent. streamable-request stays at its 30s default: the new-session
+			// wait is bounded by the connection budget, and the elapsedMs bound below
+			// turns
+			// red if that ever regresses to streamable-request.
 			final McpInspectorProperties fastProps = new McpInspectorProperties();
-			fastProps.getTimeouts().setStreamableRequest(java.time.Duration.ofMillis(100));
+			fastProps.getTimeouts().setConnection(java.time.Duration.ofMillis(200));
+			fastProps.getTimeouts().setStreamableRequest(java.time.Duration.ofSeconds(30));
 			final ProxyHandler fastHandler = new ProxyHandler(ProxyHandlerTests.this.registry,
 					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
 					ProxyHandlerTests.this.transportDetector, ProxyHandlerTests.this.objectMapper, fastProps);
@@ -1952,6 +2217,15 @@ class ProxyHandlerTests {
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
 			assertThat(entityBody(response).get("error").toString()).contains("MCP_CONNECT_FAILED");
 			assertThat(entityBody(response).get("error").toString()).contains("timeout");
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> error = (Map<String, Object>) entityBody(response).get("error");
+			assertThat(error.get("phase")).isEqualTo("initialize");
+			assertThat(((Number) error.get("budgetMs")).longValue()).isEqualTo(200L);
+			// budget source pin: the wait came from the 200ms connection budget, not from
+			// the 30s streamable-request, and the timer cannot fire before its own budget
+			final long elapsedMs = ((Number) error.get("elapsedMs")).longValue();
+			assertThat(elapsedMs).isGreaterThanOrEqualTo(200L);
+			assertThat(elapsedMs).isLessThan(200L + 5000L);
 			verify(ProxyHandlerTests.this.registry).removeAndClose(captured[0].sessionId());
 		}
 
