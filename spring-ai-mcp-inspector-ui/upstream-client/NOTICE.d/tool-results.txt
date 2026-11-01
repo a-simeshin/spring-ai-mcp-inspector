@@ -4,7 +4,9 @@ component showed the raw error text only. Local addition: when the timeline
 carries a `_leak` annotation for the displayed error text (resolved through the
 shared src/lib/leakAnnotations.ts lookup against /api/timeline), the pane renders
 a note above the content: an EXACT/verbatim match states "The client model
-received this text verbatim"; NORMALIZED/PARTIAL matches use the softer
+received this text verbatim" and links the Spring AI exception-mapping hook
+proposal (spring-projects/spring-ai#7219) as the server-side fix under design
+(plain <a>, opens in a new tab); NORMALIZED/PARTIAL matches use the softer
 "matches an exception logged at HH:MM:SS" wording without the verbatim claim.
 Both notes link to the Timeline tab and scroll to the correlated log entry via
 the leakAnnotations broker. Without an annotation the pane is unchanged

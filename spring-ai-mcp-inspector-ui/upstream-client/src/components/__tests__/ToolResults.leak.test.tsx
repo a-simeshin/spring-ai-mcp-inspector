@@ -1,6 +1,7 @@
 // [spring-ai-mcp-inspector PATCH] ToolResults exception-leak note tests (#251):
-// verbatim vs softer wording, zero noise without an annotation, junk input
-// silence, and the full cross-tab jump (hash switch + broker + Timeline scroll).
+// verbatim vs softer wording, upstream-fix pointer on the verbatim note only,
+// zero noise without an annotation, junk input silence, and the full cross-tab
+// jump (hash switch + broker + Timeline scroll).
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import ToolResults from "../ToolResults";
@@ -128,6 +129,17 @@ describe("ToolResults exception-leak note", () => {
       screen.queryByTestId("tool-result-leak-soft"),
     ).not.toBeInTheDocument();
     expect(screen.getByTestId("tool-result-leak-jump")).toBeInTheDocument();
+    // The verbatim note points to the Spring AI exception-mapping hook
+    // proposal as the server-side fix path (issue #251, "After the change").
+    const upstream = screen.getByTestId("tool-result-leak-upstream");
+    expect(upstream).toHaveAttribute(
+      "href",
+      "https://github.com/spring-projects/spring-ai/issues/7219",
+    );
+    expect(upstream).toHaveAttribute("target", "_blank");
+    expect(note).toHaveTextContent(
+      "A server-side fix is being designed upstream: spring-ai#7219",
+    );
     expect(note).toHaveTextContent(LEAK_LOG_MESSAGE);
   });
 
@@ -142,6 +154,10 @@ describe("ToolResults exception-leak note", () => {
     );
     expect(
       screen.queryByTestId("tool-result-leak-verbatim"),
+    ).not.toBeInTheDocument();
+    // The upstream-fix pointer belongs to the verbatim leak claim only.
+    expect(
+      screen.queryByTestId("tool-result-leak-upstream"),
     ).not.toBeInTheDocument();
   });
 

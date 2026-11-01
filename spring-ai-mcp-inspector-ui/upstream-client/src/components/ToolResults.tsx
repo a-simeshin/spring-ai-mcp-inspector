@@ -22,7 +22,9 @@ import {
 // (#251): when the timeline carries a `_leak` annotation for this error text,
 // the pane states whether the client model received the text verbatim (EXACT
 // match) or whether it merely matches a logged exception (NORMALIZED/PARTIAL),
-// with a link that opens the Timeline on the correlated log entry. No
+// with a link that opens the Timeline on the correlated log entry. The verbatim
+// note also links the Spring AI exception-mapping hook proposal
+// (spring-projects/spring-ai#7219) as the server-side fix under design. No
 // annotation means no note: the pane is unchanged for uncorrelated errors.
 
 interface ToolResultsProps {
@@ -237,6 +239,20 @@ const ToolResults = ({
             >
               View in Timeline
             </button>
+            {leak.verbatim && (
+              <div className="mt-1">
+                A server-side fix is being designed upstream:{" "}
+                <a
+                  data-testid="tool-result-leak-upstream"
+                  href="https://github.com/spring-projects/spring-ai/issues/7219"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                >
+                  spring-ai#7219
+                </a>
+              </div>
+            )}
             <div
               className="mt-1 text-xs font-mono line-clamp-2 break-words"
               title={capLeakText(leak.logMessage)}
