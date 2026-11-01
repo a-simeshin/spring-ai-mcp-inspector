@@ -88,7 +88,11 @@ import { resolveRefsInMessage } from "@/utils/schemaUtils";
 // [spring-ai-mcp-inspector PATCH] D3 structured error contract (issue #54):
 // the backend proxy emits `ProxyErrorDto` bodies on streamable 401/403 and
 // named SSE `error` events on the SSE path; parsed here for the error banner.
-import { ProxyErrorDto, parseProxyErrorDto } from "../connectionErrors";
+import {
+  ProxyErrorDto,
+  parseProxyErrorDto,
+  parseTerminalReconnectMillis,
+} from "../connectionErrors";
 
 interface UseConnectionOptions {
   transportType: "stdio" | "sse" | "streamable-http";
@@ -283,7 +287,11 @@ export function useConnection({
     const isError = (() => {
       if (response === undefined) return false;
       if ("error" in response) return true;
-      if ("isError" in response && (response as { isError?: boolean }).isError === true) return true;
+      if (
+        "isError" in response &&
+        (response as { isError?: boolean }).isError === true
+      )
+        return true;
       return false;
     })();
     setRequestHistory((prev) => [
@@ -556,7 +564,14 @@ export function useConnection({
   // DTO as a NAMED SSE `error` event. The SDK's EventSource (eventsource pkg)
   // only dispatches named events to addEventListener listeners, so the DTO
   // would be silently dropped. Tee the handshake stream and scan it ourselves.
-  const observeSseErrorStream = async (stream: ReadableStream<Uint8Array>) => {
+  // [spring-ai-mcp-inspector PATCH] block2: the scan also watches for the
+  // terminal SSE `retry` field the proxy sends when the upstream is dead; the
+  // observer then calls onTerminalReconnect so the transport (and its
+  // EventSource) is closed instead of retrying every ~3s against a dead target.
+  const observeSseErrorStream = async (
+    stream: ReadableStream<Uint8Array>,
+    onTerminalReconnect?: () => void,
+  ) => {
     const reader = stream.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -587,6 +602,11 @@ export function useConnection({
               currentEvent = line.slice(6).trim();
             } else if (line.startsWith("data:")) {
               currentData.push(line.slice(5).trimStart());
+            } else if (
+              onTerminalReconnect &&
+              parseTerminalReconnectMillis(line) !== null
+            ) {
+              onTerminalReconnect();
             }
           }
           flushEvent();
@@ -598,6 +618,11 @@ export function useConnection({
             currentEvent = line.slice(6).trim();
           } else if (line.startsWith("data:")) {
             currentData.push(line.slice(5).trimStart());
+          } else if (
+            onTerminalReconnect &&
+            parseTerminalReconnectMillis(line) !== null
+          ) {
+            onTerminalReconnect();
           }
         }
         flushEvent();
@@ -606,15 +631,17 @@ export function useConnection({
       // Observation is best-effort; the transport still surfaces the failure.
     }
   };
-  /** Wraps the SSE EventSource fetch: observe named `error` events, pass the stream through. */
+  /** Wraps the SSE EventSource fetch: observe named `error` events and the
+   * terminal `retry` of a dead upstream, pass the stream through. */
   const sseFetchWithErrorObservation = (
     url: string | URL | globalThis.Request,
     init?: RequestInit,
+    onTerminalReconnect?: () => void,
   ): Promise<Response> =>
     fetch(url, init).then((response) => {
       if (response.body) {
         const [transportStream, observationStream] = response.body.tee();
-        void observeSseErrorStream(observationStream);
+        void observeSseErrorStream(observationStream, onTerminalReconnect);
         return new Response(transportStream, response);
       }
       return response;
@@ -836,10 +863,18 @@ export function useConnection({
 
       // Create appropriate transport
       let transportOptions:
-        | StreamableHTTPClientTransportOptions
-        | SSEClientTransportOptions;
+        StreamableHTTPClientTransportOptions | SSEClientTransportOptions;
 
       let serverUrl: URL;
+
+      // [spring-ai-mcp-inspector PATCH] block2: filled in below once the
+      // transport is built. The SSE fetch wrapper (created before the transport
+      // exists) triggers it when the proxy sends the terminal SSE `retry` of a
+      // dead upstream; closing the transport also closes the EventSource, so
+      // the browser stops reconnecting.
+      const terminalReconnectCloser: { close: () => void } = {
+        close: () => {},
+      };
 
       // Determine connection URL based on the connection type
       if (connectionType === "direct" && transportType !== "stdio") {
@@ -980,14 +1015,18 @@ export function useConnection({
               // named SSE `error` event (D3 DTO) is observed (issue #54).
               eventSourceInit: {
                 fetch: (url, init) =>
-                  sseFetchWithErrorObservation(url, {
-                    ...init,
-                    headers: mergeRequestHeaders(
-                      init?.headers,
-                      headers,
-                      proxyHeaders,
-                    ),
-                  }),
+                  sseFetchWithErrorObservation(
+                    url,
+                    {
+                      ...init,
+                      headers: mergeRequestHeaders(
+                        init?.headers,
+                        headers,
+                        proxyHeaders,
+                      ),
+                    },
+                    () => terminalReconnectCloser.close(),
+                  ),
               },
               requestInit: {
                 headers: { ...headers, ...proxyHeaders },
@@ -1081,9 +1120,7 @@ export function useConnection({
         // with the just-returned profileId on the very first attempt, before the
         // state update has re-rendered the hook (issue #54, D9B).
         const effectiveProfileId =
-          profileIdOverride !== undefined
-            ? profileIdOverride
-            : activeProfileId;
+          profileIdOverride !== undefined ? profileIdOverride : activeProfileId;
         if (effectiveProfileId) {
           serverUrl.searchParams.append("profileId", effectiveProfileId);
         }
@@ -1127,6 +1164,34 @@ export function useConnection({
               })
             : new SSEClientTransport(serverUrl, transportOptions);
 
+        // [spring-ai-mcp-inspector PATCH] block2: the terminal SSE `retry` of a
+        // dead upstream (observed on the teed stream above) closes the
+        // transport, stopping the EventSource reconnect loop. Assigned before
+        // client.connect so a dead upstream on the very first connect is
+        // covered too.
+        terminalReconnectCloser.close = () => {
+          void transport.close();
+          // [spring-ai-mcp-inspector PATCH] block2: closing the transport
+          // preempts the EventSource error the block1 onerror wrapper
+          // relies on, so drive the same error transition here: the
+          // sidebar leaves Connected and shows the Retry banner instead
+          // of silently hanging on a dead upstream. A stale attempt (a
+          // newer connect already started) must not clobber the active
+          // session's state. Refs #157.
+          if (generation !== connectAttemptRef.current) {
+            return;
+          }
+          setConnectionError(
+            connectionFailureFromError(
+              new Error(
+                "The proxy closed the session because the upstream server is no longer reachable.",
+              ),
+            ),
+          );
+          setConnectionStatus("error");
+          setServerImplementation(null);
+        };
+
         await client.connect(transport as Transport);
 
         const protocolOnMessage = transport.onmessage;
@@ -1145,6 +1210,26 @@ export function useConnection({
           void client.close().catch(() => {});
           return;
         }
+
+        // [spring-ai-mcp-inspector PATCH] Leave the Connected state when the
+        // transport dies mid-session (see NOTICE.d/transport-death-leaves-connected.txt).
+        // The proxy closes the downstream SSE stream once the upstream liveness
+        // probe fails; on the wire that arrives as an EventSource error (the
+        // eventsource polyfill emits `error` and schedules a reconnect), which
+        // the SDK surfaces through transport.onerror. Nothing else updates
+        // connectionStatus after "connected", so without this wrapper the
+        // sidebar keeps showing Connected for a dead upstream. The wrapper
+        // delegates to the protocol handler first so the SDK's own error path
+        // keeps running; user-initiated disconnects are unaffected, because
+        // close() aborts the eventsource and the abort error is swallowed.
+        const protocolOnError = transport.onerror;
+        transport.onerror = (error: Error) => {
+          protocolOnError?.(error);
+          setConnectionError(connectionFailureFromError(error));
+          setConnectionStatus("error");
+          setServerImplementation(null);
+        };
+
 
         setClientTransport(transport);
 
@@ -1251,8 +1336,7 @@ export function useConnection({
       const makeTaskId = () => {
         // Prefer UUID when available; otherwise fall back to a reasonably unique id.
         const cryptoAny = globalThis.crypto as unknown as
-          | { randomUUID?: () => string }
-          | undefined;
+          { randomUUID?: () => string } | undefined;
         return (
           cryptoAny?.randomUUID?.() ??
           `task_${Date.now()}_${Math.random().toString(16).slice(2)}`

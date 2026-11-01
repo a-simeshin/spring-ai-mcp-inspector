@@ -68,11 +68,13 @@ const mockSSETransport: {
   url: URL | undefined;
   options: SSEClientTransportOptions | undefined;
   onmessage?: (message: JSONRPCMessage) => void;
+  onerror?: (error: Error) => void;
 } = {
   start: jest.fn(),
   url: undefined,
   options: undefined,
   onmessage: undefined,
+  onerror: undefined,
 };
 
 const mockStreamableHTTPTransport: {
@@ -2832,6 +2834,82 @@ describe("useConnection", () => {
       });
       expect(result.current.connectionError).toBeNull();
       expect(result.current.authError).toBeNull();
+    });
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Transport death after connect: the proxy
+  // closes the downstream SSE stream once the upstream liveness probe fails
+  // (see NOTICE.d/transport-death-leaves-connected.txt). The SDK surfaces the
+  // closed stream as transport.onerror mid-session; without a handler the
+  // status stays "connected" forever while the upstream is dead.
+  describe("Transport death after connect", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      // Populate the server-info panel so the mid-session clear is observable.
+      mockClient.getServerVersion.mockReturnValue({
+        name: "demo-upstream",
+        version: "0.1.0",
+      });
+    });
+
+    afterEach(() => {
+      mockClient.getServerVersion.mockReset();
+      mockSSETransport.onerror = undefined;
+    });
+
+    test("leaves Connected when the transport reports an error after a successful connect", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      // Sanity: the happy path reached Connected with server info populated.
+      expect(result.current.connectionStatus).toBe("connected");
+      expect(result.current.serverImplementation).not.toBeNull();
+
+      // Act: the proxy closes the stream (the eventsource polyfill fires
+      // `error` and the SDK transport calls onerror) while the UI still
+      // believes it is connected.
+      act(() => {
+        mockSSETransport.onerror?.(
+          new SseError(0, "Connection closed by proxy", new ErrorEvent("error")),
+        );
+      });
+
+      // Assert: the status leaves Connected and lands in the error branch
+      // with a failure the sidebar banner can render, and the stale server
+      // info from the dead session is cleared.
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.connectionError).not.toBeNull();
+      expect(result.current.serverImplementation).toBeNull();
+    });
+
+    test("delegates to the transport's previous onerror handler before updating status", async () => {
+      // The SDK's Protocol.connect installs its own transport.onerror; the
+      // wrapper must call it first so the protocol error path stays alive.
+      const protocolOnError = jest.fn();
+      mockSSETransport.onerror = protocolOnError;
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+      // connect() wrapped the handler instead of dropping it.
+      expect(mockSSETransport.onerror).not.toBe(protocolOnError);
+
+      const failure = new SseError(
+        0,
+        "Connection closed by proxy",
+        new ErrorEvent("error"),
+      );
+      act(() => {
+        mockSSETransport.onerror?.(failure);
+      });
+
+      expect(protocolOnError).toHaveBeenCalledWith(failure);
+      expect(result.current.connectionStatus).toBe("error");
     });
   });
 });

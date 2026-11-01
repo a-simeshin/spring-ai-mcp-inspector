@@ -21,6 +21,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
@@ -57,6 +58,7 @@ import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
+import io.inspector.mcp.core.proxy.ProxyReconnectPolicy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
@@ -67,6 +69,7 @@ import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.mock;
@@ -534,6 +537,188 @@ class ProxyHandlerTests {
 					assertThat(sse.data()).contains("world");
 				})
 				.verifyComplete();
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() emits a terminal retry event when the upstream target dies, so the browser stops reconnecting")
+		void openSse_whenUpstreamTargetDies_emitsTerminalRetryEvent() {
+			// given
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+
+			// when: the upstream connection is refused, the target stream errors out as
+			// dead
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+			captured[0].targetToBrowser().tryEmitError(new java.net.ConnectException("Connection refused"));
+
+			// then: the stream carries the prologue and the terminal retry event before
+			// it ends (merge order between the two inner publishers is not significant)
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			final java.util.List<org.springframework.http.codec.ServerSentEvent<String>> seen = new java.util.ArrayList<>();
+			reactor.test.StepVerifier.create(body.doOnNext(seen::add)).thenConsumeWhile((sse) -> true).verifyError();
+			assertThat(seen).anyMatch((sse) -> "endpoint".equals(sse.event()));
+			assertThat(seen)
+				.anyMatch((sse) -> java.time.Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS)
+					.equals(sse.retry()));
+			// Readable error delivery: the death also rides a structured error event
+			assertThat(seen).anyMatch((sse) -> "error".equals(sse.event()) && sse.data() != null
+					&& sse.data().contains("upstream_unreachable"));
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() emits a terminal retry event when the proxy fails to start against a dead upstream")
+		void openSse_whenUpstreamDeadOnStart_emitsTerminalRetryEventThenCompletes() {
+			// given
+			// The mocked registry must reproduce the real teardown: removeAndClose
+			// fires closeSignal, otherwise the targetToBrowser branch of the merged
+			// flux never terminates and the stream hangs instead of completing.
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			willAnswer((inv) -> {
+				captured[0].close();
+				return null;
+			}).given(ProxyHandlerTests.this.registry).removeAndClose(anyString());
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any(ProxySession.class)))
+				.willReturn(reactor.core.publisher.Mono.error(new java.net.ConnectException("Connection refused")));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then: the structured upstream_unreachable error event and the terminal
+			// retry event, then the stream completes (merge order is not significant)
+			// for a refused connect; merge order is not significant)
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			final java.util.List<org.springframework.http.codec.ServerSentEvent<String>> seen = new java.util.ArrayList<>();
+			reactor.test.StepVerifier.create(body.doOnNext(seen::add)).thenConsumeWhile((sse) -> true).verifyComplete();
+			assertThat(seen).anyMatch((sse) -> "endpoint".equals(sse.event()));
+			assertThat(seen)
+				.anyMatch((sse) -> java.time.Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS)
+					.equals(sse.retry()));
+			// Readable error delivery: the death also rides a structured error event
+			assertThat(seen).anyMatch((sse) -> "error".equals(sse.event()) && sse.data() != null
+					&& sse.data().contains("upstream_unreachable"));
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() emits the terminal death pair exactly once when both emission sites are forced to interleave for the same dead upstream")
+		void openSse_whenBothDeathSitesInterleave_emitsTerminalPairExactlyOnce() throws InterruptedException {
+			// given: both terminal emission sites (the start failure callback and the
+			// pump's onErrorResume) for the same dead upstream; the stream is subscribed
+			// cold first, then the start site fires on a helper thread and parks in the
+			// test hook right after emitting its death pair, so the pump site is forced
+			// to interleave against the parked start site with the ordering pinned by
+			// latches instead of a timing loop
+			final CountDownLatch startSiteEmittedPair = new CountDownLatch(1);
+			final CountDownLatch letStartSiteFinish = new CountDownLatch(1);
+			final AtomicBoolean firstSite = new AtomicBoolean(false);
+			ProxyHandlerTests.this.handler.setAfterDeathFramesHook(() -> {
+				if (firstSite.compareAndSet(false, true)) {
+					startSiteEmittedPair.countDown();
+					try {
+						letStartSiteFinish.await(10, TimeUnit.SECONDS);
+					}
+					catch (final InterruptedException ex) {
+						Thread.currentThread().interrupt();
+					}
+				}
+			});
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final reactor.core.publisher.Sinks.Empty<Void> startGate = reactor.core.publisher.Sinks.empty();
+			given(ProxyHandlerTests.this.mcpProxy.start(any(ProxySession.class))).willReturn(startGate.asMono());
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			final java.util.List<org.springframework.http.codec.ServerSentEvent<String>> seen = new java.util.ArrayList<>();
+			final CountDownLatch streamTerminated = new CountDownLatch(1);
+			body.doOnNext(seen::add).subscribe((next) -> {
+			}, (err) -> streamTerminated.countDown(), () -> streamTerminated.countDown());
+
+			// when: the start site emits its death pair on the helper thread and parks
+			// mid-flight; the pump stream then dies with the same death on the test
+			// thread while the start site is parked; only then is the start site released
+			final java.util.concurrent.ExecutorService startSite = java.util.concurrent.Executors
+				.newSingleThreadExecutor();
+			startSite.submit(() -> startGate.tryEmitError(new java.net.ConnectException("Connection refused")));
+			assertThat(startSiteEmittedPair.await(10, TimeUnit.SECONDS))
+				.as("the start site emitted its terminal death pair")
+				.isTrue();
+			captured[0].targetToBrowser().tryEmitError(new java.net.ConnectException("Connection refused"));
+			assertThat(streamTerminated.await(10, TimeUnit.SECONDS)).as("the stream terminated").isTrue();
+			letStartSiteFinish.countDown();
+			startSite.shutdown();
+			assertThat(startSite.awaitTermination(5, TimeUnit.SECONDS)).as("the start site finished").isTrue();
+
+			// then: exactly one structured error event and one terminal retry line reach
+			// the browser, no matter which of the two interleaved sites won the emission
+			assertThat(seen).anyMatch((sse) -> "endpoint".equals(sse.event()));
+			assertThat(seen.stream().filter((sse) -> "error".equals(sse.event())).count()).isEqualTo(1L);
+			assertThat(seen.stream()
+				.filter((sse) -> java.time.Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS)
+					.equals(sse.retry()))
+				.count()).isEqualTo(1L);
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with a non-death transport error keeps the plain error path: no terminal retry event")
+		void openSse_whenTargetFailsWithoutDeath_noTerminalRetryEvent() {
+			// given
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+
+			// when: a non-transport failure is not an upstream death
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+			captured[0].targetToBrowser().tryEmitError(new IllegalStateException("boom"));
+
+			// then: prologue, then the plain error terminal - no structured event is
+			// invented for an unclassifiable non-death failure, and no retry hint
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			reactor.test.StepVerifier.create(body)
+				.assertNext((sse) -> assertThat(sse.event()).isEqualTo("endpoint"))
+				.verifyError();
 		}
 
 		@Test
