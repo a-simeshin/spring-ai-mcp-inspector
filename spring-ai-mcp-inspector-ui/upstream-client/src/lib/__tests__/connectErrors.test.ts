@@ -5,6 +5,8 @@ import {
   humanReadableReason,
   isConnectFailedError,
   parseConnectFailureResponse,
+  parseProxyErrorEvent,
+  parseTerminalReconnectMillis,
   type ConnectFailure,
 } from "../connectErrors";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
@@ -155,5 +157,57 @@ describe("humanReadableReason", () => {
     expect(humanReadableReason("connection_refused")).toContain("refused");
     expect(humanReadableReason("dns")).toContain("DNS");
     expect(humanReadableReason("unknown")).toContain("Unknown");
+  });
+});
+
+describe("[spring-ai-mcp-inspector PATCH] parseTerminalReconnectMillis (block2 terminal SSE retry)", () => {
+  it("parses the terminal retry the proxy sends for a dead upstream", () => {
+    expect(parseTerminalReconnectMillis("retry:2147483000")).toBe(2147483000);
+  });
+
+  it("ignores ordinary short retry values (transport hiccups keep reconnecting)", () => {
+    expect(parseTerminalReconnectMillis("retry:3000")).toBeNull();
+    expect(parseTerminalReconnectMillis("retry:10000")).toBeNull();
+    expect(parseTerminalReconnectMillis("retry:3599999")).toBeNull();
+  });
+
+  it("ignores malformed values and non-retry lines", () => {
+    expect(parseTerminalReconnectMillis("retry:not-a-number")).toBeNull();
+    expect(parseTerminalReconnectMillis("retry:")).toBeNull();
+    expect(parseTerminalReconnectMillis("event: error")).toBeNull();
+    expect(parseTerminalReconnectMillis("data: {}")).toBeNull();
+    expect(parseTerminalReconnectMillis("")).toBeNull();
+  });
+});
+
+describe("[spring-ai-mcp-inspector PATCH] parseProxyErrorEvent (block3 readable SSE error event)", () => {
+  it("parses the simple message+reason payload of the proxy error event", () => {
+    const failure = parseProxyErrorEvent(
+      JSON.stringify({
+        message: "The upstream server is no longer reachable",
+        reason: "connection_refused",
+      }),
+    );
+    expect(failure).toEqual({
+      code: "MCP_CONNECT_FAILED",
+      reason: "connection_refused",
+      message: "The upstream server is no longer reachable",
+      retryable: true,
+    });
+  });
+
+  it("maps an unrecognized reason onto unknown but keeps the message", () => {
+    const failure = parseProxyErrorEvent(
+      JSON.stringify({ message: "stream died", reason: "on_fire" }),
+    );
+    expect(failure).toMatchObject({ reason: "unknown", message: "stream died" });
+  });
+
+  it("returns null for anything that is not a message+reason object", () => {
+    expect(parseProxyErrorEvent("not json")).toBeNull();
+    expect(parseProxyErrorEvent("[]")).toBeNull();
+    expect(parseProxyErrorEvent('"a string"')).toBeNull();
+    expect(parseProxyErrorEvent(JSON.stringify({ reason: "dns" }))).toBeNull();
+    expect(parseProxyErrorEvent(JSON.stringify({ message: "" }))).toBeNull();
   });
 });

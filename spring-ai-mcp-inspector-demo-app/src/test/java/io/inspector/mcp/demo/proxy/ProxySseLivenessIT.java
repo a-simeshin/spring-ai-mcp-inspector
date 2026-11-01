@@ -19,9 +19,13 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.qameta.allure.Description;
@@ -39,6 +43,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
 
+import io.inspector.mcp.core.proxy.ProxyErrorFallback;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -53,6 +59,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <li>{@code upstreamDeath_closesDownstreamSseWithinBound}: killing the target closes the
  * downstream stream within the probe-based bound (the next probe POST fails with a
  * transport-level connection refused).</li>
+ * <li>{@code openSse_againstDeadUpstream_deliversReadableErrorEvent}: opening the proxy
+ * SSE stream against an already dead upstream delivers the named {@code error} event
+ * (simple message+reason payload of this line) before the terminal retry line, and the
+ * logs carry no HttpMessageNotWritableException / "No converter" for the path.</li>
  * <li>{@code upstreamDeath_probeDisabled_streamStaysOpen}: red control - with probing
  * disabled the same kill leaves the stream open, proving the probe is what detects the
  * dead upstream.</li>
@@ -120,6 +130,14 @@ class ProxySseLivenessIT {
 	 * budget, so the positive/red pair stays falsifiable.
 	 */
 	private static final Duration SSE_CLOSE_BUDGET = Duration.ofSeconds(15);
+
+	/**
+	 * Observation window for the reconnect-storm bound: how long the browser model keeps
+	 * reconnecting after the upstream is killed before the session count is asserted.
+	 * Long enough that the unfixed 3s reconnect loop mints several extra sessions, so the
+	 * bound below is falsifiable on the unfixed proxy.
+	 */
+	private static final Duration RECONNECT_WINDOW = Duration.ofSeconds(16);
 
 	/** Inspector app: hosts the proxy with liveness probing. */
 	private ConfigurableApplicationContext inspectorApp;
@@ -284,6 +302,156 @@ class ProxySseLivenessIT {
 		// from the failUpstream path). A reader error is the expected outcome.
 		// If the stream closed cleanly (EOF), that is also valid - it means the
 		// emitter was completed normally by some other path.
+	}
+
+	@Test
+	@DisplayName("Upstream death bounds the EventSource reconnect storm: sessions stay under an explicit cap")
+	@Story("SSE liveness detection")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Kills the upstream mid-session and then drives a spec-compliant EventSource reconnect "
+			+ "model (reconnect on stream end honoring the SSE retry field, 3s default, exactly what the "
+			+ "browser polyfill does). On the unfixed proxy every reconnect attempt opens a fresh proxy "
+			+ "session every ~3s for as long as the browser sits there; here the sessions opened within "
+			+ "16s of the kill must stay <= 1: the single reconnect a browser is entitled to, after which "
+			+ "the dead upstream must stop the loop.")
+	void upstreamDeath_reconnectStorm_sessionsAreBounded() throws Exception {
+		// given: fast probe config so the kill is detected within ~5s
+		inspectorApp = ProxyAppHarness.start("SSE", false, null,
+				"--spring.ai.mcp.inspector.upstream-liveness-probe-enabled=true",
+				"--spring.ai.mcp.inspector.timeouts.upstream-probe-interval=PT2S",
+				"--spring.ai.mcp.inspector.timeouts.upstream-probe-timeout=PT3S",
+				"--spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold=PT3S");
+		targetApp = ProxyAppHarness.start("SSE", false, null);
+
+		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
+		final int targetPort = ProxyAppHarness.port(targetApp);
+		final String proxyBase = "http://127.0.0.1:" + inspectorPort + "/mcp-inspector-api";
+		final String targetUrl = "http://127.0.0.1:" + targetPort + "/sse";
+		final String sseUrl = proxyBase + "/sse?transportType=sse&url="
+				+ URLEncoder.encode(targetUrl, StandardCharsets.UTF_8);
+
+		// 1. Connect like a browser and complete the MCP initialize handshake so the
+		// liveness probe owns the session (a parked handshake keeps the stream open by
+		// design, see upstreamAlive_unansweredProbes_keepStreamOpen).
+		final BrowserReconnectModel browser = new BrowserReconnectModel(sseUrl);
+		browser.start();
+		Awaitility.await("first endpoint prologue on " + ProxyAppHarness.stack())
+			.atMost(BUDGET)
+			.pollInterval(Duration.ofMillis(100))
+			.until(() -> !browser.sessionIds.isEmpty());
+
+		final String sessionId = browser.sessionIds.iterator().next();
+		final ObjectNode init = MAPPER.createObjectNode();
+		init.put("jsonrpc", "2.0");
+		init.put("method", "initialize");
+		init.put("id", 1);
+		final ObjectNode params = init.putObject("params");
+		params.put("protocolVersion", "2025-11-25");
+		params.putObject("capabilities");
+		final ObjectNode info = params.putObject("clientInfo");
+		info.put("name", "proxy-sse-liveness-it");
+		info.put("version", "0.1.0");
+		final HttpRequest initRequest = HttpRequest
+			.newBuilder(URI.create(proxyBase + "/message?sessionId=" + sessionId))
+			.timeout(BUDGET)
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(init)))
+			.build();
+		final HttpResponse<String> initResponse = HTTP.send(initRequest, HttpResponse.BodyHandlers.ofString());
+		assertThat(initResponse.statusCode()).as("initialize POST must be 2xx on %s", ProxyAppHarness.stack())
+			.isBetween(200, 202);
+
+		// when
+		// 2. Kill the upstream; snapshot the session count at the moment of death.
+		targetApp.close();
+		targetApp = null;
+		final int sessionsAtDeath = browser.sessionIds.size();
+		assertThat(sessionsAtDeath).as("exactly one session before the death on %s", ProxyAppHarness.stack())
+			.isEqualTo(1);
+
+		// 3. Let the model keep reconnecting like a browser for the observation
+		// window. Unfixed: a new session every ~3s. Fixed: the doomed stream
+		// carries a terminal retry and the model stops reconnecting.
+		final long windowEnd = System.currentTimeMillis() + RECONNECT_WINDOW.toMillis();
+		while (System.currentTimeMillis() < windowEnd) {
+			Thread.sleep(200);
+		}
+		browser.stop();
+
+		// then
+		assertThat(browser.sessionIds.size() - sessionsAtDeath)
+			.as("proxy sessions opened within %s of the upstream death on %s (ids: %s)", RECONNECT_WINDOW,
+					ProxyAppHarness.stack(), browser.sessionIds)
+			.isLessThanOrEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("Opening the SSE stream against an already dead upstream delivers a readable error event")
+	@Story("SSE liveness detection")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Kills the upstream BEFORE the client opens the proxy SSE stream (the owner live-run "
+			+ "scenario) and verifies the stream delivers the named error event with the simple "
+			+ "message+reason payload of this line (no ProxyErrorDto contract on 1.x) followed by the "
+			+ "terminal retry line, and that the log carries no HttpMessageNotWritableException / "
+			+ "No converter for LinkedHashMap (the legacy completeWithError dispatched the JSON error "
+			+ "body into the committed text/event-stream response and the browser saw a silent cut).")
+	void openSse_againstDeadUpstream_deliversReadableErrorEvent(final CapturedOutput output) throws Exception {
+		// given: a live inspector and an upstream that dies before any client stream
+		// opens
+		inspectorApp = ProxyAppHarness.start("SSE", false, null);
+		targetApp = ProxyAppHarness.start("SSE", false, null);
+		final int inspectorPort = ProxyAppHarness.port(inspectorApp);
+		final int targetPort = ProxyAppHarness.port(targetApp);
+		final String proxyBase = "http://127.0.0.1:" + inspectorPort + "/mcp-inspector-api";
+		final String targetUrl = "http://127.0.0.1:" + targetPort + "/sse";
+		targetApp.close();
+		targetApp = null;
+		// The refused verdict must be deterministic before the client connects: while the
+		// target's graceful shutdown is still draining, a connect can be accepted and
+		// then
+		// cut ("header parser received no bytes") instead of refused.
+		Awaitility.await("target port refuses connections on " + ProxyAppHarness.stack())
+			.atMost(BUDGET)
+			.pollInterval(Duration.ofMillis(200))
+			.until(() -> {
+				try (final java.net.Socket socket = new java.net.Socket()) {
+					socket.connect(new java.net.InetSocketAddress("127.0.0.1", targetPort), 500);
+					return false;
+				}
+				catch (final java.io.IOException ex) {
+					return true;
+				}
+			});
+		final String logBaseline = output.getAll();
+
+		// when: the browser opens the proxy SSE stream (deterministic connect refusal)
+		final SseStream stream = new SseStream(proxyBase, targetUrl,
+				"sse-error-delivery-reader-" + ProxyAppHarness.stack());
+		Awaitility.await("SSE stream ended after refused connect on " + ProxyAppHarness.stack())
+			.atMost(BUDGET)
+			.pollInterval(Duration.ofMillis(100))
+			.until(() -> stream.closed.get() || stream.error.get() != null);
+
+		// then: readable error delivery - exactly one named error event carrying the
+		// simple message+reason payload of this line.
+		assertThat(stream.errorFrames).as("error frames on %s", ProxyAppHarness.stack()).hasSize(1);
+		final JsonNode payload = MAPPER.readTree(stream.errorFrames.get(0));
+		assertThat(payload.get("message").asText()).as("payload message on %s", ProxyAppHarness.stack())
+			.isEqualTo(ProxyErrorFallback.UPSTREAM_DEATH_MESSAGE);
+		assertThat(payload.get("reason").asText()).as("payload reason on %s", ProxyAppHarness.stack())
+			.isIn("timeout", "connection_refused", "dns", "unknown");
+
+		// and: the error event arrived before the terminal retry line - the browser
+		// observer closes the transport on the retry, so a later frame could be lost.
+		assertThat(stream.markers).as("terminal markers on %s", ProxyAppHarness.stack())
+			.containsExactly("error", "retry");
+
+		// and: no unwritable-error dispatch on this path - the log must be free of the
+		// converter failure the raw completeWithError used to produce.
+		final String logSinceOpen = output.getAll().substring(logBaseline.length());
+		assertThat(logSinceOpen).as("log since open on %s", ProxyAppHarness.stack())
+			.doesNotContain("HttpMessageNotWritableException")
+			.doesNotContain("No converter for LinkedHashMap");
 	}
 
 	@Test
@@ -696,6 +864,112 @@ class ProxySseLivenessIT {
 	}
 
 	/**
+	 * Spec-compliant EventSource reconnect model, the browser side of the churn this IT
+	 * guards against: whenever a stream generation ends (EOF or read error) it reconnects
+	 * after the last observed SSE {@code retry:} value, defaulting to 3000ms exactly like
+	 * the eventsource polyfill the UI uses, and a non-200 handshake ends reconnection
+	 * permanently (both per the SSE spec). Records every distinct session id advertised
+	 * by an {@code endpoint} prologue: each id is one proxy session opened, which is the
+	 * "new proxy id every ~3s" churn from the owner's live run.
+	 */
+	private static final class BrowserReconnectModel {
+
+		private static final long DEFAULT_RETRY_MILLIS = 3000;
+
+		final Set<String> sessionIds = ConcurrentHashMap.newKeySet();
+
+		final AtomicLong retryMillis = new AtomicLong(DEFAULT_RETRY_MILLIS);
+
+		final AtomicBoolean stopped = new AtomicBoolean(false);
+
+		final String sseUrl;
+
+		BrowserReconnectModel(final String sseUrl) {
+			this.sseUrl = sseUrl;
+		}
+
+		void start() {
+			final Thread loop = new Thread(this::run, "browser-reconnect-model-" + ProxyAppHarness.stack());
+			loop.setDaemon(true);
+			loop.start();
+		}
+
+		void stop() {
+			this.stopped.set(true);
+		}
+
+		private void run() {
+			while (!this.stopped.get()) {
+				try {
+					final HttpRequest request = HttpRequest.newBuilder(URI.create(this.sseUrl))
+						.timeout(Duration.ofSeconds(60))
+						.header("Accept", "text/event-stream")
+						.GET()
+						.build();
+					final HttpResponse<java.io.InputStream> response = HTTP.send(request,
+							HttpResponse.BodyHandlers.ofInputStream());
+					if (response.statusCode() != 200) {
+						// Per the SSE spec a failed handshake stops reconnection for
+						// good.
+						return;
+					}
+					try (var lines = new java.io.BufferedReader(
+							new java.io.InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+						String eventName = null;
+						final StringBuilder dataBuf = new StringBuilder();
+						String line;
+						while ((line = lines.readLine()) != null) {
+							if (line.isEmpty()) {
+								if ("endpoint".equals(eventName) && dataBuf.length() > 0) {
+									final String data = dataBuf.toString();
+									this.sessionIds
+										.add(data.substring(data.indexOf("sessionId=") + "sessionId=".length()));
+								}
+								eventName = null;
+								dataBuf.setLength(0);
+								continue;
+							}
+							if (line.startsWith("event:")) {
+								eventName = line.substring(6).trim();
+							}
+							else if (line.startsWith("data:")) {
+								if (dataBuf.length() > 0) {
+									dataBuf.append('\n');
+								}
+								dataBuf.append(line.substring(5).trim());
+							}
+							else if (line.startsWith("retry:")) {
+								this.retryMillis.set(Long.parseLong(line.substring(6).trim()));
+							}
+						}
+					}
+					// EOF: this generation ended, reconnect after the current retry
+					// delay.
+					catch (final Exception ex) {
+						// A read error also ends this generation; the spec reconnects.
+					}
+					final long deadline = System.currentTimeMillis() + this.retryMillis.get();
+					while (!this.stopped.get() && System.currentTimeMillis() < deadline) {
+						try {
+							Thread.sleep(50);
+						}
+						catch (final InterruptedException ex) {
+							Thread.currentThread().interrupt();
+							return;
+						}
+					}
+				}
+				catch (final Exception ex) {
+					// A connect or send failure also ends this generation; reconnect
+					// per spec.
+				}
+			}
+
+		}
+
+	}
+
+	/**
 	 * Reader handle for one open downstream SSE stream: tracks whether the stream closed
 	 * or errored, captures the endpoint prologue and collects every relayed
 	 * {@code message} frame so tests can assert on what the browser stream actually
@@ -710,6 +984,12 @@ class ProxySseLivenessIT {
 		final AtomicReference<Throwable> error = new AtomicReference<>();
 
 		final List<String> frames = Collections.synchronizedList(new ArrayList<>());
+
+		/** Named error event payloads, in arrival order. */
+		final List<String> errorFrames = Collections.synchronizedList(new ArrayList<>());
+
+		/** Arrival order of terminal markers: error event vs retry. */
+		final List<String> markers = Collections.synchronizedList(new ArrayList<>());
 
 		SseStream(final String proxyBase, final String targetUrl, final String threadName) {
 			final Thread reader = new Thread(() -> {
@@ -741,6 +1021,10 @@ class ProxySseLivenessIT {
 								else if ("message".equals(eventName) && dataBuf.length() > 0) {
 									SseStream.this.frames.add(dataBuf.toString());
 								}
+								else if ("error".equals(eventName) && dataBuf.length() > 0) {
+									SseStream.this.errorFrames.add(dataBuf.toString());
+									SseStream.this.markers.add("error");
+								}
 								eventName = null;
 								dataBuf.setLength(0);
 								continue;
@@ -753,6 +1037,9 @@ class ProxySseLivenessIT {
 									dataBuf.append('\n');
 								}
 								dataBuf.append(line.substring(5).trim());
+							}
+							else if (line.startsWith("retry:")) {
+								SseStream.this.markers.add("retry");
 							}
 						}
 					}
