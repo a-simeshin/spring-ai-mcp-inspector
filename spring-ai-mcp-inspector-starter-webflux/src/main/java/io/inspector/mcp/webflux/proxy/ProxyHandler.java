@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -492,6 +493,13 @@ public class ProxyHandler {
 		// merged into the stream ahead of the session teardown so the browser sees the
 		// DTO, not a silent cut.
 		final Sinks.Many<ServerSentEvent<String>> errorEvents = Sinks.many().multicast().onBackpressureBuffer(8);
+		// Once per death: the terminal frames have two concurrent emission sites (the
+		// pump's onErrorResume below and the start-failure callback), each on its own
+		// thread, racing the sink completion. The CAS picks the single winner and the
+		// monitor keeps the winning pair atomic against that completion, so the
+		// browser never sees the error event without its terminal retry line.
+		final AtomicBoolean deathFramesSent = new AtomicBoolean(false);
+		final Object deathFramesMonitor = new Object();
 
 		// takeUntilOther: the stream ends when the session closes, whether or not
 		// close() managed to complete the sink (it cannot when another thread owns it).
@@ -507,22 +515,10 @@ public class ProxyHandler {
 				// the terminal retry field: the client closes the transport on the
 				// retry line, so a later frame could be lost. An unclassified failure
 				// ends the stream without an event, as before this contract existed.
-				final ProxyErrorDto terminalDto = resolveTerminalErrorDto(err);
-				if (terminalDto != null) {
-					errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
-						.event("error")
-						.data(toErrorJson(terminalDto, targetUri(transportType, url)))
-						.build());
-				}
-				if (ProxyReconnectPolicy.isUpstreamDeath(err)) {
-					errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
-						.comment("upstream dead: reconnect suppressed")
-						.retry(Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS))
-						.build());
-				}
+				emitDeathFrames(errorEvents, deathFramesSent, deathFramesMonitor, err, targetUri(transportType, url));
 				return Flux.error(err);
 			})
-			.doOnTerminate(() -> errorEvents.tryEmitComplete())
+			.doOnTerminate(() -> completeDeathFrames(errorEvents, deathFramesMonitor))
 			.map((frame) -> {
 				try {
 					return ServerSentEvent.<String>builder()
@@ -547,21 +543,7 @@ public class ProxyHandler {
 			// the transport on the retry line, and the close signal terminates the
 			// merged flux, so a later frame could be lost. An unclassified failure
 			// ends the stream without an event, as before this contract existed.
-			final ProxyErrorDto startDto = resolveTerminalErrorDto(err);
-			if (startDto != null) {
-				errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
-					.event("error")
-					.data(toErrorJson(startDto, targetUri(transportType, url)))
-					.build());
-			}
-			// Dead upstream: the terminal retry stops the browser reconnect loop
-			// before this stream ends (see ProxyReconnectPolicy).
-			if (ProxyReconnectPolicy.isUpstreamDeath(err)) {
-				errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
-					.comment("upstream dead: reconnect suppressed")
-					.retry(Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS))
-					.build());
-			}
+			emitDeathFrames(errorEvents, deathFramesSent, deathFramesMonitor, err, targetUri(transportType, url));
 			errorEvents.tryEmitComplete();
 			this.registry.removeAndClose(sessionId);
 		});
@@ -598,6 +580,74 @@ public class ProxyHandler {
 		}
 		final String callerOwner = resolveOwner(request);
 		return callerOwner != null && callerOwner.equals(sessionOwner);
+	}
+
+	/**
+	 * Test-only hook invoked after this handler emitted its terminal death frames and
+	 * released the death monitor. Lets regression tests park the winning emission site
+	 * and force the second site (the pump's onErrorResume or the start failure callback)
+	 * to interleave deterministically instead of racing on a timing loop. Never set in
+	 * production.
+	 */
+	private volatile Runnable afterDeathFramesHook = () -> {
+	};
+
+	/**
+	 * Replaces the death-frames hook. Visible for tests only.
+	 * @param hook the hook to run after the terminal death frames (never {@code null})
+	 */
+	void setAfterDeathFramesHook(final Runnable hook) {
+		this.afterDeathFramesHook = (hook != null) ? hook : () -> {
+		};
+	}
+
+	/**
+	 * Emits the terminal death frames (the structured {@code error} event and, for an
+	 * upstream death, the terminal retry line) at most once per session: the CAS picks
+	 * the single winner between the two concurrent emission sites (the pump's
+	 * onErrorResume and the start-failure callback) and the monitor keeps the pair atomic
+	 * against the sink completion, so a concurrent teardown can never split the error
+	 * event from its retry line.
+	 * @param errorEvents the side sink carrying the terminal frames
+	 * @param deathFramesSent the once-per-death CAS guard
+	 * @param deathFramesMonitor the monitor serialising the pair against completion
+	 * @param err the terminal transport failure
+	 * @param target the upstream target URI for the D5-redacted url field
+	 */
+	private void emitDeathFrames(final Sinks.Many<ServerSentEvent<String>> errorEvents,
+			final AtomicBoolean deathFramesSent, final Object deathFramesMonitor, final Throwable err,
+			final URI target) {
+		final ProxyErrorDto terminalDto = resolveTerminalErrorDto(err);
+		if (terminalDto == null) {
+			return;
+		}
+		if (!deathFramesSent.compareAndSet(false, true)) {
+			return;
+		}
+		synchronized (deathFramesMonitor) {
+			errorEvents.tryEmitNext(
+					ServerSentEvent.<String>builder().event("error").data(toErrorJson(terminalDto, target)).build());
+			if (ProxyReconnectPolicy.isUpstreamDeath(err)) {
+				errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
+					.comment("upstream dead: reconnect suppressed")
+					.retry(Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS))
+					.build());
+			}
+		}
+		this.afterDeathFramesHook.run();
+	}
+
+	/**
+	 * Completes the terminal side sink under the death monitor so the completion can
+	 * never land between the two frames of a death pair emitted by the winning site.
+	 * @param errorEvents the side sink carrying the terminal frames
+	 * @param deathFramesMonitor the monitor serialising the pair against completion
+	 */
+	private static void completeDeathFrames(final Sinks.Many<ServerSentEvent<String>> errorEvents,
+			final Object deathFramesMonitor) {
+		synchronized (deathFramesMonitor) {
+			errorEvents.tryEmitComplete();
+		}
 	}
 
 	/**

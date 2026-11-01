@@ -21,6 +21,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
@@ -618,6 +619,76 @@ class ProxyHandlerTests {
 			// Readable error delivery: the death also rides a structured error event
 			assertThat(seen).anyMatch((sse) -> "error".equals(sse.event()) && sse.data() != null
 					&& sse.data().contains("upstream_unreachable"));
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() emits the terminal death pair exactly once when both emission sites are forced to interleave for the same dead upstream")
+		void openSse_whenBothDeathSitesInterleave_emitsTerminalPairExactlyOnce() throws InterruptedException {
+			// given: both terminal emission sites (the start failure callback and the
+			// pump's onErrorResume) for the same dead upstream; the stream is subscribed
+			// cold first, then the start site fires on a helper thread and parks in the
+			// test hook right after emitting its death pair, so the pump site is forced
+			// to interleave against the parked start site with the ordering pinned by
+			// latches instead of a timing loop
+			final CountDownLatch startSiteEmittedPair = new CountDownLatch(1);
+			final CountDownLatch letStartSiteFinish = new CountDownLatch(1);
+			final AtomicBoolean firstSite = new AtomicBoolean(false);
+			ProxyHandlerTests.this.handler.setAfterDeathFramesHook(() -> {
+				if (firstSite.compareAndSet(false, true)) {
+					startSiteEmittedPair.countDown();
+					try {
+						letStartSiteFinish.await(10, TimeUnit.SECONDS);
+					}
+					catch (final InterruptedException ex) {
+						Thread.currentThread().interrupt();
+					}
+				}
+			});
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final reactor.core.publisher.Sinks.Empty<Void> startGate = reactor.core.publisher.Sinks.empty();
+			given(ProxyHandlerTests.this.mcpProxy.start(any(ProxySession.class))).willReturn(startGate.asMono());
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			final java.util.List<org.springframework.http.codec.ServerSentEvent<String>> seen = new java.util.ArrayList<>();
+			final CountDownLatch streamTerminated = new CountDownLatch(1);
+			body.doOnNext(seen::add).subscribe((next) -> {
+			}, (err) -> streamTerminated.countDown(), () -> streamTerminated.countDown());
+
+			// when: the start site emits its death pair on the helper thread and parks
+			// mid-flight; the pump stream then dies with the same death on the test
+			// thread while the start site is parked; only then is the start site released
+			final java.util.concurrent.ExecutorService startSite = java.util.concurrent.Executors
+				.newSingleThreadExecutor();
+			startSite.submit(() -> startGate.tryEmitError(new java.net.ConnectException("Connection refused")));
+			assertThat(startSiteEmittedPair.await(10, TimeUnit.SECONDS))
+				.as("the start site emitted its terminal death pair")
+				.isTrue();
+			captured[0].targetToBrowser().tryEmitError(new java.net.ConnectException("Connection refused"));
+			assertThat(streamTerminated.await(10, TimeUnit.SECONDS)).as("the stream terminated").isTrue();
+			letStartSiteFinish.countDown();
+			startSite.shutdown();
+			assertThat(startSite.awaitTermination(5, TimeUnit.SECONDS)).as("the start site finished").isTrue();
+
+			// then: exactly one structured error event and one terminal retry line reach
+			// the browser, no matter which of the two interleaved sites won the emission
+			assertThat(seen).anyMatch((sse) -> "endpoint".equals(sse.event()));
+			assertThat(seen.stream().filter((sse) -> "error".equals(sse.event())).count()).isEqualTo(1L);
+			assertThat(seen.stream()
+				.filter((sse) -> java.time.Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS)
+					.equals(sse.retry()))
+				.count()).isEqualTo(1L);
 		}
 
 		@Test
