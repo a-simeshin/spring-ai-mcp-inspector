@@ -108,6 +108,12 @@ public class InspectorHandler implements ApplicationContextAware {
 	private static final Duration SESSION_CLOSE_BUDGET = Duration.ofSeconds(11);
 
 	/**
+	 * Budget for retrying a contended session-sink emit, see {@link #emitSessionEvent}.
+	 * Same bound as the proxy session emits (ProxySession.EMIT_SPIN_BUDGET).
+	 */
+	private static final Duration EMIT_SPIN_BUDGET = Duration.ofSeconds(1);
+
+	/**
 	 * Shared CSPRNG for OAuth {@code state} generation. {@link SecureRandom} is
 	 * thread-safe and expensive to seed, so a single instance is reused.
 	 */
@@ -677,11 +683,42 @@ public class InspectorHandler implements ApplicationContextAware {
 	private void broadcast(final SessionContext ctx, final String eventName, final Object payload) {
 		try {
 			final String json = this.objectMapper.writeValueAsString(payload);
-			ctx.sink().tryEmitNext(ServerSentEvent.<String>builder().event(eventName).data(json).build());
+			emitSessionEvent(ctx.sink(), eventName,
+					ServerSentEvent.<String>builder().event(eventName).data(json).build());
 		}
 		catch (final Exception ex) {
 			LOG.debug("Failed to emit SSE event {}: {}", eventName, ex.toString());
 		}
+	}
+
+	/**
+	 * Emits a server-initiated SSE frame onto a session sink, retrying while the emit is
+	 * contended. {@code FAIL_NON_SERIALIZED} means another thread currently owns the
+	 * sink's CAS: the frame was NOT emitted, so retrying is safe (no duplication).
+	 * Server-initiated requests (elicitation, sampling, roots-list-changed) can overlap
+	 * on one session, and a raw single {@link Sinks.Many#tryEmitNext(Object)} silently
+	 * drops the losing frame, which strands {@code awaitServerResponse} until its
+	 * timeout. The contended critical section is a buffer offer (the SSE stream off-loads
+	 * the actual send), so the spin resolves in microseconds; the bound only stops a
+	 * pathological holder from pinning the emitting thread. Every other result is
+	 * terminal (session closed) and is reported the way the raw emit used to be.
+	 * @param sink the per-session SSE sink to emit to
+	 * @param eventName the SSE event name, for diagnostics
+	 * @param event the frame to emit
+	 * @return {@code true} if the sink accepted the frame
+	 */
+	static boolean emitSessionEvent(final Sinks.Many<ServerSentEvent<String>> sink, final String eventName,
+			final ServerSentEvent<String> event) {
+		Sinks.EmitResult result = sink.tryEmitNext(event);
+		final long deadline = System.nanoTime() + EMIT_SPIN_BUDGET.toNanos();
+		while (result == Sinks.EmitResult.FAIL_NON_SERIALIZED && System.nanoTime() < deadline) {
+			Thread.onSpinWait();
+			result = sink.tryEmitNext(event);
+		}
+		if (!result.isSuccess()) {
+			LOG.debug("Failed to emit SSE event {}: {}", eventName, result.name());
+		}
+		return result.isSuccess();
 	}
 
 	private static String resolveSessionId(final ServerRequest request) {
