@@ -140,6 +140,22 @@ class SseProxyControllerTests {
 	}
 
 	/**
+	 * Reads a private terminal-state field of the emitter to distinguish the quiet
+	 * completion contract from the legacy {@code completeWithError}: only the latter
+	 * records a {@code failure} on the emitter.
+	 * @param emitter the emitter returned by the controller
+	 * @param name the {@link ResponseBodyEmitter} field to read ({@code complete} or
+	 * {@code failure})
+	 * @return the field value
+	 * @throws Exception if the field cannot be read
+	 */
+	private static Object emitterState(final SseEmitter emitter, final String name) throws Exception {
+		final java.lang.reflect.Field field = ResponseBodyEmitter.class.getDeclaredField(name);
+		field.setAccessible(true);
+		return field.get(emitter);
+	}
+
+	/**
 	 * Builds a controller with the D8/D9 auth wiring: a signed-cookie owner resolver and
 	 * an owner-scoped auth-profile store plus the OAuth2 managers.
 	 * @param store the auth-profile store
@@ -907,6 +923,78 @@ class SseProxyControllerTests {
 
 			// then — the structured unauthorized DTO is emitted
 			assertThat(bufferedFrames(emitter)).contains("unauthorized");
+		}
+
+	}
+
+	@Nested
+	@DisplayName("transport-build failure mapping")
+	class TransportBuildFailure {
+
+		@Test
+		@Story("Transport build failure")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() whose target transport cannot be built with a mappable auth failure emits the structured unauthorized error event instead of the legacy completeWithError")
+		void openSse_buildFailure_mappable_emitsStructuredError() throws Exception {
+			// given: the factory rejects the transport build with a 401-classified
+			// failure
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
+				.willThrow(new RuntimeException("401 Unauthorized"));
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, REQUEST);
+
+			// then: the browser learns WHY the stream died: the mapped DTO rides the
+			// named
+			// error event; a session is never registered for a transport that was not
+			// built
+			assertThat(bufferedFrames(emitter)).contains("unauthorized");
+			verify(SseProxyControllerTests.this.registry, never()).put(any());
+		}
+
+		@Test
+		@Story("Transport build failure")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() whose target transport build fails on a dead upstream emits the upstream_unreachable error event")
+		void openSse_buildFailure_deadUpstream_emitsUpstreamUnreachableEvent() throws Exception {
+			// given: the upstream connect is refused while the transport is being built
+			// (the refusal surfaces as a runtime wrapper, as the SDK transport rethrows)
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
+				.willThrow(new RuntimeException("connect failed", new java.net.ConnectException("Connection refused")));
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, REQUEST);
+
+			// then: the fallback death DTO rides the named error event before the stream
+			// closes
+			assertThat(bufferedFrames(emitter)).contains("upstream_unreachable");
+		}
+
+		@Test
+		@Story("Transport build failure")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() whose target transport build fails with an unclassifiable failure ends the stream quietly without the legacy completeWithError")
+		void openSse_buildFailure_unclassified_endsQuietly() throws Exception {
+			// given: the build fails with a failure carrying no HTTP status and no death
+			// classification (neither mapped nor upstream death)
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
+				.willThrow(new RuntimeException("boom"));
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, REQUEST);
+
+			// then: no structured event is invented for an unclassified failure, and the
+			// stream ends quietly: complete == true and no failure recorded. The legacy
+			// completeWithError would leave a failure on the emitter and dispatch to
+			// Boot /error, whose JSON body has no converter for text/event-stream
+			assertThat(bufferedFrames(emitter)).as("unclassified failures emit no DTO frame")
+				.doesNotContain("upstream_");
+			assertThat(emitterState(emitter, "complete")).as("the stream is still completed").isEqualTo(true);
+			assertThat(emitterState(emitter, "failure")).as("legacy completeWithError is not used").isNull();
+			verify(SseProxyControllerTests.this.registry, never()).put(any());
 		}
 
 	}
