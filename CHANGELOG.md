@@ -61,8 +61,7 @@ MCP Inspector UI `0.21.2`, Java 17+.
 - History rows keep their error styling instead of flashing back to normal (#208);
   the ping outcome shows inline in the Ping pane (#234); tool results are
   scrollable with a working Copy button (#139).
-- The delayed tab bounce is cancelled on unmount (#45); the reactive `/fetch`
-  stays off the event loop and closes the orphaned session (#50).
+- The reactive `/fetch` stays off the event loop and closes the orphaned session (#50).
 
 ### Internal
 
