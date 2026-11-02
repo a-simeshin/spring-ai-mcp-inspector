@@ -20,6 +20,12 @@ Embeddable inspector UI for Spring AI MCP servers. Drop in a single Maven depend
 
 Supports all MCP transports (`stdio`, `sse`, `streamable-http`, `stateless-http`) and both servlet (WebMVC) and reactive (WebFlux) stacks. The design follows the same pattern as `springdoc-openapi-starter-webmvc-ui`, zero-config when defaults work, fully overridable when they don't.
 
+> [!WARNING]
+> **`1.2.0` is the final release of the `1.x` line.** From this release the line is
+> end of life: no further 1.x releases or fixes. New work belongs on the `2.x` line
+> (Spring Boot 4 / Spring AI 2); see [Upgrading to `1.2.0`](#upgrading-to-120) for the
+> version map.
+
 ## Why
 
 Spring AI's MCP server starters give you a running MCP endpoint, but no UI to talk to it. The reference [MCP Inspector](https://github.com/modelcontextprotocol/inspector) is a standalone Node app that you point at a remote server. This library embeds that same React UI directly into your Spring Boot app, so:
@@ -43,8 +49,28 @@ The table below records the exact stack a given inspector release was verified w
 |---------------------------|-------------|-----------|--------------|--------------------------|
 | `1.0.0`                   | `3.5.15`    | `1.1.8`   | `0.18.3`     | `0.21.2`                 |
 | `1.1.0`                   | `3.5.15`    | `1.1.8`   | `0.18.3`     | `0.21.2`                 |
+| `1.2.0`                   | `3.5.15`    | `1.1.8`   | `0.18.3`     | `0.21.2`                 |
 
 Spring Boot 4 / Spring AI 2 are served by the `2.x` line, maintained on `develop/2.x`.
+
+### Upgrading to `1.2.0`
+
+`1.2.0` is the final release of the `1.x` line. After it the line is end of life:
+no further 1.x releases, fixes, or dependency bumps. Move to the `2.x` line
+(Spring Boot 4 / Spring AI 2); the map below shows the replacement for every 1.x
+release. The migration steps live in the 2.x README and release notes.
+
+One rename affects code that calls the proxy transport factory directly:
+`ProxyTransportFactory.openSse(URI)` is now `buildSse(URI)`, and the SSE transport
+it builds runs a single header-only preflight probe before the real connect (#259).
+The starters wire the factory internally, so applications that only add a starter
+dependency are unaffected.
+
+| 1.x release (end of life) | 2.x replacement | Spring Boot | Spring AI | Java MCP SDK |
+|--------------------------|-----------------|-------------|-----------|--------------|
+| `1.0.0`                  | `2.0.0`         | `3.5.x` to `4.1.x` | `1.1.x` to `2.0.x` | `0.18.x` to `2.0.x` |
+| `1.1.0`                  | `2.1.0`         | `3.5.x` to `4.1.x` | `1.1.x` to `2.0.x` | `0.18.x` to `2.0.x` |
+| `1.2.0` (final)          | `2.2.0`         | `3.5.x` to `4.1.x` | `1.1.x` to `2.0.x` | `0.18.x` to `2.0.x` |
 
 ### Upgrading to `1.1.0`
 
@@ -84,7 +110,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webmvc</artifactId>
-    <version>1.1.0</version>
+    <version>1.2.0</version>
 </dependency>
 ```
 
@@ -94,7 +120,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webflux</artifactId>
-    <version>1.1.0</version>
+    <version>1.2.0</version>
 </dependency>
 ```
 
