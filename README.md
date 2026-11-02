@@ -20,11 +20,17 @@ Embeddable inspector UI for Spring AI MCP servers. Drop in a single Maven depend
 
 Supports all MCP transports (`stdio`, `sse`, `streamable-http`, `stateless-http`) and both servlet (WebMVC) and reactive (WebFlux) stacks. The design follows the same pattern as `springdoc-openapi-starter-webmvc-ui`, zero-config when defaults work, fully overridable when they don't.
 
-> [!WARNING]
-> **`1.2.0` is the final release of the `1.x` line.** From this release the line is
-> end of life: no further 1.x releases or fixes. New work belongs on the `2.x` line
-> (Spring Boot 4 / Spring AI 2); see [Upgrading to `1.2.0`](#upgrading-to-120) for the
-> version map.
+> [!CAUTION]
+> **The `1.x` line is no longer supported.** `1.2.0` (2026-11-02) is its final release:
+> no further 1.x releases or fixes.
+>
+> The reason is the baseline itself. Open source support for Spring Framework 6.2 and
+> Spring Boot 3.5 ended on 2026-06-30, and Spring AI 1.1, built on that baseline, has
+> had no release since `1.1.8` (2026-06-12) while Spring AI 2.0 keeps shipping. An
+> inspector on an unsupported Spring stack would only inherit its unpatched issues.
+>
+> Use the `2.x` line instead (default branch `develop/2.x`, Spring Boot 4 / Spring AI 2).
+> [Upgrading to `1.2.0`](#upgrading-to-120) has the 1.x to 2.x version map.
 
 ## Why
 
