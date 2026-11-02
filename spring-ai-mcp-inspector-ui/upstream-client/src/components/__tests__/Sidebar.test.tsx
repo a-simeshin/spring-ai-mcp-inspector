@@ -129,6 +129,7 @@ describe("Sidebar", () => {
       expect(input).toBeInTheDocument();
       expect(input).toHaveAttribute("type", "number");
       expect(input).toHaveAttribute("min", "1");
+      expect(input).toHaveAttribute("max", "600");
       expect(input).toHaveAttribute("step", "1");
     });
 
@@ -151,7 +152,7 @@ describe("Sidebar", () => {
       const input = screen.getByLabelText("Connection timeout (s)");
       fireEvent.blur(input);
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "Must be a positive number of seconds",
+        "Must be a whole number of seconds between 1 and 600",
       );
     });
 
@@ -160,8 +161,44 @@ describe("Sidebar", () => {
       const input = screen.getByLabelText("Connection timeout (s)");
       fireEvent.blur(input);
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "Must be a positive number of seconds",
+        "Must be a whole number of seconds between 1 and 600",
       );
+    });
+
+    it("shows inline error for fractional value on blur", () => {
+      renderSidebar({ connectionTimeout: "1.5" });
+      const input = screen.getByLabelText("Connection timeout (s)");
+      fireEvent.blur(input);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Must be a whole number of seconds between 1 and 600",
+      );
+    });
+
+    it("shows inline error for value above 600 on blur", () => {
+      renderSidebar({ connectionTimeout: "601" });
+      const input = screen.getByLabelText("Connection timeout (s)");
+      fireEvent.blur(input);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Must be a whole number of seconds between 1 and 600",
+      );
+    });
+
+    it("shows inline error for exponent notation above 600 on blur", () => {
+      renderSidebar({ connectionTimeout: "1e3" });
+      const input = screen.getByLabelText("Connection timeout (s)");
+      fireEvent.blur(input);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Must be a whole number of seconds between 1 and 600",
+      );
+    });
+
+    it("accepts boundary values 1 and 600", () => {
+      for (const value of ["1", "600"]) {
+        const { unmount } = renderSidebar({ connectionTimeout: value });
+        fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
+        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+        unmount();
+      }
     });
 
     it("clears error when input is emptied and blurred", () => {
@@ -194,7 +231,29 @@ describe("Sidebar", () => {
       fireEvent.click(connectButton);
       expect(onConnect).not.toHaveBeenCalled();
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "Must be a positive number of seconds",
+        "Must be a whole number of seconds between 1 and 600",
+      );
+    });
+
+    it("blocks connect when timeout is fractional on click", () => {
+      const onConnect = jest.fn();
+      renderSidebar({ connectionTimeout: "1.5", onConnect });
+      const connectButton = screen.getByRole("button", { name: /^connect$/i });
+      fireEvent.click(connectButton);
+      expect(onConnect).not.toHaveBeenCalled();
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Must be a whole number of seconds between 1 and 600",
+      );
+    });
+
+    it("blocks connect when timeout is above 600 on click", () => {
+      const onConnect = jest.fn();
+      renderSidebar({ connectionTimeout: "601", onConnect });
+      const connectButton = screen.getByRole("button", { name: /^connect$/i });
+      fireEvent.click(connectButton);
+      expect(onConnect).not.toHaveBeenCalled();
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Must be a whole number of seconds between 1 and 600",
       );
     });
 
@@ -207,6 +266,13 @@ describe("Sidebar", () => {
         ).toBeInTheDocument();
         unmount();
       }
+    });
+
+    it("hides the field for direct connections", () => {
+      renderSidebar({ connectionType: "direct" });
+      expect(
+        screen.queryByLabelText("Connection timeout (s)"),
+      ).not.toBeInTheDocument();
     });
   });
 
