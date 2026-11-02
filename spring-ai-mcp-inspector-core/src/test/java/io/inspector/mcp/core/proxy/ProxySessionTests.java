@@ -18,8 +18,14 @@ package io.inspector.mcp.core.proxy;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
@@ -37,6 +43,8 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.BDDMockito.given;
@@ -54,6 +62,8 @@ class ProxySessionTests {
 	private Sinks.Many<JsonNode> browserToTarget;
 
 	private Sinks.Many<JsonNode> targetToBrowser;
+
+	private final ObjectMapper mapper = new ObjectMapper();
 
 	private ProxySession newSession() {
 		this.transport = mock(McpClientTransport.class);
@@ -127,6 +137,95 @@ class ProxySessionTests {
 
 			// then
 			assertThat(session.upstreamSessionId()).isEqualTo("mcp-session-123");
+		}
+
+	}
+
+	@Nested
+	@DisplayName("emitFromBrowser()")
+	class EmitFromBrowser {
+
+		@Test
+		@Story("Concurrent frame emit")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("concurrent browser frames emitted from parallel threads are all accepted, "
+				+ "none is dropped with FAIL_NON_SERIALIZED")
+		void emitFromBrowser_concurrentThreads_allFramesAccepted() throws Exception {
+			// given
+			// 32 parallel POSTs on one session, as the concurrency probe (issue #237)
+			// and any tab firing overlapping requests produce in practice. Raw
+			// tryEmitNext() on the unicast sink answers FAIL_NON_SERIALIZED to every
+			// thread that loses the sink's CAS; the session must not lose frames to it.
+			final int threads = 32;
+			final ProxySession session = newSession();
+			final ExecutorService pool = Executors.newFixedThreadPool(threads);
+			final AtomicInteger rejected = new AtomicInteger();
+			final List<CompletableFuture<Void>> jobs = new ArrayList<>(threads);
+			final CountDownLatch ready = new CountDownLatch(threads);
+			final CountDownLatch start = new CountDownLatch(1);
+			try {
+				for (int i = 0; i < threads; i++) {
+					final int idx = i;
+					jobs.add(CompletableFuture.runAsync(() -> {
+						ready.countDown();
+						try {
+							start.await();
+						}
+						catch (final InterruptedException ex) {
+							Thread.currentThread().interrupt();
+							return;
+						}
+						final ObjectNode frame = ProxySessionTests.this.mapper.createObjectNode();
+						frame.put("jsonrpc", "2.0");
+						frame.put("method", "tools/call");
+						frame.put("id", 1000 + idx);
+						if (!session.emitFromBrowser(frame)) {
+							rejected.incrementAndGet();
+						}
+					}, pool));
+				}
+				assertThat(ready.await(5, TimeUnit.SECONDS)).as("all emitters ready").isTrue();
+
+				// when
+				start.countDown();
+				CompletableFuture.allOf(jobs.toArray(new CompletableFuture[0])).get(10, TimeUnit.SECONDS);
+
+				// then
+				assertThat(rejected.get()).as("no frame may be rejected when %d threads emit concurrently", threads)
+					.isZero();
+				StepVerifier.create(ProxySessionTests.this.browserToTarget.asFlux().take(threads))
+					.expectNextCount(threads)
+					.verifyComplete();
+			}
+			finally {
+				pool.shutdownNow();
+				pool.awaitTermination(2, TimeUnit.SECONDS);
+			}
+		}
+
+		@Test
+		@Story("Concurrent frame emit")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a frame emitted after close() is reported as rejected, not silently swallowed")
+		void emitFromBrowser_afterClose_returnsFalse() {
+			// given
+			final ProxySession session = newSession();
+			session.close();
+
+			// when
+			final boolean accepted = session.emitFromBrowser(newSessionFrame());
+
+			// then
+			assertThat(accepted).as("emit after close must be rejected").isFalse();
+		}
+
+		private static ObjectNode newSessionFrame() {
+			final ObjectMapper mapper = new ObjectMapper();
+			final ObjectNode frame = mapper.createObjectNode();
+			frame.put("jsonrpc", "2.0");
+			frame.put("method", "tools/call");
+			frame.put("id", 1);
+			return frame;
 		}
 
 	}

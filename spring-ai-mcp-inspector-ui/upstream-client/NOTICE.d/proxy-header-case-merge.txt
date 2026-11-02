@@ -1,0 +1,27 @@
+src/lib/hooks/useConnection.ts + NOTICE.d/proxy-header-case-merge.txt:
+mergeRequestHeaders now treats header names as case-insensitive on
+collision (issue #299, release-blocker for 2.2.0).
+
+Root cause: the merge concatenated sources with Object.assign-style
+copying, but a Headers source normalizes names to lowercase
+(Headers.forEach) while record sources (proxyHeaders, custom headers)
+keep the original spelling. A name present in both sources therefore
+survived as two keys differing only in case, e.g. x-mcp-proxy-auth +
+X-MCP-Proxy-Auth. The SDK materializes requestInit.headers into a
+Headers instance before invoking eventSourceInit.fetch, so every proxy
+auth and custom header was guaranteed to be doubled. The browser joins
+such a pair into "Bearer t, Bearer t" and the proxy auth filter
+answers 401, which broke Via Proxy connections whenever an auth token
+was configured (#154) and duplicated every custom header (#189).
+
+Fix is confined to mergeRequestHeaders in useConnection.ts: each
+insertion looks up the existing name by its lowercase form, deletes the
+previous spelling, and lets the later source win with both its value
+and its name spelling. Semantics "later source overrides earlier on
+collision" from auth-profiles.txt are preserved; the case-preserving
+result keeps canonical spellings (X-MCP-Proxy-Auth) in DevTools.
+
+Covered by useConnection.test.tsx, "Proxy Authentication Headers >
+merges Headers source and proxy auth record into one case-insensitive
+key": a Headers source with x-mcp-proxy-auth plus the proxy auth record
+with X-MCP-Proxy-Auth must yield exactly one key.

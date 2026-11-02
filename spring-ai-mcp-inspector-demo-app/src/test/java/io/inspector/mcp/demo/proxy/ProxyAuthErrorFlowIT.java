@@ -669,6 +669,16 @@ class ProxyAuthErrorFlowIT {
 			this.server.createContext("/sse", this::handleSse);
 			this.server.createContext("/message", this::handleMessage);
 			this.server.createContext("/mcp", this::handleMcp);
+			// Without an explicit executor the JDK server runs every exchange on its
+			// single dispatcher thread; the parked /sse handler would starve the later
+			// /message POST the auth-error scenarios depend on. Same wiring as the
+			// stub in ProxySseLivenessIT.
+			final java.util.concurrent.ThreadFactory stubThreads = (runnable) -> {
+				final Thread thread = new Thread(runnable, "scripted-mcp-stub-" + ProxyAppHarness.stack());
+				thread.setDaemon(true);
+				return thread;
+			};
+			this.server.setExecutor(java.util.concurrent.Executors.newCachedThreadPool(stubThreads));
 			this.server.start();
 		}
 

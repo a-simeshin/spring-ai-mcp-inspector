@@ -1,0 +1,24 @@
+src/lib/hooks/useConnection.ts + src/lib/hooks/__tests__/useConnection.test.tsx:
+leave the Connected state when the transport dies mid-session. The Java
+proxy closes the downstream SSE stream once the upstream liveness probe
+fails (ProxyUpstreamProber), but the inspector UI kept showing Connected
+forever: connect() set connectionStatus to "connected" and no transport
+handler ever revised it, so the closed stream went unnoticed by the
+sidebar. Local fix: connect() wraps transport.onerror after
+client.connect (the same seam the existing onmessage wrapper uses), the
+wrapper delegates to the protocol handler first and then stores a
+ConnectFailure, flips connectionStatus to "error" and clears the stale
+serverImplementation. On the wire the closed stream arrives as an
+EventSource error (the eventsource 3.x polyfill emits `error` and
+schedules a reconnect, the SDK SSE transport re-emits it through
+onerror), so the sidebar leaves Connected within the probe window
+(idleThreshold + probeInterval, about 5s at the ProxySseLivenessIT fast
+config) and the existing role=alert banner (connection-error-dto)
+renders with a Retry button. User-initiated disconnects are unaffected:
+SSEClientTransport.close() aborts the eventsource and the abort error is
+swallowed, so onerror never fires for them. Covered by the "Transport
+death after connect" suite in useConnection.test.tsx (status leaves
+Connected, failure stored, stale server info cleared, delegation to the
+protocol handler) and by the InspectorUiIT$UpstreamDeath Selenide E2E in
+demo-webmvc that kills the upstream app mid-session and asserts the
+Connected branch disappears within the probe window.

@@ -69,7 +69,17 @@ jest.mock("../components/PromptsTab", () => ({
 
 jest.mock("../components/TasksTab", () => ({
   __esModule: true,
-  default: () => <div>TasksTab</div>,
+  // Renders the literal text the gate tests assert on, plus a marker for the
+  // updateTask callback so the App-level prop wiring is observable here too
+  // (owner review follow-up on ea2d2d1: dropping the prop left tests green).
+  default: (props: { updateTask?: unknown }) => (
+    <div>
+      <div>TasksTab</div>
+      {typeof props.updateTask === "function" && (
+        <div data-testid="tasks-tab-update-task-prop" />
+      )}
+    </div>
+  ),
 }));
 
 jest.mock("../components/ConsoleTab", () => ({
@@ -325,6 +335,29 @@ describe("App - Tasks tab capability gate", () => {
 
     await waitFor(() => {
       expect(screen.getByText("TasksTab")).toBeInTheDocument();
+    });
+  });
+
+  it("passes an updateTask callback to TasksTab so poll results reach the tasks list", async () => {
+    // Regression (owner review follow-up on ea2d2d1): removing the
+    // updateTask prop from App.tsx left the whole suite green because the
+    // mock above ignored props. The mock now surfaces the callback, so its
+    // absence in App.tsx fails here.
+    mockUseConnection.mockReturnValue(
+      connectionState({
+        resources: { listChanged: true },
+        tasks: { listChanged: true },
+      }),
+    );
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("tab", { name: /^Tasks$/i }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("tasks-tab-update-task-prop"),
+      ).toBeInTheDocument();
     });
   });
 });

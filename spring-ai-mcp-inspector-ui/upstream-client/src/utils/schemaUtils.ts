@@ -306,14 +306,18 @@ export function normalizeUnionType(schema: JsonSchemaType): JsonSchemaType {
 // [spring-ai-mcp-inspector PATCH] $ref schema warnings (Spring AI #5888 detector)
 /**
  * Decodes a single JSON Pointer token per RFC 6901.
- * Order matters: ~1 -> / first, then ~0 -> ~.
+ * Fragment order per RFC 6901 section 6: percent-decode first, then unescape
+ * ~1 -> / before ~0 -> ~. So "#/properties/a%7E1b" resolves the key "a/b",
+ * not "a~1b", and "~01" still yields "~1".
  * Returns null for malformed percent escapes (e.g. "a%"): server input is
  * untrusted, an undecodable token must read as unresolvable, never throw
  * (URIError would blank the whole UI: the scan runs in a render-phase useMemo).
  */
 function decodePointerToken(token: string): string | null {
   try {
-    return decodeURIComponent(token.replace(/~1/g, "/").replace(/~0/g, "~"));
+    return decodeURIComponent(token)
+      .replace(/~1/g, "/")
+      .replace(/~0/g, "~");
   } catch {
     return null;
   }
