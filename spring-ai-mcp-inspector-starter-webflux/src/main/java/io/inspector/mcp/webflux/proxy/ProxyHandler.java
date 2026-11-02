@@ -1219,9 +1219,12 @@ public class ProxyHandler {
 
 	/**
 	 * Assemble the {@code tasks/list} result page from the full handle list: honor
-	 * {@code params.cursor} (an opaque offset into the ordered task list) and emit
-	 * {@code nextCursor} while more tasks remain past the page.
-	 * @param handles all currently tracked task handles, in stable order
+	 * {@code params.cursor} (an opaque offset into the task list) and emit
+	 * {@code nextCursor} while more tasks remain past the page. The list arrives in
+	 * whatever order the task service returned it: the order is not guaranteed to be
+	 * stable across calls, so the cursor stays meaningful only while the tracked set is
+	 * unchanged.
+	 * @param handles all currently tracked task handles, in the task service's order
 	 * @param body the full JSON-RPC request body (carries the optional cursor)
 	 * @param idNode the JSON-RPC request id
 	 * @param sessionIdHeader session id to attach as the mcp-session-id response header,
@@ -1231,7 +1234,13 @@ public class ProxyHandler {
 	 */
 	private static Mono<ServerResponse> buildTaskListResult(final java.util.List<TaskHandle> handles,
 			final JsonNode body, final JsonNode idNode, final String sessionIdHeader) {
-		final int offset = parseTaskListCursor(handles.size(), body);
+		final int offset;
+		try {
+			offset = parseTaskListCursor(handles.size(), body);
+		}
+		catch (final IllegalArgumentException ex) {
+			return jsonRpcError(idNode, -32602, ex.getMessage(), sessionIdHeader);
+		}
 		final int end = Math.min(offset + TASKS_LIST_PAGE_SIZE, handles.size());
 		final java.util.List<TaskHandle> page = handles.subList(offset, end);
 		final ArrayNode tasksArray = JsonNodeFactory.instance.arrayNode(page.size());
@@ -1248,22 +1257,26 @@ public class ProxyHandler {
 
 	/**
 	 * Parse the opaque {@code params.cursor} (a decimal list offset previously emitted as
-	 * {@code nextCursor}) into an offset into the ordered task list. An absent,
-	 * non-numeric or out-of-range cursor yields an offset past the end, which produces an
-	 * empty page and terminates client pagination.
-	 * @param listSize the size of the full ordered handle list
+	 * {@code nextCursor}) into an offset into the task list. An absent cursor starts at
+	 * the beginning; a decimal cursor is clamped to the list bounds, so an out-of-range
+	 * value yields an offset past the end, an empty page and terminated pagination. A
+	 * textual non-decimal cursor is rejected with {@link IllegalArgumentException} so the
+	 * caller answers {@code -32602 Invalid params}.
+	 * @param listSize the size of the full handle list
 	 * @param body the JSON-RPC request body carrying the optional cursor
 	 * @return the offset the requested page starts at
+	 * @throws IllegalArgumentException when the textual cursor is not a decimal number
 	 */
 	private static int parseTaskListCursor(final int listSize, final JsonNode body) {
 		final JsonNode params = (body != null) ? body.get("params") : null;
 		final JsonNode cursorNode = (params != null && params.isObject()) ? params.get("cursor") : null;
 		if (cursorNode != null && cursorNode.isTextual()) {
+			final String cursor = cursorNode.asText();
 			try {
-				return Math.max(0, Math.min(Integer.parseInt(cursorNode.asText()), listSize));
+				return Math.max(0, Math.min(Integer.parseInt(cursor), listSize));
 			}
 			catch (final NumberFormatException ex) {
-				return listSize;
+				throw new IllegalArgumentException("Invalid params: non-numeric cursor '" + cursor + "'", ex);
 			}
 		}
 		return 0;

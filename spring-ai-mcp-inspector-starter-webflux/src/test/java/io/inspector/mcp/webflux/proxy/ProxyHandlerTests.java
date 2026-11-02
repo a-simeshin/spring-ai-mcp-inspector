@@ -2862,6 +2862,30 @@ class ProxyHandlerTests {
 			assertThat(result.has("nextCursor")).as("last page has no nextCursor").isFalse();
 		}
 
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/list with a non-numeric cursor returns a JSON-RPC -32602 error naming the cursor")
+		void tasksList_nonNumericCursor_returnsInvalidParamsError() throws Exception {
+			// given: a cursor that is not a decimal offset
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final java.util.List<io.inspector.mcp.core.task.TaskHandle> noTasks = java.util.List.of();
+			given(this.taskService.listTasks()).willReturn(noTasks);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"not-a-number\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then: a -32602 Invalid params error naming the offending cursor instead of
+			// an empty page
+			assertThat(response).isNotNull();
+			final JsonNode error = ProxyHandlerTests.entityJson(response).get("error");
+			assertThat(error.get("code").asInt()).isEqualTo(-32602);
+			assertThat(error.get("message").asText()).contains("not-a-number");
+		}
+
 	}
 
 	@Nested

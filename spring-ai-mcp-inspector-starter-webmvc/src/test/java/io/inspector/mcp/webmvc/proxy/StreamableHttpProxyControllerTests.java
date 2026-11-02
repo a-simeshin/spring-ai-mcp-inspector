@@ -1717,6 +1717,30 @@ class StreamableHttpProxyControllerTests {
 			assertThat(responseBody.get("result").has("nextCursor")).as("last page has no nextCursor").isFalse();
 		}
 
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/list with a non-numeric cursor returns a JSON-RPC -32602 error naming the cursor")
+		void tasksList_nonNumericCursor_returnsInvalidParamsError() throws Exception {
+			// given: a cursor that is not a decimal offset
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"not-a-number\"}}");
+			final java.util.List<TaskHandle> noTasks = java.util.List.of();
+			given(this.taskService.listTasks()).willReturn(noTasks);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: a -32602 Invalid params error naming the offending cursor instead of
+			// an empty page
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(responseBody.get("error").get("message").asText()).contains("not-a-number");
+		}
+
 	}
 
 	@Nested
