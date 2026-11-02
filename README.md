@@ -34,13 +34,15 @@ Spring AI's MCP server starters give you a running MCP endpoint, but no UI to ta
 - Spring Boot 4.1+
 - Spring AI 2.0+ (`org.springframework.ai:spring-ai-bom`)
 
-Boot 3.5 / Spring AI 1.1 are served by the `1.x` line: it is end of life from
-`1.2.0` on, and `2.x` is the actively maintained line.
+The `1.x` line (Boot 3.5 / Spring AI 1.1) is no longer supported: `1.2.0` is its
+final release. Its baseline has reached end of open source support: Spring Framework
+6.2 and Spring Boot 3.5 on 2026-06-30, and Spring AI 1.1 has had no release since
+`1.1.8` (2026-06-12). `2.x` is the only maintained line.
 
 | Line | Stack | Status |
 |------|-------|--------|
 | `2.x` (this branch) | Boot 4.x, Spring AI 2.x | active |
-| `1.x` | Boot 3.5, Spring AI 1.1 | end of life from `1.2.0` |
+| `1.x` | Boot 3.5, Spring AI 1.1 | not supported, final release `1.2.0` |
 
 ## Compatibility
 

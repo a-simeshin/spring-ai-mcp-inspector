@@ -11,6 +11,21 @@ import {
 import { validateToolOutput, hasOutputSchema } from "@/utils/schemaUtils";
 import useCopy from "@/lib/hooks/useCopy";
 import { useToast } from "@/lib/hooks/useToast";
+import {
+  capLeakText,
+  leakClock,
+  requestTimelineScrollTo,
+  useLeakForToolResult,
+} from "@/lib/leakAnnotations";
+
+// [spring-ai-mcp-inspector PATCH] Exception-leak note for error tool results
+// (#251): when the timeline carries a `_leak` annotation for this error text,
+// the pane states whether the client model received the text verbatim (EXACT
+// match) or whether it merely matches a logged exception (NORMALIZED/PARTIAL),
+// with a link that opens the Timeline on the correlated log entry. The verbatim
+// note also links the Spring AI exception-mapping hook proposal
+// (spring-projects/spring-ai#7219) as the server-side fix under design. No
+// annotation means no note: the pane is unchanged for uncorrelated errors.
 
 interface ToolResultsProps {
   toolResult: CompatibilityCallToolResult | null;
@@ -73,6 +88,16 @@ const ToolResults = ({
 }: ToolResultsProps) => {
   const { toast } = useToast();
   const { copied, setCopied } = useCopy();
+
+  // [spring-ai-mcp-inspector PATCH] Exception-leak lookup (#251). Runs before
+  // the early returns below: hooks must be unconditional. Only error results
+  // with text content are eligible; everything else resolves to null silently.
+  const leakEligible =
+    !!toolResult &&
+    "content" in toolResult &&
+    (toolResult.isError ?? false) === true;
+  const leak = useLeakForToolResult(leakEligible, toolResult);
+
   if (!toolResult) return null;
 
   if ("content" in toolResult) {
@@ -182,6 +207,60 @@ const ToolResults = ({
             {copied ? "Copied" : "Copy"}
           </Button>
         </div>
+        {leak && (
+          <div
+            data-testid="tool-result-leak-note"
+            className={`mb-2 p-2 rounded text-sm ${
+              leak.verbatim
+                ? "bg-red-100 dark:bg-red-950 text-red-800 dark:text-red-200"
+                : "bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-200"
+            }`}
+          >
+            {leak.verbatim ? (
+              <span data-testid="tool-result-leak-verbatim">
+                The client model received this text verbatim
+              </span>
+            ) : (
+              <span data-testid="tool-result-leak-soft">
+                The error text matches an exception logged at{" "}
+                {leakClock(leak.logTimestamp)}
+              </span>
+            )}{" "}
+            <button
+              type="button"
+              data-testid="tool-result-leak-jump"
+              className="underline cursor-pointer"
+              onClick={() => {
+                // Switch to the Timeline tab; the broker holds the jump request
+                // until the Timeline mounts and can scroll to the log row.
+                window.location.hash = "timeline";
+                requestTimelineScrollTo(leak.logEventId);
+              }}
+            >
+              View in Timeline
+            </button>
+            {leak.verbatim && (
+              <div className="mt-1">
+                A server-side fix is being designed upstream:{" "}
+                <a
+                  data-testid="tool-result-leak-upstream"
+                  href="https://github.com/spring-projects/spring-ai/issues/7219"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                >
+                  spring-ai#7219
+                </a>
+              </div>
+            )}
+            <div
+              className="mt-1 text-xs font-mono line-clamp-2 break-words"
+              title={capLeakText(leak.logMessage)}
+            >
+              {leak.logMessage}
+            </div>
+          </div>
+        )}
         <div className="overflow-auto max-h-[60vh]">
           {structuredResult.structuredContent && (
           <div className="mb-4">
