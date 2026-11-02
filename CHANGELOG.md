@@ -10,7 +10,7 @@ line. The two releases are feature-parity twins: every fix that shipped on
 the `1.x` line since `1.1.0` has its `2.x` counterpart in this release, and
 from here on `2.x` is the only maintained line.
 
-Stack: Spring Boot `4.1.0`, Spring AI `2.0.1`, Java MCP SDK `2.0.0`, bundled
+Stack: Spring Boot `4.1.0`, Spring AI `2.0.1`, Java MCP SDK `2.0.1`, bundled
 MCP Inspector UI `0.22.0`, Java 17+.
 
 ### Features
