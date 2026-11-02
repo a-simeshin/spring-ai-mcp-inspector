@@ -120,6 +120,24 @@ interface SidebarProps {
   onSelectConnection: (connection: SavedConnection) => void;
 }
 
+// [spring-ai-mcp-inspector PATCH] Connection timeout bounds mirror the proxy
+// contract (ProxyConnectionBudgets): a whole number of seconds 1..600.
+// Anything else must be rejected client-side, otherwise the request reaches
+// the proxy and fails with a bare 400 banner.
+const CONNECTION_TIMEOUT_MAX_SECONDS = 600;
+const CONNECTION_TIMEOUT_ERROR = `Must be a whole number of seconds between 1 and ${CONNECTION_TIMEOUT_MAX_SECONDS}`;
+
+const isValidConnectionTimeout = (raw: string): boolean => {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return true;
+  }
+  const n = Number(trimmed);
+  return (
+    Number.isInteger(n) && n >= 1 && n <= CONNECTION_TIMEOUT_MAX_SECONDS
+  );
+};
+
 const Sidebar = ({
   connectionStatus,
   connectionError,
@@ -753,9 +771,12 @@ const Sidebar = ({
           )}
 
           {/* [spring-ai-mcp-inspector PATCH] Connection timeout field.
-               Applies to all transport types (stdio: spawn+initialize,
-               SSE/HTTP: connect+initialize). Empty = proxy default (30s).
-               Validation: non-numeric or <1 blocks Connect. */}
+               Proxy connections only: the budget is applied by the proxy
+               (stdio: spawn+initialize, SSE/HTTP: connect+initialize) and
+               direct connections never build a proxy URL, so the field is
+               hidden for them. Empty = proxy default (30s). Validation:
+               whole seconds 1..600, matching ProxyConnectionBudgets. */}
+          {connectionType === "proxy" && (
           <div className="space-y-2">
             <label className="text-sm font-medium" htmlFor="connection-timeout-input">
               Connection timeout (s)
@@ -764,20 +785,16 @@ const Sidebar = ({
               id="connection-timeout-input"
               type="number"
               min="1"
+              max="600"
               step="1"
               placeholder="30 (default)"
               value={connectionTimeout}
               onChange={(e) => setConnectionTimeout(e.target.value)}
               onBlur={() => {
-                if (connectionTimeout === "") {
+                if (isValidConnectionTimeout(connectionTimeout)) {
                   setTimeoutError(null);
                 } else {
-                  const n = Number(connectionTimeout);
-                  if (!Number.isFinite(n) || n < 1) {
-                    setTimeoutError("Must be a positive number of seconds");
-                  } else {
-                    setTimeoutError(null);
-                  }
+                  setTimeoutError(CONNECTION_TIMEOUT_ERROR);
                 }
               }}
               className={`font-mono ${timeoutError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
@@ -788,6 +805,7 @@ const Sidebar = ({
               </p>
             )}
           </div>
+          )}
 
           {transportType === "stdio" && (
             <div className="space-y-2">
@@ -1201,12 +1219,9 @@ const Sidebar = ({
                     }
                   }
                   // Block connect if connection timeout is invalid
-                  if (connectionTimeout !== "") {
-                    const n = Number(connectionTimeout);
-                    if (!Number.isFinite(n) || n < 1) {
-                      setTimeoutError("Must be a positive number of seconds");
-                      return;
-                    }
+                  if (!isValidConnectionTimeout(connectionTimeout)) {
+                    setTimeoutError(CONNECTION_TIMEOUT_ERROR);
+                    return;
                   }
                   onConnect();
                 }}
