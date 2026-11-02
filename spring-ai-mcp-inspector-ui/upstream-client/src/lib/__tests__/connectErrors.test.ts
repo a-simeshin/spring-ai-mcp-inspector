@@ -91,7 +91,64 @@ describe("parseConnectFailureResponse", () => {
     });
   });
 
-  it("parses a connection_timeout payload with phase, elapsedMs, budgetMs", async () => {
+  // Byte-for-byte wire shape the proxy sends on a per-phase budget overrun:
+  // ProxyConnectionBudgets.timeoutBody (spring-ai-mcp-inspector-core), with
+  // the fixture values from ProxyConnectionBudgetsTests. The server never
+  // sends a connection_timeout code (asserted there), so these tests prove
+  // the structured-banner inputs on the real contract.
+  it("parses the proxy timeout payload: MCP_CONNECT_FAILED with reason timeout and phase numbers", async () => {
+    const failure = await parseConnectFailureResponse(
+      responseWithBody({
+        error: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          phase: "connect",
+          elapsedMs: 1234,
+          budgetMs: 1000,
+          message: "connect phase timed out after 1234ms of 1000ms budget",
+          retryable: true,
+        },
+      }),
+    );
+
+    expect(failure).toEqual({
+      code: "MCP_CONNECT_FAILED",
+      reason: "timeout",
+      message: "connect phase timed out after 1234ms of 1000ms budget",
+      retryable: true,
+      phase: "connect",
+      elapsedMs: 1234,
+      budgetMs: 1000,
+    });
+  });
+
+  it("parses the proxy timeout payload for the initialize phase", async () => {
+    const failure = await parseConnectFailureResponse(
+      responseWithBody({
+        error: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          phase: "initialize",
+          elapsedMs: 15234,
+          budgetMs: 30000,
+          message: "initialize timed out after 15234ms of 30000ms budget",
+          retryable: true,
+        },
+      }),
+    );
+
+    expect(failure).toEqual({
+      code: "MCP_CONNECT_FAILED",
+      reason: "timeout",
+      message: "initialize timed out after 15234ms of 30000ms budget",
+      retryable: true,
+      phase: "initialize",
+      elapsedMs: 15234,
+      budgetMs: 30000,
+    });
+  });
+
+  it("still accepts the connection_timeout code as a future-proofing alias, not the wire contract", async () => {
     const failure = await parseConnectFailureResponse(
       responseWithBody({
         error: {
@@ -113,26 +170,6 @@ describe("parseConnectFailureResponse", () => {
       phase: "initialize",
       elapsedMs: 15234,
       budgetMs: 30000,
-    });
-  });
-
-  it("parses connection_timeout without optional fields gracefully", async () => {
-    const failure = await parseConnectFailureResponse(
-      responseWithBody({
-        error: {
-          code: "connection_timeout",
-        },
-      }),
-    );
-
-    expect(failure).toEqual({
-      code: "MCP_CONNECT_FAILED",
-      reason: "timeout",
-      message: "Connection timed out",
-      retryable: true,
-      phase: undefined,
-      elapsedMs: undefined,
-      budgetMs: undefined,
     });
   });
 });

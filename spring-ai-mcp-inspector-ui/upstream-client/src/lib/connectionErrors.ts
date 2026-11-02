@@ -10,9 +10,17 @@
 //
 //   {"error":{"code":"MCP_CONNECT_FAILED","reason":"<timeout|connection_refused|dns|unauthorized|not_found|unknown>","message":"<human-readable>","retryable":true}}
 //
-// The proxy also returns a richer shape for per-phase connection timeouts:
+// The proxy also returns a richer shape for per-phase connection timeouts
+// (ProxyConnectionBudgets.timeoutBody on the server), on the SAME
+// MCP_CONNECT_FAILED code with a "timeout" reason:
 //
-//   {"error":{"code":"connection_timeout","phase":"<connect|initialize>","elapsedMs":<long>,"budgetMs":<long>,"message":"<human-readable>","retryable":true}}
+//   {"error":{"code":"MCP_CONNECT_FAILED","reason":"timeout","phase":"<connect|initialize>","elapsedMs":<long>,"budgetMs":<long>,"message":"<human-readable>","retryable":true}}
+//
+// There is no separate wire code for it (the server javadoc says so and
+// ProxyConnectionBudgetsTests asserts the absence of a connection_timeout
+// key). The parser below therefore reads phase/elapsedMs/budgetMs on the
+// MCP_CONNECT_FAILED branch; the connection_timeout code branch is kept
+// only as future-proofing in case a dedicated code is ever introduced.
 //
 // This module parses that body out of transport responses, carries it as an
 // error through the SDK transport layer, and maps arbitrary connect failures
@@ -222,10 +230,12 @@ export function isConnectFailedError(
 
 /**
  * Reads the structured connect-failure error out of a non-2xx transport
- * response. Handles both the legacy `MCP_CONNECT_FAILED` code and the
- * per-phase `connection_timeout` code. Consumes only a clone of the body,
- * so callers can still hand the original response to the SDK when the body
- * does not match the contract.
+ * response. Parses the `MCP_CONNECT_FAILED` contract, including the
+ * per-phase timeout detail (reason "timeout" plus phase/elapsedMs/budgetMs)
+ * the proxy sends on that same code. A dedicated `connection_timeout` code
+ * is accepted as future-proofing only; the server does not send it.
+ * Consumes only a clone of the body, so callers can still hand the original
+ * response to the SDK when the body does not match the contract.
  */
 export async function parseConnectFailureResponse(
   response: Response,
@@ -264,7 +274,11 @@ export async function parseConnectFailureResponse(
     };
   }
 
-  // Legacy MCP_CONNECT_FAILED payload
+  // Legacy MCP_CONNECT_FAILED payload. Per-phase timeouts also arrive on
+  // this branch (ProxyConnectionBudgets.timeoutBody: same code, reason
+  // "timeout", plus phase/elapsedMs/budgetMs), so those fields must be
+  // carried through here; without them the sidebar cannot render the
+  // structured timeout banner.
   if (error.code !== CONNECT_FAILED_ERROR_CODE) {
     return null;
   }
@@ -284,6 +298,10 @@ export async function parseConnectFailureResponse(
         ? error.message
         : "Failed to connect to the MCP server",
     retryable: typeof error.retryable === "boolean" ? error.retryable : true,
+    phase: typeof error.phase === "string" ? error.phase : undefined,
+    elapsedMs:
+      typeof error.elapsedMs === "number" ? error.elapsedMs : undefined,
+    budgetMs: typeof error.budgetMs === "number" ? error.budgetMs : undefined,
   };
 }
 

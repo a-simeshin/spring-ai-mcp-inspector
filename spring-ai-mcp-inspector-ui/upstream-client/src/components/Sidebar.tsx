@@ -623,41 +623,12 @@ const Sidebar = ({
                       </>
                     )}
                   </p>
-                  <p className="text-xs mb-2">
-                    <span
-                      className="cursor-pointer text-blue-600 dark:text-blue-400 hover:underline"
-                      onClick={() => {
-                        const input = document.getElementById(
-                          "connection-timeout-input",
-                        );
-                        if (input) {
-                          input.focus();
-                          input.scrollIntoView({
-                            behavior: "smooth",
-                            block: "center",
-                          });
-                        }
-                      }}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          const input = document.getElementById(
-                            "connection-timeout-input",
-                          );
-                          if (input) {
-                            input.focus();
-                            input.scrollIntoView({
-                              behavior: "smooth",
-                              block: "center",
-                            });
-                          }
-                        }
-                      }}
-                    >
-                      Increase Connection timeout in the connection form
-                    </span>
-                  </p>
+                  {/* [spring-ai-mcp-inspector PATCH] No "Increase Connection
+                      timeout" hint here: the connection-timeout input ships
+                      in PR #241, so on this base there is no field to focus
+                      and the hint would be a silent no-op (review finding F3
+                      on #243). Re-add the focus hint together with that
+                      field. */}
                   <div className="grid grid-cols-2 gap-2">
                     <Button
                       data-testid="retry-connect-button"

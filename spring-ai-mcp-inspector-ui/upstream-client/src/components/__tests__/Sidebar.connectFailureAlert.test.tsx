@@ -8,6 +8,7 @@ import "@testing-library/jest-dom";
 import Sidebar from "../Sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DEFAULT_INSPECTOR_CONFIG } from "@/lib/constants";
+import { parseConnectFailureResponse } from "@/lib/connectionErrors";
 import type { ConnectFailure, ProxyErrorDto } from "@/lib/connectionErrors";
 import { LoggingLevel } from "@modelcontextprotocol/sdk/types.js";
 // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
@@ -177,7 +178,6 @@ describe("Sidebar connect-failure alert", () => {
       expect(alert).toHaveTextContent("Connection timed out");
       expect(alert).toHaveTextContent("MCP initialize");
       expect(alert).toHaveTextContent("15.2s of 30.0s");
-      expect(alert).toHaveTextContent("Increase Connection timeout");
     });
 
     it("renders connect phase timeout correctly", () => {
@@ -196,7 +196,6 @@ describe("Sidebar connect-failure alert", () => {
       const alert = screen.getByRole("alert");
       expect(alert).toHaveTextContent("Transport connect");
       expect(alert).toHaveTextContent("5.4s of 10.0s");
-      expect(alert).toHaveTextContent("Increase Connection timeout");
     });
 
     it("renders timeout without phase data as generic timeout banner", () => {
@@ -218,60 +217,38 @@ describe("Sidebar connect-failure alert", () => {
       expect(alert).not.toHaveTextContent("MCP initialize");
     });
 
-    it("shows a clickable hint that attempts to focus the timeout input", () => {
-      // Create a mock input element
-      const mockFocus = jest.fn();
-      const mockScrollIntoView = jest.fn();
-      const getElementByIdMock = jest.spyOn(document, "getElementById");
-      getElementByIdMock.mockReturnValue({
-        focus: mockFocus,
-        scrollIntoView: mockScrollIntoView,
-      } as unknown as HTMLElement);
+    it("renders the structured banner for the real proxy timeout payload end-to-end", async () => {
+      // Byte-for-byte wire shape from ProxyConnectionBudgetsTests
+      // (ProxyConnectionBudgets.timeoutBody): the timeout arrives as
+      // MCP_CONNECT_FAILED with reason "timeout" plus phase numbers, not as
+      // a separate connection_timeout code. Parsed here and fed to the
+      // sidebar the same way useConnection does.
+      const response = {
+        clone: () => ({
+          json: async () => ({
+            error: {
+              code: "MCP_CONNECT_FAILED",
+              reason: "timeout",
+              phase: "connect",
+              elapsedMs: 1234,
+              budgetMs: 1000,
+              message: "connect phase timed out after 1234ms of 1000ms budget",
+              retryable: true,
+            },
+          }),
+        }),
+      } as unknown as Response;
 
-      renderSidebar({
-        connectionError: {
-          code: "MCP_CONNECT_FAILED",
-          reason: "timeout",
-          message: "Timed out",
-          retryable: true,
-          phase: "initialize",
-          elapsedMs: 15000,
-          budgetMs: 30000,
-        },
-      });
+      const failure = await parseConnectFailureResponse(response);
+      expect(failure?.phase).toBe("connect");
+      expect(failure?.elapsedMs).toBe(1234);
+      expect(failure?.budgetMs).toBe(1000);
 
-      const hint = screen.getByText("Increase Connection timeout in the connection form");
-      expect(hint).toBeInTheDocument();
-
-      fireEvent.click(hint);
-      expect(mockFocus).toHaveBeenCalledTimes(1);
-      expect(mockScrollIntoView).toHaveBeenCalledTimes(1);
-
-      getElementByIdMock.mockRestore();
-    });
-
-    it("hint click is no-op when timeout input element does not exist", () => {
-      const getElementByIdMock = jest.spyOn(document, "getElementById");
-      getElementByIdMock.mockReturnValue(null);
-
-      renderSidebar({
-        connectionError: {
-          code: "MCP_CONNECT_FAILED",
-          reason: "timeout",
-          message: "Timed out",
-          retryable: true,
-          phase: "connect",
-          elapsedMs: 5432,
-          budgetMs: 10000,
-        },
-      });
-
-      const hint = screen.getByText("Increase Connection timeout in the connection form");
-      expect(hint).toBeInTheDocument();
-      // Should not throw when element doesn't exist
-      expect(() => fireEvent.click(hint)).not.toThrow();
-
-      getElementByIdMock.mockRestore();
+      renderSidebar({ connectionError: failure });
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("Connection timed out");
+      expect(alert).toHaveTextContent("Transport connect");
+      expect(alert).toHaveTextContent("1.2s of 1.0s");
     });
 
     it("still shows the Retry button alongside the timeout detail", () => {
