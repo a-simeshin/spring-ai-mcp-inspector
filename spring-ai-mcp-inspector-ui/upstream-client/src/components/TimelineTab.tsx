@@ -1,5 +1,13 @@
 import { TabsContent } from "@/components/ui/tabs";
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+// [spring-ai-mcp-inspector PATCH] SEP-2322 input_required chain threading
+// for the Timeline (#253): client-side grouping of the server-recorded pairs.
+import {
+  threadInputRequiredChains,
+  summarizeChain,
+  ChainSourceEvent,
+} from "@/lib/timelineChains";
+import { isInputRequiredResult } from "@/lib/inputRequired";
 import {
   LeakInfo,
   LeakMatchType,
@@ -114,6 +122,13 @@ function protocolNegotiationOf(payload: Record<string, unknown>): ProtocolNegoti
     affectedMethods,
     summary,
   };
+}
+
+// [spring-ai-mcp-inspector PATCH] SEP-2322: detects an input_required
+// CallToolResult frame (result.resultType === "input_required" with at least
+// one of inputRequests / requestState), reusing the client layer's detector.
+function isInputRequiredFrame(payload: Record<string, unknown>): boolean {
+  return isInputRequiredResult(payload["result"]);
 }
 
 // Detects whether a JSON-RPC response payload is a CallToolResult with isError=true.
@@ -288,6 +303,9 @@ function TimelineEventRow({
   const isError = type === "MCP_JSONRPC_RESPONSE" && isCallToolError(payload);
   const errorText = isError ? errorTextOf(payload) : null;
 
+  // [spring-ai-mcp-inspector PATCH] SEP-2322: input_required badge (#253).
+  const needsInput =
+    type === "MCP_JSONRPC_RESPONSE" && isInputRequiredFrame(payload);
   // [spring-ai-mcp-inspector PATCH] Exception-leak annotation on error tool
   // results (#251): parsed defensively, so a malformed node renders as absent.
   const leak = isError ? parseLeakAnnotation(payload) : null;
@@ -322,6 +340,17 @@ function TimelineEventRow({
             tool error
           </span>
         )}
+        {/* [spring-ai-mcp-inspector PATCH] SEP-2322: input_required frames are
+            actionable in the Input Required tab, so say so instead of looking
+            like a truncated dead end. */}
+        {needsInput && (
+          <span
+            data-testid="timeline-input-required-badge"
+            className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-amber-800 text-amber-200"
+          >
+            input required
+          </span>
+        )}
         {leak && <LeakBadge leak={leak} onJumpToLog={onJumpToLog} />}
         {event.correlationId && (
           <span className="opacity-50 ml-auto shrink-0 font-mono text-[10px]">
@@ -339,6 +368,80 @@ function TimelineEventRow({
           ) : (
             <div className="opacity-50">no payload</div>
           )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// [spring-ai-mcp-inspector PATCH] SEP-2322 (#253): one input_required
+// round-trip rendered as a single collapsed chain: the original tools/call,
+// every input_required result, every re-send, and the final result share one
+// chain id (see lib/timelineChains) and render as one expandable row instead
+// of scattered dead-end frames. Members render chronologically (the API list
+// itself is newest-first).
+function ChainGroup({
+  chainId,
+  events,
+  onJumpToLog,
+}: {
+  chainId: string;
+  events: TimelineEvent[];
+  onJumpToLog: (eventId: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const summary = summarizeChain(events);
+  const stateStyle =
+    summary.state === "completed"
+      ? "bg-green-800 text-green-200"
+      : summary.state === "error"
+        ? "bg-red-800 text-red-200"
+        : "bg-amber-800 text-amber-200";
+  return (
+    <div
+      data-testid="timeline-chain"
+      className="border border-gray-700 rounded-r border-l-2 border-l-purple-500 pl-3 py-1.5 mb-1 bg-purple-950/30 text-purple-400"
+    >
+      <div
+        data-testid="timeline-chain-header"
+        className="flex items-center gap-2 text-xs cursor-pointer hover:opacity-80"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="font-semibold shrink-0">
+          tools/call chain{summary.toolName ? `: ${summary.toolName}` : ""}
+        </span>
+        <span
+          data-testid="timeline-chain-rounds"
+          className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-gray-700 text-gray-300"
+        >
+          {summary.rounds} round{summary.rounds !== 1 ? "s" : ""}
+        </span>
+        <span
+          data-testid="timeline-chain-state"
+          className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono ${stateStyle}`}
+        >
+          {summary.state === "awaiting-input"
+            ? "awaiting input"
+            : summary.state === "error"
+              ? "error"
+              : "final result"}
+        </span>
+        <span className="opacity-50 ml-auto shrink-0 font-mono text-[10px]">
+          {chainId.substring(0, 8)}
+        </span>
+        <span className="shrink-0 text-[10px]">{expanded ? "▾" : "▸"}</span>
+      </div>
+      {expanded ? (
+        <div className="mt-1 ml-2 border-l border-gray-700 pl-2">
+          {[...events]
+            .reverse()
+            .map((event) => (
+              <TimelineEventRow
+                key={event.id}
+                event={event}
+                onJumpToLog={onJumpToLog}
+              />
+            ))}
         </div>
       ) : null}
     </div>
@@ -427,6 +530,36 @@ const TimelineTab = () => {
     };
   }, [autoRefresh, fetchTimeline]);
 
+  // [spring-ai-mcp-inspector PATCH] SEP-2322 (#253): thread input_required
+  // round-trips into chains and render each chain once, at the position of
+  // its newest event; standalone events render exactly as before.
+  const renderItems = useMemo(() => {
+    const threaded = threadInputRequiredChains(
+      events as ChainSourceEvent[],
+    ) as (TimelineEvent & { chainId: string | null })[];
+    const items: (
+      | { kind: "single"; event: TimelineEvent }
+      | { kind: "chain"; chainId: string; events: TimelineEvent[] }
+    )[] = [];
+    const seenChains = new Set<string>();
+    for (const event of threaded) {
+      if (event.chainId === null) {
+        items.push({ kind: "single", event });
+        continue;
+      }
+      if (seenChains.has(event.chainId)) {
+        continue;
+      }
+      seenChains.add(event.chainId);
+      items.push({
+        kind: "chain",
+        chainId: event.chainId,
+        events: threaded.filter((candidate) => candidate.chainId === event.chainId),
+      });
+    }
+    return items;
+  }, [events]);
+
   return (
     <TabsContent value="timeline" className="h-96">
       <div className="bg-gray-900 text-gray-100 p-4 rounded-lg h-full font-mono text-sm overflow-auto flex flex-col">
@@ -448,14 +581,23 @@ const TimelineTab = () => {
           {events.length === 0 ? (
             <div className="opacity-50 text-center mt-8">No timeline events yet</div>
           ) : (
-            events.map((event) => (
-              <TimelineEventRow
-                key={event.id}
-                event={event}
-                onJumpToLog={scrollToEvent}
-                rowRef={(el) => registerRow(event.id, el)}
-              />
-            ))
+            renderItems.map((item) =>
+              item.kind === "chain" ? (
+                <ChainGroup
+                  key={`chain-${item.chainId}`}
+                  chainId={item.chainId}
+                  events={item.events}
+                  onJumpToLog={scrollToEvent}
+                />
+              ) : (
+                <TimelineEventRow
+                  key={item.event.id}
+                  event={item.event}
+                  onJumpToLog={scrollToEvent}
+                  rowRef={(el) => registerRow(item.event.id, el)}
+                />
+              ),
+            )
           )}
         </div>
       </div>
