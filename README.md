@@ -34,7 +34,13 @@ Spring AI's MCP server starters give you a running MCP endpoint, but no UI to ta
 - Spring Boot 4.1+
 - Spring AI 2.0+ (`org.springframework.ai:spring-ai-bom`)
 
-Boot 3.5 / Spring AI 1.1 are served by the `1.x` line, maintained on `develop/1.x`.
+Boot 3.5 / Spring AI 1.1 are served by the `1.x` line: it is end of life from
+`1.2.0` on, and `2.x` is the actively maintained line.
+
+| Line | Stack | Status |
+|------|-------|--------|
+| `2.x` (this branch) | Boot 4.x, Spring AI 2.x | active |
+| `1.x` | Boot 3.5, Spring AI 1.1 | end of life from `1.2.0` |
 
 ## Compatibility
 
@@ -46,16 +52,32 @@ The table below records the exact stack a given inspector release was verified w
 | `1.0.0`                   | `3.5.15`    | `1.1.8`   | `0.18.3`     | `0.21.2`                 |
 | `2.0.0`                   | `4.1.0`     | `2.0.0`   | `2.0.0`      | `0.22.0`                 |
 | `2.1.0`                   | `4.1.0`     | `2.0.0`   | `2.0.0`      | `0.22.0`                 |
+| `2.2.0`                   | `4.1.0`     | `2.0.1`   | `2.0.0`      | `0.22.0`                 |
 
-### Upgrading from `2.0.0`
+### Upgrading from `2.1.0`
 
-Nothing to change in your code or configuration. One runtime behaviour is different:
-the inspector now closes the MCP server's transport provider when the context starts
-closing, instead of leaving it to bean destruction. That is what stops a graceful
-shutdown from waiting out its whole timeout — and it means an MCP tool call still
-streaming when shutdown begins is cut short rather than being given the full window.
-Set `spring.ai.mcp.inspector.shutdown.close-mcp-server-transports: false` to keep the
-old behaviour; see [Graceful shutdown](#graceful-shutdown) for the trade-off.
+No code change is required. Three runtime behaviours are new:
+
+- Connect and initialize on streamable-http now run under a per-phase budget,
+  `spring.ai.mcp.inspector.timeouts.connection` (default 30 s), instead of the
+  whole streamable-request budget. A server that needs longer to initialize
+  now returns a structured 504 `MCP_CONNECT_FAILED` (reason `timeout`, with
+  `phase`, `elapsedMs` and `budgetMs` in the payload) instead of silently
+  using the full window. Raise the property, or pass `?connectionTimeout=`
+  (1..600 s), for slow servers.
+- Idle proxy SSE sessions are now probed for upstream liveness
+  (`spring.ai.mcp.inspector.upstream-liveness-probe-enabled`, default `true`):
+  after `timeouts.upstream-probe-idle-threshold` (default 15 s) of silence the
+  proxy pings the upstream every `timeouts.upstream-probe-interval` (default
+  10 s) and closes the downstream SSE with a structured payload when the
+  upstream is dead. Set the property to `false` to keep the old behaviour.
+- When the upstream server does not advertise task capabilities, the proxy now
+  injects them and answers `tasks/get`, `tasks/list` and `tasks/cancel`
+  locally, so tasks keep working against servers without native support and
+  sessions that only poll tasks are no longer reaped as idle.
+
+The timeline recorder stays opt-in:
+`spring.ai.mcp.inspector.timeline.enabled` (default `false`).
 
 ## Quickstart
 
@@ -67,7 +89,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webmvc</artifactId>
-    <version>2.1.0</version>
+    <version>2.2.0</version>
 </dependency>
 ```
 
@@ -77,7 +99,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webflux</artifactId>
-    <version>2.1.0</version>
+    <version>2.2.0</version>
 </dependency>
 ```
 
