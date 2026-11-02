@@ -83,7 +83,7 @@ const MediaContentView = ({
     </span>
   ) : null;
 
-  // Image content — render as <img>
+  // Image content - render as <img>
   if (hasBinary && normalisedMimeType?.startsWith("image/")) {
     const dataUri = `data:${normalisedMimeType};base64,${base64Data}`;
     const downloadName = filename || "image";
@@ -112,7 +112,7 @@ const MediaContentView = ({
     );
   }
 
-  // Audio content — render as <audio controls>
+  // Audio content - render as <audio controls>
   if (hasBinary && normalisedMimeType?.startsWith("audio/")) {
     const dataUri = `data:${normalisedMimeType};base64,${base64Data}`;
     const downloadName = filename || "audio";
@@ -143,7 +143,7 @@ const MediaContentView = ({
     );
   }
 
-  // Other binary content — render download/open affordance
+  // Other binary content - render download/open affordance
   if (hasBinary) {
     const href = `data:${normalisedMimeType || "application/octet-stream"};base64,${base64Data}`;
     const downloadName = filename || "download";
@@ -179,7 +179,7 @@ const MediaContentView = ({
     );
   }
 
-  // Text content — render via JsonView (preserves existing behaviour)
+  // Text content - render via JsonView (preserves existing behaviour)
   const displayData = text ?? "";
   return (
     <div className={className}>

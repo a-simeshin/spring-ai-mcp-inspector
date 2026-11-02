@@ -29,11 +29,14 @@ export const getServerSpecificKey = (
   return `[${serverUrl}] ${baseKey}`;
 };
 
+// [spring-ai-mcp-inspector PATCH] One-click reconnect (#121).
+// Added "disconnected-remote" to the ConnectionStatus union type.
 export type ConnectionStatus =
   | "disconnected"
   | "connected"
   | "error"
-  | "error-connecting-to-proxy";
+  | "error-connecting-to-proxy"
+  | "disconnected-remote";
 
 export const DEFAULT_MCP_PROXY_LISTEN_PORT = "6277";
 
