@@ -87,6 +87,12 @@ public class McpInspectorProperties {
 	@NestedConfigurationProperty
 	private Shutdown shutdown = new Shutdown();
 
+	/**
+	 * Whether upstream liveness probing is enabled for proxied sessions (any transport).
+	 * Defaults to {@code true}.
+	 */
+	private boolean upstreamLivenessProbeEnabled = true;
+
 	public boolean isEnabled() {
 		return this.enabled;
 	}
@@ -173,6 +179,14 @@ public class McpInspectorProperties {
 		this.timeouts = (timeouts != null) ? timeouts : new Timeouts();
 	}
 
+	public boolean isUpstreamLivenessProbeEnabled() {
+		return this.upstreamLivenessProbeEnabled;
+	}
+
+	public void setUpstreamLivenessProbeEnabled(final boolean upstreamLivenessProbeEnabled) {
+		this.upstreamLivenessProbeEnabled = upstreamLivenessProbeEnabled;
+	}
+
 	public Shutdown getShutdown() {
 		return this.shutdown;
 	}
@@ -244,6 +258,22 @@ public class McpInspectorProperties {
 		private Duration fetchRequest = Duration.ofSeconds(30);
 
 		/**
+		 * Interval between upstream liveness probes for proxied sessions. Default 10s.
+		 */
+		private Duration upstreamProbeInterval = Duration.ofSeconds(10);
+
+		/**
+		 * How long a probe answer stays filtered from the browser stream. Default 5s.
+		 */
+		private Duration upstreamProbeTimeout = Duration.ofSeconds(5);
+
+		/**
+		 * How long a proxied session may relay no traffic in either direction before the
+		 * first probe is sent. Default 15s.
+		 */
+		private Duration upstreamProbeIdleThreshold = Duration.ofSeconds(15);
+
+		/**
 		 * How long a server→UI request (sampling / elicitation / roots) waits for the
 		 * browser to answer before the proxied tool call fails. Default 120s.
 		 */
@@ -302,6 +332,30 @@ public class McpInspectorProperties {
 
 		public void setSsePreflight(final Duration ssePreflight) {
 			this.ssePreflight = ssePreflight;
+		}
+
+		public Duration getUpstreamProbeInterval() {
+			return this.upstreamProbeInterval;
+		}
+
+		public void setUpstreamProbeInterval(final Duration upstreamProbeInterval) {
+			this.upstreamProbeInterval = upstreamProbeInterval;
+		}
+
+		public Duration getUpstreamProbeTimeout() {
+			return this.upstreamProbeTimeout;
+		}
+
+		public void setUpstreamProbeTimeout(final Duration upstreamProbeTimeout) {
+			this.upstreamProbeTimeout = upstreamProbeTimeout;
+		}
+
+		public Duration getUpstreamProbeIdleThreshold() {
+			return this.upstreamProbeIdleThreshold;
+		}
+
+		public void setUpstreamProbeIdleThreshold(final Duration upstreamProbeIdleThreshold) {
+			this.upstreamProbeIdleThreshold = upstreamProbeIdleThreshold;
 		}
 
 	}

@@ -1,0 +1,9 @@
+src/lib/connectErrors.ts + src/lib/hooks/useConnection.ts
+-- terminal SSE `retry` contract for a dead upstream (block2 of the owner
+review on PR #154, 2026-10-30; twin port to the 1.x line, adapted: the
+parser lives in connectErrors.ts on this line). The proxy (both stacks,
+core ProxyReconnectPolicy) precedes the stream close of a dead upstream
+with `retry:2147483000`; connectErrors.ts parses that line, and
+useConnection.ts observes it on the teed handshake stream and closes the
+SSE transport, so the browser EventSource stops reconnecting instead of
+minting a doomed proxy session every ~3s.

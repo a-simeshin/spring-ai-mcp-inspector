@@ -694,7 +694,10 @@ describe("findUnresolvedRefs", () => {
       type: "object",
       properties: {
         value: {
-          anyOf: [{ type: "string" }, { $ref: "#/$defs/Missing" }],
+          anyOf: [
+            { type: "string" },
+            { $ref: "#/$defs/Missing" },
+          ],
         },
       },
     };
@@ -706,7 +709,10 @@ describe("findUnresolvedRefs", () => {
       type: "object",
       properties: {
         result: {
-          oneOf: [{ $ref: "#/$defs/Success" }, { $ref: "#/$defs/Error" }],
+          oneOf: [
+            { $ref: "#/$defs/Success" },
+            { $ref: "#/$defs/Error" },
+          ],
         },
       },
       $defs: {
@@ -939,7 +945,10 @@ describe("findUnresolvedRefs - schema keyword traversal", () => {
   test("detects unresolved ref inside prefixItems", () => {
     const schema: JsonSchemaType = {
       type: "array",
-      prefixItems: [{ type: "string" }, { $ref: "#/$defs/MissingPrefixItem" }],
+      prefixItems: [
+        { type: "string" },
+        { $ref: "#/$defs/MissingPrefixItem" },
+      ],
     };
     expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingPrefixItem"]);
   });
@@ -1029,15 +1038,16 @@ describe("findUnresolvedRefs - $ref sibling, legacy, and JSON Pointer fixes", ()
   test("traverses items as array (tuple items)", () => {
     const schema: JsonSchemaType & { $defs: Record<string, JsonSchemaType> } = {
       type: "array",
-      items: [{ type: "string" }, { $ref: "#/$defs/MissingTupleItem" }],
+      items: [
+        { type: "string" },
+        { $ref: "#/$defs/MissingTupleItem" },
+      ],
     };
     expect(findUnresolvedRefs(schema)).toEqual(["#/$defs/MissingTupleItem"]);
   });
 
   test("traverses legacy definitions keyword", () => {
-    const schema: JsonSchemaType & {
-      definitions: Record<string, JsonSchemaType>;
-    } = {
+    const schema: JsonSchemaType & { definitions: Record<string, JsonSchemaType> } = {
       type: "object",
       definitions: {
         RealDef: {
@@ -1051,13 +1061,13 @@ describe("findUnresolvedRefs - $ref sibling, legacy, and JSON Pointer fixes", ()
         value: { $ref: "#/definitions/RealDef" },
       },
     };
-    expect(findUnresolvedRefs(schema)).toEqual(["#/definitions/AlsoMissing"]);
+    expect(findUnresolvedRefs(schema)).toEqual([
+      "#/definitions/AlsoMissing",
+    ]);
   });
 
   test("traverses legacy dependencies schema form", () => {
-    const schema: JsonSchemaType & {
-      dependencies: Record<string, JsonSchemaType | string[]>;
-    } = {
+    const schema: JsonSchemaType & { dependencies: Record<string, JsonSchemaType | string[]> } = {
       type: "object",
       properties: {
         a: { type: "string" },
@@ -1070,9 +1080,7 @@ describe("findUnresolvedRefs - $ref sibling, legacy, and JSON Pointer fixes", ()
   });
 
   test("skips property-name form of dependencies", () => {
-    const schema: JsonSchemaType & {
-      dependencies: Record<string, JsonSchemaType | string[]>;
-    } = {
+    const schema: JsonSchemaType & { dependencies: Record<string, JsonSchemaType | string[]> } = {
       type: "object",
       properties: {
         a: { type: "string" },
@@ -1497,5 +1505,67 @@ describe("findMissingOutputSchemaWarning", () => {
         textResult("42"),
       ),
     ).not.toBeNull();
+  });
+});
+
+// RFC 6901 section 6 fragment decode order (follow-up to the #211/#264 owner
+// review, issue #261): for a URI fragment ref, percent-decode FIRST, then
+// unescape ~1/~0. The previous order unescaped first, so a ref like
+// "#/properties/a%7E1b" looked up the key "a~1b" instead of "a/b".
+describe("findUnresolvedRefs - RFC 6901 fragment decode order", () => {
+  test("resolves percent-encoded ~1 to a slash key (a%7E1b -> a/b)", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a/b": { type: "string" },
+        ok: { $ref: "#/properties/a%7E1b" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("resolves percent-encoded ~0 to a tilde key (a%7E0b -> a~b)", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a~b": { type: "string" },
+        ok: { $ref: "#/properties/a%7E0b" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("resolves double-escaped key (a%7E01b -> a~1b, not a/b or a~01b)", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a~1b": { type: "string" },
+        ok: { $ref: "#/properties/a%7E01b" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("raw unpercent-encoded ~1/~0 tokens still resolve (a~1b -> a/b)", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a/b": { type: "string" },
+        ok: { $ref: "#/properties/a~1b" },
+      },
+    };
+    expect(findUnresolvedRefs(schema)).toEqual([]);
+  });
+
+  test("resolveRef follows the same order: a%7E1b resolves to the a/b subschema", () => {
+    const schema: JsonSchemaType = {
+      type: "object",
+      properties: {
+        "a/b": { type: "string" },
+        ok: { $ref: "#/properties/a%7E1b" },
+      },
+    };
+    const props = schema.properties as Record<string, JsonSchemaType>;
+    expect(resolveRef(props.ok, schema)).toBe(props["a/b"]);
   });
 });

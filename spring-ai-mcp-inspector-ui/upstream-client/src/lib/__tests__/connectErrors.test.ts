@@ -5,8 +5,11 @@ import {
   humanReadableReason,
   isConnectFailedError,
   parseConnectFailureResponse,
+  parseProxyErrorEvent,
+  parseTerminalReconnectMillis,
   type ConnectFailure,
 } from "../connectErrors";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
 /** Minimal Response-shaped object; the parser only touches clone().json(). */
 const responseWithBody = (body: unknown): Response => {
@@ -129,13 +132,82 @@ describe("connectionFailureFromError", () => {
       retryable: true,
     });
   });
+
+  // [spring-ai-mcp-inspector PATCH] -32001 is the SDK request-timeout code;
+  // classifying it as 'timeout' is what makes the Reset session button
+  // appear. Refs #157.
+  it("maps McpError with code -32001 to timeout reason", () => {
+    const timeoutError = new McpError(ErrorCode.RequestTimeout, "Request timed out");
+    const failure = connectionFailureFromError(timeoutError);
+    expect(failure.reason).toBe("timeout");
+    expect(failure.message).toContain("Request timed out");
+    expect(failure.retryable).toBe(true);
+  });
+
+  it("keeps unknown reason for other McpError codes", () => {
+    const otherError = new McpError(ErrorCode.InternalError, "Internal error");
+    const failure = connectionFailureFromError(otherError);
+    expect(failure.reason).toBe("unknown");
+  });
 });
 
 describe("humanReadableReason", () => {
   it("maps every reason to a human-readable label", () => {
-    expect(humanReadableReason("timeout")).toContain("timed out");
+    expect(humanReadableReason("timeout")).toBe("POST /mcp request timed out");
     expect(humanReadableReason("connection_refused")).toContain("refused");
     expect(humanReadableReason("dns")).toContain("DNS");
     expect(humanReadableReason("unknown")).toContain("Unknown");
+  });
+});
+
+describe("[spring-ai-mcp-inspector PATCH] parseTerminalReconnectMillis (block2 terminal SSE retry)", () => {
+  it("parses the terminal retry the proxy sends for a dead upstream", () => {
+    expect(parseTerminalReconnectMillis("retry:2147483000")).toBe(2147483000);
+  });
+
+  it("ignores ordinary short retry values (transport hiccups keep reconnecting)", () => {
+    expect(parseTerminalReconnectMillis("retry:3000")).toBeNull();
+    expect(parseTerminalReconnectMillis("retry:10000")).toBeNull();
+    expect(parseTerminalReconnectMillis("retry:3599999")).toBeNull();
+  });
+
+  it("ignores malformed values and non-retry lines", () => {
+    expect(parseTerminalReconnectMillis("retry:not-a-number")).toBeNull();
+    expect(parseTerminalReconnectMillis("retry:")).toBeNull();
+    expect(parseTerminalReconnectMillis("event: error")).toBeNull();
+    expect(parseTerminalReconnectMillis("data: {}")).toBeNull();
+    expect(parseTerminalReconnectMillis("")).toBeNull();
+  });
+});
+
+describe("[spring-ai-mcp-inspector PATCH] parseProxyErrorEvent (block3 readable SSE error event)", () => {
+  it("parses the simple message+reason payload of the proxy error event", () => {
+    const failure = parseProxyErrorEvent(
+      JSON.stringify({
+        message: "The upstream server is no longer reachable",
+        reason: "connection_refused",
+      }),
+    );
+    expect(failure).toEqual({
+      code: "MCP_CONNECT_FAILED",
+      reason: "connection_refused",
+      message: "The upstream server is no longer reachable",
+      retryable: true,
+    });
+  });
+
+  it("maps an unrecognized reason onto unknown but keeps the message", () => {
+    const failure = parseProxyErrorEvent(
+      JSON.stringify({ message: "stream died", reason: "on_fire" }),
+    );
+    expect(failure).toMatchObject({ reason: "unknown", message: "stream died" });
+  });
+
+  it("returns null for anything that is not a message+reason object", () => {
+    expect(parseProxyErrorEvent("not json")).toBeNull();
+    expect(parseProxyErrorEvent("[]")).toBeNull();
+    expect(parseProxyErrorEvent('"a string"')).toBeNull();
+    expect(parseProxyErrorEvent(JSON.stringify({ reason: "dns" }))).toBeNull();
+    expect(parseProxyErrorEvent(JSON.stringify({ message: "" }))).toBeNull();
   });
 });

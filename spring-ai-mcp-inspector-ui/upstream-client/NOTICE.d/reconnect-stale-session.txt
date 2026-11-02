@@ -1,0 +1,27 @@
+src/lib/hooks/useConnection.ts: reconnect after silent drop: reset stale
+session before connect.  When a connection silently drops, the old MCP
+client, transport, and session ID remain in a half-open state.  Sending the
+stale mcp-session-id header on the next connect (the fetch wrapper attached
+it before the transport switch, so both SSE and Streamable HTTP carried it)
+causes the server to reject the handshake with -32001.  Local fix: at the
+start of every connect() call, close the old client/transport, clear the
+stale session ID, and never send the stale closure variable as the
+mcp-session-id request header. Also adds a connectingRef guard to prevent
+concurrent connect attempts from double-clicks, and generation checks
+before every state mutation (transport, server info, capabilities, error
+status, response headers, pushHistory after setLoggingLevel, and error
+paths after handleAuthError) so a stale handshake cannot overwrite the
+active session.  Stale attempts no longer release connectingRef; only the
+current generation can clear it (the finally guard compares the attempt's
+generation with the current one, regardless of retryCount: a recursive
+OAuth retry that completes as the current generation releases the guard
+itself, so a successful OAuth retry does not latch the guard and later
+connect() calls keep working).  The stale-attempt close() calls
+(useConnection.ts handshake guard, catch guard and post-handshake guard)
+are covered by unit tests that fail when any of them is removed.  Toast
+split: handshake failures notify through connectionError (the Sidebar
+effect renders the alert and toast); post-handshake failures (outer catch)
+notify through the direct toast, which the base had; each path fires
+exactly one toast.  OAuth failure notification is consolidated to a single
+toast path (Sidebar effect on connectionError), removing the duplicate
+toast from handleAuthError.  Refs #157.
