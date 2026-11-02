@@ -1,3 +1,7 @@
+// [spring-ai-mcp-inspector PATCH] SEP-2322 (spec revision 2026-07-28)
+// wiring coverage (#253): proves App's callTool opens an input_required chain
+// via InputRequiredController with the ORIGINAL request params while the
+// result still flows to the tools tab unchanged.
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import App from "../App";
