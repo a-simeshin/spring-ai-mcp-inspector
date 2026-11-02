@@ -123,6 +123,7 @@ public class MultiRoundTripEchoToolConfiguration {
 						random data: identical answers always produce identical tokens, so the whole flow is
 						replayable and byte-stable across restarts.
 						""")
+		.annotations(McpSchema.ToolAnnotations.builder().readOnlyHint(true).destructiveHint(false).build())
 		.inputSchema(Map.of("type", "object"))
 		.build();
 
