@@ -105,6 +105,8 @@ import static com.codeborne.selenide.Selenide.open;
  * (History pane never overlaps tab content; elementFromPoint at 780x437 with both drag
  * handles absent and the History/Notifications columns scrolling under real overflow,
  * disjoint panes at 768/1023, desktop control at 1024px).</li>
+ * <li>{@link LeakDetection} - live leak-detector flow (issue #251): leakyInsert called
+ * through the UI, verbatim Tool Results note, Timeline leak badge, APP_LOG jump.</li>
  * </ul>
  *
  * <p>
@@ -4761,6 +4763,133 @@ class InspectorUiIT {
 			notificationsCol.shouldBe(visible);
 			Assertions.assertTrue(historyAboveNotifications(),
 					"History section must be above Server Notifications at 375px (stacked, not side-by-side)");
+		}
+
+	}
+
+	// =====================================================================
+	// N. Exception leak detector (issue #251)
+	// =====================================================================
+
+	/**
+	 * Live end-to-end coverage for the exception-leak detector UI (issue #251): the
+	 * {@code leakyInsert} demo tool (landed with the detector engine in #291) logs a
+	 * failure the way an infrastructure layer would and then rethrows, so the error tool
+	 * result carries the exact E11000 text the application log already contains. The flow
+	 * asserts every link of the chain: the Tool Results verbatim note with the upstream
+	 * link, the Timeline leak badge on the annotated error row, the expanded leak detail
+	 * correlated with the APP_LOG line, and the jump scrolling that APP_LOG row into
+	 * view.
+	 */
+	@Nested
+	@DisplayName("Exception leak detector")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class LeakDetection {
+
+		/**
+		 * Boot once per group: the single test walks the whole flow on one connection.
+		 */
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			openAndConnect();
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@Test
+		@Story("Exception leak detector")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Runs leakyInsert(name=acme) through the UI against the real detector engine: "
+				+ "the Tool Results block grows a verbatim leak note with the spring-ai#7219 upstream "
+				+ "link, the View in Timeline jump switches to the Timeline tab, the failing "
+				+ "tools/call response row carries the exact-tier leak badge whose tooltip names the "
+				+ "match and the log line, the row click expands the leak detail (first log line "
+				+ "only, never the stack trace) beside the leaked E11000 error text, and the jump "
+				+ "link scrolls the correlated APP_LOG row into the viewport.")
+		@DisplayName("leakyInsertShowsLeakBadgeAndAppLogJump: verbatim note, Timeline badge, APP LOG jump")
+		void leakyInsert_showsVerbatimNote_timelineBadge_andAppLogJump() {
+			// given: the Tools tab lists the demo tools; leakyInsert takes one required
+			// string parameter that DynamicJsonForm renders as input#name.
+			clickTab("tools");
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			selectRow("leakyInsert");
+			$("#name").shouldBe(visible).setValue("acme");
+
+			// when: the tool runs; the server logs "leakyInsert failed for tenant acme"
+			// and rethrows, so the SDK packs the E11000 text into an error
+			// CallToolResult.
+			activePanel().$(byText("Run Tool")).click();
+
+			// then: the Tool Results block renders the verbatim leak note. The note
+			// arrives via the leakAnnotations broker fed by the /api/timeline poll
+			// (3 s), so it can trail the result by a few seconds.
+			$("[data-testid=tool-result-leak-note]").shouldBe(visible, Duration.ofSeconds(45));
+			$("[data-testid=tool-result-leak-verbatim]").shouldHave(text("received this text verbatim"));
+			$("[data-testid=tool-result-leak-upstream]").shouldHave(text("spring-ai#7219"));
+
+			// and: the View in Timeline link switches the app to the Timeline tab.
+			$("[data-testid=tool-result-leak-jump]").shouldBe(visible).click();
+			$("[role=tab][data-state=active][id$='-trigger-timeline']").shouldBe(visible, Duration.ofSeconds(15));
+
+			// and: the failing tools/call response row carries the leak badge (exact
+			// tier); its tooltip discloses the match kind and the correlated log line.
+			SelenideElement badge = $("[data-testid=timeline-leak-badge-exact]").shouldBe(visible,
+					Duration.ofSeconds(30));
+			badge.shouldHave(text("leak"));
+			badge.shouldHave(attributeMatching("title", ".*match: exact, verbatim.*"));
+			badge.shouldHave(attributeMatching("title", ".*leakyInsert failed for tenant acme.*"));
+
+			// and: a click on the row itself expands the detail (the badge click is a
+			// jump, see TimelineTab). The leak message block carries the engine-capped
+			// first log line only, never the stack trace; the leaked E11000 text sits in
+			// the neighboring tool error block. Selenide closest("div.border-l-2")
+			// compiles to a broken xpath, so walk the ancestor axis explicitly.
+			SelenideElement annotatedRow = badge
+				.find(org.openqa.selenium.By.xpath("ancestor::div[contains(@class, 'border-l-2')][1]"));
+			annotatedRow.click();
+			$("[data-testid=timeline-leak-log-message]").shouldBe(visible, Duration.ofSeconds(15))
+				.shouldHave(text("leakyInsert failed for tenant acme"));
+			$("[data-testid=timeline-leak-log-message]").shouldNotHave(text("E11000"));
+			activePanel().shouldHave(text("Exception leak (match: exact, verbatim)"));
+			$("[data-testid=timeline-tool-error-message]").shouldBe(visible)
+				.shouldHave(text("E11000 duplicate key error"));
+
+			// and: the jump link scrolls the correlated APP_LOG row into the viewport.
+			// Match the row by its type label span ("APP LOG") plus the log line, so the
+			// expanded annotated response row (which also carries the log line in its
+			// leak detail) can never satisfy the check by accident.
+			$("[data-testid=timeline-leak-jump-link]").shouldBe(visible).click();
+			Selenide.sleep(1_500); // scrollIntoView animates with behavior "smooth"
+			org.openqa.selenium.JavascriptExecutor js = (org.openqa.selenium.JavascriptExecutor) WebDriverRunner
+				.getWebDriver();
+			Boolean logRowInView = (Boolean) js.executeScript("""
+					var rows = document.querySelectorAll('div.border-l-2');
+					for (var i = 0; i < rows.length; i++) {
+						var row = rows[i];
+						var isAppLog = false;
+						var spans = row.querySelectorAll('span.font-semibold');
+						for (var j = 0; j < spans.length; j++) {
+							if (spans[j].textContent.trim() === 'APP LOG') {
+								isAppLog = true;
+								break;
+							}
+						}
+						if (isAppLog && row.textContent.indexOf('leakyInsert failed for tenant acme') >= 0) {
+							var rect = row.getBoundingClientRect();
+							return rect.top >= 0 && rect.bottom <= window.innerHeight;
+						}
+					}
+					return false;
+					""");
+			Assertions.assertTrue(Boolean.TRUE.equals(logRowInView),
+					"correlated APP_LOG row must be scrolled into the viewport after the jump");
 		}
 
 	}
