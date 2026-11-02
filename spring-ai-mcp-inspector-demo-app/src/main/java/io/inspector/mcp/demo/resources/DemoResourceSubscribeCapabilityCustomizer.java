@@ -12,7 +12,6 @@ package io.inspector.mcp.demo.resources;
 import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.spec.McpSchema.ServerCapabilities;
 import org.springframework.ai.mcp.customizer.McpSyncServerCustomizer;
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 /**
@@ -21,15 +20,15 @@ import org.springframework.stereotype.Component;
  * ({@code immediateExecution(true)}).
  *
  * <p>
- * <strong>Why {@link Primary} and not a plain {@link McpSyncServerCustomizer}
- * bean:</strong> the Spring AI autoconfig declares the customizer dependency as
- * {@code Optional<McpSyncServerCustomizer>}, which fails fast if more than one customizer
- * bean is present in the context. The autoconfig itself registers a hidden
- * {@code servletMcpSyncServerCustomizer} that calls
- * {@code spec.immediateExecution(true)}. We therefore mark our customizer
- * {@code @Primary} so Spring picks it during the {@code Optional} resolution,
- * <em>and</em> we re-apply the {@code immediateExecution} bit ourselves so we don't
- * regress the servlet-stack defaults.
+ * <strong>Why this is a plain {@link McpSyncServerCustomizer} bean and not
+ * {@code @Primary}:</strong> the Spring AI autoconfig declares the customizer dependency
+ * as {@code Optional<McpSyncServerCustomizer>}, which resolves at most one bean. The
+ * {@code @Primary} slot is owned by the composed customizer in
+ * {@code MultiRoundTripEchoToolConfiguration}, which delegates here so this class keeps
+ * doing exactly what its name says. The {@code immediateExecution(true)} bit below still
+ * re-applies the servlet-stack default of the autoconfig's hidden
+ * {@code servletMcpSyncServerCustomizer}, because that hidden customizer is not applied
+ * when a different bean wins the {@code Optional} resolution.
  *
  * <p>
  * The capabilities builder is overridden directly because the SDK's
@@ -37,7 +36,6 @@ import org.springframework.stereotype.Component;
  * actually wires up the subscribe handlers internally.
  */
 @Component
-@Primary
 public class DemoResourceSubscribeCapabilityCustomizer implements McpSyncServerCustomizer {
 
 	@Override
