@@ -1870,8 +1870,13 @@ const App = () => {
                   the trailing tabs (Sampling/Elicitations/Roots/Auth/Metadata)
                   render off-screen with no scroll and no affordance. flex-wrap
                   + h-auto let the triggers flow into rows; sm:h-9 +
-                  sm:flex-nowrap restore the single upstream row at >=640px. */}
-              <TabsList className="mb-4 py-0 flex-wrap h-auto sm:h-9 sm:flex-nowrap">
+                  sm:flex-nowrap restore the single upstream row at >=640px.
+                  The wrapped row that the Input Required entry adds (#253)
+                  was pushing the tools detail pane past the 375x667 fold
+                  (InspectorUiIT ResponsiveLayout), so the bar's bottom
+                  margin is mb-2 below `sm`; the upstream mb-4 spacing is
+                  restored from `sm` up. */}
+              <TabsList className="mb-2 py-0 flex-wrap h-auto sm:mb-4 sm:h-9 sm:flex-nowrap">
                 <TabsTrigger
                   value="resources"
                   disabled={!serverCapabilities?.resources}
