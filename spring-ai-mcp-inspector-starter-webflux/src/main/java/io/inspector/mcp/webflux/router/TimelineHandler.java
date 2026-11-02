@@ -25,6 +25,7 @@ import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Mono;
 
+import io.inspector.mcp.core.timeline.ExceptionLeakDetector;
 import io.inspector.mcp.core.timeline.TimelineEvent;
 import io.inspector.mcp.core.timeline.TimelineEventType;
 import io.inspector.mcp.core.timeline.TimelineQuery;
@@ -48,8 +49,17 @@ public class TimelineHandler {
 
 	private final TimelineService timelineService;
 
-	public TimelineHandler(final TimelineService timelineService) {
+	private final ExceptionLeakDetector leakDetector;
+
+	/**
+	 * Creates the handler.
+	 * @param timelineService the shared timeline service
+	 * @param leakDetector the exception-leak detector, or {@code null} to serve events
+	 * without {@code _leak} annotations (detector disabled)
+	 */
+	public TimelineHandler(final TimelineService timelineService, final ExceptionLeakDetector leakDetector) {
 		this.timelineService = timelineService;
+		this.leakDetector = leakDetector;
 	}
 
 	/**
@@ -68,7 +78,8 @@ public class TimelineHandler {
 			.limit(intParam(request, "limit"))
 			.build();
 		final List<TimelineEvent> events = this.timelineService.query(query);
-		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(events);
+		final List<TimelineEvent> enriched = (this.leakDetector != null) ? this.leakDetector.enrich(events) : events;
+		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(enriched);
 	}
 
 	/**
