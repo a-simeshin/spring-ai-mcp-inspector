@@ -555,13 +555,10 @@ public class StreamableHttpProxyController {
 				// Still a routed frame from the browser: refresh the idle-reaper
 				// timestamp, otherwise a session only polled via the Tasks tab is
 				// evicted.
+				// An intercepted frame is never the session's first POST: interception
+				// is enabled only after this session's initialize response, so no
+				// mcp-session-id header needs to be attached here.
 				session.touch();
-				if (includeSessionHeader) {
-					final ResponseEntity.BodyBuilder builder = ResponseEntity.status(taskResponse.getStatusCode())
-						.contentType(MediaType.APPLICATION_JSON);
-					builder.header(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
-					return builder.body(taskResponse.getBody());
-				}
 				return taskResponse;
 			}
 		}

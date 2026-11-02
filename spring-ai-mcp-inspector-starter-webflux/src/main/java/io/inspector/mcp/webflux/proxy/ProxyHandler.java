@@ -1018,8 +1018,10 @@ public class ProxyHandler {
 		// a third-party upstream that advertises its own tasks capability keeps the
 		// plain relay, so its tasks are never answered from the local TaskRegistry.
 		if (this.taskService != null && session.isTasksInterceptionEnabled()) {
-			final String sessionIdHeader = includeSessionHeader ? session.sessionId() : null;
-			final Mono<ServerResponse> taskResponse = tryHandleTaskMethod(idNode, body, sessionIdHeader);
+			// An intercepted frame is never the session's first POST: interception is
+			// enabled only after this session's initialize response, so the response
+			// carries no mcp-session-id header.
+			final Mono<ServerResponse> taskResponse = tryHandleTaskMethod(idNode, body, null);
 			if (taskResponse != null) {
 				// Still a routed frame from the browser: refresh the idle-reaper
 				// timestamp, otherwise a session only polled via the Tasks tab is

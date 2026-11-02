@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
@@ -2926,8 +2927,10 @@ class ProxyHandlerTests {
 			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
 			final JsonNode response = ProxyHandlerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":{\"tasks\":{\"custom\":true}}}}");
+			final AtomicReference<ProxySession> startedSession = new AtomicReference<>();
 			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
 				final ProxySession s = inv.getArgument(0);
+				startedSession.set(s);
 				s.targetToBrowser().tryEmitNext(response);
 				return Mono.empty();
 			});
@@ -2937,7 +2940,7 @@ class ProxyHandlerTests {
 						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
 
 			// when
-			final ServerResponse serverResponse = ProxyHandlerTests.this.handler.postMcp(request).block();
+			final ServerResponse serverResponse = this.handlerWithTasks.postMcp(request).block();
 
 			// then
 			assertThat(serverResponse).isNotNull();
@@ -2946,6 +2949,10 @@ class ProxyHandlerTests {
 			assertThat(responseBody.path("result").path("capabilities").path("tasks").path("custom").asBoolean())
 				.as("upstream tasks must be preserved")
 				.isTrue();
+			assertThat(startedSession.get()).isNotNull();
+			assertThat(startedSession.get().isTasksInterceptionEnabled())
+				.as("upstream-advertised tasks keeps task-method interception off")
+				.isFalse();
 		}
 
 		@Test

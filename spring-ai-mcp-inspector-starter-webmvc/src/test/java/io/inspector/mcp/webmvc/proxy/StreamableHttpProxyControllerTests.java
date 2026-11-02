@@ -1790,8 +1790,10 @@ class StreamableHttpProxyControllerTests {
 				.willReturn(target);
 			final JsonNode response = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":{\"tasks\":{\"custom\":true}}}}");
+			final AtomicReference<ProxySession> startedSession = new AtomicReference<>();
 			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
 				final ProxySession s = inv.getArgument(0);
+				startedSession.set(s);
 				s.targetToBrowser().tryEmitNext(response);
 				return Mono.empty();
 			});
@@ -1799,8 +1801,8 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
 
 			// when
-			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
-					"http://target/mcp", null, body);
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", null,
+					body);
 
 			// then
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1809,6 +1811,10 @@ class StreamableHttpProxyControllerTests {
 			assertThat(responseBody.path("result").path("capabilities").path("tasks").path("custom").asBoolean())
 				.as("upstream tasks must be preserved")
 				.isTrue();
+			assertThat(startedSession.get()).isNotNull();
+			assertThat(startedSession.get().isTasksInterceptionEnabled())
+				.as("upstream-advertised tasks keeps task-method interception off")
+				.isFalse();
 		}
 
 		@Test
