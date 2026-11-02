@@ -129,6 +129,30 @@ class McpInspectorPropertiesTests {
 			assertThat(timeouts.getFetchConnect()).isEqualTo(Duration.ofSeconds(10));
 			assertThat(timeouts.getFetchRequest()).isEqualTo(Duration.ofSeconds(30));
 			assertThat(timeouts.getServerRequest()).isEqualTo(Duration.ofSeconds(120));
+			assertThat(timeouts.getConnection()).isEqualTo(Duration.ofSeconds(30));
+		}
+
+		@Test
+		@Story("Relaxed binding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("timeouts.connection is range-checked like the connectionTimeout parameter: non-positive or above 600s is rejected")
+		void setConnection_outOfRange_isRejected() {
+			final McpInspectorProperties.Timeouts timeouts = new McpInspectorProperties().getTimeouts();
+
+			assertThatThrownBy(() -> timeouts.setConnection(null)).isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("timeouts.connection");
+			assertThatThrownBy(() -> timeouts.setConnection(Duration.ZERO))
+				.isInstanceOf(IllegalArgumentException.class);
+			assertThatThrownBy(() -> timeouts.setConnection(Duration.ofSeconds(-1)))
+				.isInstanceOf(IllegalArgumentException.class);
+			assertThatThrownBy(() -> timeouts.setConnection(Duration.ofSeconds(601)))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("600");
+
+			// sub-second positive values stay legal: tests and local setups use them as
+			// fast budgets
+			timeouts.setConnection(Duration.ofMillis(200));
+			assertThat(timeouts.getConnection()).isEqualTo(Duration.ofMillis(200));
 		}
 
 		@Test
@@ -143,6 +167,7 @@ class McpInspectorPropertiesTests {
 			env.setProperty("spring.ai.mcp.inspector.timeouts.fetch-connect", "2s");
 			env.setProperty("spring.ai.mcp.inspector.timeouts.fetch-request", "15s");
 			env.setProperty("spring.ai.mcp.inspector.timeouts.server-request", "60s");
+			env.setProperty("spring.ai.mcp.inspector.timeouts.connection", "45s");
 
 			// when
 			final McpInspectorProperties bound = Binder.get(env)
@@ -155,6 +180,7 @@ class McpInspectorPropertiesTests {
 			assertThat(bound.getTimeouts().getFetchConnect()).isEqualTo(Duration.ofSeconds(2));
 			assertThat(bound.getTimeouts().getFetchRequest()).isEqualTo(Duration.ofSeconds(15));
 			assertThat(bound.getTimeouts().getServerRequest()).isEqualTo(Duration.ofSeconds(60));
+			assertThat(bound.getTimeouts().getConnection()).isEqualTo(Duration.ofSeconds(45));
 		}
 
 		@Test

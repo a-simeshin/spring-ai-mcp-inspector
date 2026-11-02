@@ -23,6 +23,8 @@ import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.NestedConfigurationProperty;
 
+import io.inspector.mcp.core.proxy.ProxyConnectionBudgets;
+
 /**
  * Configuration properties for the Spring AI MCP Inspector.
  *
@@ -315,6 +317,28 @@ public class McpInspectorProperties {
 		 */
 		private Duration ssePreflight = Duration.ofSeconds(10);
 
+		/**
+		 * Per-phase budget applied to the proxy session bring-up: the
+		 * {@link io.inspector.mcp.core.proxy.McpProxy} start and the first JSON-RPC
+		 * {@code initialize} handshake. Default 30s, matching upstream
+		 * {@code modelcontextprotocol/inspector} PR #2362.
+		 *
+		 * <p>
+		 * The two phase timers start nearly together ({@code start} is subscribed
+		 * asynchronously), so the phases can overlap; the budget is not a shared total
+		 * deadline. Overridable per connect attempt via the {@code connectionTimeout}
+		 * query parameter (whole seconds, 1..600) on the proxy endpoints.
+		 *
+		 * <p>
+		 * For a new streamable session this budget, not {@link #streamableRequest},
+		 * bounds the wait for the first POST (the {@code initialize} handshake);
+		 * {@code streamableRequest} keeps bounding the later frames of an existing
+		 * session. Configured values are range-checked like the parameter: a null or
+		 * non-positive duration, or one above the shared 600 s cap, is rejected when
+		 * bound.
+		 */
+		private Duration connection = Duration.ofSeconds(30);
+
 		public Duration getSseSession() {
 			return this.sseSession;
 		}
@@ -377,6 +401,19 @@ public class McpInspectorProperties {
 
 		public void setSsePreflight(final Duration ssePreflight) {
 			this.ssePreflight = ssePreflight;
+		}
+
+		public Duration getConnection() {
+			return this.connection;
+		}
+
+		public void setConnection(final Duration connection) {
+			if (connection == null || connection.isNegative() || connection.isZero()
+					|| connection.compareTo(Duration.ofSeconds(ProxyConnectionBudgets.MAX_SECONDS)) > 0) {
+				throw new IllegalArgumentException("timeouts.connection must be a positive duration of at most "
+						+ ProxyConnectionBudgets.MAX_SECONDS + " seconds, got " + connection);
+			}
+			this.connection = connection;
 		}
 
 		public Duration getUpstreamProbeInterval() {
@@ -455,6 +492,13 @@ public class McpInspectorProperties {
 		 */
 		private boolean appenderDiscardingPolicy = true;
 
+		/**
+		 * The exception-leak detector. When enabled (the default), the timeline query
+		 * endpoints annotate error tool results with a {@code _leak} marker when the
+		 * error text matches a windowed application-log exception (issue #251).
+		 */
+		private LeakDetector leakDetector = new LeakDetector();
+
 		public boolean isEnabled() {
 			return this.enabled;
 		}
@@ -509,6 +553,37 @@ public class McpInspectorProperties {
 
 		public void setAppenderDiscardingPolicy(final boolean appenderDiscardingPolicy) {
 			this.appenderDiscardingPolicy = appenderDiscardingPolicy;
+		}
+
+		public LeakDetector getLeakDetector() {
+			return this.leakDetector;
+		}
+
+		public void setLeakDetector(final LeakDetector leakDetector) {
+			this.leakDetector = leakDetector;
+		}
+
+		/**
+		 * Exception-leak detector configuration. Bound under
+		 * {@code spring.ai.mcp.inspector.timeline.leak-detector}.
+		 */
+		public static class LeakDetector {
+
+			/**
+			 * Whether the exception-leak detector is enabled. Default {@code true}: the
+			 * detector is active whenever the timeline itself is enabled, and disabling
+			 * it only skips the {@code _leak} annotation, never the timeline itself.
+			 */
+			private boolean enabled = true;
+
+			public boolean isEnabled() {
+				return this.enabled;
+			}
+
+			public void setEnabled(final boolean enabled) {
+				this.enabled = enabled;
+			}
+
 		}
 
 	}
