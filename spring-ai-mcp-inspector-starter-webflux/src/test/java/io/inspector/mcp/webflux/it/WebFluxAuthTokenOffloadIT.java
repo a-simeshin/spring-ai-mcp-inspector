@@ -17,7 +17,9 @@
 package io.inspector.mcp.webflux.it;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -30,6 +32,7 @@ import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -40,11 +43,14 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.reactive.server.WebTestClient;
+import org.springframework.web.util.UriComponentsBuilder;
 import tools.jackson.databind.json.JsonMapper;
 
 import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
+import io.inspector.mcp.core.auth.OAuth2GrantMode;
+import io.inspector.mcp.core.auth.OAuth2Profile;
 import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -130,9 +136,7 @@ class WebFluxAuthTokenOffloadIT {
 
 		// then: thread evidence shows the blocking HTTP call ran on boundedElastic,
 		// never on the reactor event loop
-		assertThat(this.ccEvidenceClient.recordedThreadName()).isNotNull();
-		assertThat(this.ccEvidenceClient.recordedThreadName()).doesNotContain("reactor-http-nio");
-		assertThat(this.ccEvidenceClient.recordedThreadName()).contains("boundedElastic");
+		assertTokenCallOffEventLoop(this.ccEvidenceClient);
 		assertThat(this.ccEvidenceClient.requestCount()).isGreaterThan(0);
 	}
 
@@ -164,9 +168,7 @@ class WebFluxAuthTokenOffloadIT {
 
 		// then: thread evidence shows the blocking HTTP call ran on boundedElastic,
 		// never on the reactor event loop
-		assertThat(this.ccEvidenceClient.recordedThreadName()).isNotNull();
-		assertThat(this.ccEvidenceClient.recordedThreadName()).doesNotContain("reactor-http-nio");
-		assertThat(this.ccEvidenceClient.recordedThreadName()).contains("boundedElastic");
+		assertTokenCallOffEventLoop(this.ccEvidenceClient);
 		assertThat(this.ccEvidenceClient.requestCount()).isGreaterThan(0);
 	}
 
@@ -216,9 +218,7 @@ class WebFluxAuthTokenOffloadIT {
 
 		// then: thread evidence shows the blocking HTTP call ran on boundedElastic,
 		// never on the reactor event loop
-		assertThat(this.acEvidenceClient.recordedThreadName()).isNotNull();
-		assertThat(this.acEvidenceClient.recordedThreadName()).doesNotContain("reactor-http-nio");
-		assertThat(this.acEvidenceClient.recordedThreadName()).contains("boundedElastic");
+		assertTokenCallOffEventLoop(this.acEvidenceClient);
 		assertThat(this.acEvidenceClient.requestCount()).isGreaterThan(0);
 	}
 
@@ -268,10 +268,125 @@ class WebFluxAuthTokenOffloadIT {
 
 		// then: thread evidence shows the blocking HTTP call ran on boundedElastic,
 		// never on the reactor event loop
-		assertThat(this.acEvidenceClient.recordedThreadName()).isNotNull();
-		assertThat(this.acEvidenceClient.recordedThreadName()).doesNotContain("reactor-http-nio");
-		assertThat(this.acEvidenceClient.recordedThreadName()).contains("boundedElastic");
+		assertTokenCallOffEventLoop(this.acEvidenceClient);
 		assertThat(this.acEvidenceClient.requestCount()).isGreaterThan(0);
+	}
+
+	@Test
+	@Story("Proxy SSE connect offload")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("GET proxy /sse with profileId: the blocking CC token re-exchange at connect runs on boundedElastic, never on the Netty event loop")
+	@DisplayName("sseConnect_withProfile_tokenExchangeOffEventLoop")
+	void sseConnect_withProfile_tokenExchangeOffEventLoop() throws IOException {
+		stubTokenEndpoint(200, "{\"access_token\":\"tok-sse\",\"expires_in\":3600}");
+		final String profileId = registerCCProfile("cc-sse-connect");
+
+		// Force a REAL blocking token HTTP call at connect time: update() evicts the
+		// cached token but keeps the stored credentials, so AuthHeaders.resolve cannot
+		// take the cache path. A cache hit would make the thread assertion below
+		// vacuous (the proxy connect would never touch the token endpoint).
+		this.ccTokenManager.update(profileId, ccProfile("cc-sse-connect"));
+		final int requestsBeforeConnect = this.ccEvidenceClient.requestCount();
+
+		// A loopback port nothing listens on: the upstream connect is refused AFTER
+		// the token exchange and surfaces as a D3 error event on the SSE stream.
+		final int deadPort;
+		try (ServerSocket socket = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+			deadPort = socket.getLocalPort();
+		}
+		final String uri = UriComponentsBuilder.fromPath("/mcp-inspector-api/sse")
+			.queryParam("url", "http://127.0.0.1:%d/sse".formatted(deadPort))
+			.queryParam("profileId", profileId)
+			.encode()
+			.toUriString();
+
+		// The token exchange is upstream of the SSE response (flatMap), so once the
+		// 200 headers arrive the evidence is already recorded.
+		this.webTestClient.get().uri(uri).exchange().expectStatus().isOk();
+
+		// the connect performed exactly one fresh token exchange, not a cache hit
+		assertThat(this.ccEvidenceClient.requestCount()).isEqualTo(requestsBeforeConnect + 1);
+		assertTokenCallOffEventLoop(this.ccEvidenceClient);
+	}
+
+	@Test
+	@Story("Proxy streamable-HTTP connect offload")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("POST proxy /mcp with profileId: the blocking CC token re-exchange at connect runs on boundedElastic, never on the Netty event loop")
+	@DisplayName("postMcpConnect_withProfile_tokenExchangeOffEventLoop")
+	void postMcpConnect_withProfile_tokenExchangeOffEventLoop() throws IOException {
+		stubTokenEndpoint(200, "{\"access_token\":\"tok-mcp\",\"expires_in\":3600}");
+		final String profileId = registerCCProfile("cc-mcp-connect");
+
+		this.ccTokenManager.update(profileId, ccProfile("cc-mcp-connect"));
+		final int requestsBeforeConnect = this.ccEvidenceClient.requestCount();
+
+		final int deadPort;
+		try (ServerSocket socket = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+			deadPort = socket.getLocalPort();
+		}
+		final String uri = UriComponentsBuilder.fromPath("/mcp-inspector-api/mcp")
+			.queryParam("url", "http://127.0.0.1:%d/mcp".formatted(deadPort))
+			.queryParam("profileId", profileId)
+			.encode()
+			.toUriString();
+
+		// The upstream refuses AFTER the off-loop token exchange: structured 502
+		// (same contract as WebFluxConnectFailureIT, plus the auth profile).
+		this.webTestClient.post()
+			.uri(uri)
+			.contentType(MediaType.APPLICATION_JSON)
+			.bodyValue("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}")
+			.exchange()
+			.expectStatus()
+			.isEqualTo(502)
+			.expectBody()
+			.jsonPath("$.error.code")
+			.isEqualTo("MCP_CONNECT_FAILED");
+
+		assertThat(this.ccEvidenceClient.requestCount()).isEqualTo(requestsBeforeConnect + 1);
+		assertTokenCallOffEventLoop(this.ccEvidenceClient);
+	}
+
+	private String registerCCProfile(final String name) {
+		final AtomicReference<String> profileId = new AtomicReference<>();
+		this.webTestClient.post()
+			.uri("/mcp-inspector/api/auth-profile")
+			.contentType(MediaType.APPLICATION_JSON)
+			.bodyValue("{\"profile\": {\"name\": \"" + name + "\", \"type\": \"OAUTH2\", "
+					+ "\"grantMode\": \"CLIENT_CREDENTIALS\", \"tokenUrl\": \"http://127.0.0.1:" + this.stubTokenPort
+					+ "/token\", \"clientId\": \"cid\", \"clientSecret\": \"sec\"}}")
+			.exchange()
+			.expectStatus()
+			.isOk()
+			.expectBody()
+			.jsonPath("$.profileId")
+			.value((String pid) -> profileId.set(pid));
+		assertThat(profileId.get()).isNotNull();
+		return profileId.get();
+	}
+
+	private OAuth2Profile ccProfile(final String name) {
+		return new OAuth2Profile(name, OAuth2GrantMode.CLIENT_CREDENTIALS,
+				"http://127.0.0.1:" + this.stubTokenPort + "/token", "cid", "sec", null, null, null, null, null);
+	}
+
+	/**
+	 * Load-bearing thread-boundary evidence: the blocking token HTTP call must run on
+	 * boundedElastic, never on a Netty event loop thread. The guard must cover BOTH
+	 * event-loop prefix this stack can name its IO threads with: reactor-http-nio-*
+	 * (default Reactor Netty loop factory) and webflux-http-nio-* / webflux-http-epoll-*
+	 * (the RANDOM_PORT server loop; the epoll flavour is what this box actually runs,
+	 * observed as webflux-http-epoll-2 when the subscribeOn offload was removed).
+	 * Asserting only reactor-http-nio can never fail here and proves nothing.
+	 */
+	private static void assertTokenCallOffEventLoop(final ThreadEvidenceHttpClient client) {
+		assertThat(client.recordedThreadName()).isNotNull();
+		// http-nio covers reactor-http-nio-* and webflux-http-nio-*; http-epoll covers
+		// webflux-http-epoll-* (the observed loop name on this box)
+		assertThat(client.recordedThreadName()).doesNotContain("http-nio");
+		assertThat(client.recordedThreadName()).doesNotContain("http-epoll");
+		assertThat(client.recordedThreadName()).contains("boundedElastic");
 	}
 
 	private void stubTokenEndpoint(final int status, final String body) {

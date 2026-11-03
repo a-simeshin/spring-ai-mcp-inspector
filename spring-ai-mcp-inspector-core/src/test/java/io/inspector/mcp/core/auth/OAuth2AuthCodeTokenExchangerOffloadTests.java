@@ -73,12 +73,18 @@ class OAuth2AuthCodeTokenExchangerOffloadTests {
 				"http://127.0.0.1:" + this.stubPort + "/token", "cid", null, null, "http://idp/auth", "http://app/cb",
 				challenge, "S256");
 
+		// Runner thread at subscription time (Maven "main", Gradle "Test worker"):
+		// the runner-agnostic guard for the offload below.
+		final String runnerThread = Thread.currentThread().getName();
+
 		// when/then
 		StepVerifier.create(exchanger.exchangeAsync(profile, "auth-code-1", verifier))
 			.expectNextMatches((handle) -> "tok-1".equals(handle.accessToken()) && handle.expiresAt() != null)
 			.verifyComplete();
 
-		assertThat(this.evidenceClient.recordedThreadName()).doesNotContain("Test worker");
+		// Runner-agnostic: without the boundedElastic subscribeOn the callable
+		// would execute on the subscribing runner thread, so this goes red.
+		assertThat(this.evidenceClient.recordedThreadName()).isNotEqualTo(runnerThread);
 		assertThat(this.evidenceClient.recordedThreadName()).contains("boundedElastic");
 		assertThat(this.evidenceClient.requestCount()).isGreaterThan(0);
 	}

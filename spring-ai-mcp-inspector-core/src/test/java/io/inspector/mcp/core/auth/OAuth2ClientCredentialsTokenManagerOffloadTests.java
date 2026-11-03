@@ -68,12 +68,18 @@ class OAuth2ClientCredentialsTokenManagerOffloadTests {
 		final OAuth2Profile profile = new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS,
 				"http://127.0.0.1:" + this.stubPort + "/token", "cid", "sec", null, null, null, null, null);
 
+		// Runner thread at subscription time (Maven "main", Gradle "Test worker"):
+		// the runner-agnostic guard for the offload below.
+		final String runnerThread = Thread.currentThread().getName();
+
 		// when/then
 		StepVerifier.create(manager.acquireAsync("pid-cc", profile))
 			.expectNextMatches((handle) -> "tok-1".equals(handle.accessToken()) && handle.expiresAt() != null)
 			.verifyComplete();
 
-		assertThat(this.evidenceClient.recordedThreadName()).doesNotContain("Test worker");
+		// Runner-agnostic: without the boundedElastic subscribeOn the callable
+		// would execute on the subscribing runner thread, so this goes red.
+		assertThat(this.evidenceClient.recordedThreadName()).isNotEqualTo(runnerThread);
 		assertThat(this.evidenceClient.recordedThreadName()).contains("boundedElastic");
 		assertThat(this.evidenceClient.requestCount()).isGreaterThan(0);
 	}
