@@ -1419,10 +1419,16 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("when no TaskService bean is available, tasks/get falls through to the regular relay path")
 		void tasksGet_withoutTaskService_relaysToUpstream() throws Exception {
-			// given
+			// given: the upstream answer is pre-emitted on the session replay sink, so
+			// the
+			// relay await resolves immediately instead of waiting out the 30 s request
+			// timeout
 			final ProxySession session = newSession("s1");
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}");
+			final JsonNode upstreamAnswer = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":6,\"result\":{\"taskId\":\"t-1\",\"status\":\"vendor-implementation\"}}");
+			session.targetToBrowser().tryEmitNext(upstreamAnswer);
 			// Default controller has no TaskService
 			final StreamableHttpProxyController noTaskController = new StreamableHttpProxyController(
 					StreamableHttpProxyControllerTests.this.registry,
@@ -1435,8 +1441,13 @@ class StreamableHttpProxyControllerTests {
 			// when
 			final ResponseEntity<Object> response = noTaskController.postMcp("s1", null, null, body);
 
-			// then - the frame is relayed, not intercepted locally
-			assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+			// then - the frame is relayed upstream and the upstream answer comes back
+			// verbatim
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			assertThat((JsonNode) response.getBody()).isEqualTo(upstreamAnswer);
+			assertThat(session.browserToTarget().asFlux().blockFirst(Duration.ofMillis(500)))
+				.as("tasks/get frame must be emitted toward upstream")
+				.isEqualTo(body);
 			verify(StreamableHttpProxyControllerTests.this.registry).get("s1");
 		}
 
