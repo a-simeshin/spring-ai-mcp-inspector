@@ -585,6 +585,78 @@ class AuthProfileStoreTests {
 	}
 
 	@Nested
+	@DisplayName("currentGeneration()")
+	class Generation {
+
+		@Test
+		@Story("Generation guard")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("currentGeneration() is per profile: an update bumps only the updated profile")
+		void currentGeneration_updateBumpsOnlyThatProfile() {
+			// given
+			final String aId = AuthProfileStoreTests.this.store.register(OWNER_A, bearer("a", "t1"));
+			final String bId = AuthProfileStoreTests.this.store.register(OWNER_B, bearer("b", "t2"));
+
+			// then: fresh profiles start at 0
+			assertThat(AuthProfileStoreTests.this.store.currentGeneration(aId)).isZero();
+			assertThat(AuthProfileStoreTests.this.store.currentGeneration(bId)).isZero();
+
+			// when
+			AuthProfileStoreTests.this.store.update(OWNER_A, aId, bearer("a2", "t3"));
+
+			// then: only the updated profile's generation moved
+			assertThat(AuthProfileStoreTests.this.store.currentGeneration(aId)).isEqualTo(1L);
+			assertThat(AuthProfileStoreTests.this.store.currentGeneration(bId)).isZero();
+		}
+
+		@Test
+		@Story("Generation guard")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("currentGeneration() reports -1 for removed profiles without touching survivors")
+		void currentGeneration_removedProfile_reportsMinusOne() {
+			// given
+			final String aId = AuthProfileStoreTests.this.store.register(OWNER_A, bearer("a", "t1"));
+			final String bId = AuthProfileStoreTests.this.store.register(OWNER_B, bearer("b", "t2"));
+			final String cId = AuthProfileStoreTests.this.store.register(OWNER_B, bearer("c", "t3"));
+			AuthProfileStoreTests.this.store.setProfileTtl(Duration.ofMillis(1));
+			final String expiredId = AuthProfileStoreTests.this.store.register(OWNER_B, bearer("e", "t4"));
+			AuthProfileStoreTests.this.store.setProfileTtl(Duration.ofHours(24));
+
+			// when: another owner deletes, and the reaper sweeps an expired entry
+			assertThat(AuthProfileStoreTests.this.store.delete(OWNER_B, bId)).isTrue();
+			assertThat(AuthProfileStoreTests.this.store.removeExpired(Instant.now().plusSeconds(60))).isEqualTo(1);
+
+			// then: removed / unknown profiles report -1, unrelated profiles are
+			// untouched
+			assertThat(AuthProfileStoreTests.this.store.currentGeneration(bId)).isEqualTo(-1L);
+			assertThat(AuthProfileStoreTests.this.store.currentGeneration(expiredId)).isEqualTo(-1L);
+			assertThat(AuthProfileStoreTests.this.store.currentGeneration(aId)).isZero();
+			assertThat(AuthProfileStoreTests.this.store.currentGeneration(cId)).isZero();
+			assertThat(AuthProfileStoreTests.this.store.currentGeneration("nope")).isEqualTo(-1L);
+			assertThat(AuthProfileStoreTests.this.store.currentGeneration(null)).isEqualTo(-1L);
+		}
+
+		@Test
+		@Story("Generation guard")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("re-registering a deleted name starts a fresh generation at 0")
+		void currentGeneration_reRegisteredName_startsAtZero() {
+			// given
+			final String firstId = AuthProfileStoreTests.this.store.register(OWNER_A, bearer("dup", "t1"));
+			assertThat(AuthProfileStoreTests.this.store.delete(OWNER_A, firstId)).isTrue();
+			assertThat(AuthProfileStoreTests.this.store.currentGeneration(firstId)).isEqualTo(-1L);
+
+			// when
+			final String secondId = AuthProfileStoreTests.this.store.register(OWNER_A, bearer("dup", "t2"));
+
+			// then: the name is reusable and the new entry starts a fresh generation
+			assertThat(secondId).isNotEqualTo(firstId);
+			assertThat(AuthProfileStoreTests.this.store.currentGeneration(secondId)).isZero();
+		}
+
+	}
+
+	@Nested
 	@DisplayName("TTL configuration")
 	class TtlConfiguration {
 
