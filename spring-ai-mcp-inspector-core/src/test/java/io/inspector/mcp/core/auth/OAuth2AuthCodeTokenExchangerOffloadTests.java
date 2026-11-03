@@ -122,7 +122,7 @@ class OAuth2AuthCodeTokenExchangerOffloadTests {
 	void storeTokensIfCurrent_storesTokenWhenGenerationMatches() {
 		// given
 		final OAuth2AuthCodeTokenExchanger exchanger = new OAuth2AuthCodeTokenExchanger(this.evidenceClient,
-				new JsonMapper(), () -> 3L);
+				new JsonMapper(), (profileId) -> 3L);
 		final OAuth2AuthCodeTokenExchanger.TokenHandle handle = new OAuth2AuthCodeTokenExchanger.TokenHandle("tok-1",
 				"rt-1", Instant.now().plusSeconds(60));
 
@@ -137,7 +137,7 @@ class OAuth2AuthCodeTokenExchangerOffloadTests {
 	void storeTokensIfCurrent_throwsStaleProfileGenerationExceptionWhenGenerationChanged() {
 		// given
 		final OAuth2AuthCodeTokenExchanger exchanger = new OAuth2AuthCodeTokenExchanger(this.evidenceClient,
-				new JsonMapper(), () -> 1L);
+				new JsonMapper(), (profileId) -> 1L);
 		final OAuth2AuthCodeTokenExchanger.TokenHandle handle = new OAuth2AuthCodeTokenExchanger.TokenHandle("tok-1",
 				"rt-1", Instant.now().plusSeconds(60));
 

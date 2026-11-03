@@ -263,12 +263,12 @@ class AuthProfileHandlerTests {
 			// given
 			given(AuthProfileHandlerTests.this.store.register(eq(OWNER_A), any(AuthProfile.class)))
 				.willReturn("pid-cc");
-			given(AuthProfileHandlerTests.this.store.currentGeneration()).willReturn(1L);
+			given(AuthProfileHandlerTests.this.store.currentGeneration("pid-cc")).willReturn(1L);
 			final OAuth2ClientCredentialsTokenManager.TokenHandle handle = new OAuth2ClientCredentialsTokenManager.TokenHandle(
 					"tok-1", Instant.now().plusSeconds(60));
 			given(AuthProfileHandlerTests.this.tokenManager.acquireAsync(eq("pid-cc"), any(OAuth2Profile.class)))
 				.willReturn(Mono.just(handle));
-			given(AuthProfileHandlerTests.this.store.currentGeneration()).willReturn(1L, 2L);
+			given(AuthProfileHandlerTests.this.store.currentGeneration("pid-cc")).willReturn(1L, 2L);
 			// The storeIfCurrent call must throw StaleProfileGenerationException because
 			// the
 			// generation captured before acquireAsync (1L) no longer matches the current
@@ -292,6 +292,9 @@ class AuthProfileHandlerTests {
 				.isEqualTo("token_exchange_failed")
 				.jsonPath("$.status")
 				.isEqualTo(404);
+			// rollback on lost race: the entry is removed so the name is re-registerable
+			verify(AuthProfileHandlerTests.this.store).delete(OWNER_A, "pid-cc");
+			verify(AuthProfileHandlerTests.this.tokenManager).evict("pid-cc");
 		}
 
 		@Test
@@ -522,7 +525,7 @@ class AuthProfileHandlerTests {
 				.willReturn(Mono
 					.just(new OAuth2AuthCodeTokenExchanger.TokenHandle("at-1", "rt-1", Instant.now().plusSeconds(60))));
 			given(AuthProfileHandlerTests.this.store.markActive(OWNER_A, "pid-ac")).willReturn(true);
-			given(AuthProfileHandlerTests.this.store.currentGeneration()).willReturn(0L);
+			given(AuthProfileHandlerTests.this.store.currentGeneration("pid-ac")).willReturn(0L);
 
 			// when/then
 			withOwner(AuthProfileHandlerTests.this.client.post()
@@ -554,7 +557,7 @@ class AuthProfileHandlerTests {
 			given(AuthProfileHandlerTests.this.exchanger.exchangeAsync(pending, "auth-code-1", "verifier-1"))
 				.willReturn(Mono
 					.just(new OAuth2AuthCodeTokenExchanger.TokenHandle("at-1", "rt-1", Instant.now().plusSeconds(60))));
-			given(AuthProfileHandlerTests.this.store.currentGeneration()).willReturn(1L, 2L);
+			given(AuthProfileHandlerTests.this.store.currentGeneration("pid-ac")).willReturn(1L, 2L);
 			willThrow(new StaleProfileGenerationException("pid-ac", 1L, 2L))
 				.given(AuthProfileHandlerTests.this.exchanger)
 				.storeTokensIfCurrent(eq("pid-ac"), eq(1L), any(OAuth2AuthCodeTokenExchanger.TokenHandle.class));
@@ -572,6 +575,9 @@ class AuthProfileHandlerTests {
 				.jsonPath("$.status")
 				.isEqualTo(404);
 			verify(AuthProfileHandlerTests.this.store, never()).markActive(anyString(), anyString());
+			// rollback on lost race: the entry is removed so the name is re-registerable
+			verify(AuthProfileHandlerTests.this.store).delete(OWNER_A, "pid-ac");
+			verify(AuthProfileHandlerTests.this.exchanger).evict("pid-ac");
 		}
 
 		@Test
@@ -589,7 +595,7 @@ class AuthProfileHandlerTests {
 			given(AuthProfileHandlerTests.this.exchanger.exchangeAsync(pending, "auth-code-1", "verifier-1"))
 				.willReturn(Mono
 					.just(new OAuth2AuthCodeTokenExchanger.TokenHandle("at-1", "rt-1", Instant.now().plusSeconds(60))));
-			given(AuthProfileHandlerTests.this.store.currentGeneration()).willReturn(0L);
+			given(AuthProfileHandlerTests.this.store.currentGeneration("pid-ac")).willReturn(0L);
 			given(AuthProfileHandlerTests.this.store.markActive(OWNER_A, "pid-ac")).willReturn(false);
 
 			// when/then

@@ -55,10 +55,12 @@ import org.springframework.util.Assert;
  * tokens and stored credentials together with the profile.
  *
  * <p>
- * The store carries a monotonic {@link #generation} counter bumped on every mutation
- * path. The OAuth2 managers read this generation before an async exchange and compare it
- * after the exchange completes, discarding tokens when the generation changed (the
- * profile was deleted or mutated while the exchange was in flight).
+ * Every entry carries its own monotonic generation counter bumped when that profile is
+ * mutated; removing a profile invalidates its generation entirely. The OAuth2 managers
+ * read a profile's generation before an async exchange and compare it after the exchange
+ * completes, discarding tokens when THAT profile changed (deleted or updated while the
+ * exchange was in flight). Mutations of other profiles, including other owners' deletions
+ * and TTL sweeps, never invalidate an in-flight exchange.
  *
  * @author Artem Simeshin
  */
@@ -91,14 +93,6 @@ public class AuthProfileStore {
 	private final AtomicLong profilesExpiredTotal = new AtomicLong();
 
 	/**
-	 * Monotonic generation counter bumped on every mutation path (delete, clear,
-	 * clearBySession, removeExpired, update). Used by the OAuth2 async seams to detect
-	 * that a profile was deleted while a token exchange was in flight. Not exposed via
-	 * any API or DTO.
-	 */
-	private final AtomicLong generation = new AtomicLong();
-
-	/**
 	 * Registers {@code profile} under {@code ownerId} and returns the new server-issued
 	 * profile id. The profile name must be non-blank and unique within the owner. An
 	 * authorization-code OAuth2 profile is stored in {@code PENDING} state, everything
@@ -128,8 +122,8 @@ public class AuthProfileStore {
 			}
 			final String profileId = UUID.randomUUID().toString();
 			final ProfileState state = isPendingAuthCode(profile) ? ProfileState.PENDING : ProfileState.REGISTERED;
-			this.entries.put(profileId,
-					new Entry(ownerId, profileId, profile, state, Instant.now().plus(this.profileTtl), null));
+			this.entries.put(profileId, new Entry(ownerId, profileId, profile, state,
+					Instant.now().plus(this.profileTtl), null, new AtomicLong()));
 			LOG.debug("auth-profile[{}] registered by owner {} (state {})", profileId, ownerId, state);
 			return profileId;
 		}
@@ -194,7 +188,7 @@ public class AuthProfileStore {
 				return false;
 			}
 			this.entries.put(profileId, new Entry(entry.ownerId(), profileId, entry.profile(), ProfileState.BOUND,
-					entry.expiresAt(), sessionId));
+					entry.expiresAt(), sessionId, entry.generation()));
 			LOG.debug("auth-profile[{}] bound to session {}", profileId, sessionId);
 			return true;
 		}
@@ -202,7 +196,7 @@ public class AuthProfileStore {
 
 	/**
 	 * Removes the profile {@code profileId} (any owner — internal cleanup path) and
-	 * evicts its tokens. Bumps the generation guard.
+	 * evicts its tokens. Invalidates the profile's generation.
 	 * @param profileId the profile id
 	 * @return {@code true} when a profile was removed
 	 */
@@ -215,7 +209,6 @@ public class AuthProfileStore {
 			if (removed == null) {
 				return false;
 			}
-			bumpGeneration();
 			evict(profileId);
 			LOG.debug("auth-profile[{}] cleared", profileId);
 			return true;
@@ -223,8 +216,8 @@ public class AuthProfileStore {
 	}
 
 	/**
-	 * Removes every profile bound to {@code sessionId} and evicts their tokens. Bumps the
-	 * generation guard.
+	 * Removes every profile bound to {@code sessionId} and evicts their tokens. Each
+	 * removed profile's generation is invalidated.
 	 * @param sessionId the proxy session id
 	 * @return the number of removed profiles
 	 */
@@ -239,9 +232,6 @@ public class AuthProfileStore {
 				.map(Entry::profileId)
 				.toList();
 			removed.forEach(this.entries::remove);
-			if (!removed.isEmpty()) {
-				bumpGeneration();
-			}
 			removed.forEach(this::evict);
 			if (!removed.isEmpty()) {
 				LOG.debug("auth-profile: cleared {} profiles bound to session {}", removed.size(), sessionId);
@@ -251,8 +241,8 @@ public class AuthProfileStore {
 	}
 
 	/**
-	 * Removes every entry whose TTL has passed and evicts their tokens. Bumps the
-	 * generation guard.
+	 * Removes every entry whose TTL has passed and evicts their tokens. Each removed
+	 * profile's generation is invalidated.
 	 * @param now the sweep timestamp
 	 * @return the number of removed profiles
 	 */
@@ -267,9 +257,6 @@ public class AuthProfileStore {
 				.map(Entry::profileId)
 				.toList();
 			expired.forEach(this.entries::remove);
-			if (!expired.isEmpty()) {
-				bumpGeneration();
-			}
 			expired.forEach(this::evict);
 			this.profilesExpiredTotal.addAndGet(expired.size());
 			if (!expired.isEmpty()) {
@@ -299,7 +286,7 @@ public class AuthProfileStore {
 	 * Replaces the profile for {@code profileId} (owner-scoped). Allowed only while the
 	 * profile is not bound; the profile's lifecycle state is recomputed for the new
 	 * shape. Evicts the profile's tokens so a stale credential cannot outlive the update.
-	 * Bumps the generation guard.
+	 * Bumps the profile's generation counter.
 	 * @param ownerId the owning browser session id
 	 * @param profileId the profile id
 	 * @param profile the replacement profile
@@ -327,8 +314,9 @@ public class AuthProfileStore {
 						"a profile named '" + profile.name() + "' already exists for this session");
 			}
 			final ProfileState nextState = isPendingAuthCode(profile) ? ProfileState.PENDING : ProfileState.REGISTERED;
-			this.entries.put(profileId, entry.withProfile(profile).withState(nextState));
-			bumpGeneration();
+			final Entry updated = entry.withProfile(profile).withState(nextState);
+			updated.generation().incrementAndGet();
+			this.entries.put(profileId, updated);
 			evict(profileId);
 			LOG.debug("auth-profile[{}] updated by owner {}", profileId, ownerId);
 			return true;
@@ -337,7 +325,7 @@ public class AuthProfileStore {
 
 	/**
 	 * Deletes the profile for {@code profileId} (owner-scoped) and evicts its tokens.
-	 * Bumps the generation guard.
+	 * Invalidates the profile's generation.
 	 * @param ownerId the owning browser session id
 	 * @param profileId the profile id
 	 * @return {@code true} when deleted, {@code false} for unknown / foreign ids
@@ -352,7 +340,6 @@ public class AuthProfileStore {
 				return false;
 			}
 			this.entries.remove(profileId);
-			bumpGeneration();
 			evict(profileId);
 			LOG.debug("auth-profile[{}] deleted by owner {}", profileId, ownerId);
 			return true;
@@ -446,22 +433,26 @@ public class AuthProfileStore {
 	}
 
 	/**
-	 * Returns the current generation counter value. Callers (OAuth2 async seams) capture
-	 * this value before starting an async exchange and compare it after the exchange
-	 * completes to detect concurrent mutations.
-	 * @return the current generation value
+	 * Returns the current generation of {@code profileId}. Callers (OAuth2 async seams)
+	 * capture this value before starting an async exchange and compare it after the
+	 * exchange completes to detect concurrent mutations of that profile.
+	 *
+	 * <p>
+	 * The generation is scoped to a single profile entry: it starts at {@code 0} when the
+	 * profile is registered and is bumped by
+	 * {@link #update(String, String, AuthProfile)}. Removing the profile (delete / clear
+	 * / clearBySession / removeExpired) invalidates its generation, so an unknown or
+	 * removed profile reports {@code -1}, a value no live capture can hold. Mutations of
+	 * OTHER profiles (another owner's deletion, TTL sweeps) do not change this value.
+	 * @param profileId the profile id
+	 * @return the profile's current generation, or {@code -1} for an unknown / removed id
 	 */
-	public long currentGeneration() {
-		return this.generation.get();
-	}
-
-	/**
-	 * Bumps the generation counter. Called on every mutation path (delete, clear,
-	 * clearBySession, removeExpired, update) so that in-flight async exchanges can detect
-	 * that the profile was modified while the exchange was running.
-	 */
-	private void bumpGeneration() {
-		this.generation.incrementAndGet();
+	public long currentGeneration(final String profileId) {
+		if (profileId == null) {
+			return -1L;
+		}
+		final Entry entry = this.entries.get(profileId);
+		return (entry != null) ? entry.generation().get() : -1L;
 	}
 
 	/**
@@ -523,16 +514,20 @@ public class AuthProfileStore {
 	 * @param state the lifecycle state
 	 * @param expiresAt the TTL expiry instant
 	 * @param boundSessionId the bound proxy session id, or {@code null}
+	 * @param generation the per-profile mutation counter, shared across entry
+	 * replacements
 	 */
 	private record Entry(String ownerId, String profileId, AuthProfile profile, ProfileState state, Instant expiresAt,
-			String boundSessionId) {
+			String boundSessionId, AtomicLong generation) {
 
 		Entry withProfile(final AuthProfile newProfile) {
-			return new Entry(this.ownerId, this.profileId, newProfile, this.state, this.expiresAt, this.boundSessionId);
+			return new Entry(this.ownerId, this.profileId, newProfile, this.state, this.expiresAt, this.boundSessionId,
+					this.generation);
 		}
 
 		Entry withState(final ProfileState newState) {
-			return new Entry(this.ownerId, this.profileId, this.profile, newState, this.expiresAt, this.boundSessionId);
+			return new Entry(this.ownerId, this.profileId, this.profile, newState, this.expiresAt, this.boundSessionId,
+					this.generation);
 		}
 
 	}

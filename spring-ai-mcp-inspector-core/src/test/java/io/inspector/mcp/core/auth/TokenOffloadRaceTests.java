@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -77,7 +78,7 @@ class TokenOffloadRaceTests {
 		final OAuth2Profile profile = new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS,
 				"http://127.0.0.1:" + this.stubPort + "/token", "cid", "sec", null, null, null, null, null);
 		final String profileId = store.register("owner-a", profile);
-		final long expectedGeneration = store.currentGeneration();
+		final long expectedGeneration = store.currentGeneration(profileId);
 
 		// when: start the async acquire, then concurrently delete the profile
 		final CompletableFuture<Void> acquireFuture = CompletableFuture
@@ -130,7 +131,7 @@ class TokenOffloadRaceTests {
 				challenge, "S256");
 		final String profileId = store.register("owner-a", profile);
 		exchanger.mintState("owner-a", profileId);
-		final long expectedGeneration = store.currentGeneration();
+		final long expectedGeneration = store.currentGeneration(profileId);
 
 		// when: start the async exchange, then concurrently delete the profile
 		final CompletableFuture<Void> exchangeFuture = CompletableFuture
@@ -180,7 +181,7 @@ class TokenOffloadRaceTests {
 		final OAuth2Profile profile = new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS,
 				"http://127.0.0.1:" + this.stubPort + "/token", "cid", "sec", null, null, null, null, null);
 		final String profileId = store.register("owner-a", profile);
-		final long expectedGeneration = store.currentGeneration();
+		final long expectedGeneration = store.currentGeneration(profileId);
 
 		// when: start the async acquire, then concurrently clear the profile
 		final CompletableFuture<Void> acquireFuture = CompletableFuture
@@ -220,8 +221,8 @@ class TokenOffloadRaceTests {
 		final AuthProfileStore store = new AuthProfileStore();
 		final java.util.concurrent.CountDownLatch generationReadLatch = new java.util.concurrent.CountDownLatch(1);
 		final java.util.concurrent.CountDownLatch deleteLatch = new java.util.concurrent.CountDownLatch(1);
-		final java.util.function.LongSupplier pausingGuard = () -> {
-			final long g = store.currentGeneration();
+		final java.util.function.ToLongFunction<String> pausingGuard = (pid) -> {
+			final long g = store.currentGeneration(pid);
 			generationReadLatch.countDown();
 			try {
 				deleteLatch.await(5, TimeUnit.SECONDS);
@@ -242,7 +243,7 @@ class TokenOffloadRaceTests {
 		final OAuth2Profile profile = new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS,
 				"http://127.0.0.1:" + this.stubPort + "/token", "cid", "sec", null, null, null, null, null);
 		final String profileId = store.register("owner-a", profile);
-		final long expectedGeneration = store.currentGeneration();
+		final long expectedGeneration = store.currentGeneration(profileId);
 
 		// when: storeIfCurrent starts and pauses after reading generation
 		final CompletableFuture<Void> storeFuture = CompletableFuture.runAsync(() -> {
@@ -279,8 +280,8 @@ class TokenOffloadRaceTests {
 		final AuthProfileStore store = new AuthProfileStore();
 		final java.util.concurrent.CountDownLatch generationReadLatch = new java.util.concurrent.CountDownLatch(1);
 		final java.util.concurrent.CountDownLatch deleteLatch = new java.util.concurrent.CountDownLatch(1);
-		final java.util.function.LongSupplier pausingGuard = () -> {
-			final long g = store.currentGeneration();
+		final java.util.function.ToLongFunction<String> pausingGuard = (pid) -> {
+			final long g = store.currentGeneration(pid);
 			generationReadLatch.countDown();
 			try {
 				deleteLatch.await(5, TimeUnit.SECONDS);
@@ -301,7 +302,7 @@ class TokenOffloadRaceTests {
 				challenge, "S256");
 		final String profileId = store.register("owner-a", profile);
 		exchanger.mintState("owner-a", profileId);
-		final long expectedGeneration = store.currentGeneration();
+		final long expectedGeneration = store.currentGeneration(profileId);
 
 		// when: storeTokensIfCurrent starts and pauses after reading generation
 		final CompletableFuture<Void> storeFuture = CompletableFuture.runAsync(() -> {
@@ -329,6 +330,106 @@ class TokenOffloadRaceTests {
 		assertThat(exchanger.tokenCount()).isZero();
 		assertThat(exchanger.stateCount()).isZero();
 		assertThat(store.resolve("owner-a", profileId)).isEmpty();
+	}
+
+	@Test
+	void registerBlockedAtTokenEndpoint_foreignDeleteAndSweep_registrationSurvives() throws Exception {
+		// given: token endpoint that blocks until released
+		stubTokenEndpointWithLatch(200, "{\"access_token\":\"tok-1\",\"expires_in\":3600}");
+
+		final AuthProfileStore store = new AuthProfileStore();
+		final OAuth2ClientCredentialsTokenManager manager = new OAuth2ClientCredentialsTokenManager(
+				HttpClient.newHttpClient(), new JsonMapper(), store::currentGeneration);
+		final OAuth2AuthCodeTokenExchanger exchanger = new OAuth2AuthCodeTokenExchanger();
+		store.setTokenEvictor((profileId) -> {
+			manager.evict(profileId);
+			exchanger.evict(profileId);
+		});
+
+		// an unrelated owner's profile the TTL reaper will sweep mid-flight
+		store.setProfileTtl(Duration.ofMillis(1));
+		final String expiredId = store.register("owner-c", new OAuth2Profile("cc-c", OAuth2GrantMode.CLIENT_CREDENTIALS,
+				"http://127.0.0.1:" + this.stubPort + "/token", "cid-c", "sec-c", null, null, null, null, null));
+		store.setProfileTtl(Duration.ofHours(24));
+
+		final OAuth2Profile profile = new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS,
+				"http://127.0.0.1:" + this.stubPort + "/token", "cid", "sec", null, null, null, null, null);
+		final String profileId = store.register("owner-a", profile);
+		final long expectedGeneration = store.currentGeneration(profileId);
+
+		// when: start the async acquire, then mutate OTHER profiles while it is blocked
+		final CompletableFuture<Void> acquireFuture = CompletableFuture
+			.runAsync(() -> StepVerifier.create(manager.acquireAsync(profileId, profile))
+				.expectNextMatches((handle) -> "tok-1".equals(handle.accessToken()))
+				.verifyComplete());
+
+		// Give the async exchange a moment to reach the blocked endpoint
+		Thread.sleep(100);
+
+		// Foreign owner's concurrent registration + delete and the TTL sweep: none of
+		// these may invalidate owner-a's in-flight registration
+		final String foreignId = store.register("owner-b", new OAuth2Profile("cc-b", OAuth2GrantMode.CLIENT_CREDENTIALS,
+				"http://127.0.0.1:" + this.stubPort + "/token", "cid-b", "sec-b", null, null, null, null, null));
+		assertThat(store.delete("owner-b", foreignId)).isTrue();
+		assertThat(store.removeExpired(Instant.now().plusSeconds(60))).isEqualTo(1);
+		assertThat(store.resolve("owner-c", expiredId)).isEmpty();
+
+		// Release the token endpoint
+		this.tokenEndpointLatch.countDown();
+		acquireFuture.get(10, TimeUnit.SECONDS);
+
+		// then: the registration survives the foreign mutations and the token is stored
+		final OAuth2ClientCredentialsTokenManager.TokenHandle handle = new OAuth2ClientCredentialsTokenManager.TokenHandle(
+				"tok-1", Instant.now().plusSeconds(60));
+		manager.storeIfCurrent(profileId, expectedGeneration, handle, profile);
+		assertThat(manager.credentialCount()).isEqualTo(1);
+		assertThat(manager.cacheSize()).isEqualTo(1);
+		assertThat(store.resolve("owner-a", profileId)).isPresent();
+	}
+
+	@Test
+	void exchangeBlockedAtTokenEndpoint_foreignDelete_exchangeSurvives() throws Exception {
+		// given: token endpoint that blocks until released
+		stubTokenEndpointWithLatch(200, "{\"access_token\":\"tok-1\",\"expires_in\":3600}");
+
+		final AuthProfileStore store = new AuthProfileStore();
+		final OAuth2AuthCodeTokenExchanger exchanger = new OAuth2AuthCodeTokenExchanger(HttpClient.newHttpClient(),
+				new JsonMapper(), store::currentGeneration);
+		store.setTokenEvictor(exchanger);
+
+		final String verifier = "test-verifier";
+		final String challenge = s256(verifier);
+		final OAuth2Profile profile = new OAuth2Profile("ac", OAuth2GrantMode.AUTHORIZATION_CODE,
+				"http://127.0.0.1:" + this.stubPort + "/token", "cid", null, null, "http://idp/auth", "http://app/cb",
+				challenge, "S256");
+		final String profileId = store.register("owner-a", profile);
+		exchanger.mintState("owner-a", profileId);
+		final long expectedGeneration = store.currentGeneration(profileId);
+
+		// when: start the async exchange, then delete ANOTHER owner's profile mid-flight
+		final CompletableFuture<Void> exchangeFuture = CompletableFuture
+			.runAsync(() -> StepVerifier.create(exchanger.exchangeAsync(profile, "auth-code", verifier))
+				.expectNextMatches((handle) -> "tok-1".equals(handle.accessToken()))
+				.verifyComplete());
+
+		// Give the async exchange a moment to reach the blocked endpoint
+		Thread.sleep(100);
+
+		// Foreign owner's concurrent delete: must not invalidate owner-a's exchange
+		final String foreignId = store.register("owner-b", new OAuth2Profile("cc-b", OAuth2GrantMode.CLIENT_CREDENTIALS,
+				"http://127.0.0.1:" + this.stubPort + "/token", "cid-b", "sec-b", null, null, null, null, null));
+		assertThat(store.delete("owner-b", foreignId)).isTrue();
+
+		// Release the token endpoint
+		this.tokenEndpointLatch.countDown();
+		exchangeFuture.get(10, TimeUnit.SECONDS);
+
+		// then: the exchange survives the foreign delete and the tokens are stored
+		final OAuth2AuthCodeTokenExchanger.TokenHandle handle = new OAuth2AuthCodeTokenExchanger.TokenHandle("tok-1",
+				"rt-1", Instant.now().plusSeconds(60));
+		exchanger.storeTokensIfCurrent(profileId, expectedGeneration, handle);
+		assertThat(exchanger.tokenCount()).isEqualTo(1);
+		assertThat(store.resolve("owner-a", profileId)).isPresent();
 	}
 
 	private void stubTokenEndpointWithLatch(final int status, final String body) {

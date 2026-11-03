@@ -32,7 +32,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.LongSupplier;
+import java.util.function.ToLongFunction;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -97,22 +97,23 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 	/** JSON mapper for token responses. */
 	private final JsonMapper objectMapper;
 
-	/** Generation guard for atomic token storage. */
-	private LongSupplier generationGuard = () -> 0L;
+	/** Per-profile generation guard for atomic token storage. */
+	private ToLongFunction<String> generationGuard = (profileId) -> 0L;
 
 	/** Per-profile locks for the atomic store-tokens contract. */
 	private final ConcurrentMap<String, Object> tokenStoreLocks = new ConcurrentHashMap<>();
 
 	public OAuth2AuthCodeTokenExchanger() {
-		this(java.net.http.HttpClient.newBuilder().connectTimeout(REQUEST_TIMEOUT).build(), new JsonMapper(), () -> 0L);
+		this(java.net.http.HttpClient.newBuilder().connectTimeout(REQUEST_TIMEOUT).build(), new JsonMapper(),
+				(profileId) -> 0L);
 	}
 
 	public OAuth2AuthCodeTokenExchanger(final java.net.http.HttpClient httpClient, final JsonMapper objectMapper) {
-		this(httpClient, objectMapper, () -> 0L);
+		this(httpClient, objectMapper, (profileId) -> 0L);
 	}
 
 	public OAuth2AuthCodeTokenExchanger(final java.net.http.HttpClient httpClient, final JsonMapper objectMapper,
-			final LongSupplier generationGuard) {
+			final ToLongFunction<String> generationGuard) {
 		this.httpClient = (httpClient != null) ? httpClient : java.net.http.HttpClient.newHttpClient();
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.generationGuard = generationGuard;
@@ -240,10 +241,10 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 	}
 
 	/**
-	 * Sets the generation guard used by {@link #storeTokensIfCurrent}.
-	 * @param generationGuard the generation supplier
+	 * Sets the per-profile generation guard used by {@link #storeTokensIfCurrent}.
+	 * @param generationGuard the per-profile generation guard
 	 */
-	public void setGenerationGuard(final LongSupplier generationGuard) {
+	public void setGenerationGuard(final ToLongFunction<String> generationGuard) {
 		Assert.notNull(generationGuard, "generationGuard must not be null");
 		this.generationGuard = generationGuard;
 	}
@@ -272,9 +273,10 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 
 	/**
 	 * Atomically stores the exchanged tokens under {@code profileId} only when the
-	 * current generation matches the expected generation captured at verification time.
-	 * Synchronized on the {@code tokens} map so that concurrent generation bumps
-	 * (delete/clear) are visible and atomic with the store.
+	 * profile's current generation matches the expected generation captured at
+	 * verification time. Synchronized per profile so that concurrent generation bumps
+	 * (update) and removals (delete/clear, reported as -1) are visible and atomic with
+	 * the store. A negative expected generation is always stale.
 	 * @param profileId the profile id
 	 * @param expectedGeneration the generation captured at verification time
 	 * @param handle the exchanged token handle
@@ -285,8 +287,8 @@ public class OAuth2AuthCodeTokenExchanger implements TokenEvictor {
 		Assert.notNull(handle, "handle must not be null");
 		final Object lock = this.tokenStoreLocks.computeIfAbsent(profileId, (key) -> new Object());
 		synchronized (lock) {
-			final long currentGeneration = this.generationGuard.getAsLong();
-			if (currentGeneration != expectedGeneration) {
+			final long currentGeneration = this.generationGuard.applyAsLong(profileId);
+			if (expectedGeneration < 0 || currentGeneration != expectedGeneration) {
 				throw new StaleProfileGenerationException(profileId, expectedGeneration, currentGeneration);
 			}
 			this.tokens.put(profileId, handle);

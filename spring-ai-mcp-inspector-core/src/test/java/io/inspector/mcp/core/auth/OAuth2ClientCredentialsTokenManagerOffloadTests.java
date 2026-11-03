@@ -95,7 +95,7 @@ class OAuth2ClientCredentialsTokenManagerOffloadTests {
 	void storeIfCurrent_storesTokenWhenGenerationMatches() {
 		// given
 		final OAuth2ClientCredentialsTokenManager manager = new OAuth2ClientCredentialsTokenManager(this.evidenceClient,
-				new JsonMapper(), () -> 5L);
+				new JsonMapper(), (profileId) -> 5L);
 		final OAuth2ClientCredentialsTokenManager.TokenHandle handle = new OAuth2ClientCredentialsTokenManager.TokenHandle(
 				"tok-1", Instant.now().plusSeconds(60));
 		final OAuth2Profile profile = new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS,
@@ -113,7 +113,7 @@ class OAuth2ClientCredentialsTokenManagerOffloadTests {
 	void storeIfCurrent_throwsStaleProfileGenerationExceptionWhenGenerationChanged() {
 		// given
 		final OAuth2ClientCredentialsTokenManager manager = new OAuth2ClientCredentialsTokenManager(this.evidenceClient,
-				new JsonMapper(), () -> 1L);
+				new JsonMapper(), (profileId) -> 1L);
 		final OAuth2ClientCredentialsTokenManager.TokenHandle handle = new OAuth2ClientCredentialsTokenManager.TokenHandle(
 				"tok-1", Instant.now().plusSeconds(60));
 		final OAuth2Profile profile = new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS,
@@ -129,7 +129,7 @@ class OAuth2ClientCredentialsTokenManagerOffloadTests {
 	void storeIfCurrent_storesNothingOnStaleGeneration() {
 		// given
 		final OAuth2ClientCredentialsTokenManager manager = new OAuth2ClientCredentialsTokenManager(this.evidenceClient,
-				new JsonMapper(), () -> 1L);
+				new JsonMapper(), (profileId) -> 1L);
 		final OAuth2ClientCredentialsTokenManager.TokenHandle handle = new OAuth2ClientCredentialsTokenManager.TokenHandle(
 				"tok-1", Instant.now().plusSeconds(60));
 		final OAuth2Profile profile = new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS,

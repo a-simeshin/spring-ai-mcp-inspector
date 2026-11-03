@@ -31,7 +31,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.LongSupplier;
+import java.util.function.ToLongFunction;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -123,15 +123,15 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 	/** Cumulative count of orphaned locks removed by the fallback sweep. */
 	private final AtomicLong profileLocksOrphanedTotal = new AtomicLong();
 
-	/** Generation guard to detect stale profile mutations. */
-	private LongSupplier generationGuard = () -> 0L;
+	/** Per-profile generation guard to detect stale profile mutations. */
+	private ToLongFunction<String> generationGuard = (profileId) -> 0L;
 
 	public OAuth2ClientCredentialsTokenManager() {
-		this(HttpClient.newBuilder().connectTimeout(REQUEST_TIMEOUT).build(), new JsonMapper(), () -> 0L);
+		this(HttpClient.newBuilder().connectTimeout(REQUEST_TIMEOUT).build(), new JsonMapper(), (profileId) -> 0L);
 	}
 
 	public OAuth2ClientCredentialsTokenManager(final HttpClient httpClient, final JsonMapper objectMapper) {
-		this(httpClient, objectMapper, () -> 0L);
+		this(httpClient, objectMapper, (profileId) -> 0L);
 	}
 
 	/**
@@ -150,7 +150,7 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 	}
 
 	public OAuth2ClientCredentialsTokenManager(final HttpClient httpClient, final JsonMapper objectMapper,
-			final LongSupplier generationGuard) {
+			final ToLongFunction<String> generationGuard) {
 		this.httpClient = (httpClient != null) ? httpClient : HttpClient.newHttpClient();
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.requestTimeout = REQUEST_TIMEOUT;
@@ -158,11 +158,11 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 	}
 
 	/**
-	 * Sets the generation guard supplier for bean wiring scenarios where the supplier is
+	 * Sets the per-profile generation guard for bean wiring scenarios where the guard is
 	 * not available at construction time.
-	 * @param generationGuard the generation guard supplier
+	 * @param generationGuard the per-profile generation guard
 	 */
-	public void setGenerationGuard(final LongSupplier generationGuard) {
+	public void setGenerationGuard(final ToLongFunction<String> generationGuard) {
 		Assert.notNull(generationGuard, "generationGuard must not be null");
 		this.generationGuard = generationGuard;
 	}
@@ -219,9 +219,10 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 	 * <p>
 	 * Under the per-profile lock (same single-flight contract as
 	 * {@link #getAccessToken(String, boolean)}), checks
-	 * {@code generationGuard.getAsLong() == expectedGeneration}. On mismatch throws
-	 * {@link StaleProfileGenerationException} without storing anything. On match stores
-	 * both credentials and the cached token entry.
+	 * {@code generationGuard.applyAsLong(profileId) == expectedGeneration}. On mismatch
+	 * (including a negative expected generation, captured when the profile was already
+	 * gone) throws {@link StaleProfileGenerationException} without storing anything. On
+	 * match stores both credentials and the cached token entry.
 	 * @param profileId the store profile id
 	 * @param expectedGeneration the generation captured at registration time
 	 * @param handle the exchanged token handle
@@ -237,8 +238,8 @@ public class OAuth2ClientCredentialsTokenManager implements TokenEvictor {
 				"storeIfCurrent requires a CLIENT_CREDENTIALS profile");
 		final Object lock = this.profileLocks.computeIfAbsent(profileId, (key) -> new Object());
 		synchronized (lock) {
-			final long currentGeneration = this.generationGuard.getAsLong();
-			if (currentGeneration != expectedGeneration) {
+			final long currentGeneration = this.generationGuard.applyAsLong(profileId);
+			if (expectedGeneration < 0 || currentGeneration != expectedGeneration) {
 				throw new StaleProfileGenerationException(profileId, expectedGeneration, currentGeneration);
 			}
 			LOG.debug("oauth2-cc[{}] generation match ({}), storing credentials and token expiring {}", profileId,
