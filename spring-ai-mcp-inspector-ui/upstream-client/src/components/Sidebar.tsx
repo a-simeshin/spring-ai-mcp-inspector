@@ -115,6 +115,12 @@ interface SidebarProps {
   onSaveConnection: (name: string) => SavedConnection | undefined;
   onDeleteConnection: (id: string) => void;
   onSelectConnection: (connection: SavedConnection) => void;
+  // [spring-ai-mcp-inspector PATCH] Stale auth-profile bindings (issue #267):
+  // saved connections bound to a profile name the server no longer has.
+  // Rendered as a warning banner, not a toast, with one-click fix actions.
+  staleAuthProfileBindings?: SavedConnection[];
+  onUnlinkAuthProfile?: (connectionId: string) => void;
+  onOpenAuthSettings?: () => void;
 }
 
 const Sidebar = ({
@@ -159,6 +165,9 @@ const Sidebar = ({
   onSaveConnection,
   onDeleteConnection,
   onSelectConnection,
+  staleAuthProfileBindings,
+  onUnlinkAuthProfile,
+  onOpenAuthSettings,
 }: SidebarProps) => {
   const [theme, setTheme] = useTheme();
   const [showEnvVars, setShowEnvVars] = useState(false);
@@ -376,6 +385,51 @@ const Sidebar = ({
               </SelectContent>
             </Select>
           </div>
+
+          {/* [spring-ai-mcp-inspector PATCH] Stale auth-profile bindings
+              (issue #267): a saved connection references a profile name the
+              server no longer serves (restarted in-memory store, or a backend
+              without the auth-profile API). Names are rendered as React text
+              nodes, so any markup inside a stored name is escaped. */}
+          {staleAuthProfileBindings && staleAuthProfileBindings.length > 0 && (
+            <div className="space-y-2">
+              {staleAuthProfileBindings.map((conn) => (
+                <div
+                  key={conn.id}
+                  className="bg-amber-50 dark:bg-amber-950 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 rounded-lg p-3"
+                  data-testid={`stale-auth-binding-${conn.id}`}
+                  role="status"
+                >
+                  <p className="text-xs">
+                    Connection <span className="font-medium">{conn.name}</span>{" "}
+                    is bound to auth profile{" "}
+                    <span className="font-medium">{conn.authProfileName}</span>,
+                    which is missing on this server.
+                  </p>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => onUnlinkAuthProfile?.(conn.id)}
+                      data-testid={`stale-auth-binding-unlink-${conn.id}`}
+                    >
+                      Unlink profile
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => onOpenAuthSettings?.()}
+                      data-testid="stale-auth-binding-open-settings"
+                    >
+                      Open Auth Settings
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* [spring-ai-mcp-inspector PATCH] Saved connections (#121). */}
           <div className="space-y-2">
