@@ -9,6 +9,7 @@
  */
 package io.inspector.mcp.demo.tools;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -57,6 +58,26 @@ public class TaskRegistry implements TaskService {
 
 	private final ConcurrentHashMap<String, Entry> tasks = new ConcurrentHashMap<>();
 
+	private final Clock clock;
+
+	/**
+	 * Create a registry on the system clock. Used by Spring component scanning.
+	 */
+	public TaskRegistry() {
+		this(Clock.systemUTC());
+	}
+
+	/**
+	 * Create a registry reading time from the given {@link Clock}. Tests inject a
+	 * controllable clock so TTL eviction can be advanced deterministically, without real
+	 * sleeps.
+	 * @param clock the time source for creation stamps, terminal transitions, keep-alive
+	 * refreshes and the eviction deadline
+	 */
+	TaskRegistry(final Clock clock) {
+		this.clock = clock;
+	}
+
 	/**
 	 * Create a new task in the {@code working} state.
 	 * @param ttl how long after the last update (terminal transition or keep-alive) the
@@ -67,7 +88,7 @@ public class TaskRegistry implements TaskService {
 	 */
 	public Entry createTask(final Duration ttl, final int pollIntervalSeconds, final String keepAliveUrl) {
 		final String taskId = UUID.randomUUID().toString();
-		final Instant now = Instant.now();
+		final Instant now = Instant.now(this.clock);
 		final Entry entry = new Entry(taskId, now, ttl, pollIntervalSeconds, keepAliveUrl);
 		tasks.put(taskId, entry);
 		return entry;
@@ -95,7 +116,7 @@ public class TaskRegistry implements TaskService {
 			return false;
 		}
 		if (entry.status.compareAndSet("working", "cancelled")) {
-			entry.markUpdated();
+			entry.markUpdated(Instant.now(this.clock));
 			return true;
 		}
 		return false;
@@ -115,7 +136,7 @@ public class TaskRegistry implements TaskService {
 		}
 		if (entry.status.compareAndSet("working", "completed")) {
 			entry.result.set(result);
-			entry.markUpdated();
+			entry.markUpdated(Instant.now(this.clock));
 			return true;
 		}
 		return false;
@@ -135,7 +156,7 @@ public class TaskRegistry implements TaskService {
 		}
 		if (entry.status.compareAndSet("working", "failed")) {
 			entry.error.set(error);
-			entry.markUpdated();
+			entry.markUpdated(Instant.now(this.clock));
 			return true;
 		}
 		return false;
@@ -153,7 +174,7 @@ public class TaskRegistry implements TaskService {
 		if (entry == null) {
 			return false;
 		}
-		final Instant now = Instant.now();
+		final Instant now = Instant.now(this.clock);
 		entry.lastKeepAlive.set(now);
 		entry.lastUpdatedAt.set(now);
 		return true;
@@ -169,7 +190,7 @@ public class TaskRegistry implements TaskService {
 	 */
 	@Scheduled(fixedRateString = "${demo.task-sweep-millis:30000}", initialDelay = 5000)
 	public void evictExpiredTasks() {
-		final Instant deadline = Instant.now();
+		final Instant deadline = Instant.now(this.clock);
 		tasks.values().removeIf(entry -> {
 			if (isTerminal(entry.status.get())) {
 				final Instant ref = entry.lastUpdatedAt.get();
@@ -206,7 +227,7 @@ public class TaskRegistry implements TaskService {
 			// Should not happen: input_required is not in use yet.
 			throw new TaskNotCancelableException(taskId, current);
 		}
-		entry.markUpdated();
+		entry.markUpdated(Instant.now(this.clock));
 		return toHandle(entry);
 	}
 
@@ -259,9 +280,12 @@ public class TaskRegistry implements TaskService {
 
 		final String taskId;
 
-		/** Record that the task state was just observably updated (now). */
-		void markUpdated() {
-			this.lastUpdatedAt.set(Instant.now());
+		/**
+		 * Record that the task state was just observably updated.
+		 * @param now the timestamp of the observable update
+		 */
+		void markUpdated(final Instant now) {
+			this.lastUpdatedAt.set(now);
 		}
 
 		Entry(final String taskId, final Instant createdAt, final Duration ttl, final int pollIntervalSeconds,

@@ -2741,18 +2741,29 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("when no TaskService bean is available, tasks/get falls through to the regular relay path")
 		void tasksGet_withoutTaskService_relaysToUpstream() throws Exception {
-			// given
+			// given: the upstream answer is pre-emitted on the session replay sink, so
+			// the
+			// relay await resolves immediately instead of waiting out the 30 s request
+			// timeout
+			final String frame = "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}";
 			final ProxySession session = newSession("s1");
+			final JsonNode upstreamAnswer = ProxyHandlerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":6,\"result\":{\"taskId\":\"t-1\",\"status\":\"vendor-implementation\"}}");
+			session.targetToBrowser().tryEmitNext(upstreamAnswer);
 			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
-			final ServerRequest request = buildTaskRequest("s1",
-					"{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}");
+			final ServerRequest request = buildTaskRequest("s1", frame);
 
 			// when - the default handler has no TaskService
 			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
 
-			// then - the frame is relayed, not intercepted locally
+			// then - the frame is relayed upstream and the upstream answer comes back
+			// verbatim
 			assertThat(response).isNotNull();
-			assertThat(response.statusCode()).isNotEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(ProxyHandlerTests.entityJson(response)).isEqualTo(upstreamAnswer);
+			assertThat(session.browserToTarget().asFlux().blockFirst(Duration.ofMillis(500)))
+				.as("tasks/get frame must be emitted toward upstream")
+				.isEqualTo(ProxyHandlerTests.this.objectMapper.readTree(frame));
 		}
 
 		@Test
