@@ -1,0 +1,48 @@
+STALE AUTH-PROFILE BINDING 404 (issue #267)
+
+Upstream behavior: on every page load the auth-profiles panel fires the
+unconditional GET /mcp-inspector/api/auth-profile and GET .../auth-profile/prefill
+requests. When the backend predates the auth-profile API, or its in-memory
+profile store was restarted, both calls return 404 and the panel emits a raw
+destructive toast "Auth Profile Error / Not Found" on every load, stacking on
+top of the server notifications pane. Upstream has no notion of a saved
+connection being bound to a named auth profile.
+
+Local fix:
+- `src/lib/types/savedConnection.ts`: optional `authProfileName` field on
+  `SavedConnection` (absent = no binding; schema-compatible with the existing
+  v1 localStorage key `mcp-inspector.savedConnections.v1`).
+- `src/lib/savedConnections.ts`: `isValidConnection` accepts the optional
+  string binding; new `unlinkAuthProfileFromSavedConnection(id)` removes the
+  binding from one entry and persists the whole array back to the v1 key
+  without touching other entries or the schema version.
+- `src/components/AuthProfiles.tsx`: 404 from the mount-time list or prefill
+  fetch resolves to an empty profile set (`onProfilesChange([])`) with NO
+  toast - the effective profile set is simply empty. Non-404 failures keep
+  the existing destructive toast.
+- `src/App.tsx`: staleness is evaluated only after the first list result
+  arrives (success or suppressed 404), so nothing flashes while the request
+  is in flight. Connections whose `authProfileName` is not in the effective
+  profile set are passed to the Sidebar as `staleAuthProfileBindings` with
+  one-click handlers: unlink (persist via the storage layer) and
+  `setIsAuthDebuggerVisible(true)` ("Open Auth Settings").
+- `src/components/Sidebar.tsx`: warning banner (not a toast) above the
+  Saved Connections section, one item per stale binding, naming the
+  connection and the missing profile. Names render as React text nodes, so
+  markup inside a stored name is escaped.
+- `src/components/ui/toaster.tsx` + `src/components/ui/toast.tsx`: the toast
+  viewport measures the notifications pane (`data-testid` on the pane in
+  App.tsx) and raises itself above the pane's top edge via the
+  `--toast-viewport-offset` CSS variable, so toasts no longer cover the
+  pane; without the pane the original position is kept.
+
+Covered by:
+- `src/lib/__tests__/savedConnections.test.ts` (binding validation on load,
+  unlink persistence semantics)
+- `src/components/__tests__/Sidebar.savedConnections.test.tsx` (banner
+  naming, multi-binding items, one-click actions, no banner for valid
+  connections, name escaping)
+- `src/components/__tests__/AuthProfiles.staleBinding.test.tsx` (404
+  suppression for list and prefill, destructive toast kept for non-404)
+- `src/components/__tests__/Toaster.viewportOffset.test.tsx` (viewport
+  raised above the pane, default offset without/with hidden pane)

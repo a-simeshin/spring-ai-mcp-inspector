@@ -12,6 +12,7 @@ import {
   isValidConnection,
   filterValidConnections,
   stripSecrets,
+  unlinkAuthProfileFromSavedConnection,
 } from "../savedConnections";
 import type { SavedConnection } from "../types/savedConnection";
 
@@ -661,6 +662,82 @@ describe("savedConnections", () => {
       expect(headerValues).not.toContain("key-abc");
       expect(headerValues).not.toContain("visible");
       expect(headerValues.every((v) => v === "")).toBe(true);
+    });
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Auth-profile binding on saved connections
+  // (issue #267): optional string field, validated on load, removable via a
+  // one-click unlink that persists the whole array back to the v1 key.
+  describe("auth profile binding (issue #267)", () => {
+    const store = (connections: SavedConnection[]) => {
+      localStorage.setItem(
+        SAVED_CONNECTIONS_KEY,
+        JSON.stringify({ schemaVersion: 1, connections }),
+      );
+    };
+
+    it("accepts an optional string authProfileName on load", () => {
+      store([mockConnection({ authProfileName: "ghost" })]);
+      const loaded = loadSavedConnections();
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0].authProfileName).toBe("ghost");
+    });
+
+    it("accepts entries without authProfileName on load", () => {
+      store([mockConnection()]);
+      const loaded = loadSavedConnections();
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0].authProfileName).toBeUndefined();
+    });
+
+    it("rejects a non-string authProfileName", () => {
+      const corrupt = {
+        ...mockConnection(),
+        authProfileName: 42,
+      } as unknown as SavedConnection;
+      store([corrupt]);
+      expect(loadSavedConnections()).toEqual([]);
+    });
+
+    it("unlinks the binding and persists the array untouched otherwise", () => {
+      const bound = mockConnection({
+        id: "bound-1",
+        name: "Bound",
+        authProfileName: "ghost",
+      });
+      const untouched = mockConnection({
+        id: "other-2",
+        name: "Other",
+      });
+      store([bound, untouched]);
+
+      const result = unlinkAuthProfileFromSavedConnection("bound-1");
+
+      expect(result).not.toBeNull();
+      expect(result?.[0].authProfileName).toBeUndefined();
+      expect(result?.[0].name).toBe("Bound");
+      expect(result?.[1]).toEqual(untouched);
+
+      const stored = JSON.parse(
+        localStorage.getItem(SAVED_CONNECTIONS_KEY) ?? "null",
+      ) as { schemaVersion: number; connections: SavedConnection[] };
+      expect(stored.schemaVersion).toBe(1);
+      expect(stored.connections).toHaveLength(2);
+      expect(stored.connections[0].authProfileName).toBeUndefined();
+      expect(stored.connections[1]).toEqual(untouched);
+    });
+
+    it("returns null for an unknown id or a connection without binding", () => {
+      const bound = mockConnection({ id: "has-binding", authProfileName: "x" });
+      const plain = mockConnection({ id: "no-binding" });
+      store([bound, plain]);
+      expect(unlinkAuthProfileFromSavedConnection("missing-id")).toBeNull();
+      expect(unlinkAuthProfileFromSavedConnection("no-binding")).toBeNull();
+      // Storage unchanged after the null-return calls.
+      const stored = JSON.parse(
+        localStorage.getItem(SAVED_CONNECTIONS_KEY) ?? "null",
+      ) as { connections: SavedConnection[] };
+      expect(stored.connections[0].authProfileName).toBe("x");
     });
   });
 });
