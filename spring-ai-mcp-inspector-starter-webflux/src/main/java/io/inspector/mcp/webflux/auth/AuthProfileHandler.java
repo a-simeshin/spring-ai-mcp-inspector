@@ -23,6 +23,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import io.inspector.mcp.core.auth.AuthProfile;
 import io.inspector.mcp.core.auth.AuthProfileExchangeRequest;
@@ -212,15 +213,23 @@ public class AuthProfileHandler {
 
 	/**
 	 * DELETE {@code /auth-profile/{profileId}} — deletes the profile (owner-scoped) and
-	 * evicts its tokens.
+	 * evicts its tokens. The blocking store call runs on boundedElastic so a delete that
+	 * drains an in-flight token refresh does not hold the event loop. evicts its tokens.
 	 * @param request the current request
 	 * @return a {@link Mono} emitting the delete result
 	 */
 	public Mono<ServerResponse> delete(final ServerRequest request) {
-		if (!this.store.delete(ownerId(request), request.pathVariable("profileId"))) {
-			return ServerResponse.notFound().build();
-		}
-		return ServerResponse.noContent().build();
+		final String ownerId = ownerId(request);
+		final String profileId = request.pathVariable("profileId");
+		// store.delete drains an in-flight refresh: it waits on the per-profile
+		// single-flight lock, up to the 10s exchange timeout. Run it off the
+		// event loop so other requests keep being served while the delete waits.
+		return Mono.fromCallable(() -> this.store.delete(ownerId, profileId)).flatMap((deleted) -> {
+			if (!deleted) {
+				return ServerResponse.notFound().build();
+			}
+			return ServerResponse.noContent().build();
+		}).subscribeOn(Schedulers.boundedElastic());
 	}
 
 	/**

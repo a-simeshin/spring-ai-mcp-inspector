@@ -47,11 +47,14 @@ class TokenOffloadRaceTests {
 
 	private CountDownLatch tokenEndpointLatch;
 
+	private CountDownLatch tokenEndpointArrived;
+
 	@BeforeEach
 	void setUp() throws IOException {
 		this.stubServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		this.stubPort = this.stubServer.getAddress().getPort();
 		this.tokenEndpointLatch = new CountDownLatch(1);
+		this.tokenEndpointArrived = new CountDownLatch(1);
 	}
 
 	@AfterEach
@@ -86,8 +89,11 @@ class TokenOffloadRaceTests {
 				.expectNextMatches((handle) -> "tok-1".equals(handle.accessToken()))
 				.verifyComplete());
 
-		// Give the async exchange a moment to reach the blocked endpoint
-		Thread.sleep(100);
+		// Order check: the async exchange must be parked at the blocked endpoint
+		// before the concurrent mutation runs
+		assertThat(this.tokenEndpointArrived.await(5, TimeUnit.SECONDS))
+			.as("async exchange reached the blocked token endpoint before the mutation")
+			.isTrue();
 
 		// Concurrent DELETE
 		final boolean deleted = store.delete("owner-a", profileId);
@@ -139,7 +145,9 @@ class TokenOffloadRaceTests {
 				.expectNextMatches((handle) -> "tok-1".equals(handle.accessToken()))
 				.verifyComplete());
 
-		Thread.sleep(100);
+		assertThat(this.tokenEndpointArrived.await(5, TimeUnit.SECONDS))
+			.as("async exchange reached the blocked token endpoint before the mutation")
+			.isTrue();
 
 		final boolean deleted = store.delete("owner-a", profileId);
 		assertThat(deleted).isTrue();
@@ -189,7 +197,9 @@ class TokenOffloadRaceTests {
 				.expectNextMatches((handle) -> "tok-1".equals(handle.accessToken()))
 				.verifyComplete());
 
-		Thread.sleep(100);
+		assertThat(this.tokenEndpointArrived.await(5, TimeUnit.SECONDS))
+			.as("async exchange reached the blocked token endpoint before the mutation")
+			.isTrue();
 
 		// Concurrent CLEAR (internal cleanup path)
 		final boolean cleared = store.clear(profileId);
@@ -257,8 +267,11 @@ class TokenOffloadRaceTests {
 			}
 		});
 
-		// Wait until generation has been read (inside the lock, before the put)
-		generationReadLatch.await(5, TimeUnit.SECONDS);
+		// Order check: the generation must have been read (inside the lock,
+		// before the put) before the concurrent DELETE runs
+		assertThat(generationReadLatch.await(5, TimeUnit.SECONDS))
+			.as("generation was read inside the lock before the concurrent delete")
+			.isTrue();
 
 		// Concurrent DELETE: bumps generation and evicts
 		final boolean deleted = store.delete("owner-a", profileId);
@@ -315,8 +328,11 @@ class TokenOffloadRaceTests {
 			}
 		});
 
-		// Wait until generation has been read (inside the lock, before the put)
-		generationReadLatch.await(5, TimeUnit.SECONDS);
+		// Order check: the generation must have been read (inside the lock,
+		// before the put) before the concurrent DELETE runs
+		assertThat(generationReadLatch.await(5, TimeUnit.SECONDS))
+			.as("generation was read inside the lock before the concurrent delete")
+			.isTrue();
 
 		// Concurrent DELETE: bumps generation and evicts
 		final boolean deleted = store.delete("owner-a", profileId);
@@ -363,8 +379,11 @@ class TokenOffloadRaceTests {
 				.expectNextMatches((handle) -> "tok-1".equals(handle.accessToken()))
 				.verifyComplete());
 
-		// Give the async exchange a moment to reach the blocked endpoint
-		Thread.sleep(100);
+		// Order check: the async exchange must be parked at the blocked endpoint
+		// before the concurrent mutation runs
+		assertThat(this.tokenEndpointArrived.await(5, TimeUnit.SECONDS))
+			.as("async exchange reached the blocked token endpoint before the mutation")
+			.isTrue();
 
 		// Foreign owner's concurrent registration + delete and the TTL sweep: none of
 		// these may invalidate owner-a's in-flight registration
@@ -412,8 +431,11 @@ class TokenOffloadRaceTests {
 				.expectNextMatches((handle) -> "tok-1".equals(handle.accessToken()))
 				.verifyComplete());
 
-		// Give the async exchange a moment to reach the blocked endpoint
-		Thread.sleep(100);
+		// Order check: the async exchange must be parked at the blocked endpoint
+		// before the concurrent mutation runs
+		assertThat(this.tokenEndpointArrived.await(5, TimeUnit.SECONDS))
+			.as("async exchange reached the blocked token endpoint before the mutation")
+			.isTrue();
 
 		// Foreign owner's concurrent delete: must not invalidate owner-a's exchange
 		final String foreignId = store.register("owner-b", new OAuth2Profile("cc-b", OAuth2GrantMode.CLIENT_CREDENTIALS,
@@ -434,6 +456,9 @@ class TokenOffloadRaceTests {
 
 	private void stubTokenEndpointWithLatch(final int status, final String body) {
 		this.stubServer.createContext("/token", (exchange) -> {
+			// signal arrival FIRST so tests assert the in-flight order instead of
+			// sleeping and hoping the exchange reached the endpoint
+			this.tokenEndpointArrived.countDown();
 			try {
 				this.tokenEndpointLatch.await(5, TimeUnit.SECONDS);
 			}
