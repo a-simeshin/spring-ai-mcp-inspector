@@ -11,3 +11,12 @@ layout at >=640px (twMerge drops the base `h-9` in favour of
 verification checklist at 375px/<640px (tester card t_ffb31393);
 the existing Selenide E2E suites keep exercising the >=640px layout
 and tab selection/routing.
+
+Update (#253 input_required panel): the extra Input Required trigger
+adds one wrapped row at 375px, which pushed the tools detail pane to
+bottom 669.55 > 667 at scrollY=0 (InspectorUiIT
+ResponsiveLayout.configPane_listPane_detailPane_disjoint_375x667,
+byte-identical across CI runs). The bar's bottom margin is now mb-2
+below `sm` (upstream mb-4 kept from `sm` up), reclaiming 8px so every
+pane stays inside the first 375x667 viewport with the new tab present.
+The wrap itself, all triggers and the >=640px layout are unchanged.

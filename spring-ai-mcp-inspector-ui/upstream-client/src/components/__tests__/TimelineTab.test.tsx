@@ -667,3 +667,156 @@ describe("TimelineTab", () => {
     }
   });
 });
+
+
+// [spring-ai-mcp-inspector PATCH] SEP-2322 (spec revision 2026-07-28)
+// Timeline chain rendering (#253): the original tools/call, its input_required
+// result, the re-send, and the final result render as ONE collapsed chain,
+// not scattered dead-end frames.
+describe("TimelineTab SEP-2322 input_required chain", () => {
+  const originalFetch = global.fetch;
+  const originalBootstrap = (window as unknown as Record<string, unknown>)[
+    "__MCP_INSPECTOR_BOOTSTRAP"
+  ];
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    (window as unknown as Record<string, unknown>)[
+      "__MCP_INSPECTOR_BOOTSTRAP"
+    ] = originalBootstrap;
+  });
+
+  const renderTab = () =>
+    render(
+      <Tabs defaultValue="timeline">
+        <TimelineTab />
+      </Tabs>,
+    );
+
+  const chainEvents: WireEvent[] = [
+    {
+      id: "c-1",
+      correlationId: "pair-1",
+      sessionId: null,
+      type: "MCP_JSONRPC_REQUEST",
+      timestamp: "2026-08-30T12:00:01.000Z",
+      payload: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "book_seat", arguments: { seat: "12A" } },
+      },
+    },
+    {
+      id: "c-2",
+      correlationId: "pair-1",
+      sessionId: null,
+      type: "MCP_JSONRPC_RESPONSE",
+      timestamp: "2026-08-30T12:00:02.000Z",
+      payload: {
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          resultType: "input_required",
+          inputRequests: {
+            "req-1": {
+              method: "elicitation/create",
+              params: { message: "Which seat?" },
+            },
+          },
+          requestState: "opaque-1",
+        },
+      },
+    },
+    {
+      id: "c-3",
+      correlationId: "pair-2",
+      sessionId: null,
+      type: "MCP_JSONRPC_REQUEST",
+      timestamp: "2026-08-30T12:00:05.000Z",
+      payload: {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "book_seat",
+          arguments: { seat: "12A" },
+          inputResponses: { "req-1": { action: "accept", content: {} } },
+          requestState: "opaque-1",
+        },
+      },
+    },
+    {
+      id: "c-4",
+      correlationId: "pair-2",
+      sessionId: null,
+      type: "MCP_JSONRPC_RESPONSE",
+      timestamp: "2026-08-30T12:00:06.000Z",
+      payload: {
+        jsonrpc: "2.0",
+        id: 2,
+        result: { content: [{ type: "text", text: "Booked." }] },
+      },
+    },
+  ];
+
+  it("renders the whole round-trip as ONE collapsed chain row", async () => {
+    mockFetch(chainEvents);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("timeline-chain")).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText("tools/call chain: book_seat"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("timeline-chain-rounds").textContent).toBe(
+      "2 rounds",
+    );
+    expect(screen.getByTestId("timeline-chain-state").textContent).toBe(
+      "final result",
+    );
+    // Collapsed: the four member frames do not render standalone.
+    expect(screen.queryAllByText("tools/call")).toHaveLength(0);
+  });
+
+  it("expands the chain to its chronological member frames", async () => {
+    mockFetch(chainEvents);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("timeline-chain-header")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByTestId("timeline-chain-header"));
+
+    // Both tools/call frames (original + re-send) are inside the chain.
+    expect(screen.queryAllByText("tools/call")).toHaveLength(2);
+  });
+
+  it("badges a standalone input_required answer as actionable", async () => {
+    mockFetch([chainEvents[1]]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("timeline-input-required-badge"),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("timeline-chain")).toBeNull();
+  });
+
+  it("shows awaiting-input on a chain whose last answer needs more input", async () => {
+    // The re-send went out but its answer never arrived (or answered with
+    // another input_required round that is not recorded yet): the chain's
+    // chronologically last response is still the input_required frame.
+    mockFetch(chainEvents.slice(0, 3));
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("timeline-chain")).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId("timeline-chain-state").textContent).toBe(
+      "awaiting input",
+    );
+  });
+});
