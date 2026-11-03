@@ -274,6 +274,49 @@ describe("Sidebar", () => {
         screen.queryByLabelText("Connection timeout (s)"),
       ).not.toBeInTheDocument();
     });
+
+    it("keeps Connect enabled and clickable in direct mode after a proxy-mode timeout error", () => {
+      const onConnect = jest.fn();
+      const { rerender } = renderSidebar({
+        connectionTimeout: "700",
+        onConnect,
+      });
+      fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /^connect$/i }),
+      ).toBeDisabled();
+      // Same session switched to Direct: field and error gone, Connect live
+      rerender(
+        <TooltipProvider>
+          <Sidebar
+            {...defaultProps}
+            connectionType="direct"
+            connectionTimeout="700"
+            onConnect={onConnect}
+          />
+        </TooltipProvider>,
+      );
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      const connectButton = screen.getByRole("button", { name: /^connect$/i });
+      expect(connectButton).toBeEnabled();
+      fireEvent.click(connectButton);
+      expect(onConnect).toHaveBeenCalledTimes(1);
+    });
+
+    it("connects in direct mode with a stale invalid persisted timeout", () => {
+      const onConnect = jest.fn();
+      renderSidebar({
+        connectionType: "direct",
+        connectionTimeout: "700",
+        onConnect,
+      });
+      const connectButton = screen.getByRole("button", { name: /^connect$/i });
+      expect(connectButton).toBeEnabled();
+      fireEvent.click(connectButton);
+      expect(onConnect).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
   });
 
   describe("Environment Variables", () => {
