@@ -8,6 +8,8 @@ import {
   isConnectFailedError,
   isHttp401Error,
   parseConnectFailureResponse,
+  humanReadablePhase,
+  formatBudgetBreakdown,
   type ConnectFailure,
 } from "../connectionErrors";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
@@ -88,6 +90,88 @@ describe("parseConnectFailureResponse", () => {
       retryable: true,
     });
   });
+
+  // Byte-for-byte wire shape the proxy sends on a per-phase budget overrun:
+  // ProxyConnectionBudgets.timeoutBody (spring-ai-mcp-inspector-core), with
+  // the fixture values from ProxyConnectionBudgetsTests. The server never
+  // sends a connection_timeout code (asserted there), so these tests prove
+  // the structured-banner inputs on the real contract.
+  it("parses the proxy timeout payload: MCP_CONNECT_FAILED with reason timeout and phase numbers", async () => {
+    const failure = await parseConnectFailureResponse(
+      responseWithBody({
+        error: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          phase: "connect",
+          elapsedMs: 1234,
+          budgetMs: 1000,
+          message: "connect phase timed out after 1234ms of 1000ms budget",
+          retryable: true,
+        },
+      }),
+    );
+
+    expect(failure).toEqual({
+      code: "MCP_CONNECT_FAILED",
+      reason: "timeout",
+      message: "connect phase timed out after 1234ms of 1000ms budget",
+      retryable: true,
+      phase: "connect",
+      elapsedMs: 1234,
+      budgetMs: 1000,
+    });
+  });
+
+  it("parses the proxy timeout payload for the initialize phase", async () => {
+    const failure = await parseConnectFailureResponse(
+      responseWithBody({
+        error: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          phase: "initialize",
+          elapsedMs: 15234,
+          budgetMs: 30000,
+          message: "initialize timed out after 15234ms of 30000ms budget",
+          retryable: true,
+        },
+      }),
+    );
+
+    expect(failure).toEqual({
+      code: "MCP_CONNECT_FAILED",
+      reason: "timeout",
+      message: "initialize timed out after 15234ms of 30000ms budget",
+      retryable: true,
+      phase: "initialize",
+      elapsedMs: 15234,
+      budgetMs: 30000,
+    });
+  });
+
+  it("still accepts the connection_timeout code as a future-proofing alias, not the wire contract", async () => {
+    const failure = await parseConnectFailureResponse(
+      responseWithBody({
+        error: {
+          code: "connection_timeout",
+          phase: "initialize",
+          elapsedMs: 15234,
+          budgetMs: 30000,
+          message: "connection initialize timed out after 15234ms of 30000ms budget",
+          retryable: true,
+        },
+      }),
+    );
+
+    expect(failure).toEqual({
+      code: "MCP_CONNECT_FAILED",
+      reason: "timeout",
+      message: "connection initialize timed out after 15234ms of 30000ms budget",
+      retryable: true,
+      phase: "initialize",
+      elapsedMs: 15234,
+      budgetMs: 30000,
+    });
+  });
 });
 
 describe("ConnectFailedError", () => {
@@ -101,6 +185,23 @@ describe("ConnectFailedError", () => {
     expect(error.message).toBe("Connection refused");
   });
 
+  it("carries timeout detail fields when provided", () => {
+    const timeoutFailure: ConnectFailure = {
+      code: CONNECT_FAILED_ERROR_CODE,
+      reason: "timeout",
+      message: "Timed out during initialize",
+      retryable: true,
+      phase: "initialize",
+      elapsedMs: 15234,
+      budgetMs: 30000,
+    };
+    const error = new ConnectFailedError(timeoutFailure);
+
+    expect(error.phase).toBe("initialize");
+    expect(error.elapsedMs).toBe(15234);
+    expect(error.budgetMs).toBe(30000);
+  });
+
   it("rejects cross-type errors", () => {
     expect(isConnectFailedError(new Error("Connection refused"))).toBe(false);
     expect(isConnectFailedError(null)).toBe(false);
@@ -111,6 +212,21 @@ describe("connectionFailureFromError", () => {
   it("keeps structured failures as-is", () => {
     expect(connectionFailureFromError(new ConnectFailedError(refusedFailure))).toEqual(
       refusedFailure,
+    );
+  });
+
+  it("preserves timeout phase detail from ConnectFailedError", () => {
+    const timeoutFailure: ConnectFailure = {
+      code: CONNECT_FAILED_ERROR_CODE,
+      reason: "timeout",
+      message: "Timed out",
+      retryable: true,
+      phase: "connect",
+      elapsedMs: 5432,
+      budgetMs: 10000,
+    };
+    expect(connectionFailureFromError(new ConnectFailedError(timeoutFailure))).toEqual(
+      timeoutFailure,
     );
   });
 
@@ -143,6 +259,36 @@ describe("humanReadableReason", () => {
     expect(humanReadableReason("unauthorized")).toBe("Authentication required");
     expect(humanReadableReason("not_found")).toBe("Server responded 404: check the URL path");
     expect(humanReadableReason("unknown")).toBe("");
+  });
+});
+
+describe("humanReadablePhase", () => {
+  it("maps connect phase to Transport connect", () => {
+    expect(humanReadablePhase("connect")).toBe("Transport connect");
+  });
+
+  it("maps initialize phase to MCP initialize", () => {
+    expect(humanReadablePhase("initialize")).toBe("MCP initialize");
+  });
+
+  it("falls back to the raw value for unknown phases", () => {
+    expect(humanReadablePhase("dns")).toBe("dns");
+    expect(humanReadablePhase("")).toBe("");
+  });
+});
+
+describe("formatBudgetBreakdown", () => {
+  it("formats seconds from ms values", () => {
+    expect(formatBudgetBreakdown(15234, 30000)).toBe("15.2s of 30.0s");
+  });
+
+  it("shows <1s for values under 1000", () => {
+    expect(formatBudgetBreakdown(500, 30000)).toBe("<1s of 30.0s");
+    expect(formatBudgetBreakdown(30000, 500)).toBe("30.0s of <1s");
+  });
+
+  it("shows <1s for zero ms", () => {
+    expect(formatBudgetBreakdown(0, 0)).toBe("<1s of <1s");
   });
 });
 
