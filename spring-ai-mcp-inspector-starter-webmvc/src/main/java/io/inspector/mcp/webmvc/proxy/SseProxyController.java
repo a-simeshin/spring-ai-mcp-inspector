@@ -57,8 +57,11 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyConnectFailure;
+import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
 import io.inspector.mcp.core.proxy.ProxyConnectTimeoutException;
 import io.inspector.mcp.core.proxy.ProxyConnectionBudgets;
 import io.inspector.mcp.core.proxy.ProxyConnectionBudgets.ProxyConnectionBudgetException;
@@ -95,6 +98,14 @@ import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
  * browser-side {@code SSEClientTransport} where to POST messages. Subsequent frames from
  * the target are streamed as {@code event: message}.
  *
+ * <p>
+ * A target that cannot be brought up is answered before the stream starts: the handler
+ * throws {@link ProxyConnectFailureException} and the {@link #connectFailure} advice maps
+ * it onto the same structured {@code MCP_CONNECT_FAILED} JSON body the streamable
+ * controller serves. A plain {@code ResponseStatusException} would delegate to Boot's
+ * {@code /error} dispatch, whose default {@code include-message=never} drops the message
+ * from both the status line and the body - exactly what this advice exists to avoid.
+ *
  * @author Artem Simeshin
  */
 @RestController
@@ -102,6 +113,12 @@ import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
 public class SseProxyController {
 
 	private static final Logger LOG = LoggerFactory.getLogger(SseProxyController.class);
+
+	/**
+	 * Error code of the structured connect-failure payload (mirrors
+	 * {@code StreamableHttpProxyController#connectFailureResponse}).
+	 */
+	private static final String ERROR_CODE_MCP_CONNECT_FAILED = "MCP_CONNECT_FAILED";
 
 	private final ProxySessionRegistry registry;
 
@@ -359,6 +376,19 @@ public class SseProxyController {
 			target = buildTargetTransport(transportType, url, command, args, env, headers, authorizationRef);
 		}
 		catch (final Exception ex) {
+			// Request-shape rejections (restricted custom header name, illegal value,
+			// unsupported transportType) and connect timeouts fail the HTTP handshake
+			// itself: classify() keeps the offending header name in the structured 502
+			// body the browser can read. Every other build failure (auth, dead
+			// upstream, unclassified) rides the SSE stream as a mapped error event so
+			// spec-compliant EventSource clients keep the reconnect-stop contract.
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
+			if (failure.reason() == ProxyConnectFailure.Reason.INVALID_REQUEST
+					|| failure.reason() == ProxyConnectFailure.Reason.TIMEOUT) {
+				LOG.warn("proxy[{}] failed to build target transport ({}): {}", sessionId, failure.reason().wire(),
+						ex.toString());
+				throw new ProxyConnectFailureException(failure, ex);
+			}
 			LOG.warn("proxy[{}] failed to build target transport: {}", sessionId, ex.toString());
 			// Same readable-error contract as every other terminal failure of this
 			// stream: completeWithError would dispatch to Boot /error, whose JSON body
@@ -661,15 +691,39 @@ public class SseProxyController {
 			}
 			case "stdio" -> {
 				if (command == null || command.isBlank()) {
-					throw new IllegalArgumentException(
+					throw new InvalidProxyRequestException(
 							"missing required 'command' query parameter for stdio transport");
 				}
 				final List<String> argv = parseArgv(command, args);
 				final Map<String, String> environment = parseEnv(env);
 				yield this.transportFactory.openStdio(argv, environment);
 			}
-			default -> throw new IllegalArgumentException("unsupported transportType: " + transportType);
+			default -> throw new InvalidProxyRequestException("unsupported transportType: " + transportType);
 		};
+	}
+
+	/**
+	 *
+	 * Answers a failed session bring-up with the structured {@code MCP_CONNECT_FAILED}
+	 * payload: 504 Gateway Timeout for {@link ProxyConnectFailure.Reason#TIMEOUT}, 502
+	 * Bad Gateway for every other reason. The body is written by this controller itself
+	 * (same contract as {@code StreamableHttpProxyController#connectFailureResponse})
+	 * because the container error page a thrown status exception would delegate to drops
+	 * the message on the wire (Boot's default
+	 * {@code server.error.include-message=never}); the cause stays server-side in the
+	 * log.
+	 * @param ex the connect failure signalled by the session bring-up
+	 * @return the HTTP response entity carrying the structured error body
+	 */
+	@ExceptionHandler(ProxyConnectFailureException.class)
+	private ResponseEntity<Object> connectFailure(final ProxyConnectFailureException ex) {
+		final ProxyConnectFailure failure = ex.failure();
+		final HttpStatus status = (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT) ? HttpStatus.GATEWAY_TIMEOUT
+				: HttpStatus.BAD_GATEWAY;
+		return ResponseEntity.status(status)
+			.contentType(MediaType.APPLICATION_JSON)
+			.body(Map.of("error", Map.of("code", ERROR_CODE_MCP_CONNECT_FAILED, "reason", failure.reason().wire(),
+					"message", failure.message(), "retryable", failure.retryable())));
 	}
 
 	/**

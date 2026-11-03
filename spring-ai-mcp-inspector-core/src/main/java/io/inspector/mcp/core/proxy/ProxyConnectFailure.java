@@ -42,6 +42,17 @@ import io.modelcontextprotocol.spec.McpTransportException;
 public record ProxyConnectFailure(Reason reason, String message) {
 
 	/**
+	 * Whether retrying the same request can plausibly succeed. Only an
+	 * {@link Reason#INVALID_REQUEST} failure answers {@code false}: the proxy rejected
+	 * the request itself (restricted header name, illegal value, unsupported
+	 * transportType), so an identical retry fails identically.
+	 * @return {@code true} unless the failure is an invalid request
+	 */
+	public boolean retryable() {
+		return this.reason != Reason.INVALID_REQUEST;
+	}
+
+	/**
 	 * Machine-readable failure category. Serialized verbatim as the {@code reason} field
 	 * of the {@code MCP_CONNECT_FAILED} error payload.
 	 */
@@ -55,6 +66,12 @@ public record ProxyConnectFailure(Reason reason, String message) {
 
 		/** The upstream host name could not be resolved. */
 		DNS("dns"),
+
+		/**
+		 * The request was rejected before any network I/O (restricted custom header name,
+		 * illegal header value).
+		 */
+		INVALID_REQUEST("invalid_request"),
 
 		/** The upstream server responded with 404 Not Found. */
 		NOT_FOUND("not_found"),
@@ -89,8 +106,23 @@ public record ProxyConnectFailure(Reason reason, String message) {
 	public static ProxyConnectFailure classify(final Throwable error) {
 		Throwable current = error;
 		while (current != null) {
+			// The DNS check MUST run before the invalid-request check:
+			// java.nio.channels.UnresolvedAddressException extends
+			// IllegalArgumentException, so a broader IAE match here would
+			// reclassify a bare UAE as invalid_request and let a foreign IAE
+			// (e.g. NumberFormatException) push its raw message to the browser.
 			if (current instanceof UnknownHostException || current instanceof UnresolvedAddressException) {
 				return new ProxyConnectFailure(Reason.DNS, "could not resolve the MCP server host name");
+			}
+			if (current instanceof InvalidProxyRequestException) {
+				// Rejection issued by this proxy before any network I/O (restricted
+				// custom header name, illegal value, unsupported transportType). The
+				// message was built value-safe, so it can travel to the browser;
+				// without this branch the controllers would collapse it into the
+				// generic "failed to connect" message.
+				final String message = (current.getMessage() != null) ? current.getMessage()
+						: "the MCP server request was rejected: " + current.getClass().getSimpleName();
+				return new ProxyConnectFailure(Reason.INVALID_REQUEST, message);
 			}
 			if (current instanceof ConnectException) {
 				// The MCP SDK (StreamableHttpClientTransport) wraps DNS failures

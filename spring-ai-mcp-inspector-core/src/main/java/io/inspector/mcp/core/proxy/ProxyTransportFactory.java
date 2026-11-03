@@ -22,12 +22,14 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
@@ -409,9 +411,17 @@ public class ProxyTransportFactory {
 		if (!hasAuth && !hasCustom) {
 			return null;
 		}
+		if (hasCustom) {
+			validateHeaderNames(customHeaders);
+		}
 		return (builder, method, endpoint, body, context) -> {
 			if (hasAuth) {
-				builder.setHeader("Authorization", authorization);
+				try {
+					builder.setHeader("Authorization", authorization);
+				}
+				catch (final IllegalArgumentException ex) {
+					throw new InvalidProxyRequestException("Authorization header rejected: invalid value", null);
+				}
 			}
 			if (hasCustom) {
 				customHeaders.forEach((name, value) -> {
@@ -419,8 +429,9 @@ public class ProxyTransportFactory {
 						try {
 							builder.setHeader(name, value);
 						}
-						catch (final IllegalArgumentException ignored) {
-							// restricted header names are silently skipped
+						catch (final IllegalArgumentException ex) {
+							throw new InvalidProxyRequestException(
+									"custom header '" + name + "' rejected: invalid value", null);
 						}
 					}
 				});
@@ -429,10 +440,53 @@ public class ProxyTransportFactory {
 	}
 
 	/**
+	 * Validates that all custom header names are allowed by the JDK's
+	 * {@link HttpRequest.Builder} - throws {@link InvalidProxyRequestException} at
+	 * transport build time for any restricted name. The message contains every offending
+	 * header name and the JDK's reason, but NEVER any header value.
+	 * <p>
+	 * Null and blank header names are silently skipped (they are guarded by the caller's
+	 * null/blank check in the customizer lambda). Null header values are also skipped
+	 * (the customizer lambda skips null values, so there is nothing to validate).
+	 * @param customHeaders the headers to validate (never {@code null})
+	 */
+	private static void validateHeaderNames(final Map<String, String> customHeaders) {
+		// name -> JDK rejection reason, kept as a pair: a header NAME may itself
+		// contain a colon (rejected by the JDK as "invalid header name"), so joining
+		// "name: reason" and splitting back on ':' garbles both fields.
+		final Map<String, String> offenders = new LinkedHashMap<>();
+		for (final Map.Entry<String, String> entry : customHeaders.entrySet()) {
+			final String name = entry.getKey();
+			if (name != null && !name.isBlank() && entry.getValue() != null) {
+				try {
+					HttpRequest.newBuilder().setHeader(name, "probe");
+				}
+				catch (final IllegalArgumentException ex) {
+					offenders.put(name, ex.getMessage());
+				}
+			}
+		}
+		if (!offenders.isEmpty()) {
+			final String names = String.join(", ", offenders.keySet());
+			final String reasons = offenders.values().stream().collect(Collectors.joining("; "));
+			if (offenders.size() == 1) {
+				throw new InvalidProxyRequestException(
+						"custom header '" + names + "' is not allowed by the JDK HTTP client: " + reasons);
+			}
+			else {
+				throw new InvalidProxyRequestException(
+						"custom headers [" + names + "] are not allowed by the JDK HTTP client: " + reasons);
+			}
+		}
+	}
+
+	/**
 	 * Builds a customizer for resolved {@link AuthHeaders}: the authorization header is
 	 * read from {@code authorizationRef} when provided (live token refresh support) else
 	 * from the static {@code headers.authorization()}; custom headers are applied
-	 * verbatim. Returns {@code null} when nothing needs forwarding.
+	 * verbatim. Returns {@code null} when nothing needs forwarding. Restricted custom
+	 * header names fail fast at build time (see {@link #validateHeaderNames(Map)}); an
+	 * illegal header value fails at request time with a value-safe message.
 	 * @param headers the resolved auth headers (never {@code null})
 	 * @param authorizationRef live authorization source, or {@code null}
 	 * @return a customizer, or {@code null} when no headers need forwarding
@@ -441,23 +495,33 @@ public class ProxyTransportFactory {
 			final AtomicReference<String> authorizationRef) {
 		final boolean hasAuth = (authorizationRef != null)
 				|| (headers.authorization() != null && !headers.authorization().isBlank());
-		final boolean hasCustom = headers.customHeaders() != null && !headers.customHeaders().isEmpty();
+		final Map<String, String> customHeaders = headers.customHeaders();
+		final boolean hasCustom = customHeaders != null && !customHeaders.isEmpty();
 		if (!hasAuth && !hasCustom) {
 			return null;
+		}
+		if (hasCustom) {
+			validateHeaderNames(customHeaders);
 		}
 		return (builder, method, endpoint, body, context) -> {
 			final String authorization = (authorizationRef != null) ? authorizationRef.get() : headers.authorization();
 			if (authorization != null && !authorization.isBlank()) {
-				builder.setHeader("Authorization", authorization);
+				try {
+					builder.setHeader("Authorization", authorization);
+				}
+				catch (final IllegalArgumentException ex) {
+					throw new InvalidProxyRequestException("Authorization header rejected: invalid value", null);
+				}
 			}
 			if (hasCustom) {
-				headers.customHeaders().forEach((name, value) -> {
+				customHeaders.forEach((name, value) -> {
 					if (name != null && !name.isBlank() && value != null) {
 						try {
 							builder.setHeader(name, value);
 						}
-						catch (final IllegalArgumentException ignored) {
-							// restricted header names are silently skipped
+						catch (final IllegalArgumentException ex) {
+							throw new InvalidProxyRequestException(
+									"custom header '" + name + "' rejected: invalid value", null);
 						}
 					}
 				});

@@ -1,0 +1,14 @@
+src/lib/connectionErrors.ts (upstream connectErrors.ts, merged into connectionErrors.ts by the auth-profiles rebase): allow-list the `invalid_request` wire reason.
+The Java proxy classifies transport-build-time rejections (a restricted
+custom header name like "host", or an illegal header value) as
+ProxyConnectFailure.Reason.INVALID_REQUEST, wire value "invalid_request",
+and both webmvc controllers answer with the structured MCP_CONNECT_FAILED
+body carrying that reason. The streamable-http fetch wrapper in
+useConnection.ts parses the body via parseConnectFailureResponse, which
+rejected any reason outside CONNECT_FAILURE_REASONS and returned null, so
+the sidebar alert degraded the failure to reason "unknown" and dropped the
+proxy's message (header name + JDK reason) that the body carried. Local
+fix: add "invalid_request" to ConnectFailureReason and the allow-list, plus
+a humanReadableReason label pointing at the custom headers. Covered by
+src/lib/__tests__/connectErrors.test.ts (parses the invalid_request body,
+human-readable label asserted).

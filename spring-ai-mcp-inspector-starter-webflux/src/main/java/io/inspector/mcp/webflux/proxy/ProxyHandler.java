@@ -59,6 +59,7 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
@@ -781,7 +782,7 @@ public class ProxyHandler {
 			}
 			case "stdio" -> {
 				if (command == null || command.isBlank()) {
-					throw new IllegalArgumentException(
+					throw new InvalidProxyRequestException(
 							"missing required 'command' query parameter for stdio transport");
 				}
 				final List<String> argv = new ArrayList<>();
@@ -792,7 +793,7 @@ public class ProxyHandler {
 				final Map<String, String> environment = parseEnv(env);
 				yield this.transportFactory.openStdio(argv, environment);
 			}
-			default -> throw new IllegalArgumentException("unsupported transportType: " + transportType);
+			default -> throw new InvalidProxyRequestException("unsupported transportType: " + transportType);
 		};
 	}
 
@@ -940,7 +941,7 @@ public class ProxyHandler {
 					? HttpStatus.GATEWAY_TIMEOUT : HttpStatus.BAD_GATEWAY;
 			return ServerResponse.status(status)
 				.bodyValue(Map.of("error", Map.of("code", "MCP_CONNECT_FAILED", "reason", failure.reason().wire(),
-						"message", failure.message(), "retryable", Boolean.TRUE)));
+						"message", failure.message(), "retryable", failure.retryable())));
 		}
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
@@ -1108,7 +1109,7 @@ public class ProxyHandler {
 					? HttpStatus.GATEWAY_TIMEOUT : HttpStatus.BAD_GATEWAY;
 			return ServerResponse.status(status)
 				.bodyValue(Map.of("error", Map.of("code", "MCP_CONNECT_FAILED", "reason", failure.reason().wire(),
-						"message", failure.message(), "retryable", Boolean.TRUE)));
+						"message", failure.message(), "retryable", failure.retryable())));
 		});
 	}
 
