@@ -1,0 +1,21 @@
+connection-timeout: optional Connection timeout (s) field in Connect form
+Files:
+  spring-ai-mcp-inspector-ui/upstream-client/src/components/Sidebar.tsx
+  spring-ai-mcp-inspector-ui/upstream-client/src/components/__tests__/Sidebar.test.tsx
+  spring-ai-mcp-inspector-ui/upstream-client/src/lib/hooks/useConnection.ts
+  spring-ai-mcp-inspector-ui/upstream-client/src/lib/hooks/__tests__/useConnection.test.tsx
+  spring-ai-mcp-inspector-ui/upstream-client/src/App.tsx
+  spring-ai-mcp-inspector-ui/upstream-client/src/__tests__/App.connectionTimeoutPersistence.test.tsx
+Description:
+  Adds an optional numeric input for connection timeout in seconds.
+  Empty = proxy default (30s). Filled = forwarded as connectionTimeout
+  query parameter to the proxy. Proxy connections only (the field is
+  hidden for direct connections, which never build a proxy URL).
+  Validation: whole seconds 1..600 (matching ProxyConnectionBudgets),
+  decimal digits only (the proxy parses the raw string with Long.parseLong,
+  so JS numeric literals like 1e1 or +30 are rejected client-side with the
+  field-level error), enforced on blur and on the Connect click guard,
+  both scoped to proxy connections: direct mode neither renders the field
+  nor enforces the guard, so a stale invalid persisted value cannot
+  silently lock Connect.
+  Value persisted to localStorage (lastConnectionTimeout).
