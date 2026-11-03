@@ -1717,6 +1717,30 @@ class StreamableHttpProxyControllerTests {
 			assertThat(responseBody.get("result").has("nextCursor")).as("last page has no nextCursor").isFalse();
 		}
 
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/list with a non-numeric cursor returns a JSON-RPC -32602 error naming the cursor")
+		void tasksList_nonNumericCursor_returnsInvalidParamsError() throws Exception {
+			// given: a cursor that is not a decimal offset
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"not-a-number\"}}");
+			final java.util.List<TaskHandle> noTasks = java.util.List.of();
+			given(this.taskService.listTasks()).willReturn(noTasks);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: a -32602 Invalid params error naming the offending cursor instead of
+			// an empty page
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(responseBody.get("error").get("message").asText()).contains("not-a-number");
+		}
+
 	}
 
 	@Nested
@@ -1790,8 +1814,10 @@ class StreamableHttpProxyControllerTests {
 				.willReturn(target);
 			final JsonNode response = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":{\"tasks\":{\"custom\":true}}}}");
+			final AtomicReference<ProxySession> startedSession = new AtomicReference<>();
 			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
 				final ProxySession s = inv.getArgument(0);
+				startedSession.set(s);
 				s.targetToBrowser().tryEmitNext(response);
 				return Mono.empty();
 			});
@@ -1799,8 +1825,8 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
 
 			// when
-			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
-					"http://target/mcp", null, body);
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", null,
+					body);
 
 			// then
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1809,6 +1835,10 @@ class StreamableHttpProxyControllerTests {
 			assertThat(responseBody.path("result").path("capabilities").path("tasks").path("custom").asBoolean())
 				.as("upstream tasks must be preserved")
 				.isTrue();
+			assertThat(startedSession.get()).isNotNull();
+			assertThat(startedSession.get().isTasksInterceptionEnabled())
+				.as("upstream-advertised tasks keeps task-method interception off")
+				.isFalse();
 		}
 
 		@Test
