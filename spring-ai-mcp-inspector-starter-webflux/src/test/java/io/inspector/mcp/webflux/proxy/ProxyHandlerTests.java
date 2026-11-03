@@ -35,6 +35,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.boot.web.server.WebServer;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.boot.web.server.context.WebServerInitializedEvent;
@@ -71,6 +72,7 @@ import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.mock;
@@ -2520,6 +2522,58 @@ class ProxyHandlerTests {
 			final JsonNode result = body.get("result");
 			assertThat(result.get("taskId").asText()).isEqualTo("t-123");
 			assertThat(result.get("status").asText()).isEqualTo("working");
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/get records the request and the locally produced response into the traffic timeline")
+		void tasksGet_interceptedLocally_recordsLocalExchange() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-123",
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+			given(this.taskService.getTask("t-123")).willReturn(handle);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> requestCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(ProxyHandlerTests.this.mcpProxy).recordLocalExchange(eq(session), requestCaptor.capture(),
+					responseCaptor.capture());
+			assertThat(requestCaptor.getValue().get("method").asText()).isEqualTo("tasks/get");
+			assertThat(requestCaptor.getValue().get("id").asInt()).isEqualTo(13);
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(13);
+			assertThat(recordedResponse.get("result").get("taskId").asText()).isEqualTo("t-123");
+		}
+
+		@Test
+		@Story("no interception for non-task methods")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a non-task method relayed upstream is never recorded as a locally answered exchange")
+		void nonTaskMethod_neverRecordsLocalExchange() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willReturn(Mono.empty());
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/list\"}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then: passthrough traffic keeps the plain relay timeline behavior
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isNotEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+			verify(ProxyHandlerTests.this.mcpProxy, never()).recordLocalExchange(any(), any(), any());
 		}
 
 		@Test
