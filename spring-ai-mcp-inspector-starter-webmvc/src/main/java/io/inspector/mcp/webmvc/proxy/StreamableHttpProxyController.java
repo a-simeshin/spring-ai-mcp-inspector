@@ -555,13 +555,10 @@ public class StreamableHttpProxyController {
 				// Still a routed frame from the browser: refresh the idle-reaper
 				// timestamp, otherwise a session only polled via the Tasks tab is
 				// evicted.
+				// An intercepted frame is never the session's first POST: interception
+				// is enabled only after this session's initialize response, so no
+				// mcp-session-id header needs to be attached here.
 				session.touch();
-				if (includeSessionHeader) {
-					final ResponseEntity.BodyBuilder builder = ResponseEntity.status(taskResponse.getStatusCode())
-						.contentType(MediaType.APPLICATION_JSON);
-					builder.header(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
-					return builder.body(taskResponse.getBody());
-				}
 				return taskResponse;
 			}
 		}
@@ -871,14 +868,20 @@ public class StreamableHttpProxyController {
 	/**
 	 * Handle a {@code tasks/list} request: return the requested page of tracked tasks,
 	 * honoring {@code params.cursor} and emitting {@code nextCursor} while more tasks
-	 * remain (see {@link #applyTaskListCursor}).
+	 * remain (see {@link #parseTaskListCursor}).
 	 * @param idNode the JSON-RPC request id
 	 * @param body the full JSON-RPC request body (carries the optional cursor)
 	 * @return a JSON-RPC response with a {@code tasks} array
 	 */
 	private ResponseEntity<Object> handleTaskList(final JsonNode idNode, final JsonNode body) {
 		final java.util.List<TaskHandle> handles = taskService().listTasks();
-		final int offset = parseTaskListCursor(handles.size(), body);
+		final int offset;
+		try {
+			offset = parseTaskListCursor(handles.size(), body);
+		}
+		catch (final IllegalArgumentException ex) {
+			return jsonRpcError(idNode, -32602, ex.getMessage());
+		}
 		final int end = Math.min(offset + TASKS_LIST_PAGE_SIZE, handles.size());
 		final java.util.List<TaskHandle> page = handles.subList(offset, end);
 		final ArrayNode tasksArray = JsonNodeFactory.instance.arrayNode(page.size());
@@ -895,22 +898,26 @@ public class StreamableHttpProxyController {
 
 	/**
 	 * Parse the opaque {@code params.cursor} (a decimal list offset previously emitted as
-	 * {@code nextCursor}) into an offset into the ordered task list. An absent,
-	 * non-numeric or out-of-range cursor yields an offset past the end, which produces an
-	 * empty page and terminates client pagination.
-	 * @param listSize the size of the full ordered handle list
+	 * {@code nextCursor}) into an offset into the task list. An absent cursor starts at
+	 * the beginning; a decimal cursor is clamped to the list bounds, so an out-of-range
+	 * value yields an offset past the end, an empty page and terminated pagination. A
+	 * textual non-decimal cursor is rejected with {@link IllegalArgumentException} so the
+	 * caller answers {@code -32602 Invalid params}.
+	 * @param listSize the size of the full handle list
 	 * @param body the JSON-RPC request body carrying the optional cursor
 	 * @return the offset the requested page starts at
+	 * @throws IllegalArgumentException when the textual cursor is not a decimal number
 	 */
 	private static int parseTaskListCursor(final int listSize, final JsonNode body) {
 		final JsonNode params = (body != null) ? body.get("params") : null;
 		final JsonNode cursorNode = (params != null && params.isObject()) ? params.get("cursor") : null;
 		if (cursorNode != null && cursorNode.isTextual()) {
+			final String cursor = cursorNode.asText();
 			try {
-				return Math.max(0, Math.min(Integer.parseInt(cursorNode.asText()), listSize));
+				return Math.max(0, Math.min(Integer.parseInt(cursor), listSize));
 			}
 			catch (final NumberFormatException ex) {
-				return listSize;
+				throw new IllegalArgumentException("Invalid params: non-numeric cursor '" + cursor + "'", ex);
 			}
 		}
 		return 0;

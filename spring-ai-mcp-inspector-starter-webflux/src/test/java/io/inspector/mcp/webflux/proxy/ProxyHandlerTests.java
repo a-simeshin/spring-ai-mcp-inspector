@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
@@ -2741,18 +2742,29 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("when no TaskService bean is available, tasks/get falls through to the regular relay path")
 		void tasksGet_withoutTaskService_relaysToUpstream() throws Exception {
-			// given
+			// given: the upstream answer is pre-emitted on the session replay sink, so
+			// the
+			// relay await resolves immediately instead of waiting out the 30 s request
+			// timeout
+			final String frame = "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}";
 			final ProxySession session = newSession("s1");
+			final JsonNode upstreamAnswer = ProxyHandlerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":6,\"result\":{\"taskId\":\"t-1\",\"status\":\"vendor-implementation\"}}");
+			session.targetToBrowser().tryEmitNext(upstreamAnswer);
 			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
-			final ServerRequest request = buildTaskRequest("s1",
-					"{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}");
+			final ServerRequest request = buildTaskRequest("s1", frame);
 
 			// when - the default handler has no TaskService
 			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
 
-			// then - the frame is relayed, not intercepted locally
+			// then - the frame is relayed upstream and the upstream answer comes back
+			// verbatim
 			assertThat(response).isNotNull();
-			assertThat(response.statusCode()).isNotEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(ProxyHandlerTests.entityJson(response)).isEqualTo(upstreamAnswer);
+			assertThat(session.browserToTarget().asFlux().blockFirst(Duration.ofMillis(500)))
+				.as("tasks/get frame must be emitted toward upstream")
+				.isEqualTo(ProxyHandlerTests.this.objectMapper.readTree(frame));
 		}
 
 		@Test
@@ -2861,6 +2873,30 @@ class ProxyHandlerTests {
 			assertThat(result.has("nextCursor")).as("last page has no nextCursor").isFalse();
 		}
 
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/list with a non-numeric cursor returns a JSON-RPC -32602 error naming the cursor")
+		void tasksList_nonNumericCursor_returnsInvalidParamsError() throws Exception {
+			// given: a cursor that is not a decimal offset
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final java.util.List<io.inspector.mcp.core.task.TaskHandle> noTasks = java.util.List.of();
+			given(this.taskService.listTasks()).willReturn(noTasks);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"not-a-number\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then: a -32602 Invalid params error naming the offending cursor instead of
+			// an empty page
+			assertThat(response).isNotNull();
+			final JsonNode error = ProxyHandlerTests.entityJson(response).get("error");
+			assertThat(error.get("code").asInt()).isEqualTo(-32602);
+			assertThat(error.get("message").asText()).contains("not-a-number");
+		}
+
 	}
 
 	@Nested
@@ -2926,8 +2962,10 @@ class ProxyHandlerTests {
 			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
 			final JsonNode response = ProxyHandlerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":{\"tasks\":{\"custom\":true}}}}");
+			final AtomicReference<ProxySession> startedSession = new AtomicReference<>();
 			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
 				final ProxySession s = inv.getArgument(0);
+				startedSession.set(s);
 				s.targetToBrowser().tryEmitNext(response);
 				return Mono.empty();
 			});
@@ -2937,7 +2975,7 @@ class ProxyHandlerTests {
 						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
 
 			// when
-			final ServerResponse serverResponse = ProxyHandlerTests.this.handler.postMcp(request).block();
+			final ServerResponse serverResponse = this.handlerWithTasks.postMcp(request).block();
 
 			// then
 			assertThat(serverResponse).isNotNull();
@@ -2946,6 +2984,10 @@ class ProxyHandlerTests {
 			assertThat(responseBody.path("result").path("capabilities").path("tasks").path("custom").asBoolean())
 				.as("upstream tasks must be preserved")
 				.isTrue();
+			assertThat(startedSession.get()).isNotNull();
+			assertThat(startedSession.get().isTasksInterceptionEnabled())
+				.as("upstream-advertised tasks keeps task-method interception off")
+				.isFalse();
 		}
 
 		@Test

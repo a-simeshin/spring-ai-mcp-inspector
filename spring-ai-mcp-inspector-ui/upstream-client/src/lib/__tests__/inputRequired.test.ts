@@ -146,6 +146,17 @@ describe("buildToolRetryParams (byte-exact echo)", () => {
       old: true,
     });
   });
+
+  it("drops a stale requestState riding on originalParams when the new round sends none", () => {
+    const stale: ToolCallParams = {
+      ...originalParams,
+      requestState: "stale-state",
+    } as ToolCallParams;
+    const params = buildToolRetryParams(stale, { fresh: 1 }, undefined);
+    expect(Object.keys(params)).not.toContain("requestState");
+    expect(params.requestState).toBeUndefined();
+    expect((stale as Record<string, unknown>).requestState).toBe("stale-state");
+  });
 });
 
 const makeController = (
