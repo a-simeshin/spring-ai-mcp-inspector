@@ -12,5 +12,7 @@ Description:
   query parameter to the proxy. Proxy connections only (the field is
   hidden for direct connections, which never build a proxy URL).
   Validation: whole seconds 1..600 (matching ProxyConnectionBudgets),
-  enforced on blur and on the Connect click guard.
+  decimal digits only (the proxy parses the raw string with Long.parseLong,
+  so JS numeric literals like 1e1 or +30 are rejected client-side with the
+  field-level error), enforced on blur and on the Connect click guard.
   Value persisted to localStorage (lastConnectionTimeout).
