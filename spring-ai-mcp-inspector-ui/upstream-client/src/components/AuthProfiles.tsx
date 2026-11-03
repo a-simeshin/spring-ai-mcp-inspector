@@ -30,6 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  AuthProfileApiError,
   AuthProfileSummary,
   AuthProfileType,
   ApiKeyPlacement,
@@ -128,22 +129,40 @@ const AuthProfiles = ({
     [toast],
   );
 
+  // [spring-ai-mcp-inspector PATCH] 404 on the unconditional list/prefill
+  // fetches is not an error to toast (issue #267): the backend either predates
+  // the auth-profile API or its in-memory store was restarted. The effective
+  // profile set is empty, and App marks bound saved connections as stale.
+  const isEndpointNotFound = useCallback(
+    (error: unknown): boolean =>
+      error instanceof AuthProfileApiError && error.status === 404,
+    [],
+  );
+
   const refreshProfiles = useCallback(async () => {
     setLoading(true);
     try {
       onProfilesChange(await listAuthProfiles(config));
     } catch (error) {
-      notifyError(error instanceof Error ? error.message : String(error));
+      if (isEndpointNotFound(error)) {
+        onProfilesChange([]);
+      } else {
+        notifyError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
       setLoading(false);
     }
-  }, [config, onProfilesChange, notifyError]);
+  }, [config, onProfilesChange, notifyError, isEndpointNotFound]);
 
   useEffect(() => {
     void refreshProfiles();
     void listPrefillAuthProfiles(config)
       .then(setPrefill)
       .catch((error) => {
+        if (isEndpointNotFound(error)) {
+          setPrefill([]);
+          return;
+        }
         notifyError(error instanceof Error ? error.message : String(error));
       });
     // [spring-ai-mcp-inspector PATCH] One-shot mount refresh; the panel is

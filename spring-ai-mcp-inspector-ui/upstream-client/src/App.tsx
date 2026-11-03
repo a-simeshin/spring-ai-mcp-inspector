@@ -47,6 +47,7 @@ import React, {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -138,6 +139,7 @@ import {
   savedConnectionHistoryKey,
   stripSecrets,
   touchSavedConnection,
+  unlinkAuthProfileFromSavedConnection,
 } from "./lib/savedConnections";
 // [spring-ai-mcp-inspector PATCH] Persistent history (#218): bucket carry
 // over on the saved-connection lifecycle and cleanup on delete.
@@ -292,6 +294,10 @@ const App = () => {
   // owns secrets); profiles list is owner-scoped, secrets never persisted.
   const [profiles, setProfiles] = useState<AuthProfileSummary[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
+  // [spring-ai-mcp-inspector PATCH] Stale auth-profile bindings (issue #267):
+  // false until the first list result (success or suppressed 404) arrives, so
+  // a bound connection is not flagged stale before the server has answered.
+  const [authProfilesResolved, setAuthProfilesResolved] = useState(false);
 
   const [resources, setResources] = useState<Resource[]>([]);
   const [resourceTemplates, setResourceTemplates] = useState<
@@ -879,6 +885,39 @@ const App = () => {
     },
     [activeConnectionId, activeHistoryConnectionId],
   );
+
+  // [spring-ai-mcp-inspector PATCH] Stale auth-profile bindings (issue #267):
+  // the effective profile set is only known after the first list load
+  // (a 404 from a backend without the auth-profile API counts as empty),
+  // so staleness is evaluated after that, not from the initial empty state.
+  const handleProfilesChange = useCallback((next: AuthProfileSummary[]) => {
+    setProfiles(next);
+    setAuthProfilesResolved(true);
+  }, []);
+
+  const staleAuthProfileBindings = useMemo(
+    () =>
+      authProfilesResolved
+        ? savedConnections.filter(
+            (c) =>
+              typeof c.authProfileName === "string" &&
+              c.authProfileName !== "" &&
+              !profiles.some((p) => p.name === c.authProfileName),
+          )
+        : [],
+    [authProfilesResolved, savedConnections, profiles],
+  );
+
+  const handleUnlinkAuthProfile = useCallback((connectionId: string) => {
+    const updated = unlinkAuthProfileFromSavedConnection(connectionId);
+    if (updated) {
+      setSavedConnections(updated);
+    }
+  }, []);
+
+  const handleOpenAuthSettings = useCallback(() => {
+    setIsAuthDebuggerVisible(true);
+  }, []);
 
   // [spring-ai-mcp-inspector PATCH] Saved connections: reset fields
   // absent from the entry so stale values (e.g. stdio fields leaking
@@ -2247,7 +2286,7 @@ const App = () => {
           // [spring-ai-mcp-inspector PATCH] Named auth profiles + D3 error
           // banner (issue #54).
           profiles={profiles}
-          onProfilesChange={setProfiles}
+          onProfilesChange={handleProfilesChange}
           activeProfileId={activeProfileId}
           onActiveProfileChange={setActiveProfileId}
           authError={authError}
@@ -2273,6 +2312,10 @@ const App = () => {
           onSaveConnection={handleSaveConnection}
           onDeleteConnection={handleDeleteConnection}
           onSelectConnection={handleSelectConnection}
+          // [spring-ai-mcp-inspector PATCH] Stale auth-profile bindings (#267).
+          staleAuthProfileBindings={staleAuthProfileBindings}
+          onUnlinkAuthProfile={handleUnlinkAuthProfile}
+          onOpenAuthSettings={handleOpenAuthSettings}
         />
         {!isCompactLayout && (
           <div
@@ -2777,6 +2820,7 @@ const App = () => {
                   height: `${historyPaneHeight}px`,
                 }
           }
+          data-testid="notifications-pane"
         >
           {!isCompactLayout && (
             <div

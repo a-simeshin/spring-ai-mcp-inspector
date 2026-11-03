@@ -97,6 +97,10 @@ export function isValidConnection(c: unknown): c is SavedConnection {
   // connectionTimeout: optional string. Accepts any string (validated at form level),
   // or undefined/absent for old entries without the field.
   if (obj.connectionTimeout !== undefined && typeof obj.connectionTimeout !== "string") return false;
+  // Validate optional auth-profile binding (issue #267): string or absent.
+  if (obj.authProfileName !== undefined && typeof obj.authProfileName !== "string") {
+    return false;
+  }
   return true;
 }
 
@@ -230,6 +234,27 @@ export function deleteSavedConnection(id: string): void {
   if (filtered.length < connections.length) {
     persistConnections(filtered);
   }
+}
+
+/**
+ * Remove the auth-profile binding from a saved connection (issue #267).
+ * Persists the updated array to the v1 localStorage key, leaving every other
+ * entry and field untouched. Returns the updated connections array, or null
+ * when the id is unknown or the connection has no binding to remove.
+ */
+export function unlinkAuthProfileFromSavedConnection(
+  id: string,
+): SavedConnection[] | null {
+  const connections = loadSavedConnections();
+  const idx = connections.findIndex((c) => c.id === id);
+  if (idx === -1 || !connections[idx].authProfileName) {
+    return null;
+  }
+  const unlinked: SavedConnection = { ...connections[idx] };
+  delete unlinked.authProfileName;
+  connections[idx] = unlinked;
+  persistConnections(connections);
+  return connections;
 }
 
 /**

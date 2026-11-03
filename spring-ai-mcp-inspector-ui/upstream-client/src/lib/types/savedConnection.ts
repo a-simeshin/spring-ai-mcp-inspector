@@ -17,6 +17,12 @@ export interface SavedConnection {
   connectionTimeout?: string;
   lastUsedAt: number;
   createdAt: number;
+  /**
+   * Optional named auth profile this connection is bound to (issue #267).
+   * Absent on entries saved before the binding existed; `undefined` and an
+   * empty string both mean "no binding".
+   */
+  authProfileName?: string;
 }
 
 export interface SavedConnectionsV1 {
