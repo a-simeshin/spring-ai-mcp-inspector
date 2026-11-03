@@ -1208,7 +1208,7 @@ const Sidebar = ({
               </div>
             )}
             {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). Block onConnect when invalid. */}
-            {/* [spring-ai-mcp-inspector PATCH] Also block Connect when connection timeout is invalid. */}
+            {/* [spring-ai-mcp-inspector PATCH] Also block Connect when connection timeout is invalid (proxy connections only: direct never forwards the timeout, so a stale invalid persisted value must not silently lock Connect). */}
             {connectionStatus !== "connected" && (
               <Button
                 className="w-full"
@@ -1222,15 +1222,19 @@ const Sidebar = ({
                       return;
                     }
                   }
-                  // Block connect if connection timeout is invalid
-                  if (!isValidConnectionTimeout(connectionTimeout)) {
+                  // Block connect if connection timeout is invalid (proxy only)
+                  if (
+                    connectionType === "proxy" &&
+                    !isValidConnectionTimeout(connectionTimeout)
+                  ) {
                     setTimeoutError(CONNECTION_TIMEOUT_ERROR);
                     return;
                   }
                   onConnect();
                 }}
                 disabled={
-                  (transportType !== "stdio" && !!urlError) || !!timeoutError
+                  (transportType !== "stdio" && !!urlError) ||
+                  (connectionType === "proxy" && !!timeoutError)
                 }
               >
                 <Play className="w-4 h-4 mr-2" />
