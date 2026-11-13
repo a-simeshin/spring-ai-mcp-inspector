@@ -2277,9 +2277,11 @@ class ProxyHandlerTests {
 			assertThat(error.get("phase")).isEqualTo("initialize");
 			assertThat(((Number) error.get("budgetMs")).longValue()).isEqualTo(200L);
 			// budget source pin: the wait came from the 200ms connection budget, not from
-			// the 30s streamable-request, and the timer cannot fire before its own budget
+			// the 30s streamable-request. The lower bound carries 10ms of slack: timer
+			// delivery and the elapsed nanoTime read can disagree by a tick, so the
+			// timeout can land a millisecond under the budget without firing early.
 			final long elapsedMs = ((Number) error.get("elapsedMs")).longValue();
-			assertThat(elapsedMs).isGreaterThanOrEqualTo(200L);
+			assertThat(elapsedMs).isGreaterThanOrEqualTo(190L);
 			assertThat(elapsedMs).isLessThan(200L + 5000L);
 			verify(ProxyHandlerTests.this.registry).removeAndClose(captured[0].sessionId());
 		}
