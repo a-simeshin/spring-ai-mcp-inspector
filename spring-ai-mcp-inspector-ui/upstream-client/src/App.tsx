@@ -71,6 +71,7 @@ import {
   Key,
   ListTodo,
   MessageSquare,
+  MessageSquarePlus,
   Settings,
 } from "lucide-react";
 
@@ -90,6 +91,10 @@ import TasksTab from "./components/TasksTab";
 import AppsTab from "./components/AppsTab";
 // [spring-ai-mcp-inspector PATCH] TimelineTab — MCP event timeline (#112).
 import TimelineTab from "./components/TimelineTab";
+// [spring-ai-mcp-inspector PATCH] SEP-2322 input_required panel (#253).
+import InputRequiredTab, {
+  PendingInputChain,
+} from "./components/InputRequiredTab";
 import { InspectorConfig } from "./lib/configurationTypes";
 import {
   getMCPProxyAddress,
@@ -106,6 +111,13 @@ import ElicitationTab, {
   PendingElicitationRequest,
   ElicitationResponse,
 } from "./components/ElicitationTab";
+// [spring-ai-mcp-inspector PATCH] SEP-2322 (spec revision 2026-07-28)
+// input_required round-trip for tools/call, client layer (#253).
+import {
+  InputRequiredController,
+  InputResponses,
+  isInputRequiredResult,
+} from "./lib/inputRequired";
 import {
   CustomHeaders,
   migrateFromLegacyAuth,
@@ -197,6 +209,7 @@ const ALL_TABS: string[] = [
   "ping",
   "sampling",
   "elicitations",
+  "input-required",
   "roots",
   "auth",
   "metadata",
@@ -224,6 +237,7 @@ const buildValidTabs = (
   "ping",
   "sampling",
   "elicitations",
+  "input-required",
   "roots",
   "auth",
   "metadata",
@@ -375,6 +389,11 @@ const App = () => {
       }
     >
   >([]);
+  // [spring-ai-mcp-inspector PATCH] SEP-2322 input_required panel (#253):
+  // pending input chains rendered in the Input Required tab.
+  const [pendingInputChains, setPendingInputChains] = useState<
+    PendingInputChain[]
+  >([]);
   const [isAuthDebuggerVisible, setIsAuthDebuggerVisible] = useState(false);
 
   const [authState, setAuthState] =
@@ -522,6 +541,7 @@ const App = () => {
     completionsSupported,
     connect: connectMcpServer,
     disconnect: disconnectMcpServer,
+    resetSessionAndConnect,
   } = useConnection({
     transportType,
     command,
@@ -1272,6 +1292,114 @@ const App = () => {
     cacheToolOutputSchemas(response.tools);
   };
 
+  // [spring-ai-mcp-inspector PATCH] SEP-2322 (spec revision 2026-07-28)
+  // input_required round-trip for tools/call, client layer (#253): when a
+  // tools/call answer needs more input, the chain is registered here and the
+  // controller fires onInputRequired events (correlation id, requests,
+  // requestState, original params). resendToolCall() on the controller re-issues
+  // the ORIGINAL call with the user's inputResponses and the requestState
+  // echoed byte-exact, looping across rounds until a final result or error;
+  // cancel() drops the chain. The controller is created once; it reaches the
+  // current sendMCPRequest through a ref so it never captures a stale closure.
+  const sendToolCallRef = useRef(sendMCPRequest);
+  // Refreshed on every render (no effect) so the once-created controller
+  // always reaches the latest sendMCPRequest closure.
+  sendToolCallRef.current = sendMCPRequest;
+  const inputRequiredRef = useRef<InputRequiredController | null>(null);
+  if (!inputRequiredRef.current) {
+    inputRequiredRef.current = new InputRequiredController(
+      async (params) =>
+        await sendToolCallRef.current(
+          { method: "tools/call" as const, params },
+          CompatibilityCallToolResultSchema,
+          "tools",
+        ),
+    );
+  }
+
+  // [spring-ai-mcp-inspector PATCH] SEP-2322 input_required panel (#253):
+  // subscribe once to the controller created above. A new round of a live
+  // chain replaces the stored snapshot (same correlation id, round + 1);
+  // chain closure (final result, error, or cancel) drops it. Round 1 of a
+  // new chain focuses the panel, mirroring the legacy elicitation flow.
+  useEffect(() => {
+    const controller = inputRequiredRef.current;
+    if (!controller) {
+      return;
+    }
+    const unsubscribeInput = controller.onInputRequired((event) => {
+      setPendingInputChains((prev) => [
+        ...prev.filter((chain) => chain.correlationId !== event.correlationId),
+        {
+          correlationId: event.correlationId,
+          round: event.round,
+          requests: event.requests,
+          requestState: event.requestState,
+          originalParams: event.originalParams,
+        },
+      ]);
+      if (event.round === 1) {
+        setActiveTab("input-required");
+        window.location.hash = "input-required";
+      }
+    });
+    const unsubscribeClosed = controller.onChainClosed((event) => {
+      setPendingInputChains((prev) =>
+        prev.filter((chain) => chain.correlationId !== event.correlationId),
+      );
+    });
+    return () => {
+      unsubscribeInput();
+      unsubscribeClosed();
+    };
+  }, []);
+
+  // [spring-ai-mcp-inspector PATCH] SEP-2322 input_required panel (#253):
+  // submit re-sends the ORIGINAL tools/call through the controller (which
+  // echoes the requestState byte-exact and continues the same chain); a
+  // multi-round answer resolves with the next input_required result, which
+  // the panel already shows via onInputRequired, so only a final result
+  // reaches the tools tab. A failed re-send surfaces as an error-shaped
+  // result there instead of a dead end.
+  const handleInputRequiredSubmit = (
+    chain: PendingInputChain,
+    responses: InputResponses,
+  ): void => {
+    void inputRequiredRef.current
+      ?.resendToolCall(
+        chain.originalParams,
+        responses,
+        chain.requestState,
+        chain.correlationId,
+      )
+      .then((result) => {
+        if (isInputRequiredResult(result)) {
+          return;
+        }
+        setToolResult(result as CompatibilityCallToolResult);
+      })
+      .catch((error: unknown) => {
+        setToolResult({
+          content: [
+            {
+              type: "text" as const,
+              text: `input_required chain failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            },
+          ],
+          isError: true,
+        });
+      });
+  };
+
+  // [spring-ai-mcp-inspector PATCH] SEP-2322 input_required panel (#253):
+  // cancel abandons the chain cleanly (the controller rejects later resends
+  // for it; the pending snapshot is dropped via onChainClosed).
+  const handleInputRequiredCancel = (chain: PendingInputChain): void => {
+    inputRequiredRef.current?.cancel(chain.correlationId);
+  };
+
   const callTool = async (
     name: string,
     params: Record<string, unknown>,
@@ -1460,6 +1588,14 @@ const App = () => {
         return latestToolResult;
       } else {
         const directResult = response as CompatibilityCallToolResult;
+        // [spring-ai-mcp-inspector PATCH] SEP-2322 (spec 2026-07-28): an
+        // input_required answer opens (or would continue) a client-side chain;
+        // the result itself still flows to the tools tab unchanged, and the
+        // legacy elicitation flow is untouched (it is a server request on
+        // elicitation/create, not a tools/call result).
+        if (isInputRequiredResult(response)) {
+          inputRequiredRef.current?.openChain(request.params, response);
+        }
         setToolResult(directResult);
         // Clear any validation errors since tool execution completed
         setErrors((prev) => ({ ...prev, tools: null }));
@@ -1621,7 +1757,19 @@ const App = () => {
           rects to fit the viewport at scrollY=0, and a 50vh sidebar leaves
           less than 200px for the stacked Tools panes below the wrapped tab
           bar — too little for the list and detail to both be usable with
-          their internal scrolling. */}
+          their internal scrolling. [spring-ai-mcp-inspector PATCH] Mobile
+          pre-connect sidebar (issue #230): before the first connect BOTH
+          cap classes are dropped (no vh cap below lg), so the sidebar grows
+          to its natural height and the URL input and the Connect button sit
+          in normal flow instead of a capped inner scroll area (at 375x812
+          the 30vh scroll area showed 113px of a 500px column: URL top 193
+          and Connect top 481 were out of view and a real click at Connect's
+          centre hit the floating theme bar; at 812x375 landscape the 50vh
+          sm: cap squeezed the pane to ~187px and put Connect back inside an
+          inner scroll). Once connected both caps return
+          (h-[30vh]) so the #58 contract (config/list/detail rects inside the
+          first 667px viewport at scrollY=0) keeps holding; the cap only
+          matters with tab content mounted, which never happens pre-connect. */}
       <div
         style={
           isCompactLayout
@@ -1633,7 +1781,9 @@ const App = () => {
                 transition: isSidebarDragging ? "none" : "width 0.15s",
               }
         }
-        className="bg-card border-border flex flex-col relative w-full lg:w-auto lg:border-r border-b lg:border-b-0 h-[30vh] sm:h-[50vh] lg:h-auto overflow-y-auto lg:overflow-y-visible"
+        className={`bg-card border-border flex flex-col relative w-full lg:w-auto lg:border-r border-b lg:border-b-0 ${
+          mcpClient ? "h-[30vh] sm:h-[50vh]" : ""
+        } lg:h-auto overflow-y-auto lg:overflow-y-visible`}
         data-testid="config-pane"
       >
         <Sidebar
@@ -1668,6 +1818,7 @@ const App = () => {
           authError={authError}
           onConnect={connectMcpServer}
           onDisconnect={disconnectMcpServer}
+          onResetSession={resetSessionAndConnect}
           logLevel={logLevel}
           sendLogLevelRequest={sendLogLevelRequest}
           loggingSupported={!!serverCapabilities?.logging || false}
@@ -1719,8 +1870,13 @@ const App = () => {
                   the trailing tabs (Sampling/Elicitations/Roots/Auth/Metadata)
                   render off-screen with no scroll and no affordance. flex-wrap
                   + h-auto let the triggers flow into rows; sm:h-9 +
-                  sm:flex-nowrap restore the single upstream row at >=640px. */}
-              <TabsList className="mb-4 py-0 flex-wrap h-auto sm:h-9 sm:flex-nowrap">
+                  sm:flex-nowrap restore the single upstream row at >=640px.
+                  The wrapped row that the Input Required entry adds (#253)
+                  was pushing the tools detail pane past the 375x667 fold
+                  (InspectorUiIT ResponsiveLayout), so the bar's bottom
+                  margin is mb-2 below `sm`; the upstream mb-4 spacing is
+                  restored from `sm` up. */}
+              <TabsList className="mb-2 py-0 flex-wrap h-auto sm:mb-4 sm:h-9 sm:flex-nowrap">
                 <TabsTrigger
                   value="resources"
                   disabled={!serverCapabilities?.resources}
@@ -1808,6 +1964,18 @@ const App = () => {
                   {pendingElicitationRequests.length > 0 && (
                     <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center">
                       {pendingElicitationRequests.length}
+                    </span>
+                  )}
+                </TabsTrigger>
+                {/* [spring-ai-mcp-inspector PATCH] SEP-2322 input_required
+                    panel (#253): pending input_required chains with a badge,
+                    mirroring the elicitations trigger. */}
+                <TabsTrigger value="input-required" className="relative">
+                  <MessageSquarePlus className="w-4 h-4 mr-2" />
+                  Input Required
+                  {pendingInputChains.length > 0 && (
+                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center">
+                      {pendingInputChains.length}
                     </span>
                   )}
                 </TabsTrigger>
@@ -2066,6 +2234,13 @@ const App = () => {
                     <ElicitationTab
                       pendingRequests={pendingElicitationRequests}
                       onResolve={handleResolveElicitation}
+                    />
+                    {/* [spring-ai-mcp-inspector PATCH] SEP-2322 input_required
+                        panel (#253). */}
+                    <InputRequiredTab
+                      pendingChains={pendingInputChains}
+                      onSubmit={handleInputRequiredSubmit}
+                      onCancel={handleInputRequiredCancel}
                     />
                     <RootsTab
                       roots={roots}

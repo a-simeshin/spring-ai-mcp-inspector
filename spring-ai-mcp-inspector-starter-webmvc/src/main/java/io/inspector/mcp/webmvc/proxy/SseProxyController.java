@@ -18,6 +18,7 @@ package io.inspector.mcp.webmvc.proxy;
 
 import java.io.IOException;
 import java.net.URI;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -36,6 +37,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -55,10 +57,18 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyConnectFailure;
+import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
+import io.inspector.mcp.core.proxy.ProxyConnectTimeoutException;
+import io.inspector.mcp.core.proxy.ProxyConnectionBudgets;
+import io.inspector.mcp.core.proxy.ProxyConnectionBudgets.ProxyConnectionBudgetException;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
+import io.inspector.mcp.core.proxy.ProxyErrorFallback;
 import io.inspector.mcp.core.proxy.ProxyErrorMapper;
+import io.inspector.mcp.core.proxy.ProxyReconnectPolicy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
@@ -88,6 +98,14 @@ import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
  * browser-side {@code SSEClientTransport} where to POST messages. Subsequent frames from
  * the target are streamed as {@code event: message}.
  *
+ * <p>
+ * A target that cannot be brought up is answered before the stream starts: the handler
+ * throws {@link ProxyConnectFailureException} and the {@link #connectFailure} advice maps
+ * it onto the same structured {@code MCP_CONNECT_FAILED} JSON body the streamable
+ * controller serves. A plain {@code ResponseStatusException} would delegate to Boot's
+ * {@code /error} dispatch, whose default {@code include-message=never} drops the message
+ * from both the status line and the body - exactly what this advice exists to avoid.
+ *
  * @author Artem Simeshin
  */
 @RestController
@@ -95,6 +113,12 @@ import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
 public class SseProxyController {
 
 	private static final Logger LOG = LoggerFactory.getLogger(SseProxyController.class);
+
+	/**
+	 * Error code of the structured connect-failure payload (mirrors
+	 * {@code StreamableHttpProxyController#connectFailureResponse}).
+	 */
+	private static final String ERROR_CODE_MCP_CONNECT_FAILED = "MCP_CONNECT_FAILED";
 
 	private final ProxySessionRegistry registry;
 
@@ -187,6 +211,8 @@ public class SseProxyController {
 	 * @param command the executable for stdio transport
 	 * @param args the arguments for stdio transport
 	 * @param env the environment variables for stdio transport as JSON
+	 * @param connectionTimeout optional per-phase budget as raw query-parameter text
+	 * (whole seconds); when absent the configured default (30s) applies
 	 * @param request the current request, read for its context path
 	 * @return the {@link SseEmitter} for the opened session
 	 */
@@ -196,8 +222,10 @@ public class SseProxyController {
 			@RequestParam(value = "url", required = false) final String url,
 			@RequestParam(value = "command", required = false) final String command,
 			@RequestParam(value = "args", required = false) final String args,
-			@RequestParam(value = "env", required = false) final String env, final HttpServletRequest request) {
-		return openSse(transportType, url, command, args, env, null, request);
+			@RequestParam(value = "env", required = false) final String env,
+			@RequestParam(value = "connectionTimeout", required = false) final String connectionTimeout,
+			final HttpServletRequest request) {
+		return openSse(transportType, url, command, args, env, null, connectionTimeout, request);
 	}
 
 	/**
@@ -211,6 +239,8 @@ public class SseProxyController {
 	 * @param args the arguments for stdio transport
 	 * @param env the environment variables for stdio transport as JSON
 	 * @param profileId the owner-scoped auth profile id, or {@code null}
+	 * @param connectionTimeout optional per-phase budget as raw query-parameter text
+	 * (whole seconds); when absent the configured default (30s) applies
 	 * @param request the current request, read for its context path
 	 * @return the {@link SseEmitter} for the opened session
 	 */
@@ -222,8 +252,15 @@ public class SseProxyController {
 			@RequestParam(value = "args", required = false) final String args,
 			@RequestParam(value = "env", required = false) final String env,
 			@RequestParam(value = "profileId", required = false) final String profileId,
+			@RequestParam(value = "connectionTimeout", required = false) final String connectionTimeout,
 			final HttpServletRequest request) {
-		return openProxiedSession(transportType, url, command, args, env, profileId, contextPath(request));
+		// An invalid value propagates to the @ExceptionHandler below: the servlet stack
+		// answers a real HTTP 400 with the structured JSON body, matching the reactive
+		// stack's badRequest() on the same endpoints.
+		final Duration connectionBudget = ProxyConnectionBudgets.parseOrDefault(connectionTimeout,
+				resolveTimeouts().getConnection());
+		return openProxiedSession(transportType, url, command, args, env, profileId, contextPath(request),
+				connectionBudget);
 	}
 
 	/**
@@ -231,14 +268,18 @@ public class SseProxyController {
 	 * @param command the executable for stdio transport
 	 * @param args the arguments for stdio transport
 	 * @param env the environment variables for stdio transport as JSON
+	 * @param connectionTimeout optional per-phase budget as raw query-parameter text
+	 * (whole seconds); when absent the configured default (30s) applies
 	 * @param request the current request, read for its context path
 	 * @return the {@link SseEmitter} for the opened session
 	 */
 	@GetMapping(path = "/stdio", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
 	public SseEmitter openStdio(@RequestParam("command") final String command,
 			@RequestParam(value = "args", required = false) final String args,
-			@RequestParam(value = "env", required = false) final String env, final HttpServletRequest request) {
-		return openProxiedSession("stdio", null, command, args, env, null, contextPath(request));
+			@RequestParam(value = "env", required = false) final String env,
+			@RequestParam(value = "connectionTimeout", required = false) final String connectionTimeout,
+			final HttpServletRequest request) {
+		return openStdio(command, args, env, null, connectionTimeout, request);
 	}
 
 	/**
@@ -247,6 +288,8 @@ public class SseProxyController {
 	 * @param args the arguments for stdio transport
 	 * @param env the environment variables for stdio transport as JSON
 	 * @param profileId the owner-scoped auth profile id, or {@code null}
+	 * @param connectionTimeout optional per-phase budget as raw query-parameter text
+	 * (whole seconds); when absent the configured default (30s) applies
 	 * @param request the current request, read for its context path
 	 * @return the {@link SseEmitter} for the opened session
 	 */
@@ -255,8 +298,14 @@ public class SseProxyController {
 			@RequestParam(value = "args", required = false) final String args,
 			@RequestParam(value = "env", required = false) final String env,
 			@RequestParam(value = "profileId", required = false) final String profileId,
+			@RequestParam(value = "connectionTimeout", required = false) final String connectionTimeout,
 			final HttpServletRequest request) {
-		return openProxiedSession("stdio", null, command, args, env, profileId, contextPath(request));
+		// An invalid value propagates to the @ExceptionHandler below: the servlet stack
+		// answers a real HTTP 400 with the structured JSON body, matching the reactive
+		// stack's badRequest() on the same endpoints.
+		final Duration connectionBudget = ProxyConnectionBudgets.parseOrDefault(connectionTimeout,
+				resolveTimeouts().getConnection());
+		return openProxiedSession("stdio", null, command, args, env, profileId, contextPath(request), connectionBudget);
 	}
 
 	/**
@@ -273,9 +322,8 @@ public class SseProxyController {
 		if (session == null || !isOwnerOf(session)) {
 			return ResponseEntity.notFound().build();
 		}
-		final Sinks.EmitResult result = session.browserToTarget().tryEmitNext(body);
-		if (result.isFailure()) {
-			LOG.warn("proxy[{}] /message emit failure: {}", sessionId, result.name());
+		if (!session.emitFromBrowser(body)) {
+			LOG.warn("proxy[{}] /message emit failure", sessionId);
 			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
 		}
 		session.touch();
@@ -294,7 +342,8 @@ public class SseProxyController {
 	}
 
 	private SseEmitter openProxiedSession(final String transportType, final String url, final String command,
-			final String args, final String env, final String profileId, final String contextPath) {
+			final String args, final String env, final String profileId, final String contextPath,
+			final Duration connectionBudget) {
 		final String sessionId = UUID.randomUUID().toString();
 		final SseEmitter emitter = new SseEmitter(resolveTimeouts().getSseSession().toMillis());
 
@@ -322,12 +371,29 @@ public class SseProxyController {
 		final AtomicReference<String> authorizationRef = new AtomicReference<>(
 				(headers != null) ? headers.authorization() : null);
 		final McpClientTransport target;
+		final long connectStartNanos = System.nanoTime();
 		try {
 			target = buildTargetTransport(transportType, url, command, args, env, headers, authorizationRef);
 		}
 		catch (final Exception ex) {
+			// Request-shape rejections (restricted custom header name, illegal value,
+			// unsupported transportType) and connect timeouts fail the HTTP handshake
+			// itself: classify() keeps the offending header name in the structured 502
+			// body the browser can read. Every other build failure (auth, dead
+			// upstream, unclassified) rides the SSE stream as a mapped error event so
+			// spec-compliant EventSource clients keep the reconnect-stop contract.
+			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
+			if (failure.reason() == ProxyConnectFailure.Reason.INVALID_REQUEST
+					|| failure.reason() == ProxyConnectFailure.Reason.TIMEOUT) {
+				LOG.warn("proxy[{}] failed to build target transport ({}): {}", sessionId, failure.reason().wire(),
+						ex.toString());
+				throw new ProxyConnectFailureException(failure, ex);
+			}
 			LOG.warn("proxy[{}] failed to build target transport: {}", sessionId, ex.toString());
-			emitter.completeWithError(ex);
+			// Same readable-error contract as every other terminal failure of this
+			// stream: completeWithError would dispatch to Boot /error, whose JSON body
+			// has no converter for the text/event-stream response.
+			completeWithMappedError(emitter, ex, TransportKind.SSE, targetUri(transportType, url));
 			return emitter;
 		}
 
@@ -376,7 +442,18 @@ public class SseProxyController {
 			.takeUntilOther(session.closeSignal())
 			.subscribe((frame) -> sendMessageEvent(emitter, sessionId, frame), (err) -> {
 				LOG.warn("proxy[{}] target stream errored: {}", sessionId, err.toString());
-				completeWithMappedError(emitter, err, TransportKind.SSE, targetUri(transportType, url));
+				// Surface the structured payload (connect-phase timeout carried via
+				// failUpstream, or a classified transport failure) instead of a bare
+				// stream abort the browser cannot read. Budget overruns keep the
+				// proxy-error budget contract; other upstream failures map to the D3
+				// error DTO.
+				if (asConnectTimeout(err) != null) {
+					sendErrorEvent(emitter, err);
+					emitter.complete();
+				}
+				else {
+					completeWithMappedError(emitter, err, TransportKind.SSE, targetUri(transportType, url));
+				}
 			}, () -> emitter.complete());
 
 		emitter.onCompletion(() -> this.registry.removeAndClose(sessionId));
@@ -384,15 +461,33 @@ public class SseProxyController {
 		emitter.onError((ex) -> this.registry.removeAndClose(sessionId));
 
 		// Kick off the proxy. This call subscribes the browser->target pump
-		// and registers the inbound handler on the target transport.
-		this.mcpProxy.start(session).subscribe((ignored) -> {
+		// and registers the inbound handler on the target transport. The budget bounds
+		// the bring-up; an overrun fails the session sink (so awaiters fail fast) and
+		// is surfaced to the browser as a structured error event instead of a bare
+		// stream abort the client cannot read.
+		this.mcpProxy.start(session).timeout(connectionBudget).subscribe((ignored) -> {
 		}, (err) -> {
-			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
-			// D3: the structured error event must land BEFORE the session teardown —
-			// removeAndClose fires the close signal, which completes the emitter, and
-			// a completed emitter can no longer send the error frame (same ordering
-			// rule the webflux handler documents).
-			completeWithMappedError(emitter, err, TransportKind.SSE, targetUri(transportType, url));
+			if (err instanceof java.util.concurrent.TimeoutException) {
+				final long elapsedMs = (System.nanoTime() - connectStartNanos) / 1_000_000L;
+				final ProxyConnectTimeoutException timeoutEx = new ProxyConnectTimeoutException(
+						ProxyConnectTimeoutException.Phase.CONNECT, elapsedMs, connectionBudget.toMillis());
+				LOG.warn("proxy[{}] connect phase timed out after {}ms of {}ms budget", sessionId, elapsedMs,
+						connectionBudget.toMillis());
+				session.failUpstream(timeoutEx);
+				this.registry.removeAndClose(sessionId);
+				sendErrorEvent(emitter, err);
+				emitter.complete();
+			}
+			else {
+				LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+				// D3: the structured error event must land BEFORE the session teardown,
+				// because
+				// removeAndClose fires the close signal, which completes the emitter, and
+				// a completed emitter can no longer send the error frame (same ordering
+				// rule the webflux handler documents).
+				completeWithMappedError(emitter, err, TransportKind.SSE, targetUri(transportType, url));
+				this.registry.removeAndClose(sessionId);
+			}
 			this.registry.removeAndClose(sessionId);
 		});
 
@@ -400,24 +495,43 @@ public class SseProxyController {
 	}
 
 	/**
-	 * Completes the emitter with the D3 contract: a mappable transport failure emits a
-	 * structured {@code error} event and completes normally; anything else falls back to
-	 * the legacy {@code completeWithError}.
+	 * Completes the emitter with the readable error contract. A mapper-classified failure
+	 * rides a structured error event with the mapped DTO. A terminal failure the mapper
+	 * cannot classify (null: no HTTP status) but the policy recognizes as an upstream
+	 * death rides the same error event with the ProxyErrorFallback upstreamDeath DTO,
+	 * followed by the terminal retry field so EventSource clients stop reconnecting. Any
+	 * other unclassified failure ends the stream quietly: the response is already
+	 * text/event-stream, so the raw completeWithError would dispatch to Boot's /error,
+	 * whose JSON body has no converter for this media type
+	 * (HttpMessageNotWritableException in the log) while the browser sees a silent cut
+	 * either way.
 	 * @param emitter the SSE emitter to complete
 	 * @param err the transport failure
 	 * @param kind the transport kind gating the mapping
-	 * @param target the upstream target URI for the D5-redacted {@code url} field
+	 * @param target the upstream target URI for the D5-redacted url field
 	 */
 	private void completeWithMappedError(final SseEmitter emitter, final Throwable err, final TransportKind kind,
 			final URI target) {
-		final ProxyErrorDto dto = ProxyErrorMapper.map(err, kind);
-		if (dto == null) {
-			emitter.completeWithError(err);
-			return;
-		}
+		final boolean upstreamDead = ProxyReconnectPolicy.isUpstreamDeath(err);
+		final ProxyErrorDto mapped = ProxyErrorMapper.map(err, kind);
+		final ProxyErrorDto dto = (mapped != null) ? mapped
+				: (upstreamDead ? ProxyErrorFallback.upstreamDeath() : null);
 		try {
-			final ProxyErrorDto withUrl = dto.withUrl(ProxyErrorDto.redactUrl(target));
-			emitter.send(SseEmitter.event().name("error").data(this.objectMapper.writeValueAsString(withUrl)));
+			if (dto != null) {
+				// The error event is sent BEFORE the terminal retry field: the browser
+				// observer processes frames sequentially and closes the transport on the
+				// retry line, so a frame sent after it could be lost.
+				final ProxyErrorDto withUrl = dto.withUrl(ProxyErrorDto.redactUrl(target));
+				emitter.send(SseEmitter.event().name("error").data(this.objectMapper.writeValueAsString(withUrl)));
+			}
+			if (upstreamDead) {
+				// Dead upstream: every browser reconnect would mint a doomed proxy
+				// session every ~3s. The terminal SSE retry field tells spec-compliant
+				// EventSource clients (native and the polyfill) to stop reconnecting.
+				emitter.send(SseEmitter.event()
+					.comment("upstream dead: reconnect suppressed")
+					.reconnectTime(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS));
+			}
 			emitter.complete();
 		}
 		catch (final IOException ex) {
@@ -493,6 +607,62 @@ public class SseProxyController {
 		};
 	}
 
+	/**
+	 * Answers a rejected {@code connectionTimeout} value with a real HTTP 400 and the
+	 * structured {@code MCP_CONNECT_FAILED} JSON body, matching the reactive stack's
+	 * {@code badRequest()} on the same endpoints. Spring resolves the handler before the
+	 * emitter return type commits the response, so the status code reaches the client.
+	 * @param ex the validation failure raised while parsing the query parameter
+	 * @return the 400 response entity
+	 */
+	@ExceptionHandler(ProxyConnectionBudgetException.class)
+	public ResponseEntity<Object> handleInvalidConnectionTimeout(final ProxyConnectionBudgetException ex) {
+		return ResponseEntity.badRequest()
+			.contentType(MediaType.APPLICATION_JSON)
+			.body(ProxyConnectionBudgets.invalidParameterBody(ex.rawValue(), ex.getMessage()));
+	}
+
+	/**
+	 * Best-effort structured terminal error for a failed session bring-up: a
+	 * {@code proxy-error} event with the JSON payload, falling back to the exception
+	 * message when the payload cannot be serialized.
+	 * @param emitter the browser-facing emitter
+	 * @param err the failure that ended the bring-up
+	 */
+	private static void sendErrorEvent(final SseEmitter emitter, final Throwable err) {
+		final ProxyConnectTimeoutException timeoutEx = asConnectTimeout(err);
+		final Map<String, Object> payload = (timeoutEx != null) ? ProxyConnectionBudgets.timeoutBody(timeoutEx)
+				: Map.of("error", Map.of("code", "MCP_CONNECT_FAILED", "reason", "unknown", "message",
+						String.valueOf(err.getMessage()), "retryable", Boolean.TRUE));
+		try {
+			emitter.send(SseEmitter.event()
+				.name("proxy-error")
+				.data(JsonMapper.builder().build().writeValueAsString(payload)));
+		}
+		catch (final IOException ex) {
+			LOG.warn("proxy: failed to send proxy-error event, falling back to error completion: {}", ex.toString());
+			emitter.completeWithError(err);
+		}
+	}
+
+	/**
+	 * Unwraps a {@link ProxyConnectTimeoutException} carried by (or equal to) the given
+	 * failure, if any.
+	 * @param err the failure to inspect
+	 * @return the connect-phase timeout, or {@code null} when the failure is something
+	 * else
+	 */
+	private static ProxyConnectTimeoutException asConnectTimeout(final Throwable err) {
+		Throwable current = err;
+		while (current != null) {
+			if (current instanceof ProxyConnectTimeoutException connectTimeout) {
+				return connectTimeout;
+			}
+			current = current.getCause();
+		}
+		return null;
+	}
+
 	private void sendMessageEvent(final SseEmitter emitter, final String sessionId, final JsonNode frame) {
 		try {
 			emitter.send(SseEmitter.event().name("message").data(this.objectMapper.writeValueAsString(frame)));
@@ -521,15 +691,39 @@ public class SseProxyController {
 			}
 			case "stdio" -> {
 				if (command == null || command.isBlank()) {
-					throw new IllegalArgumentException(
+					throw new InvalidProxyRequestException(
 							"missing required 'command' query parameter for stdio transport");
 				}
 				final List<String> argv = parseArgv(command, args);
 				final Map<String, String> environment = parseEnv(env);
 				yield this.transportFactory.openStdio(argv, environment);
 			}
-			default -> throw new IllegalArgumentException("unsupported transportType: " + transportType);
+			default -> throw new InvalidProxyRequestException("unsupported transportType: " + transportType);
 		};
+	}
+
+	/**
+	 *
+	 * Answers a failed session bring-up with the structured {@code MCP_CONNECT_FAILED}
+	 * payload: 504 Gateway Timeout for {@link ProxyConnectFailure.Reason#TIMEOUT}, 502
+	 * Bad Gateway for every other reason. The body is written by this controller itself
+	 * (same contract as {@code StreamableHttpProxyController#connectFailureResponse})
+	 * because the container error page a thrown status exception would delegate to drops
+	 * the message on the wire (Boot's default
+	 * {@code server.error.include-message=never}); the cause stays server-side in the
+	 * log.
+	 * @param ex the connect failure signalled by the session bring-up
+	 * @return the HTTP response entity carrying the structured error body
+	 */
+	@ExceptionHandler(ProxyConnectFailureException.class)
+	private ResponseEntity<Object> connectFailure(final ProxyConnectFailureException ex) {
+		final ProxyConnectFailure failure = ex.failure();
+		final HttpStatus status = (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT) ? HttpStatus.GATEWAY_TIMEOUT
+				: HttpStatus.BAD_GATEWAY;
+		return ResponseEntity.status(status)
+			.contentType(MediaType.APPLICATION_JSON)
+			.body(Map.of("error", Map.of("code", ERROR_CODE_MCP_CONNECT_FAILED, "reason", failure.reason().wire(),
+					"message", failure.message(), "retryable", failure.retryable())));
 	}
 
 	/**

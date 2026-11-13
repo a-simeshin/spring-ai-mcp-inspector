@@ -1,9 +1,10 @@
 // [spring-ai-mcp-inspector PATCH] TimelineTab test: schema alignment, APP_LOG rendering, empty state (#130).
 // [spring-ai-mcp-inspector PATCH] Protocol negotiation badge test: _protocolNegotiation enrichment (#129, #130).
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import TimelineTab from "../TimelineTab";
 import { Tabs } from "@/components/ui/tabs";
+import { requestTimelineScrollTo } from "@/lib/leakAnnotations";
 
 /**
  * TimelineTab consumes the serialized io.inspector.mcp.core.timeline.TimelineEvent
@@ -422,5 +423,400 @@ describe("TimelineTab", () => {
     expect(row.className).toContain("border-l-green-500");
     expect(row.className).toContain("bg-green-950/30");
     expect(row.className).not.toContain("red");
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Exception-leak badge tests (#251). Fixtures
+  // follow the D5 wire shape as serialized by
+  // ExceptionLeakDetector#toLeakNode (verified on the engine branch).
+
+  const LEAK_LOG_MESSAGE = "E11000 duplicate key error collection: db.app";
+
+  // Spring AI concatenates message + lineSeparator + rootCause, so without a
+  // cause the text is duplicated (spec fact F1): this is the exact error text.
+  const LEAK_ERROR_TEXT =
+    LEAK_LOG_MESSAGE + "\n" + LEAK_LOG_MESSAGE;
+
+  const LEAK_LOG_EVENT: WireEvent = {
+    id: "evt-log-1",
+    correlationId: null,
+    sessionId: null,
+    type: "APP_LOG",
+    timestamp: "2026-08-30T12:00:04.100Z",
+    payload: {
+      logLevel: "ERROR",
+      loggerName: "io.inspector.demo.DemoTool",
+      threadName: "main",
+      message: LEAK_LOG_MESSAGE,
+    },
+  };
+
+  function leakResponseEvent(
+    matchType: string,
+    verbatim: boolean,
+    logMessage: string = LEAK_LOG_MESSAGE,
+  ): WireEvent {
+    return {
+      id: "evt-resp-leak",
+      correlationId: "corr-leak",
+      sessionId: "s-leak",
+      type: "MCP_JSONRPC_RESPONSE",
+      timestamp: "2026-08-30T12:00:05.000Z",
+      payload: {
+        jsonrpc: "2.0",
+        id: 10,
+        result: {
+          content: [{ type: "text", text: LEAK_ERROR_TEXT }],
+          isError: true,
+        },
+        _leak: {
+          matchType,
+          verbatim,
+          logEventId: "evt-log-1",
+          logTimestamp: "2026-08-30T12:00:04.100Z",
+          logMessage,
+          logThrowableClass: "org.springframework.dao.DuplicateKeyException",
+          multipleCandidates: false,
+          droppedCandidates: 0,
+        },
+      },
+    };
+  }
+
+  const LEAK_EXACT_RESPONSE_EVENT = leakResponseEvent("EXACT", true);
+  const LEAK_NORMALIZED_RESPONSE_EVENT = leakResponseEvent("NORMALIZED", false);
+  const LEAK_PARTIAL_RESPONSE_EVENT = leakResponseEvent("PARTIAL", false);
+
+  function mockScrollIntoView(): jest.Mock {
+    const scrollIntoView = jest.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    return scrollIntoView;
+  }
+
+  function restoreScrollIntoView() {
+    delete (window.HTMLElement.prototype as unknown as Record<string, unknown>)
+      .scrollIntoView;
+  }
+
+  // The APP_LOG row, identified by its gray border: the message text also
+  // appears inside the expanded leak detail block of the response row.
+  function logRowOf(message: string): HTMLElement {
+    return Array.from(document.querySelectorAll("div.border-l-2")).find(
+      (el) =>
+        el.className.includes("border-l-gray-500") &&
+        el.textContent?.includes(message),
+    ) as HTMLElement;
+  }
+
+  it("renders a leak: exact badge next to the tool error badge for an EXACT annotation", async () => {
+    mockFetch([LEAK_LOG_EVENT, LEAK_EXACT_RESPONSE_EVENT]);
+    renderTab();
+
+    const badge = await screen.findByTestId("timeline-leak-badge-exact");
+    expect(badge).toHaveTextContent("leak: exact");
+    expect(badge.getAttribute("title")).toContain("verbatim");
+    expect(badge.getAttribute("title")).toContain(LEAK_LOG_MESSAGE);
+
+    // Next to the #201 tool-error badge: the leak badge renders right after it.
+    const errorBadge = screen.getByTestId("timeline-tool-error-badge");
+    expect(
+      errorBadge.compareDocumentPosition(badge) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("scrolls the correlated APP_LOG row into view on badge click without expanding the row", async () => {
+    mockFetch([LEAK_LOG_EVENT, LEAK_EXACT_RESPONSE_EVENT]);
+    renderTab();
+    const scrollIntoView = mockScrollIntoView();
+    try {
+      const badge = await screen.findByTestId("timeline-leak-badge-exact");
+      fireEvent.click(badge);
+
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+      // The scrolled element is the APP_LOG row carrying the log message, not
+      // the response row the badge sits on.
+      expect(scrollIntoView.mock.instances[0]).toBe(logRowOf(LEAK_LOG_MESSAGE));
+      // stopPropagation: the badge click must not toggle the row expansion.
+      expect(screen.queryByText(/"jsonrpc": "2.0"/)).not.toBeInTheDocument();
+    } finally {
+      restoreScrollIntoView();
+    }
+  });
+
+  it("renders three visually distinct badge styles for EXACT, NORMALIZED and PARTIAL", async () => {
+    for (const [event, testId, expectedClass, forbiddenClass] of [
+      [LEAK_EXACT_RESPONSE_EVENT, "timeline-leak-badge-exact", "border-red-500", "dashed"],
+      [LEAK_NORMALIZED_RESPONSE_EVENT, "timeline-leak-badge-normalized", "border-amber-500", "dashed"],
+      [LEAK_PARTIAL_RESPONSE_EVENT, "timeline-leak-badge-partial", "border-dashed", "border-amber-500"],
+    ] as const) {
+      mockFetch([event]);
+      renderTab();
+
+      const badge = await screen.findByTestId(testId);
+      expect(badge.className).toContain(expectedClass);
+      expect(badge.className).not.toContain(forbiddenClass);
+
+      cleanup();
+    }
+  });
+
+  it("renders no leak badge for an error response without a _leak annotation", async () => {
+    mockFetch([VALIDATION_ERROR_RESPONSE_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("1 event")).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByTestId("timeline-leak-badge-exact"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("timeline-leak-badge-normalized"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("timeline-leak-badge-partial"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders no leak badge and does not crash on malformed _leak nodes", async () => {
+    const malformed: WireEvent[] = [
+      {
+        id: "evt-resp-garbage-1",
+        correlationId: "corr-g1",
+        sessionId: null,
+        type: "MCP_JSONRPC_RESPONSE",
+        timestamp: "2026-08-30T12:00:06.000Z",
+        payload: {
+          jsonrpc: "2.0",
+          id: 11,
+          result: { content: [{ type: "text", text: "boom" }], isError: true },
+          _leak: "not-an-object",
+        },
+      },
+      {
+        id: "evt-resp-garbage-2",
+        correlationId: "corr-g2",
+        sessionId: null,
+        type: "MCP_JSONRPC_RESPONSE",
+        timestamp: "2026-08-30T12:00:07.000Z",
+        payload: {
+          jsonrpc: "2.0",
+          id: 12,
+          result: { content: [{ type: "text", text: "boom" }], isError: true },
+          _leak: { matchType: "WEIRD", verbatim: true, logEventId: "x" },
+        },
+      },
+    ];
+    mockFetch(malformed);
+    const { container } = renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("2 events")).toBeInTheDocument(),
+    );
+    expect(container).not.toBeEmptyDOMElement();
+    expect(
+      screen.queryByTestId("timeline-leak-badge-exact"),
+    ).not.toBeInTheDocument();
+  });
+  it("caps the leak badge tooltip at 200 characters for long log messages", async () => {
+    const longMessage = "x".repeat(400);
+    mockFetch([leakResponseEvent("EXACT", true, longMessage)]);
+    renderTab();
+
+    const badge = await screen.findByTestId("timeline-leak-badge-exact");
+    const title = badge.getAttribute("title") ?? "";
+    expect(title.length).toBeLessThanOrEqual(200);
+    expect(title.endsWith("...")).toBe(true);
+  });
+
+  it("renders the expanded leak detail block with a line-clamped message and jump link", async () => {
+    mockFetch([LEAK_LOG_EVENT, LEAK_EXACT_RESPONSE_EVENT]);
+    renderTab();
+
+    const badge = await screen.findByTestId("timeline-leak-badge-exact");
+    fireEvent.click(badge.closest("div.border-l-2") as HTMLElement);
+
+    const message = await screen.findByTestId("timeline-leak-log-message");
+    expect(message).toHaveTextContent(LEAK_LOG_MESSAGE);
+    expect(message.className).toContain("line-clamp-2");
+    expect(
+      screen.getByText("exception: org.springframework.dao.DuplicateKeyException"),
+    ).toBeInTheDocument();
+
+    const scrollIntoView = mockScrollIntoView();
+    try {
+      fireEvent.click(screen.getByTestId("timeline-leak-jump-link"));
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+      expect(scrollIntoView.mock.instances[0]).toBe(logRowOf(LEAK_LOG_MESSAGE));
+    } finally {
+      restoreScrollIntoView();
+    }
+  });
+
+  it("consumes a pending jump requested while the Timeline was not mounted", async () => {
+    // The Tool Result pane queues the jump before the tab switch mounts us.
+    requestTimelineScrollTo("evt-log-1");
+    mockFetch([LEAK_LOG_EVENT, LEAK_EXACT_RESPONSE_EVENT]);
+    renderTab();
+
+    const scrollIntoView = mockScrollIntoView();
+    try {
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+      expect(scrollIntoView.mock.instances[0]).toBe(logRowOf(LEAK_LOG_MESSAGE));
+    } finally {
+      restoreScrollIntoView();
+    }
+  });
+});
+
+
+// [spring-ai-mcp-inspector PATCH] SEP-2322 (spec revision 2026-07-28)
+// Timeline chain rendering (#253): the original tools/call, its input_required
+// result, the re-send, and the final result render as ONE collapsed chain,
+// not scattered dead-end frames.
+describe("TimelineTab SEP-2322 input_required chain", () => {
+  const originalFetch = global.fetch;
+  const originalBootstrap = (window as unknown as Record<string, unknown>)[
+    "__MCP_INSPECTOR_BOOTSTRAP"
+  ];
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    (window as unknown as Record<string, unknown>)[
+      "__MCP_INSPECTOR_BOOTSTRAP"
+    ] = originalBootstrap;
+  });
+
+  const renderTab = () =>
+    render(
+      <Tabs defaultValue="timeline">
+        <TimelineTab />
+      </Tabs>,
+    );
+
+  const chainEvents: WireEvent[] = [
+    {
+      id: "c-1",
+      correlationId: "pair-1",
+      sessionId: null,
+      type: "MCP_JSONRPC_REQUEST",
+      timestamp: "2026-08-30T12:00:01.000Z",
+      payload: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "book_seat", arguments: { seat: "12A" } },
+      },
+    },
+    {
+      id: "c-2",
+      correlationId: "pair-1",
+      sessionId: null,
+      type: "MCP_JSONRPC_RESPONSE",
+      timestamp: "2026-08-30T12:00:02.000Z",
+      payload: {
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          resultType: "input_required",
+          inputRequests: {
+            "req-1": {
+              method: "elicitation/create",
+              params: { message: "Which seat?" },
+            },
+          },
+          requestState: "opaque-1",
+        },
+      },
+    },
+    {
+      id: "c-3",
+      correlationId: "pair-2",
+      sessionId: null,
+      type: "MCP_JSONRPC_REQUEST",
+      timestamp: "2026-08-30T12:00:05.000Z",
+      payload: {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "book_seat",
+          arguments: { seat: "12A" },
+          inputResponses: { "req-1": { action: "accept", content: {} } },
+          requestState: "opaque-1",
+        },
+      },
+    },
+    {
+      id: "c-4",
+      correlationId: "pair-2",
+      sessionId: null,
+      type: "MCP_JSONRPC_RESPONSE",
+      timestamp: "2026-08-30T12:00:06.000Z",
+      payload: {
+        jsonrpc: "2.0",
+        id: 2,
+        result: { content: [{ type: "text", text: "Booked." }] },
+      },
+    },
+  ];
+
+  it("renders the whole round-trip as ONE collapsed chain row", async () => {
+    mockFetch(chainEvents);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("timeline-chain")).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText("tools/call chain: book_seat"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("timeline-chain-rounds").textContent).toBe(
+      "2 rounds",
+    );
+    expect(screen.getByTestId("timeline-chain-state").textContent).toBe(
+      "final result",
+    );
+    // Collapsed: the four member frames do not render standalone.
+    expect(screen.queryAllByText("tools/call")).toHaveLength(0);
+  });
+
+  it("expands the chain to its chronological member frames", async () => {
+    mockFetch(chainEvents);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("timeline-chain-header")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByTestId("timeline-chain-header"));
+
+    // Both tools/call frames (original + re-send) are inside the chain.
+    expect(screen.queryAllByText("tools/call")).toHaveLength(2);
+  });
+
+  it("badges a standalone input_required answer as actionable", async () => {
+    mockFetch([chainEvents[1]]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("timeline-input-required-badge"),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("timeline-chain")).toBeNull();
+  });
+
+  it("shows awaiting-input on a chain whose last answer needs more input", async () => {
+    // The re-send went out but its answer never arrived (or answered with
+    // another input_required round that is not recorded yet): the chain's
+    // chronologically last response is still the input_required frame.
+    mockFetch(chainEvents.slice(0, 3));
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("timeline-chain")).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId("timeline-chain-state").textContent).toBe(
+      "awaiting input",
+    );
   });
 });

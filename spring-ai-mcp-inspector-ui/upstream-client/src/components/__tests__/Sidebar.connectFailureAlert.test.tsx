@@ -1,17 +1,21 @@
-// [spring-ai-mcp-inspector PATCH] owner-session isolation and auth-profile tests
+// [spring-ai-mcp-inspector PATCH] owner-session isolation, auth-profile, D3
+// structured error banner tests, plus status-text and Reset session button
+// tests, plus structured per-phase timeout banner tests.
 // jsdom lacks MediaQueryList; useTheme calls window.matchMedia on mount.
+
 import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import Sidebar from "../Sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DEFAULT_INSPECTOR_CONFIG } from "@/lib/constants";
+import { parseConnectFailureResponse } from "@/lib/connectionErrors";
 import type { ConnectFailure, ProxyErrorDto } from "@/lib/connectionErrors";
 import { LoggingLevel } from "@modelcontextprotocol/sdk/types.js";
 // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
 import type { SavedConnection } from "@/lib/types/savedConnection";
 
 jest.mock("@/lib/hooks/useToast", () => ({
-  useToast: () => ({ toast: jest.fn() }),
+  useToast: () => ({ toast: jest.fn().mockReturnValue({ dismiss: jest.fn() }) }),
 }));
 
 beforeAll(() => {
@@ -53,6 +57,7 @@ const baseProps = {
   setOauthScope: jest.fn(),
   onConnect: jest.fn(),
   onDisconnect: jest.fn(),
+  onResetSession: jest.fn(),
   logLevel: "debug" as LoggingLevel,
   sendLogLevelRequest: jest.fn(),
   loggingSupported: false,
@@ -70,7 +75,9 @@ const baseProps = {
 };
 
 describe("Sidebar connect-failure alert", () => {
-  type SidebarTestProps = Partial<Omit<typeof baseProps, "connectionError" | "connectionStatus">> & {
+  type SidebarTestProps = Partial<
+    Omit<typeof baseProps, "connectionError" | "connectionStatus">
+  > & {
     connectionError?: ConnectFailure | null;
     connectionStatus?: string;
   };
@@ -153,6 +160,117 @@ describe("Sidebar connect-failure alert", () => {
     expect(screen.getByTestId("retry-connect-button")).toBeInTheDocument();
   });
 
+  describe("structured timeout banner", () => {
+    it("renders phase name and budget breakdown for structured timeout", () => {
+      renderSidebar({
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          message: "connection initialize timed out after 15234ms of 30000ms budget",
+          retryable: true,
+          phase: "initialize",
+          elapsedMs: 15234,
+          budgetMs: 30000,
+        },
+      });
+
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("Connection timed out");
+      expect(alert).toHaveTextContent("MCP initialize");
+      expect(alert).toHaveTextContent("15.2s of 30.0s");
+    });
+
+    it("renders connect phase timeout correctly", () => {
+      renderSidebar({
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          message: "connection connect timed out after 5432ms of 10000ms budget",
+          retryable: true,
+          phase: "connect",
+          elapsedMs: 5432,
+          budgetMs: 10000,
+        },
+      });
+
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("Transport connect");
+      expect(alert).toHaveTextContent("5.4s of 10.0s");
+    });
+
+    it("renders timeout without phase data as generic timeout banner", () => {
+      renderSidebar({
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          message: "Timed out",
+          retryable: true,
+        },
+      });
+
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("Failed to connect to the MCP server");
+      expect(alert).toHaveTextContent("POST /mcp request timed out");
+      expect(alert).toHaveTextContent("Timed out");
+      // No phase-specific content
+      expect(alert).not.toHaveTextContent("Transport connect");
+      expect(alert).not.toHaveTextContent("MCP initialize");
+    });
+
+    it("renders the structured banner for the real proxy timeout payload end-to-end", async () => {
+      // Byte-for-byte wire shape from ProxyConnectionBudgetsTests
+      // (ProxyConnectionBudgets.timeoutBody): the timeout arrives as
+      // MCP_CONNECT_FAILED with reason "timeout" plus phase numbers, not as
+      // a separate connection_timeout code. Parsed here and fed to the
+      // sidebar the same way useConnection does.
+      const response = {
+        clone: () => ({
+          json: async () => ({
+            error: {
+              code: "MCP_CONNECT_FAILED",
+              reason: "timeout",
+              phase: "connect",
+              elapsedMs: 1234,
+              budgetMs: 1000,
+              message: "connect phase timed out after 1234ms of 1000ms budget",
+              retryable: true,
+            },
+          }),
+        }),
+      } as unknown as Response;
+
+      const failure = await parseConnectFailureResponse(response);
+      expect(failure?.phase).toBe("connect");
+      expect(failure?.elapsedMs).toBe(1234);
+      expect(failure?.budgetMs).toBe(1000);
+
+      renderSidebar({ connectionError: failure });
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("Connection timed out");
+      expect(alert).toHaveTextContent("Transport connect");
+      expect(alert).toHaveTextContent("1.2s of 1.0s");
+    });
+
+    it("still shows the Retry button alongside the timeout detail", () => {
+      renderSidebar({
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          message: "Timed out",
+          retryable: true,
+          phase: "initialize",
+          elapsedMs: 15000,
+          budgetMs: 30000,
+        },
+      });
+
+      // Retry button still present
+      expect(screen.getByTestId("retry-connect-button")).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("retry-connect-button"));
+      expect(baseProps.onConnect).toHaveBeenCalled();
+    });
+  });
+
   describe("sidebar status text (connectionStatus === error)", () => {
     const statusTextProps = { connectionStatus: "error" as const };
 
@@ -169,7 +287,7 @@ describe("Sidebar connect-failure alert", () => {
       expect(screen.getByText(/proxy token is correct/i)).toBeInTheDocument();
     });
 
-    it('does NOT mention token for connection_refused', () => {
+    it("does NOT mention token for connection_refused", () => {
       renderSidebar({
         ...statusTextProps,
         connectionError: {
@@ -183,7 +301,7 @@ describe("Sidebar connect-failure alert", () => {
       expect(screen.queryByText(/proxy token/i)).not.toBeInTheDocument();
     });
 
-    it('does NOT mention token for dns', () => {
+    it("does NOT mention token for dns", () => {
       renderSidebar({
         ...statusTextProps,
         connectionError: {
@@ -197,7 +315,7 @@ describe("Sidebar connect-failure alert", () => {
       expect(screen.queryByText(/proxy token/i)).not.toBeInTheDocument();
     });
 
-    it('does NOT mention token for timeout', () => {
+    it("does NOT mention token for timeout", () => {
       renderSidebar({
         ...statusTextProps,
         connectionError: {
@@ -211,7 +329,7 @@ describe("Sidebar connect-failure alert", () => {
       expect(screen.queryByText(/proxy token/i)).not.toBeInTheDocument();
     });
 
-    it('does NOT mention token for unknown', () => {
+    it("does NOT mention token for unknown", () => {
       renderSidebar({
         ...statusTextProps,
         connectionError: {
@@ -223,6 +341,56 @@ describe("Sidebar connect-failure alert", () => {
       });
       expect(screen.getByText(/MCP server is running/i)).toBeInTheDocument();
       expect(screen.queryByText(/proxy token/i)).not.toBeInTheDocument();
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Reset session button tests.
+    it("shows Reset session button for timeout errors", () => {
+      renderSidebar({
+        ...statusTextProps,
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          message: "Connection timed out after 5000ms",
+          retryable: true,
+        },
+      });
+
+      expect(screen.getByTestId("reset-session-button")).toBeInTheDocument();
+      expect(screen.getByTestId("retry-connect-button")).toBeInTheDocument();
+    });
+
+    it("does not show Reset session button for non-timeout errors", () => {
+      renderSidebar({
+        ...statusTextProps,
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "connection_refused",
+          message: "Connection refused: connect ECONNREFUSED",
+          retryable: true,
+        },
+      });
+
+      expect(
+        screen.queryByTestId("reset-session-button"),
+      ).not.toBeInTheDocument();
+      expect(screen.getByTestId("retry-connect-button")).toBeInTheDocument();
+    });
+
+    it("calls onResetSession when Reset session is clicked", () => {
+      const onResetSession = jest.fn();
+      renderSidebar({
+        onResetSession,
+        ...statusTextProps,
+        connectionError: {
+          code: "MCP_CONNECT_FAILED",
+          reason: "timeout",
+          message: "Connection timed out after 5000ms",
+          retryable: true,
+        },
+      });
+
+      fireEvent.click(screen.getByTestId("reset-session-button"));
+      expect(onResetSession).toHaveBeenCalledTimes(1);
     });
   });
 });

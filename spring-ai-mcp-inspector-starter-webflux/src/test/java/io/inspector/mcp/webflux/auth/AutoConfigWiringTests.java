@@ -32,6 +32,9 @@ import org.junit.jupiter.api.Test;
 
 import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
+import io.inspector.mcp.core.auth.OAuth2GrantMode;
+import io.inspector.mcp.core.auth.OAuth2Profile;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.webflux.McpInspectorWebFluxAutoConfiguration;
@@ -97,6 +100,80 @@ class AutoConfigWiringTests {
 			registry.reap();
 
 			verify(store).removeExpired(any(Instant.class));
+		}
+
+	}
+
+	@Nested
+	@DisplayName("Token offload wiring")
+	class TokenOffloadWiring {
+
+		@Test
+		@Story("auto-config wires the composite evictor and the exchanger generation guard")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("mcpInspectorTokenManager wires the store so delete evicts auth-code state and tokens")
+		void autoConfigWiring_delete_evictsAuthCodeTokens() {
+			final AuthProfileStore store = AutoConfigWiringTests.this.config.mcpInspectorAuthProfileStore();
+			final OAuth2AuthCodeTokenExchanger exchanger = AutoConfigWiringTests.this.config
+				.mcpInspectorAuthCodeTokenExchanger();
+			AutoConfigWiringTests.this.config.mcpInspectorTokenManager(store, exchanger);
+
+			final OAuth2Profile profile = new OAuth2Profile("ac", OAuth2GrantMode.AUTHORIZATION_CODE, "http://t/token",
+					"cid", null, null, "http://idp/auth", "http://app/cb", "ch", "S256");
+			final String profileId = store.register("owner-a", profile);
+			// Bump the generation past 0: only the wired guard accepts it, so the
+			// store below proves the exchanger's guard wiring (the default 0L goes
+			// stale).
+			assertThat(store.update("owner-a", profileId, profile)).isTrue();
+			final long generation = store.currentGeneration(profileId);
+			assertThat(generation).isPositive();
+
+			exchanger.mintState("owner-a", profileId);
+			exchanger.storeTokensIfCurrent(profileId, generation,
+					new OAuth2AuthCodeTokenExchanger.TokenHandle("tok-1", "rt-1", Instant.now().plusSeconds(60)));
+			assertThat(exchanger.stateCount()).isOne();
+			assertThat(exchanger.tokenCount()).isOne();
+
+			// when: delete the profile through the wired store
+			assertThat(store.delete("owner-a", profileId)).isTrue();
+
+			// then: the composite evictor dropped the auth-code state and tokens
+			assertThat(exchanger.stateCount()).isZero();
+			assertThat(exchanger.tokenCount()).isZero();
+		}
+
+		@Test
+		@Story("auto-config wires the composite evictor and the manager generation guard")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("mcpInspectorTokenManager wires the guard so storeIfCurrent accepts the current generation")
+		void autoConfigWiring_delete_evictsCcCredentials() {
+			final AuthProfileStore store = AutoConfigWiringTests.this.config.mcpInspectorAuthProfileStore();
+			final OAuth2AuthCodeTokenExchanger exchanger = AutoConfigWiringTests.this.config
+				.mcpInspectorAuthCodeTokenExchanger();
+			final OAuth2ClientCredentialsTokenManager manager = AutoConfigWiringTests.this.config
+				.mcpInspectorTokenManager(store, exchanger);
+
+			final OAuth2Profile profile = new OAuth2Profile("cc", OAuth2GrantMode.CLIENT_CREDENTIALS, "http://t/token",
+					"cid", "sec", null, null, null, null, null);
+			final String profileId = store.register("owner-a", profile);
+			// Bump the generation past 0: only the wired guard accepts it, so the
+			// store below proves the manager's guard wiring (the default 0L goes stale).
+			assertThat(store.update("owner-a", profileId, profile)).isTrue();
+			final long generation = store.currentGeneration(profileId);
+			assertThat(generation).isPositive();
+
+			manager.storeIfCurrent(profileId, generation,
+					new OAuth2ClientCredentialsTokenManager.TokenHandle("tok-1", Instant.now().plusSeconds(60)),
+					profile);
+			assertThat(manager.credentialCount()).isOne();
+			assertThat(manager.cacheSize()).isOne();
+
+			// when: delete the profile through the wired store
+			assertThat(store.delete("owner-a", profileId)).isTrue();
+
+			// then: the composite evictor dropped the credentials and the cached token
+			assertThat(manager.credentialCount()).isZero();
+			assertThat(manager.cacheSize()).isZero();
 		}
 
 	}

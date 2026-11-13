@@ -23,6 +23,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import io.inspector.mcp.core.auth.AuthProfile;
 import io.inspector.mcp.core.auth.AuthProfileExchangeRequest;
@@ -34,6 +35,7 @@ import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.auth.OAuth2GrantMode;
 import io.inspector.mcp.core.auth.OAuth2Profile;
+import io.inspector.mcp.core.auth.StaleProfileGenerationException;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
 import io.inspector.mcp.core.proxy.ProxyUpstreamException;
 
@@ -53,7 +55,10 @@ import io.inspector.mcp.core.proxy.ProxyUpstreamException;
  * {@code (store.register, tokenManager.acquire)} (D9A): when the initial
  * {@code client_credentials} exchange fails, the store entry and any credentials are
  * rolled back and {@code 502 token_exchange_failed} is returned — no orphan profile, no
- * retained client secret.
+ * retained client secret. A registration or exchange that loses the generation race (the
+ * profile changed while the exchange was in flight) is rolled back the same way and
+ * answered with {@code 404 token_exchange_failed}, so no credential-less entry blocks
+ * re-registering the same name.
  *
  * @author Artem Simeshin
  */
@@ -108,10 +113,25 @@ public class AuthProfileHandler {
 				final String profileId = this.store.register(ownerId, profile);
 				if (profile instanceof OAuth2Profile oauth2
 						&& oauth2.grantMode() == OAuth2GrantMode.CLIENT_CREDENTIALS) {
-					try {
-						this.tokenManager.acquire(profileId, oauth2);
-					}
-					catch (final RuntimeException ex) {
+					final long expectedGeneration = this.store.currentGeneration(profileId);
+					return this.tokenManager.acquireAsync(profileId, oauth2).<ServerResponse>flatMap((handle) -> {
+						try {
+							this.tokenManager.storeIfCurrent(profileId, expectedGeneration, handle, oauth2);
+						}
+						catch (final StaleProfileGenerationException ex) {
+							// Lost the generation race: the profile changed under the
+							// in-flight
+							// exchange. Roll the registration back so no credential-less
+							// entry
+							// blocks re-registering the same name.
+							this.store.delete(ownerId, profileId);
+							this.tokenManager.evict(profileId);
+							return ServerResponse.status(HttpStatus.NOT_FOUND)
+								.bodyValue(new ProxyErrorDto(404, CODE_TOKEN_EXCHANGE_FAILED, ex.getMessage(),
+										"Profile was modified during registration; re-register.", null));
+						}
+						return ServerResponse.ok().bodyValue(AuthProfileRegistrationResponse.of(profileId));
+					}).onErrorResume(ProxyUpstreamException.class, (ex) -> {
 						// D9A rollback: no orphan profile, no retained client secret.
 						this.store.delete(ownerId, profileId);
 						this.tokenManager.evict(profileId);
@@ -119,7 +139,7 @@ public class AuthProfileHandler {
 							.bodyValue(new ProxyErrorDto(502, CODE_TOKEN_EXCHANGE_FAILED,
 									"OAuth2 client-credentials exchange failed: " + ex.getMessage(),
 									"Verify the token URL, client id and client secret, then re-register.", null));
-					}
+					});
 				}
 				if (profile instanceof OAuth2Profile oauth2
 						&& oauth2.grantMode() == OAuth2GrantMode.AUTHORIZATION_CODE) {
@@ -193,15 +213,23 @@ public class AuthProfileHandler {
 
 	/**
 	 * DELETE {@code /auth-profile/{profileId}} — deletes the profile (owner-scoped) and
-	 * evicts its tokens.
+	 * evicts its tokens. The blocking store call runs on boundedElastic so a delete that
+	 * drains an in-flight token refresh does not hold the event loop. evicts its tokens.
 	 * @param request the current request
 	 * @return a {@link Mono} emitting the delete result
 	 */
 	public Mono<ServerResponse> delete(final ServerRequest request) {
-		if (!this.store.delete(ownerId(request), request.pathVariable("profileId"))) {
-			return ServerResponse.notFound().build();
-		}
-		return ServerResponse.noContent().build();
+		final String ownerId = ownerId(request);
+		final String profileId = request.pathVariable("profileId");
+		// store.delete drains an in-flight refresh: it waits on the per-profile
+		// single-flight lock, up to the 10s exchange timeout. Run it off the
+		// event loop so other requests keep being served while the delete waits.
+		return Mono.fromCallable(() -> this.store.delete(ownerId, profileId)).flatMap((deleted) -> {
+			if (!deleted) {
+				return ServerResponse.notFound().build();
+			}
+			return ServerResponse.noContent().build();
+		}).subscribeOn(Schedulers.boundedElastic());
 	}
 
 	/**
@@ -226,21 +254,36 @@ public class AuthProfileHandler {
 					return ServerResponse.badRequest()
 						.bodyValue(Map.of("error", "state mismatch, expired or already consumed"));
 				}
-				try {
-					final OAuth2AuthCodeTokenExchanger.TokenHandle handle = this.exchanger
-						.exchange((OAuth2Profile) pending.get(), body.code(), body.codeVerifier());
-					this.exchanger.storeTokens(profileId, handle);
-					this.store.markActive(ownerId, profileId);
-				}
-				catch (final IllegalArgumentException ex) {
-					return ServerResponse.badRequest().bodyValue(Map.of("error", ex.getMessage()));
-				}
-				catch (final ProxyUpstreamException ex) {
-					return ServerResponse.status(HttpStatus.BAD_GATEWAY)
-						.bodyValue(new ProxyErrorDto(502, CODE_TOKEN_EXCHANGE_FAILED, ex.getMessage(),
-								"Verify the token URL and client credentials, then retry.", null));
-				}
-				return ServerResponse.ok().bodyValue(AuthProfileRegistrationResponse.of(profileId));
+				final long expectedGeneration = this.store.currentGeneration(profileId);
+				return this.exchanger.exchangeAsync((OAuth2Profile) pending.get(), body.code(), body.codeVerifier())
+					.flatMap((handle) -> {
+						try {
+							this.exchanger.storeTokensIfCurrent(profileId, expectedGeneration, handle);
+						}
+						catch (final StaleProfileGenerationException ex) {
+							// Lost the generation race: roll the exchange back so no
+							// credential-less entry blocks re-registering the same name.
+							this.store.delete(ownerId, profileId);
+							this.exchanger.evict(profileId);
+							return ServerResponse.status(HttpStatus.NOT_FOUND)
+								.bodyValue(new ProxyErrorDto(404, CODE_TOKEN_EXCHANGE_FAILED, ex.getMessage(),
+										"Profile was removed during exchange; re-register.", null));
+						}
+						if (!this.store.markActive(ownerId, profileId)) {
+							this.exchanger.evict(profileId);
+							return ServerResponse.status(HttpStatus.NOT_FOUND)
+								.bodyValue(new ProxyErrorDto(404, CODE_TOKEN_EXCHANGE_FAILED,
+										"Profile was removed during exchange; re-register.",
+										"Re-register and complete the exchange again.", null));
+						}
+						return ServerResponse.ok().bodyValue(AuthProfileRegistrationResponse.of(profileId));
+					})
+					.onErrorResume(ProxyUpstreamException.class,
+							(ex) -> ServerResponse.status(HttpStatus.BAD_GATEWAY)
+								.bodyValue(new ProxyErrorDto(502, CODE_TOKEN_EXCHANGE_FAILED, ex.getMessage(),
+										"Verify the token URL and client credentials, then retry.", null)))
+					.onErrorResume(IllegalArgumentException.class,
+							(ex) -> ServerResponse.badRequest().bodyValue(Map.of("error", ex.getMessage())));
 			}
 			catch (final IllegalArgumentException ex) {
 				return ServerResponse.badRequest().bodyValue(Map.of("error", ex.getMessage()));

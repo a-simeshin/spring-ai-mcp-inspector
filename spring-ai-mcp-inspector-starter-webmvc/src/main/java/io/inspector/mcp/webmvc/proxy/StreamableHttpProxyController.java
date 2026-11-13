@@ -36,6 +36,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -64,6 +65,9 @@ import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
 import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
+import io.inspector.mcp.core.proxy.ProxyConnectTimeoutException;
+import io.inspector.mcp.core.proxy.ProxyConnectionBudgets;
+import io.inspector.mcp.core.proxy.ProxyConnectionBudgets.ProxyConnectionBudgetException;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
 import io.inspector.mcp.core.proxy.ProxyErrorMapper;
 import io.inspector.mcp.core.proxy.ProxySession;
@@ -270,8 +274,10 @@ public class StreamableHttpProxyController {
 	@PostMapping(path = "/mcp", consumes = MediaType.APPLICATION_JSON_VALUE)
 	public ResponseEntity<Object> postMcp(
 			@RequestHeader(value = ProxyConstants.MCP_SESSION_ID_HEADER, required = false) final String mcpSessionId,
-			@RequestParam(value = "url", required = false) final String url, @RequestBody final JsonNode body) {
-		return postMcp(mcpSessionId, url, null, body);
+			@RequestParam(value = "url", required = false) final String url,
+			@RequestParam(value = "connectionTimeout", required = false) final String connectionTimeout,
+			@RequestBody final JsonNode body) {
+		return postMcp(mcpSessionId, url, null, connectionTimeout, body);
 	}
 
 	/**
@@ -281,6 +287,8 @@ public class StreamableHttpProxyController {
 	 * @param mcpSessionId the {@code mcp-session-id} header value, may be {@code null}
 	 * @param url the streamable-HTTP target URL
 	 * @param profileId the owner-scoped auth profile id, or {@code null}
+	 * @param connectionTimeout optional per-phase budget as raw query-parameter text
+	 * (whole seconds); when absent the configured default (30s) applies
 	 * @param body the JSON-RPC frame to forward
 	 * @return the HTTP response entity
 	 */
@@ -289,9 +297,20 @@ public class StreamableHttpProxyController {
 			@RequestHeader(value = ProxyConstants.MCP_SESSION_ID_HEADER, required = false) final String mcpSessionId,
 			@RequestParam(value = "url", required = false) final String url,
 			@RequestParam(value = "profileId", required = false) final String profileId,
+			@RequestParam(value = "connectionTimeout", required = false) final String connectionTimeout,
 			@RequestBody final JsonNode body) {
+		// Validate the parameter before any session lookup: an invalid value must answer
+		// 400 on every branch (new or existing session), matching the reactive stack.
+		try {
+			ProxyConnectionBudgets.parseOrDefault(connectionTimeout, resolveTimeouts().getConnection());
+		}
+		catch (final ProxyConnectionBudgetException ex) {
+			return ResponseEntity.badRequest()
+				.contentType(MediaType.APPLICATION_JSON)
+				.body(ProxyConnectionBudgets.invalidParameterBody(connectionTimeout, ex.getMessage()));
+		}
 		if (mcpSessionId == null || mcpSessionId.isBlank()) {
-			return openSessionAndForward(url, profileId, body);
+			return openSessionAndForward(url, profileId, body, connectionTimeout);
 		}
 		final ProxySession session = this.registry.get(mcpSessionId);
 		if (session == null || !isOwnerOf(session)) {
@@ -333,23 +352,34 @@ public class StreamableHttpProxyController {
 
 	/**
 	 * Brings up a fresh session and forwards the first frame. If the frame is a JSON-RPC
-	 * request, blocks for up to the configured
-	 * {@code spring.ai.mcp.inspector.timeouts.streamable-request} on the matching
-	 * response. Otherwise returns 202.
+	 * request, blocks for up to the resolved connection budget on the matching response.
+	 * Otherwise returns 202.
 	 * @param url the streamable-HTTP target URL
 	 * @param profileId the owner-scoped auth profile id, or {@code null}
 	 * @param body the JSON-RPC frame to forward
+	 * @param connectionTimeout optional per-phase budget as raw query-parameter text
+	 * (whole seconds); when absent the configured default (30s) applies
 	 * @return the HTTP response entity
 	 */
-	private ResponseEntity<Object> openSessionAndForward(final String url, final String profileId,
-			final JsonNode body) {
+	private ResponseEntity<Object> openSessionAndForward(final String url, final String profileId, final JsonNode body,
+			final String connectionTimeout) {
 		// A blank/relative url is the WAF-safe same-origin default — the proxy resolves
 		// it
 		// to the loopback MCP endpoint server-side (see ProxyTargetResolver). Only an
 		// explicit absolute url targets a non-loopback server.
+		final Duration connectionBudget;
+		try {
+			connectionBudget = ProxyConnectionBudgets.parseOrDefault(connectionTimeout,
+					resolveTimeouts().getConnection());
+		}
+		catch (final ProxyConnectionBudgetException ex) {
+			return ResponseEntity.badRequest()
+				.contentType(MediaType.APPLICATION_JSON)
+				.body(ProxyConnectionBudgets.invalidParameterBody(connectionTimeout, ex.getMessage()));
+		}
 		final ProxySession session;
 		try {
-			session = openSession(url, profileId);
+			session = openSession(url, profileId, connectionBudget);
 		}
 		catch (final ProxyConnectFailureException ex) {
 			return connectFailureResponse(ex.failure());
@@ -364,7 +394,7 @@ public class StreamableHttpProxyController {
 			}
 			return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body("upstream connect failed");
 		}
-		return relayWithSessionHeader(session, body, true);
+		return relayWithSessionHeader(session, body, true, connectionBudget);
 	}
 
 	private boolean isOwnedProfile(final String profileId) {
@@ -404,7 +434,35 @@ public class StreamableHttpProxyController {
 		return ResponseEntity.status(status)
 			.contentType(MediaType.APPLICATION_JSON)
 			.body(Map.of("error", Map.of("code", ERROR_CODE_MCP_CONNECT_FAILED, "reason", failure.reason().wire(),
-					"message", failure.message(), "retryable", Boolean.TRUE)));
+					"message", failure.message(), "retryable", failure.retryable())));
+	}
+
+	/**
+	 * Maps a per-phase budget overrun onto a 504 response with the structured
+	 * {@code MCP_CONNECT_FAILED} / {@code reason=timeout} payload carrying the phase,
+	 * elapsed and budget numbers.
+	 * @param ex the timeout exception (never {@code null})
+	 * @return the HTTP response entity
+	 */
+	private static ResponseEntity<Object> connectTimeoutResponse(final ProxyConnectTimeoutException ex) {
+		return ResponseEntity.status(HttpStatus.GATEWAY_TIMEOUT)
+			.contentType(MediaType.APPLICATION_JSON)
+			.body(ProxyConnectionBudgets.timeoutBody(ex));
+	}
+
+	/**
+	 * Answers a rejected {@code connectionTimeout} value with a real HTTP 400 and the
+	 * structured {@code MCP_CONNECT_FAILED} JSON body, matching the reactive stack's
+	 * {@code badRequest()} on the same endpoints. Spring resolves the handler before the
+	 * emitter return type commits the response, so the status code reaches the client.
+	 * @param ex the validation failure raised while parsing the query parameter
+	 * @return the 400 response entity
+	 */
+	@ExceptionHandler(ProxyConnectionBudgetException.class)
+	public ResponseEntity<Object> handleInvalidConnectionTimeout(final ProxyConnectionBudgetException ex) {
+		return ResponseEntity.badRequest()
+			.contentType(MediaType.APPLICATION_JSON)
+			.body(ProxyConnectionBudgets.invalidParameterBody(ex.rawValue(), ex.getMessage()));
 	}
 
 	/**
@@ -458,26 +516,27 @@ public class StreamableHttpProxyController {
 	 * @return the HTTP response entity
 	 */
 	private ResponseEntity<Object> forwardOnExistingSession(final ProxySession session, final JsonNode body) {
-		return relayWithSessionHeader(session, body, false);
+		return relayWithSessionHeader(session, body, false, resolveTimeouts().getStreamableRequest());
 	}
 
 	/**
-	 * Core relay path shared by the "new session" and "existing session" branches.
-	 * @param session live proxy session
-	 * @param body incoming JSON-RPC frame
-	 * @param includeSessionHeader whether to attach the {@code mcp-session-id} header to
-	 * the response (only on the first POST of a session)
-	 * @return the HTTP response entity with the relayed result
+	 * Relays a frame to an existing session. When this is the first frame of the session
+	 * (the MCP {@code initialize} handshake), the wait is bounded by the resolved
+	 * per-phase connection budget rather than {@code streamable-request}; later frames
+	 * keep the generic per-request timeout.
+	 * @param session the live proxy session
+	 * @param body the JSON-RPC frame to relay
+	 * @param includeSessionHeader whether this is the session's first frame
+	 * @param connectionBudget the resolved per-phase connection budget
+	 * @return the HTTP response entity
 	 */
 	private ResponseEntity<Object> relayWithSessionHeader(final ProxySession session, final JsonNode body,
-			final boolean includeSessionHeader) {
+			final boolean includeSessionHeader, final Duration connectionBudget) {
 		final JsonNode idNode = extractRequestId(body);
 		// Notification / response — no answer expected from upstream → 202 Accepted.
 		if (idNode == null) {
-			final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
-			if (emitResult.isFailure()) {
-				return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-					.body("emit failed: " + emitResult.name());
+			if (!session.emitFromBrowser(body)) {
+				return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("emit failed");
 			}
 			session.touch();
 			final ResponseEntity.BodyBuilder builder = ResponseEntity.accepted();
@@ -496,13 +555,10 @@ public class StreamableHttpProxyController {
 				// Still a routed frame from the browser: refresh the idle-reaper
 				// timestamp, otherwise a session only polled via the Tasks tab is
 				// evicted.
+				// An intercepted frame is never the session's first POST: interception
+				// is enabled only after this session's initialize response, so no
+				// mcp-session-id header needs to be attached here.
 				session.touch();
-				if (includeSessionHeader) {
-					final ResponseEntity.BodyBuilder builder = ResponseEntity.status(taskResponse.getStatusCode())
-						.contentType(MediaType.APPLICATION_JSON);
-					builder.header(ProxyConstants.MCP_SESSION_ID_HEADER, session.sessionId());
-					return builder.body(taskResponse.getBody());
-				}
 				return taskResponse;
 			}
 		}
@@ -516,7 +572,8 @@ public class StreamableHttpProxyController {
 		// Without this the replay sink may not carry the error to a late
 		// subscriber, and the awaiter would block for the full
 		// streamable-request timeout instead of failing fast.
-		final Duration requestTimeout = resolveTimeouts().getStreamableRequest();
+		final Duration requestTimeout = includeSessionHeader ? connectionBudget
+				: resolveTimeouts().getStreamableRequest();
 		final Sinks.One<JsonNode> awaiterSink = Sinks.one();
 		session.targetToBrowser()
 			.asFlux()
@@ -525,11 +582,11 @@ public class StreamableHttpProxyController {
 			.timeout(requestTimeout)
 			.subscribe(awaiterSink::tryEmitValue, awaiterSink::tryEmitError, () -> awaiterSink.tryEmitEmpty());
 		final Mono<JsonNode> awaiter = awaiterSink.asMono();
-		final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
-		if (emitResult.isFailure()) {
-			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("emit failed: " + emitResult.name());
+		if (!session.emitFromBrowser(body)) {
+			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("emit failed");
 		}
 		session.touch();
+		final long initializeStartNanos = System.nanoTime();
 		try {
 			final JsonNode response = awaiter.block(requestTimeout);
 			if (taskService() != null) {
@@ -542,6 +599,24 @@ public class StreamableHttpProxyController {
 			return builder.body(response);
 		}
 		catch (final RuntimeException ex) {
+			if (includeSessionHeader) {
+				final ProxyConnectTimeoutException timeoutEx = asConnectTimeout(ex).orElse(null);
+				if (timeoutEx != null) {
+					LOG.warn("proxy[{}] {} phase timed out after {}ms of {}ms budget", session.sessionId(),
+							timeoutEx.phase().wire(), timeoutEx.elapsedMs(), timeoutEx.budgetMs());
+					this.registry.removeAndClose(session.sessionId());
+					return connectTimeoutResponse(timeoutEx);
+				}
+				if (ex.getCause() instanceof java.util.concurrent.TimeoutException) {
+					final long elapsedMs = (System.nanoTime() - initializeStartNanos) / 1_000_000L;
+					final ProxyConnectTimeoutException initializedEx = new ProxyConnectTimeoutException(
+							ProxyConnectTimeoutException.Phase.INITIALIZE, elapsedMs, connectionBudget.toMillis());
+					LOG.warn("proxy[{}] initialize phase timed out after {}ms of {}ms budget", session.sessionId(),
+							elapsedMs, connectionBudget.toMillis());
+					this.registry.removeAndClose(session.sessionId());
+					return connectTimeoutResponse(initializedEx);
+				}
+			}
 			// D3: a mappable transport failure (401/403 on the initial handshake or a
 			// later call) becomes the structured DTO; anything else stays the legacy 504.
 			final ProxyErrorDto dto = ProxyErrorMapper.map(ex, TransportKind.STREAMABLE);
@@ -573,10 +648,11 @@ public class StreamableHttpProxyController {
 	 * Allocates the {@link ProxySession} and kicks off the {@link McpProxy} pumps.
 	 * @param url the streamable-HTTP target URL
 	 * @param profileId the owner-scoped auth profile id, or {@code null}
+	 * @param connectionBudget per-phase budget applied to the session bring-up
 	 * @return a live {@link ProxySession}, or {@code null} if the transport could not be
 	 * created or the profile handoff failed
 	 */
-	private ProxySession openSession(final String url, final String profileId) {
+	private ProxySession openSession(final String url, final String profileId, final Duration connectionBudget) {
 		final String sessionId = UUID.randomUUID().toString();
 		// D8: resolve the owner from the signed session cookie and the bound profile
 		// when a profileId is supplied. A foreign/unknown profileId is a structured 400.
@@ -599,6 +675,7 @@ public class StreamableHttpProxyController {
 				(headers != null) ? headers.authorization() : null);
 		final McpClientTransport target;
 		final URI resolved;
+		final long connectStartNanos = System.nanoTime();
 		try {
 			resolved = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
 			target = (headers != null)
@@ -625,9 +702,23 @@ public class StreamableHttpProxyController {
 			session.bindProfile(ownerId, profileId);
 		}
 		this.registry.put(session);
-		this.mcpProxy.start(session).subscribe((ignored) -> {
+		// The budget bounds the session bring-up (McpProxy.start: transport connect
+		// plus inbound pump wiring). An overrun is routed onto the session's
+		// targetToBrowser sink so the initialize awaiter fails with a CONNECT-phase
+		// ProxyConnectTimeoutException instead of blocking to the request timeout.
+		this.mcpProxy.start(session).timeout(connectionBudget).subscribe((ignored) -> {
 		}, (err) -> {
-			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+			if (err instanceof java.util.concurrent.TimeoutException) {
+				final long elapsedMs = (System.nanoTime() - connectStartNanos) / 1_000_000L;
+				final ProxyConnectTimeoutException timeoutEx = new ProxyConnectTimeoutException(
+						ProxyConnectTimeoutException.Phase.CONNECT, elapsedMs, connectionBudget.toMillis());
+				LOG.warn("proxy[{}] connect phase timed out after {}ms of {}ms budget", sessionId, elapsedMs,
+						connectionBudget.toMillis());
+				session.failUpstream(timeoutEx);
+			}
+			else {
+				LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+			}
 			this.registry.removeAndClose(sessionId);
 		});
 		return session;
@@ -661,6 +752,24 @@ public class StreamableHttpProxyController {
 	private static HttpServletResponse currentResponse() {
 		final var attrs = RequestContextHolder.getRequestAttributes();
 		return (attrs instanceof ServletRequestAttributes sra) ? sra.getResponse() : null;
+	}
+
+	/**
+	 * Unwraps a {@link ProxyConnectTimeoutException} carried by (or equal to) the given
+	 * awaiter failure, if any.
+	 * @param ex the failure the awaiter saw
+	 * @return the connect-phase timeout, or empty when the failure is something else
+	 */
+
+	private static Optional<ProxyConnectTimeoutException> asConnectTimeout(final Throwable ex) {
+		Throwable current = ex;
+		while (current != null) {
+			if (current instanceof ProxyConnectTimeoutException connectTimeout) {
+				return Optional.of(connectTimeout);
+			}
+			current = current.getCause();
+		}
+		return Optional.empty();
 	}
 
 	/**
@@ -759,14 +868,20 @@ public class StreamableHttpProxyController {
 	/**
 	 * Handle a {@code tasks/list} request: return the requested page of tracked tasks,
 	 * honoring {@code params.cursor} and emitting {@code nextCursor} while more tasks
-	 * remain (see {@link #applyTaskListCursor}).
+	 * remain (see {@link #parseTaskListCursor}).
 	 * @param idNode the JSON-RPC request id
 	 * @param body the full JSON-RPC request body (carries the optional cursor)
 	 * @return a JSON-RPC response with a {@code tasks} array
 	 */
 	private ResponseEntity<Object> handleTaskList(final JsonNode idNode, final JsonNode body) {
 		final java.util.List<TaskHandle> handles = taskService().listTasks();
-		final int offset = parseTaskListCursor(handles.size(), body);
+		final int offset;
+		try {
+			offset = parseTaskListCursor(handles.size(), body);
+		}
+		catch (final IllegalArgumentException ex) {
+			return jsonRpcError(idNode, -32602, ex.getMessage());
+		}
 		final int end = Math.min(offset + TASKS_LIST_PAGE_SIZE, handles.size());
 		final java.util.List<TaskHandle> page = handles.subList(offset, end);
 		final ArrayNode tasksArray = JsonNodeFactory.instance.arrayNode(page.size());
@@ -783,22 +898,26 @@ public class StreamableHttpProxyController {
 
 	/**
 	 * Parse the opaque {@code params.cursor} (a decimal list offset previously emitted as
-	 * {@code nextCursor}) into an offset into the ordered task list. An absent,
-	 * non-numeric or out-of-range cursor yields an offset past the end, which produces an
-	 * empty page and terminates client pagination.
-	 * @param listSize the size of the full ordered handle list
+	 * {@code nextCursor}) into an offset into the task list. An absent cursor starts at
+	 * the beginning; a decimal cursor is clamped to the list bounds, so an out-of-range
+	 * value yields an offset past the end, an empty page and terminated pagination. A
+	 * textual non-decimal cursor is rejected with {@link IllegalArgumentException} so the
+	 * caller answers {@code -32602 Invalid params}.
+	 * @param listSize the size of the full handle list
 	 * @param body the JSON-RPC request body carrying the optional cursor
 	 * @return the offset the requested page starts at
+	 * @throws IllegalArgumentException when the textual cursor is not a decimal number
 	 */
 	private static int parseTaskListCursor(final int listSize, final JsonNode body) {
 		final JsonNode params = (body != null) ? body.get("params") : null;
 		final JsonNode cursorNode = (params != null && params.isObject()) ? params.get("cursor") : null;
 		if (cursorNode != null && cursorNode.isTextual()) {
+			final String cursor = cursorNode.asText();
 			try {
-				return Math.max(0, Math.min(Integer.parseInt(cursorNode.asText()), listSize));
+				return Math.max(0, Math.min(Integer.parseInt(cursor), listSize));
 			}
 			catch (final NumberFormatException ex) {
-				return listSize;
+				throw new IllegalArgumentException("Invalid params: non-numeric cursor '" + cursor + "'", ex);
 			}
 		}
 		return 0;

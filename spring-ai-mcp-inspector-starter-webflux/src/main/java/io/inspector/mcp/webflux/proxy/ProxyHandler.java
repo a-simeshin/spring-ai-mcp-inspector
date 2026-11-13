@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -58,15 +59,22 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
+import io.inspector.mcp.core.proxy.ProxyConnectTimeoutException;
+import io.inspector.mcp.core.proxy.ProxyConnectionBudgets;
+import io.inspector.mcp.core.proxy.ProxyConnectionBudgets.ProxyConnectionBudgetException;
 import io.inspector.mcp.core.proxy.ProxyErrorDto;
+import io.inspector.mcp.core.proxy.ProxyErrorFallback;
 import io.inspector.mcp.core.proxy.ProxyErrorMapper;
+import io.inspector.mcp.core.proxy.ProxyReconnectPolicy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.proxy.ProxyUpstreamException;
 import io.inspector.mcp.core.proxy.TransportKind;
 import io.inspector.mcp.core.task.TaskHandle;
 import io.inspector.mcp.core.task.TaskNotCancelableException;
@@ -86,12 +94,12 @@ import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
  * Endpoint layout under {@link ProxyConstants#BASE}:
  *
  * <ul>
- * <li>{@code GET /sse} / {@code GET /stdio} — opens a session, returns SSE stream</li>
- * <li>{@code POST /message} — pushes a frame into an open SSE session</li>
- * <li>{@code POST/GET/DELETE /mcp} — Streamable-HTTP transport</li>
- * <li>{@code GET /config} — defaults for the client form</li>
- * <li>{@code GET /health} — liveness</li>
- * <li>{@code POST /fetch} — outbound HTTP proxy</li>
+ * <li>{@code GET /sse} / {@code GET /stdio} : opens a session, returns SSE stream</li>
+ * <li>{@code POST /message} : pushes a frame into an open SSE session</li>
+ * <li>{@code POST/GET/DELETE /mcp} : Streamable-HTTP transport</li>
+ * <li>{@code GET /config} : defaults for the client form</li>
+ * <li>{@code GET /health} : liveness</li>
+ * <li>{@code POST /fetch} : outbound HTTP proxy</li>
  * </ul>
  *
  * @author Artem Simeshin
@@ -276,7 +284,7 @@ public class ProxyHandler {
 	}
 
 	public Mono<ServerResponse> fetch(final ServerRequest request) {
-		// doFetch() ends in a blocking HttpClient.send() — keep it off the event loop.
+		// doFetch() ends in a blocking HttpClient.send() : keep it off the event loop.
 		return readJsonBody(request).flatMap((body) -> Mono.fromCallable(() -> doFetch(body))
 			.subscribeOn(Schedulers.boundedElastic())
 			.flatMap((envelope) -> ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(envelope))
@@ -341,8 +349,9 @@ public class ProxyHandler {
 		final String args = request.queryParam("args").orElse(null);
 		final String env = request.queryParam("env").orElse(null);
 		final String profileId = request.queryParam("profileId").orElse(null);
+		final String connectionTimeout = request.queryParam("connectionTimeout").orElse(null);
 		return openProxiedSession(transportType, url, command, args, env, profileId, inboundAuthorization(request),
-				inboundCustomHeaders(request), request);
+				inboundCustomHeaders(request), request, connectionTimeout, contextPath(request));
 	}
 
 	public Mono<ServerResponse> openStdio(final ServerRequest request) {
@@ -350,13 +359,14 @@ public class ProxyHandler {
 		final String args = request.queryParam("args").orElse(null);
 		final String env = request.queryParam("env").orElse(null);
 		final String profileId = request.queryParam("profileId").orElse(null);
+		final String connectionTimeout = request.queryParam("connectionTimeout").orElse(null);
 		return openProxiedSession("stdio", null, command, args, env, profileId, inboundAuthorization(request),
-				inboundCustomHeaders(request), request);
+				inboundCustomHeaders(request), request, connectionTimeout, contextPath(request));
 	}
 
 	/**
-	 * Returns the request's deployment prefix — the WebFlux base path or a forwarded
-	 * proxy prefix — normalised so a root-mounted application contributes nothing.
+	 * Returns the request's deployment prefix : the WebFlux base path or a forwarded
+	 * proxy prefix : normalised so a root-mounted application contributes nothing.
 	 * @param request the incoming request
 	 * @return the prefix, or an empty string when the application is root-mounted
 	 */
@@ -410,10 +420,9 @@ public class ProxyHandler {
 			return ServerResponse.notFound().build();
 		}
 		return readJsonBody(request).flatMap((body) -> {
-			final Sinks.EmitResult er = session.browserToTarget().tryEmitNext(body);
-			if (er.isFailure()) {
+			if (!session.emitFromBrowser(body)) {
 				return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
-					.bodyValue(Map.of("error", "emit failed: " + er.name()));
+					.bodyValue(Map.of("error", "emit failed"));
 			}
 			session.touch();
 			return ServerResponse.accepted().build();
@@ -422,14 +431,23 @@ public class ProxyHandler {
 
 	private Mono<ServerResponse> openProxiedSession(final String transportType, final String url, final String command,
 			final String args, final String env, final String profileId, final String authorization,
-			final Map<String, String> customHeaders, final ServerRequest request) {
+			final Map<String, String> customHeaders, final ServerRequest request, final String connectionTimeout,
+			final String contextPath) {
+		final Duration connectionBudget;
+		try {
+			connectionBudget = ProxyConnectionBudgets.parseOrDefault(connectionTimeout, this.timeouts.getConnection());
+		}
+		catch (final ProxyConnectionBudgetException ex) {
+			return ServerResponse.badRequest()
+				.contentType(MediaType.APPLICATION_JSON)
+				.bodyValue(ProxyConnectionBudgets.invalidParameterBody(connectionTimeout, ex.getMessage()));
+		}
+		final long connectStartNanos = System.nanoTime();
 		final String sessionId = UUID.randomUUID().toString();
-		final String contextPath = contextPath(request);
 		// D8: resolve the owner from the signed session cookie (mint on demand) and the
 		// bound profile when a profileId is supplied. A foreign/unknown profileId is a
-		// structured 400 — existence is not leaked.
+		// structured 400 : existence is not leaked.
 		final String ownerId = resolveOwner(request);
-		final AuthHeaders headers;
 		if (profileId != null && !profileId.isBlank()) {
 			if (this.authProfileStore == null || this.sessionOwnerResolver == null) {
 				return ServerResponse.badRequest().bodyValue(Map.of("error", "auth-profile support is not wired"));
@@ -441,14 +459,116 @@ public class ProxyHandler {
 							"Invalid or missing auth profile or session reference.",
 							"Check the profile fields and profileId, then reconnect.", null));
 			}
-			headers = AuthHeaders.resolve(profile.get(), profileId, this.ccTokenManager, this.authCodeExchanger);
-		}
-		else {
-			headers = null;
-		}
+			final AuthProfile resolvedProfile = profile.get();
+			final Mono<AuthHeaders> headersMono = Mono
+				.fromCallable(() -> AuthHeaders.resolve(resolvedProfile, profileId, this.ccTokenManager,
+						this.authCodeExchanger))
+				.subscribeOn(Schedulers.boundedElastic())
+				.onErrorResume(ProxyUpstreamException.class, (ex) -> Mono.empty())
+				.onErrorResume(IllegalStateException.class, (ex) -> Mono.empty());
+			return headersMono.flatMap((resolvedHeaders) -> {
+				final AtomicReference<String> authorizationRef = new AtomicReference<>(resolvedHeaders.authorization());
+				final McpClientTransport target;
+				try {
+					target = buildTargetTransport(transportType, url, command, args, env, resolvedHeaders,
+							authorizationRef, authorization, customHeaders);
+				}
+				catch (final Exception ex) {
+					LOG.warn("proxy[{}] failed to build target transport: {}", sessionId, ex.toString());
+					return ServerResponse.badRequest().bodyValue(Map.of("error", ex.getMessage()));
+				}
+				// browserToTarget stays unicast (single consumer in McpProxy);
+				// targetToBrowser is multicast-replay so per-request awaiters in the
+				// Streamable-HTTP path can attach while keeping this long-lived SSE
+				// subscriber working.
+				final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
+				final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
+				final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser,
+						authorizationRef);
+				// One-time bind: rejected reuse / foreign ids close the handoff (D4/D8).
+				if (!this.authProfileStore.bind(ownerId, profileId, sessionId)) {
+					return ServerResponse.badRequest()
+						.bodyValue(new ProxyErrorDto(400, "bad_request",
+								"Invalid or missing auth profile or session reference.",
+								"Check the profile fields and profileId, then reconnect.", null));
+				}
+				session.bindProfile(ownerId, profileId);
+				this.registry.put(session);
 
-		final AtomicReference<String> authorizationRef = new AtomicReference<>(
-				(headers != null) ? headers.authorization() : null);
+				final String proxyBase = (this.properties != null) ? this.properties.getProxyPath()
+						: "/mcp-inspector-api";
+				// The prologue must carry the deployment prefix: the browser resolves it
+				// with
+				// new URL(data, sseUrl), and a path-absolute value replaces the whole
+				// path, so
+				// without the prefix every first client->server frame would 404.
+				final ServerSentEvent<String> prologue = ServerSentEvent.<String>builder()
+					.event("endpoint")
+					.data(contextPath + proxyBase + "/message?sessionId=" + sessionId)
+					.build();
+
+				// D3 outbox: structured error events (SSE-only redirect/401/403 mapping)
+				// are
+				// merged into the stream ahead of the session teardown so the browser
+				// sees the
+				// DTO, not a silent cut.
+				final Sinks.Many<ServerSentEvent<String>> errorEvents = Sinks.many()
+					.multicast()
+					.onBackpressureBuffer(8);
+
+				// takeUntilOther: the stream ends when the session closes, whether or not
+				// close() managed to complete the sink (it cannot when another thread
+				// owns it).
+				final var flux = Flux.merge(errorEvents.asFlux(),
+						targetToBrowser.asFlux()
+							.takeUntilOther(session.closeSignal())
+							.doOnTerminate(() -> errorEvents.tryEmitComplete())
+							.map((frame) -> {
+								try {
+									return ServerSentEvent.<String>builder()
+										.event("message")
+										.data(this.objectMapper.writeValueAsString(frame))
+										.build();
+								}
+								catch (final Exception ex) {
+									return ServerSentEvent.<String>builder()
+										.event("error")
+										.data(ex.getMessage())
+										.build();
+								}
+							})
+							.startWith(prologue))
+					.doOnCancel(() -> this.registry.removeAndClose(sessionId))
+					.doOnTerminate(() -> this.registry.removeAndClose(sessionId));
+
+				this.mcpProxy.start(session).subscribe((ignored) -> {
+				}, (err) -> {
+					LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+					// D3: emit the structured error event BEFORE the session teardown :
+					// the
+					// close signal terminates the merged flux, so the DTO must land
+					// first.
+					final ProxyErrorDto dto = ProxyErrorMapper.map(err, TransportKind.SSE);
+					if (dto != null) {
+						errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
+							.event("error")
+							.data(toErrorJson(dto, targetUri(transportType, url)))
+							.build());
+					}
+					errorEvents.tryEmitComplete();
+					this.registry.removeAndClose(sessionId);
+				});
+
+				return ServerResponse.ok().contentType(MediaType.TEXT_EVENT_STREAM).body(flux, ServerSentEvent.class);
+			})
+				.switchIfEmpty(Mono.defer(() -> ServerResponse.status(HttpStatus.BAD_GATEWAY)
+					.bodyValue(new ProxyErrorDto(502, "token_exchange_failed",
+							"OAuth2 token acquisition failed for profile " + profileId,
+							"Check the token endpoint, then reconnect.", null))));
+		}
+		// No profileId : existing synchronous path
+		final AuthHeaders headers = null;
+		final AtomicReference<String> authorizationRef = new AtomicReference<>(null);
 		final McpClientTransport target;
 		try {
 			target = buildTargetTransport(transportType, url, command, args, env, headers, authorizationRef,
@@ -491,45 +611,110 @@ public class ProxyHandler {
 		// merged into the stream ahead of the session teardown so the browser sees the
 		// DTO, not a silent cut.
 		final Sinks.Many<ServerSentEvent<String>> errorEvents = Sinks.many().multicast().onBackpressureBuffer(8);
+		// Once per death: the terminal frames have two concurrent emission sites (the
+		// pump's onErrorResume below and the start-failure callback), each on its own
+		// thread, racing the sink completion. The CAS picks the single winner and the
+		// monitor keeps the winning pair atomic against that completion, so the
+		// browser never sees the error event without its terminal retry line.
+		final AtomicBoolean deathFramesSent = new AtomicBoolean(false);
+		final Object deathFramesMonitor = new Object();
 
 		// takeUntilOther: the stream ends when the session closes, whether or not
 		// close() managed to complete the sink (it cannot when another thread owns it).
-		final var flux = Flux.merge(errorEvents.asFlux(),
-				targetToBrowser.asFlux()
-					.takeUntilOther(session.closeSignal())
-					.doOnTerminate(() -> errorEvents.tryEmitComplete())
-					.map((frame) -> {
-						try {
-							return ServerSentEvent.<String>builder()
-								.event("message")
-								.data(this.objectMapper.writeValueAsString(frame))
-								.build();
-						}
-						catch (final Exception ex) {
-							return ServerSentEvent.<String>builder().event("error").data(ex.getMessage()).build();
-						}
-					})
-					.startWith(prologue))
+		final var flux = Flux.merge(errorEvents.asFlux(), targetToBrowser.asFlux()
+			.takeUntilOther(session.closeSignal())
+			// Dead upstream: emit the terminal retry ahead of the teardown so
+			// spec-compliant EventSource clients stop reconnecting instead of
+			// minting a doomed proxy session every ~3s.
+			.onErrorResume((err) -> {
+				// Readable error delivery: a classified failure (D3-mapped or an
+				// upstream death) rides a structured error event, so the browser learns
+				// why the stream died instead of a silent cut. The event lands BEFORE
+				// the terminal retry field: the client closes the transport on the
+				// retry line, so a later frame could be lost. An unclassified failure
+				// ends the stream without an event, as before this contract existed.
+				emitDeathFrames(errorEvents, deathFramesSent, deathFramesMonitor, err, targetUri(transportType, url));
+				return Flux.error(err);
+			})
+			.doOnTerminate(() -> completeDeathFrames(errorEvents, deathFramesMonitor))
+			.map((frame) -> {
+				try {
+					return ServerSentEvent.<String>builder()
+						.event("message")
+						.data(this.objectMapper.writeValueAsString(frame))
+						.build();
+				}
+				catch (final Exception ex) {
+					return ServerSentEvent.<String>builder().event("error").data(ex.getMessage()).build();
+				}
+			})
+			.startWith(prologue))
 			.doOnCancel(() -> this.registry.removeAndClose(sessionId))
 			.doOnTerminate(() -> this.registry.removeAndClose(sessionId));
 
-		this.mcpProxy.start(session).subscribe((ignored) -> {
+		// The budget bounds the session bring-up; an overrun is surfaced as a
+		// structured proxy-error event on the side sink instead of a bare stream
+		// abort the client cannot read.
+		this.mcpProxy.start(session).timeout(connectionBudget).subscribe((ignored) -> {
 		}, (err) -> {
-			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
-			// D3: emit the structured error event BEFORE the session teardown — the
-			// close signal terminates the merged flux, so the DTO must land first.
-			final ProxyErrorDto dto = ProxyErrorMapper.map(err, TransportKind.SSE);
-			if (dto != null) {
-				errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
-					.event("error")
-					.data(toErrorJson(dto, targetUri(transportType, url)))
-					.build());
+			if (err instanceof java.util.concurrent.TimeoutException) {
+				final long elapsedMs = (System.nanoTime() - connectStartNanos) / 1_000_000L;
+				final ProxyConnectTimeoutException timeoutEx = new ProxyConnectTimeoutException(
+						ProxyConnectTimeoutException.Phase.CONNECT, elapsedMs, connectionBudget.toMillis());
+				LOG.warn("proxy[{}] connect phase timed out after {}ms of {}ms budget", sessionId, elapsedMs,
+						connectionBudget.toMillis());
+				// The budget payload rides the side sink directly: the merged stream
+				// error
+				// path below belongs to the death-frames contract (retry suppression for
+				// dead upstreams), so the terminal proxy-error must not race it.
+				errorEvents.tryEmitNext(proxyErrorEvent(timeoutEx));
+				errorEvents.tryEmitComplete();
 			}
-			errorEvents.tryEmitComplete();
+			else {
+				LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+				// Readable error delivery: a classified failure (D3-mapped or an
+				// upstream death) rides a structured error event together with its
+				// terminal retry field, so the browser learns why the stream died
+				// instead of a silent cut.
+				emitDeathFrames(errorEvents, deathFramesSent, deathFramesMonitor, err, targetUri(transportType, url));
+				if (resolveTerminalErrorDto(err) == null) {
+					// Unclassified bring-up failure: no death frames exist for it, so the
+					// generic MCP_CONNECT_FAILED proxy-error payload carries the reason
+					// to
+					// the browser instead (connection-budget contract).
+					errorEvents.tryEmitNext(proxyErrorEvent(err));
+				}
+				errorEvents.tryEmitComplete();
+			}
 			this.registry.removeAndClose(sessionId);
 		});
 
 		return ServerResponse.ok().contentType(MediaType.TEXT_EVENT_STREAM).body(flux, ServerSentEvent.class);
+	}
+
+	/**
+	 * Maps a terminal SSE-stream failure onto a {@code proxy-error} event carrying the
+	 * structured error payload: the connect-phase timeout when the failure is (or
+	 * carries) a {@link ProxyConnectTimeoutException}, the generic
+	 * {@code MCP_CONNECT_FAILED} contract otherwise. Matches the servlet stack's event
+	 * shape so one client-side parser covers both.
+	 * @param err the failure that ended the stream
+	 * @return the terminal SSE event
+	 */
+	private static ServerSentEvent<String> proxyErrorEvent(final Throwable err) {
+		final ProxyConnectTimeoutException timeoutEx = asConnectTimeout(err);
+		final Map<String, Object> payload = (timeoutEx != null) ? ProxyConnectionBudgets.timeoutBody(timeoutEx)
+				: Map.of("error", Map.of("code", "MCP_CONNECT_FAILED", "reason", "unknown", "message",
+						String.valueOf(err.getMessage()), "retryable", Boolean.TRUE));
+		try {
+			return ServerSentEvent.<String>builder()
+				.event("proxy-error")
+				.data(JsonMapper.builder().build().writeValueAsString(payload))
+				.build();
+		}
+		catch (final Exception ex) {
+			return ServerSentEvent.<String>builder().event("proxy-error").data(ex.getMessage()).build();
+		}
 	}
 
 	/**
@@ -561,6 +746,90 @@ public class ProxyHandler {
 		}
 		final String callerOwner = resolveOwner(request);
 		return callerOwner != null && callerOwner.equals(sessionOwner);
+	}
+
+	/**
+	 * Test-only hook invoked after this handler emitted its terminal death frames and
+	 * released the death monitor. Lets regression tests park the winning emission site
+	 * and force the second site (the pump's onErrorResume or the start failure callback)
+	 * to interleave deterministically instead of racing on a timing loop. Never set in
+	 * production.
+	 */
+	private volatile Runnable afterDeathFramesHook = () -> {
+	};
+
+	/**
+	 * Replaces the death-frames hook. Visible for tests only.
+	 * @param hook the hook to run after the terminal death frames (never {@code null})
+	 */
+	void setAfterDeathFramesHook(final Runnable hook) {
+		this.afterDeathFramesHook = (hook != null) ? hook : () -> {
+		};
+	}
+
+	/**
+	 * Emits the terminal death frames (the structured {@code error} event and, for an
+	 * upstream death, the terminal retry line) at most once per session: the CAS picks
+	 * the single winner between the two concurrent emission sites (the pump's
+	 * onErrorResume and the start-failure callback) and the monitor keeps the pair atomic
+	 * against the sink completion, so a concurrent teardown can never split the error
+	 * event from its retry line.
+	 * @param errorEvents the side sink carrying the terminal frames
+	 * @param deathFramesSent the once-per-death CAS guard
+	 * @param deathFramesMonitor the monitor serialising the pair against completion
+	 * @param err the terminal transport failure
+	 * @param target the upstream target URI for the D5-redacted url field
+	 */
+	private void emitDeathFrames(final Sinks.Many<ServerSentEvent<String>> errorEvents,
+			final AtomicBoolean deathFramesSent, final Object deathFramesMonitor, final Throwable err,
+			final URI target) {
+		final ProxyErrorDto terminalDto = resolveTerminalErrorDto(err);
+		if (terminalDto == null) {
+			return;
+		}
+		if (!deathFramesSent.compareAndSet(false, true)) {
+			return;
+		}
+		synchronized (deathFramesMonitor) {
+			errorEvents.tryEmitNext(
+					ServerSentEvent.<String>builder().event("error").data(toErrorJson(terminalDto, target)).build());
+			if (ProxyReconnectPolicy.isUpstreamDeath(err)) {
+				errorEvents.tryEmitNext(ServerSentEvent.<String>builder()
+					.comment("upstream dead: reconnect suppressed")
+					.retry(Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS))
+					.build());
+			}
+		}
+		this.afterDeathFramesHook.run();
+	}
+
+	/**
+	 * Completes the terminal side sink under the death monitor so the completion can
+	 * never land between the two frames of a death pair emitted by the winning site.
+	 * @param errorEvents the side sink carrying the terminal frames
+	 * @param deathFramesMonitor the monitor serialising the pair against completion
+	 */
+	private static void completeDeathFrames(final Sinks.Many<ServerSentEvent<String>> errorEvents,
+			final Object deathFramesMonitor) {
+		synchronized (deathFramesMonitor) {
+			errorEvents.tryEmitComplete();
+		}
+	}
+
+	/**
+	 * Resolves the terminal error DTO: the D3 mapping when the failure classifies, the
+	 * upstream-death fallback when the mapper yields null but the policy recognizes a
+	 * dead upstream, else null (no structured event: the stream simply ends, as before
+	 * this contract existed).
+	 * @param err the terminal transport failure
+	 * @return the DTO for the SSE {@code error} event, or null when nothing classifies
+	 */
+	private static ProxyErrorDto resolveTerminalErrorDto(final Throwable err) {
+		final ProxyErrorDto mapped = ProxyErrorMapper.map(err, TransportKind.SSE);
+		if (mapped != null) {
+			return mapped;
+		}
+		return ProxyReconnectPolicy.isUpstreamDeath(err) ? ProxyErrorFallback.upstreamDeath() : null;
 	}
 
 	/**
@@ -615,7 +884,7 @@ public class ProxyHandler {
 			}
 			case "stdio" -> {
 				if (command == null || command.isBlank()) {
-					throw new IllegalArgumentException(
+					throw new InvalidProxyRequestException(
 							"missing required 'command' query parameter for stdio transport");
 				}
 				final List<String> argv = new ArrayList<>();
@@ -626,7 +895,7 @@ public class ProxyHandler {
 				final Map<String, String> environment = parseEnv(env);
 				yield this.transportFactory.openStdio(argv, environment);
 			}
-			default -> throw new IllegalArgumentException("unsupported transportType: " + transportType);
+			default -> throw new InvalidProxyRequestException("unsupported transportType: " + transportType);
 		};
 	}
 
@@ -669,15 +938,26 @@ public class ProxyHandler {
 		final String authorization = inboundAuthorization(request);
 		final Map<String, String> customHeaders = inboundCustomHeaders(request);
 		final String profileId = request.queryParam("profileId").orElse(null);
-		return readJsonBody(request).flatMap((body) -> handlePostMcp(mcpSessionId,
-				request.queryParam("url").orElse(null), body, authorization, customHeaders, profileId, request));
+		final String connectionTimeout = request.queryParam("connectionTimeout").orElse(null);
+		final Duration connectionBudget;
+		try {
+			connectionBudget = ProxyConnectionBudgets.parseOrDefault(connectionTimeout, this.timeouts.getConnection());
+		}
+		catch (final ProxyConnectionBudgetException ex) {
+			return ServerResponse.badRequest()
+				.contentType(MediaType.APPLICATION_JSON)
+				.bodyValue(ProxyConnectionBudgets.invalidParameterBody(connectionTimeout, ex.getMessage()));
+		}
+		return readJsonBody(request)
+			.flatMap((body) -> handlePostMcp(mcpSessionId, request.queryParam("url").orElse(null), body, authorization,
+					customHeaders, profileId, request, connectionBudget));
 	}
 
 	/**
 	 * Spec-compliant POST /mcp dispatcher.
 	 *
 	 * <p>
-	 * If {@code mcpSessionId} is missing — opens a new session, then routes the frame
+	 * If {@code mcpSessionId} is missing : opens a new session, then routes the frame
 	 * through {@link #relayAndAwait}. Otherwise looks up the existing session.
 	 * @param mcpSessionId the {@code mcp-session-id} header value, may be {@code null}
 	 * @param url the upstream URL query parameter, may be {@code null}
@@ -688,20 +968,21 @@ public class ProxyHandler {
 	 * forward upstream, may be empty
 	 * @param profileId the owner-scoped auth profile id, or {@code null}
 	 * @param request the current request (owner resolution)
+	 * @param connectionBudget the resolved per-phase connection budget
 	 * @return a {@link Mono} emitting the upstream response
 	 */
 	private Mono<ServerResponse> handlePostMcp(final String mcpSessionId, final String url, final JsonNode body,
 			final String authorization, final Map<String, String> customHeaders, final String profileId,
-			final ServerRequest request) {
+			final ServerRequest request, final Duration connectionBudget) {
 		if (mcpSessionId == null || mcpSessionId.isBlank()) {
-			return openSessionAndRelay(url, body, authorization, customHeaders, profileId, request);
+			return openSessionAndRelay(url, body, authorization, customHeaders, profileId, request, connectionBudget);
 		}
 		final ProxySession session = this.registry.get(mcpSessionId);
 		if (session == null || !isOwnerOf(session, request)) {
 			return ServerResponse.status(HttpStatus.NOT_FOUND)
 				.bodyValue(Map.of("error", "unknown mcp-session-id: " + mcpSessionId));
 		}
-		return relayAndAwait(session, body, false);
+		return relayAndAwait(session, body, false, this.timeouts.getStreamableRequest());
 	}
 
 	/**
@@ -714,10 +995,12 @@ public class ProxyHandler {
 	 * forward upstream, may be empty
 	 * @param profileId the owner-scoped auth profile id, or {@code null}
 	 * @param request the current request (owner resolution)
+	 * @param connectionBudget the resolved per-phase connection budget
 	 * @return a {@link Mono} emitting the upstream response
 	 */
 	private Mono<ServerResponse> openSessionAndRelay(final String url, final JsonNode body, final String authorization,
-			final Map<String, String> customHeaders, final String profileId, final ServerRequest request) {
+			final Map<String, String> customHeaders, final String profileId, final ServerRequest request,
+			final Duration connectionBudget) {
 		// Blank/relative url is the WAF-safe same-origin default — resolved to the
 		// loopback MCP endpoint server-side (ProxyTargetResolver); only an explicit
 		// absolute url targets a non-loopback server.
@@ -725,7 +1008,6 @@ public class ProxyHandler {
 		// D8: resolve the owner from the signed session cookie and the bound profile
 		// when a profileId is supplied. A foreign/unknown profileId is a structured 400.
 		final String ownerId = resolveOwner(request);
-		final AuthHeaders headers;
 		if (profileId != null && !profileId.isBlank()) {
 			if (this.authProfileStore == null || this.sessionOwnerResolver == null) {
 				return ServerResponse.badRequest().bodyValue(Map.of("error", "auth-profile support is not wired"));
@@ -737,15 +1019,49 @@ public class ProxyHandler {
 							"Invalid or missing auth profile or session reference.",
 							"Check the profile fields and profileId, then reconnect.", null));
 			}
-			headers = AuthHeaders.resolve(profile.get(), profileId, this.ccTokenManager, this.authCodeExchanger);
+			final AuthProfile resolvedProfile = profile.get();
+			return Mono
+				.fromCallable(() -> AuthHeaders.resolve(resolvedProfile, profileId, this.ccTokenManager,
+						this.authCodeExchanger))
+				.subscribeOn(Schedulers.boundedElastic())
+				.onErrorResume(ProxyUpstreamException.class, (ex) -> Mono.empty())
+				.onErrorResume(IllegalStateException.class, (ex) -> Mono.empty())
+				.flatMap((headers) -> openSessionAndRelayAfterAuth(sessionId, url, body, authorization, customHeaders,
+						profileId, ownerId, headers, connectionBudget))
+				.switchIfEmpty(Mono.defer(() -> ServerResponse.status(HttpStatus.BAD_GATEWAY)
+					.bodyValue(new ProxyErrorDto(502, "token_exchange_failed",
+							"OAuth2 token acquisition failed for profile " + profileId,
+							"Check the token endpoint, then reconnect.", null))));
 		}
-		else {
-			headers = null;
-		}
+		// No profileId: synchronous path
+		return openSessionAndRelayAfterAuth(sessionId, url, body, authorization, customHeaders, profileId, ownerId,
+				null, connectionBudget);
+	}
+
+	/**
+	 * Continuation of {@link #openSessionAndRelay} after auth headers have been resolved
+	 * (either async via boundedElastic for the profile path, or synchronous for the
+	 * no-profile path). Builds the transport, creates the session, binds the profile,
+	 * registers the session and dispatches the first frame.
+	 * @param sessionId the new session id
+	 * @param url the upstream streamable-HTTP URL
+	 * @param body the first JSON-RPC frame to relay
+	 * @param authorization the inbound {@code Authorization} header
+	 * @param customHeaders extra headers from the request
+	 * @param profileId the owner-scoped auth profile id, or {@code null}
+	 * @param ownerId the resolved owner id
+	 * @param headers the resolved auth headers, or {@code null} when no profile is used
+	 * @param connectionBudget the resolved per-phase connection budget
+	 * @return a {@link Mono} emitting the relay result
+	 */
+	private Mono<ServerResponse> openSessionAndRelayAfterAuth(final String sessionId, final String url,
+			final JsonNode body, final String authorization, final Map<String, String> customHeaders,
+			final String profileId, final String ownerId, final AuthHeaders headers, final Duration connectionBudget) {
 		final AtomicReference<String> authorizationRef = new AtomicReference<>(
 				(headers != null) ? headers.authorization() : null);
 		final McpClientTransport target;
 		final URI resolved;
+		final long connectStartNanos = System.nanoTime();
 		try {
 			resolved = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
 			target = (headers != null)
@@ -759,7 +1075,7 @@ public class ProxyHandler {
 					? HttpStatus.GATEWAY_TIMEOUT : HttpStatus.BAD_GATEWAY;
 			return ServerResponse.status(status)
 				.bodyValue(Map.of("error", Map.of("code", "MCP_CONNECT_FAILED", "reason", failure.reason().wire(),
-						"message", failure.message(), "retryable", Boolean.TRUE)));
+						"message", failure.message(), "retryable", failure.retryable())));
 		}
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(256);
@@ -779,32 +1095,51 @@ public class ProxyHandler {
 			session.bindProfile(ownerId, profileId);
 		}
 		this.registry.put(session);
-		this.mcpProxy.start(session).subscribe((ignored) -> {
+		// The budget bounds the session bring-up; an overrun is routed onto the
+		// session's targetToBrowser sink so the initialize awaiter fails with a
+		// CONNECT-phase ProxyConnectTimeoutException instead of blocking to the request
+		// timeout.
+		this.mcpProxy.start(session).timeout(connectionBudget).subscribe((ignored) -> {
 		}, (err) -> {
-			LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+			if (err instanceof java.util.concurrent.TimeoutException) {
+				final long elapsedMs = (System.nanoTime() - connectStartNanos) / 1_000_000L;
+				final ProxyConnectTimeoutException timeoutEx = new ProxyConnectTimeoutException(
+						ProxyConnectTimeoutException.Phase.CONNECT, elapsedMs, connectionBudget.toMillis());
+				LOG.warn("proxy[{}] connect phase timed out after {}ms of {}ms budget", sessionId, elapsedMs,
+						connectionBudget.toMillis());
+				session.failUpstream(timeoutEx);
+			}
+			else {
+				LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
+				// Route the failure onto the session sink so the SSE stream surfaces
+				// the structured proxy-error payload instead of completing silently.
+				session.failUpstream(err);
+			}
 			this.registry.removeAndClose(sessionId);
 		});
-		return relayAndAwait(session, body, true);
+		return relayAndAwait(session, body, true, connectionBudget);
 	}
 
 	/**
 	 * Relays {@code body} to the upstream. If the body is a JSON-RPC request (has an
-	 * {@code id}), waits up to 30s for the matching response and returns it as
-	 * {@code application/json}. Notification/response frames produce a 202 with empty
+	 * {@code id}) and this is the session's first frame (the {@code initialize}
+	 * handshake), waits up to the per-phase connection budget; every other frame waits up
+	 * to {@code streamableRequest}. Notification/response frames produce a 202 with empty
 	 * body.
 	 * @param session the proxy session to relay through
 	 * @param body the JSON-RPC frame to relay
-	 * @param includeSessionHeader whether to echo the {@code mcp-session-id} header
+	 * @param includeSessionHeader whether this is the session's first frame
+	 * @param connectionBudget the resolved per-phase connection budget, used for the
+	 * first frame of a session
 	 * @return a {@link Mono} emitting the relay result
 	 */
 	private Mono<ServerResponse> relayAndAwait(final ProxySession session, final JsonNode body,
-			final boolean includeSessionHeader) {
+			final boolean includeSessionHeader, final Duration connectionBudget) {
 		final JsonNode idNode = extractRequestId(body);
 		if (idNode == null) {
-			final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
-			if (emitResult.isFailure()) {
+			if (!session.emitFromBrowser(body)) {
 				return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
-					.bodyValue(Map.of("error", "emit failed: " + emitResult.name()));
+					.bodyValue(Map.of("error", "emit failed"));
 			}
 			session.touch();
 			final ServerResponse.BodyBuilder accepted = ServerResponse.accepted();
@@ -818,8 +1153,10 @@ public class ProxyHandler {
 		// a third-party upstream that advertises its own tasks capability keeps the
 		// plain relay, so its tasks are never answered from the local TaskRegistry.
 		if (this.taskService != null && session.isTasksInterceptionEnabled()) {
-			final String sessionIdHeader = includeSessionHeader ? session.sessionId() : null;
-			final Mono<ServerResponse> taskResponse = tryHandleTaskMethod(idNode, body, sessionIdHeader);
+			// An intercepted frame is never the session's first POST: interception is
+			// enabled only after this session's initialize response, so the response
+			// carries no mcp-session-id header.
+			final Mono<ServerResponse> taskResponse = tryHandleTaskMethod(idNode, body, null);
 			if (taskResponse != null) {
 				// Still a routed frame from the browser: refresh the idle-reaper
 				// timestamp, otherwise a session only polled via the Tasks tab is
@@ -834,7 +1171,7 @@ public class ProxyHandler {
 		// framework. Without this the replay sink may not carry the error to
 		// a late subscriber, and the awaiter would block for the full
 		// streamable-request timeout instead of failing fast.
-		final Duration requestTimeout = this.timeouts.getStreamableRequest();
+		final Duration requestTimeout = includeSessionHeader ? connectionBudget : this.timeouts.getStreamableRequest();
 		final Sinks.One<JsonNode> awaiterSink = Sinks.one();
 		session.targetToBrowser()
 			.asFlux()
@@ -843,12 +1180,11 @@ public class ProxyHandler {
 			.timeout(requestTimeout)
 			.subscribe(awaiterSink::tryEmitValue, awaiterSink::tryEmitError, () -> awaiterSink.tryEmitEmpty());
 		final Mono<JsonNode> awaiter = awaiterSink.asMono();
-		final Sinks.EmitResult emitResult = session.browserToTarget().tryEmitNext(body);
-		if (emitResult.isFailure()) {
-			return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR)
-				.bodyValue(Map.of("error", "emit failed: " + emitResult.name()));
+		if (!session.emitFromBrowser(body)) {
+			return ServerResponse.status(HttpStatus.INTERNAL_SERVER_ERROR).bodyValue(Map.of("error", "emit failed"));
 		}
 		session.touch();
+		final long initializeStartNanos = System.nanoTime();
 		return awaiter.flatMap((node) -> {
 			if (ProxyHandler.this.taskService != null) {
 				injectTasksCapability(session, node, body, includeSessionHeader);
@@ -859,6 +1195,25 @@ public class ProxyHandler {
 			}
 			return ok.bodyValue(node);
 		}).onErrorResume((ex) -> {
+			if (includeSessionHeader) {
+				final ProxyConnectTimeoutException carried = asConnectTimeout(ex);
+				if (carried != null) {
+					LOG.warn("proxy[{}] {} phase timed out after {}ms of {}ms budget", session.sessionId(),
+							carried.phase().wire(), carried.elapsedMs(), carried.budgetMs());
+					this.registry.removeAndClose(session.sessionId());
+					return connectTimeoutResponse(carried);
+				}
+				if (ex instanceof java.util.concurrent.TimeoutException
+						|| ex.getCause() instanceof java.util.concurrent.TimeoutException) {
+					final long elapsedMs = (System.nanoTime() - initializeStartNanos) / 1_000_000L;
+					final ProxyConnectTimeoutException timeoutEx = new ProxyConnectTimeoutException(
+							ProxyConnectTimeoutException.Phase.INITIALIZE, elapsedMs, connectionBudget.toMillis());
+					LOG.warn("proxy[{}] initialize phase timed out after {}ms of {}ms budget", session.sessionId(),
+							elapsedMs, connectionBudget.toMillis());
+					this.registry.removeAndClose(session.sessionId());
+					return connectTimeoutResponse(timeoutEx);
+				}
+			}
 			// D3: a mappable transport failure (401/403 on the initial handshake or a
 			// later call) becomes the structured DTO; anything else stays the legacy 504.
 			final ProxyErrorDto dto = ProxyErrorMapper.map(ex, TransportKind.STREAMABLE);
@@ -888,12 +1243,12 @@ public class ProxyHandler {
 					? HttpStatus.GATEWAY_TIMEOUT : HttpStatus.BAD_GATEWAY;
 			return ServerResponse.status(status)
 				.bodyValue(Map.of("error", Map.of("code", "MCP_CONNECT_FAILED", "reason", failure.reason().wire(),
-						"message", failure.message(), "retryable", Boolean.TRUE)));
+						"message", failure.message(), "retryable", failure.retryable())));
 		});
 	}
 
 	/**
-	 * Returns the {@code id} node iff {@code body} is a JSON-RPC <em>request</em> — i.e.
+	 * Returns the {@code id} node iff {@code body} is a JSON-RPC <em>request</em> : i.e.
 	 * it carries both a {@code method} and an {@code id}.
 	 *
 	 * <p>
@@ -999,9 +1354,12 @@ public class ProxyHandler {
 
 	/**
 	 * Assemble the {@code tasks/list} result page from the full handle list: honor
-	 * {@code params.cursor} (an opaque offset into the ordered task list) and emit
-	 * {@code nextCursor} while more tasks remain past the page.
-	 * @param handles all currently tracked task handles, in stable order
+	 * {@code params.cursor} (an opaque offset into the task list) and emit
+	 * {@code nextCursor} while more tasks remain past the page. The list arrives in
+	 * whatever order the task service returned it: the order is not guaranteed to be
+	 * stable across calls, so the cursor stays meaningful only while the tracked set is
+	 * unchanged.
+	 * @param handles all currently tracked task handles, in the task service's order
 	 * @param body the full JSON-RPC request body (carries the optional cursor)
 	 * @param idNode the JSON-RPC request id
 	 * @param sessionIdHeader session id to attach as the mcp-session-id response header,
@@ -1011,7 +1369,13 @@ public class ProxyHandler {
 	 */
 	private static Mono<ServerResponse> buildTaskListResult(final java.util.List<TaskHandle> handles,
 			final JsonNode body, final JsonNode idNode, final String sessionIdHeader) {
-		final int offset = parseTaskListCursor(handles.size(), body);
+		final int offset;
+		try {
+			offset = parseTaskListCursor(handles.size(), body);
+		}
+		catch (final IllegalArgumentException ex) {
+			return jsonRpcError(idNode, -32602, ex.getMessage(), sessionIdHeader);
+		}
 		final int end = Math.min(offset + TASKS_LIST_PAGE_SIZE, handles.size());
 		final java.util.List<TaskHandle> page = handles.subList(offset, end);
 		final ArrayNode tasksArray = JsonNodeFactory.instance.arrayNode(page.size());
@@ -1028,22 +1392,26 @@ public class ProxyHandler {
 
 	/**
 	 * Parse the opaque {@code params.cursor} (a decimal list offset previously emitted as
-	 * {@code nextCursor}) into an offset into the ordered task list. An absent,
-	 * non-numeric or out-of-range cursor yields an offset past the end, which produces an
-	 * empty page and terminates client pagination.
-	 * @param listSize the size of the full ordered handle list
+	 * {@code nextCursor}) into an offset into the task list. An absent cursor starts at
+	 * the beginning; a decimal cursor is clamped to the list bounds, so an out-of-range
+	 * value yields an offset past the end, an empty page and terminated pagination. A
+	 * textual non-decimal cursor is rejected with {@link IllegalArgumentException} so the
+	 * caller answers {@code -32602 Invalid params}.
+	 * @param listSize the size of the full handle list
 	 * @param body the JSON-RPC request body carrying the optional cursor
 	 * @return the offset the requested page starts at
+	 * @throws IllegalArgumentException when the textual cursor is not a decimal number
 	 */
 	private static int parseTaskListCursor(final int listSize, final JsonNode body) {
 		final JsonNode params = (body != null) ? body.get("params") : null;
 		final JsonNode cursorNode = (params != null && params.isObject()) ? params.get("cursor") : null;
 		if (cursorNode != null && cursorNode.isTextual()) {
+			final String cursor = cursorNode.asText();
 			try {
-				return Math.max(0, Math.min(Integer.parseInt(cursorNode.asText()), listSize));
+				return Math.max(0, Math.min(Integer.parseInt(cursor), listSize));
 			}
 			catch (final NumberFormatException ex) {
-				return listSize;
+				throw new IllegalArgumentException("Invalid params: non-numeric cursor '" + cursor + "'", ex);
 			}
 		}
 		return 0;
@@ -1180,7 +1548,7 @@ public class ProxyHandler {
 			return ServerResponse.status(HttpStatus.NOT_FOUND)
 				.bodyValue(Map.of("error", "unknown mcp-session-id: " + mcpSessionId));
 		}
-		// takeUntilOther: see openProxiedSession — the sink's own completion can be lost.
+		// takeUntilOther: see openProxiedSession : the sink's own completion can be lost.
 		final var flux = session.targetToBrowser().asFlux().takeUntilOther(session.closeSignal()).map((frame) -> {
 			try {
 				return ServerSentEvent.<String>builder()
@@ -1211,6 +1579,36 @@ public class ProxyHandler {
 	// helpers
 	// ---------------------------------------------------------------------
 
+	/**
+	 * Maps a per-phase budget overrun onto a 504 response with the structured
+	 * {@code MCP_CONNECT_FAILED} / {@code reason=timeout} payload carrying the phase,
+	 * elapsed and budget numbers.
+	 * @param ex the timeout exception (never {@code null})
+	 * @return the HTTP response entity
+	 */
+	private static Mono<ServerResponse> connectTimeoutResponse(final ProxyConnectTimeoutException ex) {
+		return ServerResponse.status(HttpStatus.GATEWAY_TIMEOUT)
+			.contentType(MediaType.APPLICATION_JSON)
+			.bodyValue(ProxyConnectionBudgets.timeoutBody(ex));
+	}
+
+	/**
+	 * Unwraps a {@link ProxyConnectTimeoutException} carried by (or equal to) the given
+	 * awaiter failure, if any.
+	 * @param ex the failure the awaiter saw
+	 * @return the connect-phase timeout, or empty when the failure is something else
+	 */
+	private static ProxyConnectTimeoutException asConnectTimeout(final Throwable ex) {
+		Throwable current = ex;
+		while (current != null) {
+			if (current instanceof ProxyConnectTimeoutException connectTimeout) {
+				return connectTimeout;
+			}
+			current = current.getCause();
+		}
+		return null;
+	}
+
 	private static String mapTransport(final TransportType type) {
 		if (type == null) {
 			return "";
@@ -1235,7 +1633,7 @@ public class ProxyHandler {
 		}
 		// Relative same-origin path (e.g. "/mcp"), not an absolute
 		// http://localhost:<port>
-		// — keeps the proxy ?url= WAF-safe; the proxy resolves it to loopback
+		// : keeps the proxy ?url= WAF-safe; the proxy resolves it to loopback
 		// server-side.
 		return path;
 	}

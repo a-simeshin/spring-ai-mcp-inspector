@@ -1,0 +1,28 @@
+src/lib/inputRequired.ts, src/lib/__tests__/inputRequired.test.ts, src/App.tsx:
+SEP-2322 (MCP spec revision 2026-07-28) input round-trip support for
+tools/call, client layer (#253).  Upstream 0.22.0 only implements the legacy
+2025-06-18 SSE elicitation flow: when a server answers tools/call with
+{ resultType: "input_required", inputRequests, requestState } the client shows
+a truncated result and cannot answer.  Local addition src/lib/inputRequired.ts:
+result detection (isInputRequiredResult: resultType "input_required" plus at
+least one of inputRequests / requestState per the spec; everything else,
+including bare resultType, is treated as a final result so older servers are
+unaffected), typed onInputRequired / onChainClosed events carrying a
+correlation id, the requests, the requestState, and the ORIGINAL tools/call
+params, and resendToolCall(originalParams, inputResponses, requestState,
+correlationId?) which re-issues the ORIGINAL tools/call with the user's
+inputResponses and the requestState echoed byte-exact (opaque: never parsed,
+mutated, or re-encoded; omitted entirely when the server did not send one).
+A retry answered with input_required again advances the same correlation chain
+(round + 1) until a final result or error; cancel(correlationId) drops the
+chain, rejects further resends for it, and silences a retry that was already
+on the wire.  App.tsx wires the controller into callTool's direct-result
+branch (detection only; the result still flows to the tools tab unchanged and
+the legacy elicitation flow is not touched) through a sender ref so the
+controller never captures a stale sendMCPRequest closure.  Unit tests cover
+result parsing, byte-exact echo (non-ASCII + emoji + base64 padding state,
+JSON round trip), stale-echo stripping, original-params immutability,
+multi-round looping across one correlation id, sender errors, cancellation
+(both before resend and while in flight), and the legacy-elicitation guard.
+Note: inputRequests is a spec-defined MAP keyed by server request id, not the
+array shape the original card described.  Refs #253.
