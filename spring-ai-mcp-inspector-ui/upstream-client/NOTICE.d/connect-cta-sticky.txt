@@ -1,15 +1,17 @@
 src/components/Sidebar.tsx +
- src/components/__tests__/Sidebar.connectCtaSticky.test.tsx — pin the
+ src/components/__tests__/Sidebar.connectCtaSticky.test.tsx: render the
 connect CTA block (Connect / Reconnect buttons, status dot, error
-banners) sticky to the bottom of the sidebar's scroll area (issue
-#269). On a pristine 1280x800 desktop load the primary Connect button
-used to sit below the fold (~y=1001 at viewport height 807) once
-sections above it expanded; the CTA container now renders
-`sticky bottom-0 bg-card pt-2`, so the button stays pinned inside the
-viewport whether the sidebar content overflows or fits. When the
-content fits the scroll area the sticky offset has no effect and the
-layout is otherwise unchanged. Also tags the pristine Connect button
-with `data-testid=sidebar-connect-button` (the post-connect
+banners) in a fixed region under the sidebar's scroll area instead of
+the last section inside it (issue #269). On a pristine 1280x800
+desktop load the primary Connect button used to sit below the fold
+(3px cut; ~213px below once the auth profile editor expanded); as a
+flex sibling of the scroll container (`px-4 pb-4 pt-2 space-y-2`) the
+button stays fully visible however far the sections expand and the
+layout is unchanged when the content fits. A sticky overlay was
+rejected: a bar pinned over the scroll area covered sections scrolled
+underneath it and intercepted clicks on the auth/config toggles. Also
+tags the pristine Connect button with
+`data-testid=sidebar-connect-button` (the post-connect
 Reconnect/Restart button keeps its own `connect-button` testid) so
 the desktop fold checks can read its geometry without scrolling it
 into view. Covered by

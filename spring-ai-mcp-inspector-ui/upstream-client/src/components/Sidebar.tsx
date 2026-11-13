@@ -1337,47 +1337,7 @@ const Sidebar = ({
           {/* Connection error alert is rendered at the top of the config
               pane below (see NOTICE.d/connect-error-alert.txt). */}
 
-          {/* [spring-ai-mcp-inspector PATCH] Issue #269: pin the connect CTA
-              block sticky to the bottom of the sidebar scroll area so the
-              Connect button stays inside the viewport however far the
-              sections above it expand (e.g. the auth profile editor). The
-              pristine Connect button below also gets a dedicated testid for
-              the fold-visibility checks (InspectorUiIT#ConnectCtaSticky). */}
-          <div className="space-y-2 sticky bottom-0 bg-card pt-2">
-            {connectionStatus === "connected" && (
-              <div className="grid grid-cols-2 gap-4">
-                <Button
-                  data-testid="connect-button"
-                  onClick={async () => {
-                    await onDisconnect();
-                    onConnect();
-                  }}
-                >
-                  <RotateCcw className="w-4 h-4 mr-2" />
-                  {transportType === "stdio" ? "Restart" : "Reconnect"}
-                </Button>
-                <Button onClick={onDisconnect}>
-                  <RefreshCwOff className="w-4 h-4 mr-2" />
-                  Disconnect
-                </Button>
-              </div>
-            )}
-            {/* [spring-ai-mcp-inspector PATCH] Disable Connect when the URL is invalid (non-STDIO transports) or the connection timeout is invalid (proxy connections only: direct never forwards the timeout, so a stale invalid persisted value must not silently lock Connect); issue #269 rework: validation moved into the shared connect handler App passes via onConnect, so the canvas CTA validates identically. */}
-            {connectionStatus !== "connected" && (
-              <Button
-                className="w-full"
-                onClick={onConnect}
-                data-testid="sidebar-connect-button"
-                disabled={
-                  (transportType !== "stdio" && !!urlError) ||
-                  (connectionType === "proxy" && !!timeoutError)
-                }
-              >
-                <Play className="w-4 h-4 mr-2" />
-                Connect
-              </Button>
-            )}
-
+          <div className="space-y-2">
             <div className="flex items-center justify-center space-x-2 mb-4">
               <div
                 className={`w-2 h-2 rounded-full ${(() => {
@@ -1423,7 +1383,6 @@ const Sidebar = ({
                 })()}
               </span>
             </div>
-
             {/* [spring-ai-mcp-inspector PATCH] Version badge: negotiated MCP
                 protocol revision with compatibility notice, sourced from the
                 client's own initialize handshake (works direct and via
@@ -1457,7 +1416,6 @@ const Sidebar = ({
                 )}
               </div>
             )}
-
             {/* [spring-ai-mcp-inspector PATCH] Keep-alive observability
                 indicator and stale-connection warning banner (#235, t_3925eae7). */}
             {connectionStatus === "connected" && (
@@ -1564,6 +1522,78 @@ const Sidebar = ({
             )}
           </div>
         </div>
+      </div>
+
+      {/* [spring-ai-mcp-inspector PATCH] Issue #269: render the connect CTA
+          buttons in a fixed region under the sidebar scroll area (a flex
+          sibling of the scroll container, not sticky). A sticky overlay
+          pinned over the scroll area intercepted clicks on sections
+          scrolled underneath it (auth/config toggles under the bar in
+          CI). As a flex region the Connect button stays inside the
+          viewport at any section expansion and never covers content.
+          Only the buttons live here: the status line, the connection
+          error banner, the server card and the logging level stay in
+          the scroll area above, so a tall error banner cannot squeeze
+          the scroll area. The region gets a dedicated testid for the
+          fold-visibility checks (InspectorUiIT#ConnectCtaArea). */}
+      <div
+        className="px-4 pb-4 pt-2 space-y-2"
+        data-testid="sidebar-connect-region"
+      >
+        {connectionStatus === "connected" && (
+          <div className="grid grid-cols-2 gap-4">
+            <Button
+              data-testid="connect-button"
+              onClick={async () => {
+                await onDisconnect();
+                onConnect();
+              }}
+            >
+              <RotateCcw className="w-4 h-4 mr-2" />
+              {transportType === "stdio" ? "Restart" : "Reconnect"}
+            </Button>
+            <Button onClick={onDisconnect}>
+              <RefreshCwOff className="w-4 h-4 mr-2" />
+              Disconnect
+            </Button>
+          </div>
+        )}
+        {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). Block onConnect when invalid. */}
+            {/* [spring-ai-mcp-inspector PATCH] Also block Connect when connection timeout is invalid (proxy connections only: direct never forwards the timeout, so a stale invalid persisted value must not silently lock Connect). */}
+        {connectionStatus !== "connected" && (
+          <Button
+            className="w-full"
+            data-testid="sidebar-connect-button"
+            onClick={() => {
+              // Mark URL as touched on first connect attempt
+              if (transportType !== "stdio") {
+                setUrlTouched(true);
+                const result = validateServerUrl(sseUrl);
+                if (!result.isValid) {
+                  setUrlError(result.errorMessage);
+                  return;
+                }
+              }
+              // Block connect if connection timeout is invalid (proxy only)
+              if (
+                connectionType === "proxy" &&
+                !isValidConnectionTimeout(connectionTimeout)
+              ) {
+                setTimeoutError(CONNECTION_TIMEOUT_ERROR);
+                return;
+              }
+              onConnect();
+            }}
+            disabled={
+              (transportType !== "stdio" && !!urlError) ||
+              (connectionType === "proxy" && !!timeoutError)
+            }
+          >
+            <Play className="w-4 h-4 mr-2" />
+            Connect
+          </Button>
+        )}
+
       </div>
       <div className="p-4 border-t">
         <div className="flex items-center justify-between">
