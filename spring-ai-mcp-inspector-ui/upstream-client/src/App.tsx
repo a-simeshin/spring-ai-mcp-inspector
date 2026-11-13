@@ -545,12 +545,30 @@ const App = () => {
   // bucket and editing a saved connection's URL cannot orphan its history;
   // ad-hoc (unsaved) connections keep the transport-scoped form key.
   const historyKeyForConnection = useCallback(() => {
-    return (
-      activeConnectionId ??
-      (transportType === "stdio"
+    const formKey =
+      transportType === "stdio"
         ? `stdio:${command} ${args}`
-        : `${transportType}:${sseUrl || "ephemeral"}`)
+        : `${transportType}:${sseUrl || "ephemeral"}`;
+    if (activeConnectionId === undefined) {
+      return formKey;
+    }
+    // [spring-ai-mcp-inspector PATCH] Owner review minor on PR #218,
+    // 2026-11-13: the association survived a reload, so typing a
+    // different URL after selecting A still wrote into A's bucket. The
+    // selected entry adopts the session only while the form still points
+    // at its endpoint (the same transport-scoped comparison the
+    // disconnect-time carry-over uses); a mismatched form falls back to
+    // the ad-hoc key.
+    const selected = loadSavedConnections().find(
+      (c) => c.id === activeConnectionId,
     );
+    if (
+      selected !== undefined &&
+      savedConnectionHistoryKey(selected) === formKey
+    ) {
+      return activeConnectionId;
+    }
+    return formKey;
   }, [activeConnectionId, transportType, command, args, sseUrl]);
   const {
     connectionStatus,
@@ -773,9 +791,19 @@ const App = () => {
       if (activeConnectionId === id) {
         setActiveConnectionId(undefined);
       }
+      // [spring-ai-mcp-inspector PATCH] Owner review minor on PR #218,
+      // 2026-11-13: deleting the connection that owns the live session
+      // released the association but not the session's frozen bucket key,
+      // so in-flight history writes kept recreating an orphan bucket for
+      // the deleted id after clearHistory. Release the freeze with the
+      // association: the session keeps writing into the form-derived
+      // bucket instead.
+      if (activeHistoryConnectionId === id) {
+        setActiveHistoryConnectionId(undefined);
+      }
       setSavedConnections(loadSavedConnections());
     },
-    [activeConnectionId],
+    [activeConnectionId, activeHistoryConnectionId],
   );
 
   // [spring-ai-mcp-inspector PATCH] Saved connections: reset fields

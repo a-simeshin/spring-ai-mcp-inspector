@@ -1115,3 +1115,131 @@ describe("App - activeConnectionId survives reload (owner review 2026-11-13)", (
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Owner review minors on PR #218 (2026-11-13): the saved association was
+// sticky across F5 (typing a different URL after selecting A still wrote
+// into A's bucket), and deleting the selected connection during its live
+// session left the frozen key writing and recreating an orphan bucket for
+// the deleted id.
+// ---------------------------------------------------------------------------
+describe("App - saved association tracks the form endpoint (owner review 2026-11-13)", () => {
+  const mockUseConnection = jest.mocked(useConnection);
+
+  const connectedState = {
+    ...disconnectedConnectionState,
+    connectionStatus: "connected" as const,
+  };
+
+  const seedSavedConnection = (name: string, url: string): string => {
+    const raw = localStorage.getItem(SAVED_CONNECTIONS_KEY);
+    const existing = raw
+      ? (JSON.parse(raw) as {
+          schemaVersion: number;
+          connections: Array<Record<string, unknown>>;
+        })
+      : { schemaVersion: 1, connections: [] };
+    const nowMs = Date.now();
+    const id = `saved-${name.replace(/\s+/g, "-").toLowerCase()}`;
+    existing.connections.push({
+      id,
+      name,
+      transport: "sse",
+      connectionType: "proxy",
+      url,
+      customHeaders: [],
+      lastUsedAt: nowMs,
+      createdAt: nowMs,
+    });
+    localStorage.setItem(SAVED_CONNECTIONS_KEY, JSON.stringify(existing));
+    return id;
+  };
+
+  const lastConnectionId = () =>
+    mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+      .connectionId;
+
+  beforeEach(() => {
+    jest.restoreAllMocks();
+    jest.clearAllMocks();
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  test("typing a different URL after selecting A does not write into A's bucket", async () => {
+    localStorage.clear();
+    const savedId = seedSavedConnection(
+      "Team Server",
+      "http://localhost:3001/sse",
+    );
+
+    const { getByTestId } = render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+
+    await act(async () => {
+      getByTestId("mock-select-connection").click();
+    });
+    await waitFor(() => {
+      expect(lastConnectionId()).toBe(savedId);
+    });
+
+    // The form no longer points at the selected entry's endpoint: the
+    // pending bucket key must follow the form, not stay sticky on A.
+    await act(async () => {
+      getByTestId("mock-edit-url").click();
+    });
+    await waitFor(() => {
+      expect(lastConnectionId()).toBe("sse:http://localhost:3001/half-typed");
+    });
+
+    // A session started against the edited URL freezes at the ad-hoc key.
+    mockUseConnection.mockReturnValue(connectedState);
+    await act(async () => {
+      getByTestId("mock-connect").click();
+    });
+    expect(lastConnectionId()).toBe("sse:http://localhost:3001/half-typed");
+    expect(lastConnectionId()).not.toBe(savedId);
+  });
+
+  test("deleting the selected connection during its live session does not recreate its bucket", async () => {
+    localStorage.clear();
+    const savedId = seedSavedConnection(
+      "Team Server",
+      "http://localhost:3001/sse",
+    );
+
+    const { getByTestId } = render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+
+    await act(async () => {
+      getByTestId("mock-select-connection").click();
+    });
+    await act(async () => {
+      getByTestId("mock-connect").click();
+    });
+    expect(lastConnectionId()).toBe(savedId);
+
+    // The live session's frozen bucket key is released together with the
+    // association: the deleted id must never receive writes again.
+    await act(async () => {
+      getByTestId("mock-delete-connection").click();
+    });
+    expect(loadHistory(savedId)).toHaveLength(0);
+    expect(lastConnectionId()).not.toBe(savedId);
+
+    // A later write in the still-live session (the hook appends into the
+    // key App handed it) must not resurrect the deleted bucket.
+    appendHistory(lastConnectionId(), {
+      request: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 2 }),
+      at: 2000,
+    });
+    expect(loadHistory(savedId)).toHaveLength(0);
+  });
+});

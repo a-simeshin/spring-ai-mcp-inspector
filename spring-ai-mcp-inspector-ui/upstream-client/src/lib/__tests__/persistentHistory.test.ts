@@ -741,6 +741,21 @@ describe("migrateHistory", () => {
     expect(merged[1].at).toBe(1000);
   });
 
+  it("sorts interleaved buckets by timestamp after the merge (owner review minor, PR #218)", () => {
+    // A Save over an existing connection migrates a source bucket whose
+    // entries are OLDER than the destination's newest (the destination
+    // session kept appending after the saved entry was created). Plain
+    // concatenation interleaves two ascending sequences and the panel
+    // showed entries out of order.
+    appendHistory(TO, { request: '{"dest":"newest"}', at: 900 });
+    appendHistory(TO, { request: '{"dest":"middle"}', at: 500 });
+    appendHistory(FROM, { request: '{"src":"newest"}', at: 300 });
+    appendHistory(FROM, { request: '{"src":"oldest"}', at: 100 });
+    migrateHistory(FROM, TO);
+    expect(loadHistory(FROM)).toHaveLength(0);
+    expect(loadHistory(TO).map((e) => e.at)).toEqual([100, 300, 500, 900]);
+  });
+
   it("is a no-op when both ids are equal", () => {
     appendHistory(FROM, { request: '{"a":1}', at: 1000 });
     migrateHistory(FROM, FROM);

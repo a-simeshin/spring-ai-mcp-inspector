@@ -380,7 +380,18 @@ export function migrateHistory(fromId: string, toId: string): void {
     return;
   }
   const destination = store.byConnection[toId] ?? [];
-  store.byConnection[toId] = trimBucket([...destination, ...source]);
+  // [spring-ai-mcp-inspector PATCH] Owner review minor on PR #218,
+  // 2026-11-13: a Save over an existing connection migrates a source
+  // bucket whose entries are OLDER than the destination's newest (the
+  // destination session kept appending after the saved entry was
+  // created). Plain concatenation interleaves two ascending sequences,
+  // so the panel showed entries out of order. Sort by timestamp
+  // ascending, the canonical appendHistory order, before the FIFO trim;
+  // the sort is stable, so entries with equal timestamps keep
+  // destination-first bucket order.
+  store.byConnection[toId] = trimBucket(
+    [...destination, ...source].sort((a, b) => a.at - b.at),
+  );
   delete store.byConnection[fromId];
   // The destination bucket is spared from wholesale eviction so the
   // entries just carried over are not the first thing dropped.
