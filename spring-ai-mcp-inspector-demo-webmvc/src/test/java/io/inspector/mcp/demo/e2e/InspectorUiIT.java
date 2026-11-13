@@ -4774,6 +4774,92 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
+	// Z. Connect CTA sticky (issue #269)
+	// =====================================================================
+
+	/**
+	 * Live end-to-end coverage for the sidebar Connect CTA contract (issue #269, see
+	 * NOTICE.d/connect-cta-sticky.txt in the UI module): on a pristine desktop viewport
+	 * (exactly 1280x800) the primary Connect button is fully visible without scrolling
+	 * the sidebar, and manually expanding the auth profile editor (collapsed by default
+	 * since issue #268) does not push it below the fold. The CTA container is pinned
+	 * sticky to the bottom of the sidebar's scroll area.
+	 *
+	 * <p>
+	 * Geometry is read via JavaScript probes only. Any Selenide probe or click that
+	 * scrolls the button into view would make the fold check vacuously true (the same
+	 * false-guarantee trap the {@link MobileViewport375x812} group documents), so the
+	 * waits below use {@code exist}, not {@code visible}, and the sidebar scroll position
+	 * is reset before probing.
+	 */
+	@Nested
+	@DisplayName("Connect CTA sticky (pristine 1280x800, issue #269)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class ConnectCtaSticky {
+
+		@BeforeAll
+		void boot() {
+			startApp(new Combo("sse"));
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		/**
+		 * Forces the sidebar's inner scroll area back to the top so the fold probes below
+		 * always run at a deterministic scroll position (an earlier interaction may have
+		 * scrolled it).
+		 */
+		private static void resetSidebarScroll() {
+			Selenide.executeJavaScript("var c = document.querySelector('.bg-card.border-r .overflow-auto');"
+					+ "if (c) { c.scrollTop = 0; }");
+		}
+
+		@Test
+		@Feature("Sidebar")
+		@Story("Connect CTA sticky")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("On a pristine load at exactly 1280x800 the sidebar Connect "
+				+ "button is fully visible without scrolling the sidebar")
+		void pristineLoad_connectCtaFullyVisibleAt1280x800() {
+			open("/mcp-inspector/index.html");
+			// The viewport helpers need the Selenide driver, which is bound by
+			// the first open(); resize afterwards.
+			ResponsiveTestHelpers.setViewportExactly(1280, 800);
+			// Existence (not visibility) on purpose: the fold claim is proven
+			// by the geometry probe, and a visibility wait could scroll the
+			// button into view and make the probe vacuously true.
+			$("[data-testid=sidebar-connect-button]").should(com.codeborne.selenide.Condition.exist,
+					Duration.ofSeconds(15));
+			resetSidebarScroll();
+			Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("sidebar-connect-button"),
+					"pristine load at 1280x800: Connect must be fully visible without scrolling, rect="
+							+ ResponsiveTestHelpers.paneRect("sidebar-connect-button"));
+		}
+
+		@Test
+		@Feature("Sidebar")
+		@Story("Connect CTA sticky")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Expanding the auth profile editor at 1280x800 must not push "
+				+ "the Connect button below the fold")
+		void expandedAuthEditor_connectCtaStaysVisibleAt1280x800() {
+			open("/mcp-inspector/index.html");
+			ResponsiveTestHelpers.setViewportExactly(1280, 800);
+			$("[data-testid=auth-profile-editor-toggle]").shouldBe(visible, Duration.ofSeconds(15)).click();
+			// The editor section must render before we probe (race condition).
+			$("[data-testid=auth-profile-type]").should(com.codeborne.selenide.Condition.exist, Duration.ofSeconds(15));
+			resetSidebarScroll();
+			Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("sidebar-connect-button"),
+					"expanded auth editor at 1280x800: Connect must stay fully visible, rect="
+							+ ResponsiveTestHelpers.paneRect("sidebar-connect-button"));
+		}
+
+	}
+
+	// =====================================================================
 	// N. Exception leak detector (issue #251)
 	// =====================================================================
 
