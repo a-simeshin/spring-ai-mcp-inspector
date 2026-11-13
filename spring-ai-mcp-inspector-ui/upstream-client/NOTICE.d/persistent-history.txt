@@ -105,6 +105,14 @@ tests cover both scenarios in src/__tests__/App.transportScoping.test.tsx
 session under a new name pointing at the same server still carries the
 bucket at disconnect (existing tests keep passing).
 
+Review rework (PR #218, 2026-11-13): regression test for the write side of
+the reload association. Selecting a saved connection in the sidebar must
+persist it under "lastActiveConnectionId" (the persist-on-change effect in
+App.tsx), and a remount restores the saved bucket from that key alone.
+The test performs a real selection and a remount with no manual seeding
+of the key; RED when the setItem call in App.tsx is suppressed while the
+rest of the suite stays green (src/__tests__/App.transportScoping.test.tsx).
+
 Covered by: src/lib/__tests__/persistentHistory.test.ts,
 src/__tests__/App.transportScoping.test.tsx,
 src/components/__tests__/HistoryAndNotifications.test.tsx

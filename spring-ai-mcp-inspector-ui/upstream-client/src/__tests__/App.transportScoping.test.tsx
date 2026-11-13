@@ -1078,4 +1078,40 @@ describe("App - activeConnectionId survives reload (owner review 2026-11-13)", (
     });
     expect(localStorage.getItem("lastActiveConnectionId")).toBeNull();
   });
+
+  test("selecting a saved connection writes the association for the next mount", async () => {
+    localStorage.clear();
+    const savedId = seedSavedConnection(
+      "Team Server",
+      "http://localhost:3001/sse",
+    );
+    // Owner review 2026-11-13 (rework on PR #218), second blocker: the
+    // reload tests above seed lastActiveConnectionId manually, so dropping
+    // the persist effect leaves the whole suite green. This test performs
+    // a real selection and lets the app write the key itself.
+    expect(localStorage.getItem("lastActiveConnectionId")).toBeNull();
+
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    const { getByTestId, unmount } = render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+
+    await act(async () => {
+      getByTestId("mock-select-connection").click();
+    });
+
+    // The selection persisted the association under the bucket key.
+    await waitFor(() => {
+      expect(localStorage.getItem("lastActiveConnectionId")).toBe(savedId);
+    });
+
+    // A remount (a reload) then restores the saved bucket from that key
+    // alone.
+    unmount();
+    render(<App />);
+    await waitFor(() => {
+      expect(lastConnectionId()).toBe(savedId);
+    });
+  });
 });
