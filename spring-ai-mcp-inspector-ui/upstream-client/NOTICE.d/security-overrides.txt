@@ -1,5 +1,7 @@
 package.json overrides: npm overrides for 7 transitive dependency security
-advisories (GHSA advisories, all within current major). postcss bumped as
-direct devDependency. Vite pinned to ^7.3.5 to close GHSA-fx2h-pf6j-xcff and
-GHSA-v6wh-96g9-6wx3 while staying on the 7.x line (8.x jumps the bundler to
-Rolldown and broke an E2E: vite 8 proposal declined in PR #168).
+advisories (GHSA advisories, all within current major). body-parser override
+raised ^2.3.0 to ^2.4.0 (2.4.0 in the lock) with the PR #314 dependabot group
+bump. postcss bumped as direct devDependency. Vite pinned to ^7.3.5 to close
+GHSA-fx2h-pf6j-xcff and GHSA-v6wh-96g9-6wx3 while staying on the 7.x line
+(8.x jumps the bundler to Rolldown and broke an E2E: vite 8 proposal
+declined in PR #168).
