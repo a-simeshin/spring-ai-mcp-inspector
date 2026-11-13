@@ -1038,9 +1038,11 @@ class StreamableHttpProxyControllerTests {
 			assertThat(error.path("phase").asText()).isEqualTo("initialize");
 			assertThat(error.path("budgetMs").asLong()).isEqualTo(200L);
 			// budget source pin: the wait came from the 200ms connection budget, not from
-			// the 30s streamable-request, and the timer cannot fire before its own budget
+			// the 30s streamable-request. The lower bound carries 10ms of slack: timer
+			// delivery and the elapsed nanoTime read can disagree by a tick, so the
+			// timeout can land a millisecond under the budget without firing early.
 			final long elapsedMs = error.path("elapsedMs").asLong();
-			assertThat(elapsedMs).isGreaterThanOrEqualTo(200L);
+			assertThat(elapsedMs).isGreaterThanOrEqualTo(190L);
 			assertThat(elapsedMs).isLessThan(200L + 5000L);
 			assertThat(error.path("retryable").asBoolean()).isTrue();
 			verify(StreamableHttpProxyControllerTests.this.registry).removeAndClose(any(String.class));
