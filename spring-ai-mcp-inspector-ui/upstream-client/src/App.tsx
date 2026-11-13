@@ -1640,6 +1640,13 @@ const App = () => {
             // so it is applied even before the activeProfileId state update re-renders
             // the hook closure.
             setActiveProfileId(profileId);
+            // [spring-ai-mcp-inspector PATCH] Capture the history bucket key
+            // at connect time exactly like handleConnect (PR #218 review
+            // blocker, round 5): a profile-authorized session is ad-hoc (no
+            // saved connection id), so without the freeze the key would
+            // follow the editable URL field for the whole session and a
+            // mid-session edit would reshuffle the history buckets.
+            setActiveHistoryConnectionId(historyKeyForConnection());
             void connectMcpServer(undefined, 0, profileId);
           }}
         />

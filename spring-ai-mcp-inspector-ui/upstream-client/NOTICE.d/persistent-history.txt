@@ -42,8 +42,18 @@ Changed files:
   in pushHistory + clearHistory in clearRequestHistory)
 - src/App.tsx (connectionId wiring: key captured at connect() via
   handleConnect/handleDisconnect wrappers, frozen while connected;
-  onOAuthConnect derives the prefix from the live transportType)
+  onOAuthConnect derives the prefix from the live transportType;
+  onProfileAuthorized captures the same frozen key for the D9B
+  profile-authorized connect)
 - src/components/HistoryAndNotifications.tsx (localStorage plaintext warning)
+
+Review rework (PR #218, 2026-11-12): the D9B profile-authorized connect
+(onProfileAuthorized in App.tsx) captures the same transport-scoped form key
+frozen at connect and held until disconnect, exactly like handleConnect: a
+profile-authorized session is ad-hoc (no saved connection id), so the
+activeConnectionId branch never applies on that path. Covered by the
+App.transportScoping.test.tsx profile-authorized OAuth callback describe
+(RED on dacbc6f, GREEN after the fix).
 
 Covered by: src/lib/__tests__/persistentHistory.test.ts,
 src/__tests__/App.transportScoping.test.tsx,

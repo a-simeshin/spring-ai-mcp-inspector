@@ -6,6 +6,12 @@ import { appendHistory, clearHistory, loadHistory } from "../lib/persistentHisto
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import { SESSION_KEYS } from "../lib/constants";
 import { SAVED_CONNECTIONS_KEY } from "../lib/savedConnections";
+// D9B profile flow (review blocker round 5): the pending record writer is
+// real (sessionStorage), only the server exchange is mocked below.
+import {
+  exchangeAuthCode,
+  savePendingAuthCodeFlow,
+} from "../lib/auth-profiles";
 
 // Mock auth dependencies first
 jest.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
@@ -145,6 +151,14 @@ global.fetch = jest.fn().mockResolvedValue({ json: () => Promise.resolve({}) });
 // Use an empty module mock, so that mock state can be reset between tests.
 jest.mock("../lib/hooks/useConnection", () => ({
   useConnection: jest.fn(),
+}));
+
+// D9B: OAuthCallback exchanges the auth code for a profile id. Keep the
+// module's real pending-record storage (sessionStorage) and mock only the
+// server exchange, exactly like the review-blocker probe harness.
+jest.mock("../lib/auth-profiles", () => ({
+  ...jest.requireActual("../lib/auth-profiles"),
+  exchangeAuthCode: jest.fn(),
 }));
 
 describe("App - transport scoping connectionId", () => {
@@ -625,5 +639,114 @@ describe("App - OAuth callback captures a transport-correct bucket key", () => {
         (call) => call[0].connectionId === `streamable-http:${oauthServerUrl}`,
       ),
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D9B profile-authorized connect must capture the history bucket key
+// (PR #218 review blocker, round 5). onProfileAuthorized starts the connect
+// without going through handleConnect, so the key must be frozen there too.
+// RED on dacbc6f: after a profile-authorized connect the key keeps following
+// the editable URL field and moves to the half-typed bucket mid-session.
+// Harness: real App + real OAuthCallback (lazy), only the auth-code exchange
+// is mocked; the Connect-button control lives in the same harness.
+// ---------------------------------------------------------------------------
+
+describe("App - profile-authorized OAuth callback (D9B) freezes the bucket key", () => {
+  const mockUseConnection = jest.mocked(useConnection);
+  const mockExchangeAuthCode = exchangeAuthCode as unknown as jest.Mock;
+  const formUrl = "http://localhost:3001/sse";
+
+  beforeEach(() => {
+    jest.restoreAllMocks();
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    sessionStorage.clear();
+    localStorage.clear();
+    mockExchangeAuthCode.mockReset();
+  });
+
+  afterEach(() => {
+    // OAuthCallback itself replaceState("/") after processing; restore the
+    // root path for any later describe in this file.
+    window.history.replaceState({}, document.title, "/");
+  });
+
+  const lastConnectionId = () =>
+    mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+      .connectionId;
+
+  test("onProfileAuthorized connect freezes the key: a mid-session URL edit does not move the bucket", async () => {
+    const { getByTestId } = render(<App />);
+    mockExchangeAuthCode.mockResolvedValue({ profileId: "prof-1" });
+    savePendingAuthCodeFlow({
+      profileId: "prof-1",
+      codeVerifier: "verifier-1",
+      state: "state-1",
+    });
+    // jsdom cannot navigate; pushState updates location.pathname/search,
+    // which is all App and OAuthCallback read.
+    window.history.pushState({}, "", "/oauth/callback?code=x&state=state-1");
+
+    // The D9B connect bypasses handleConnect: connect(undefined, 0, profileId).
+    await waitFor(
+      () => {
+        expect(disconnectedConnectionState.connect).toHaveBeenCalledWith(
+          undefined,
+          0,
+          "prof-1",
+        );
+      },
+      { timeout: 5000 },
+    );
+
+    // The key is captured at connect time as the transport-scoped form key
+    // (a profile-authorized session has no saved connection id).
+    expect(lastConnectionId()).toBe(`sse:${formUrl}`);
+
+    // Wait for the main layout (OAuthCallback replaceState("/") once the
+    // processing settles), then edit the URL field mid-session.
+    const editButton = await waitFor(
+      () => {
+        const el = getByTestId("mock-edit-url");
+        expect(el).toBeTruthy();
+        return el;
+      },
+      { timeout: 5000 },
+    );
+    await act(async () => {
+      editButton.click();
+    });
+
+    // RED on dacbc6f: the key follows the form field into the half-typed
+    // bucket. GREEN after the fix: it stays frozen at the connect value.
+    await waitFor(() => {
+      expect(lastConnectionId()).toBe(`sse:${formUrl}`);
+    });
+    expect(
+      mockUseConnection.mock.calls.some(
+        (call) =>
+          call[0].connectionId ===
+          "sse:http://localhost:3001/half-typed",
+      ),
+    ).toBe(false);
+  });
+
+  test("control: the same edit after a Connect-button session keeps the key frozen", async () => {
+    const { getByTestId } = render(<App />);
+
+    await act(async () => {
+      getByTestId("mock-connect").click();
+    });
+    await waitFor(() => {
+      expect(disconnectedConnectionState.connect).toHaveBeenCalled();
+    });
+    expect(lastConnectionId()).toBe(`sse:${formUrl}`);
+
+    await act(async () => {
+      getByTestId("mock-edit-url").click();
+    });
+    await waitFor(() => {
+      expect(lastConnectionId()).toBe(`sse:${formUrl}`);
+    });
   });
 });
