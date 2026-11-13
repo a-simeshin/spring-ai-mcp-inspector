@@ -1,0 +1,16 @@
+src/components/__tests__/AuthProfilesPristineLoad.test.tsx
+- issue #268: independent regression spec for the pristine-load validation
+contract of the auth-profiles panel. A fresh mount with empty persisted state
+(localStorage and sessionStorage cleared in setup) renders no validation
+messages anywhere in the auth profile editor, the editor section is collapsed
+on initial render and expands only via the create-profile toggle, and the
+"Profile name is required" error appears only after a user interaction:
+blurring the empty Name field or attempting to save with an empty required
+field. The shipped UX keeps the save button disabled while the draft is
+invalid, so a save attempt on an empty required field is blocked outright;
+the blur interaction is the path that surfaces the error, and it clears once
+valid values are entered. Each acceptance criterion of the issue maps to at
+least one assertion in this spec. Kept separate from
+AuthProfiles.test.tsx so the spec can land independently of the editor fix
+that reworks that file. Covered by jest unit tests in
+spring-ai-mcp-inspector-ui/upstream-client.
