@@ -72,6 +72,7 @@ import {
   ListTodo,
   MessageSquare,
   MessageSquarePlus,
+  Play,
   Settings,
 } from "lucide-react";
 
@@ -2271,6 +2272,17 @@ const App = () => {
               <p className="text-lg text-gray-500 dark:text-gray-400">
                 Connect to an MCP server to start inspecting
               </p>
+              {/* [spring-ai-mcp-inspector PATCH] Empty-state Connect CTA
+                  (issue #269): the landing page needs a primary connect
+                  affordance; it reuses the same connect action the sidebar
+                  CTA wires instead of duplicating the flow. */}
+              <Button
+                data-testid="empty-state-connect-button"
+                onClick={() => void connectMcpServer()}
+              >
+                <Play className="w-4 h-4 mr-2" />
+                Connect
+              </Button>
               <div className="flex items-center gap-2">
                 <p className="text-sm text-muted-foreground">
                   Need to configure authentication?
