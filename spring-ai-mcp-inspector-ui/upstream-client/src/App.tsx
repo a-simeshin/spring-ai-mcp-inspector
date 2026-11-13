@@ -114,6 +114,9 @@ import {
   saveInspectorConfig,
   getMCPTaskTtl,
 } from "./utils/configUtils";
+// [spring-ai-mcp-inspector PATCH] issue #269 rework: shared URL validation
+// for both Connect CTAs.
+import { validateServerUrl } from "./utils/urlValidation";
 import ElicitationTab, {
   PendingElicitationRequest,
   ElicitationResponse,
@@ -281,6 +284,31 @@ const resolveTab = (
   return normalized ?? getDefaultTab(caps);
 };
 
+// [spring-ai-mcp-inspector PATCH] Connection timeout bounds mirror the proxy
+// contract (ProxyConnectionBudgets): a whole number of seconds 1..600.
+// Anything else must be rejected client-side, otherwise the request reaches
+// the proxy and fails with a bare 400 banner. Accepted input is decimal
+// digits only: the proxy parses the raw string with Long.parseLong, so
+// "1e1" and "0x10" fail there and are caught here with the field-level
+// error instead. "+30" parses as 30 at the proxy, so rejecting it is
+// stricter than the proxy on purpose (one accepted notation per value).
+// Owner decision on the 2026-11-19 #335 rebase: the validator and its
+// error constant live in App (shared connect handler), not in Sidebar.
+const CONNECTION_TIMEOUT_MAX_SECONDS = 600;
+const CONNECTION_TIMEOUT_ERROR = `Must be a whole number of seconds between 1 and ${CONNECTION_TIMEOUT_MAX_SECONDS}`;
+
+const isValidConnectionTimeout = (raw: string): boolean => {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return true;
+  }
+  if (!/^[0-9]+$/.test(trimmed)) {
+    return false;
+  }
+  const n = Number(trimmed);
+  return n >= 1 && n <= CONNECTION_TIMEOUT_MAX_SECONDS;
+};
+
 const App = () => {
   // [spring-ai-mcp-inspector PATCH] D10 legacy localStorage secret migration:
   // MUST run synchronously BEFORE the state initializers below read the six
@@ -330,6 +358,11 @@ const App = () => {
   const [transportType, setTransportType] = useState<
     "stdio" | "sse" | "streamable-http"
   >(getInitialTransportType);
+  // [spring-ai-mcp-inspector PATCH] issue #269 rework: URL validation state
+  // lives here so the sidebar CTA and the empty-state canvas CTA share the
+  // exact same error message and disable condition.
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [urlTouched, setUrlTouched] = useState(false);
   const [connectionType, setConnectionType] = useState<"direct" | "proxy">(
     () => {
       return (
@@ -343,6 +376,10 @@ const App = () => {
   const [connectionTimeout, setConnectionTimeout] = useState<string>(() => {
     return localStorage.getItem("lastConnectionTimeout") || "";
   });
+  // [spring-ai-mcp-inspector PATCH] Connection timeout validation state:
+  // starts null (a stale invalid persisted value must not silently lock
+  // Connect), set on field blur and on the shared connect handler.
+  const [timeoutError, setTimeoutError] = useState<string | null>(null);
   const [logLevel, setLogLevel] = useState<LoggingLevel>("debug");
   const [notifications, setNotifications] = useState<ServerNotification[]>([]);
   const [roots, setRoots] = useState<Root[]>([]);
@@ -1089,6 +1126,54 @@ const App = () => {
     setActiveHistoryConnectionId(undefined);
     await disconnectMcpServer();
   }, [activeHistoryConnectionId, disconnectMcpServer]);
+
+  // [spring-ai-mcp-inspector PATCH] issue #269 rework: one validated connect
+  // handler for both Connect buttons (the sidebar CTA and the empty-state
+  // canvas CTA). For URL-based transports an empty or invalid server URL
+  // surfaces the URL validation error and blocks the connect instead of
+  // falling back to the loopback demo server; a proxy connection with an
+  // invalid connection timeout is blocked by the same handler.
+  // The validated handler delegates to handleConnect (not
+  // connectMcpServer) so the persistent-history bucket freeze from the
+  // PR #218 wrappers applies to both CTAs.
+  // [spring-ai-mcp-inspector PATCH] Re-validate the persisted timeout on
+  // field blur: the same field-level check the Sidebar ran before the
+  // validation state moved up here.
+  const validateConnectionTimeout = useCallback(() => {
+    setTimeoutError(
+      isValidConnectionTimeout(connectionTimeout)
+        ? null
+        : CONNECTION_TIMEOUT_ERROR,
+    );
+  }, [connectionTimeout]);
+
+  const handleConnectRequest = useCallback(() => {
+    if (transportType !== "stdio") {
+      setUrlTouched(true);
+      const result = validateServerUrl(sseUrl);
+      setUrlError(result.isValid ? null : result.errorMessage);
+      if (!result.isValid) {
+        return;
+      }
+    }
+    // [spring-ai-mcp-inspector PATCH] Block connect if the connection
+    // timeout is invalid (proxy only: direct never forwards the timeout,
+    // so a stale invalid persisted value must not silently lock Connect).
+    if (
+      connectionType === "proxy" &&
+      !isValidConnectionTimeout(connectionTimeout)
+    ) {
+      setTimeoutError(CONNECTION_TIMEOUT_ERROR);
+      return;
+    }
+    void handleConnect();
+  }, [
+    transportType,
+    sseUrl,
+    handleConnect,
+    connectionType,
+    connectionTimeout,
+  ]);
 
   const onOAuthConnect = useCallback(
     (serverUrl: string) => {
@@ -2255,7 +2340,15 @@ const App = () => {
           // [spring-ai-mcp-inspector PATCH] Persistent history (#218):
           // wrappers capture/release the history bucket key at connect and
           // disconnect time (see handleConnect/handleDisconnect above).
-          onConnect={handleConnect}
+          // [spring-ai-mcp-inspector PATCH] issue #269 rework: onConnect
+          // is the shared validating handler; URL validation state is
+          // lifted to App so the canvas CTA validates under the same
+          // condition.
+          onConnect={handleConnectRequest}
+          urlError={urlError}
+          setUrlError={setUrlError}
+          urlTouched={urlTouched}
+          setUrlTouched={setUrlTouched}
           onDisconnect={handleDisconnect}
           onResetSession={resetSessionAndConnect}
           logLevel={logLevel}
@@ -2265,6 +2358,8 @@ const App = () => {
           setConnectionType={setConnectionType}
           connectionTimeout={connectionTimeout}
           setConnectionTimeout={setConnectionTimeout}
+          timeoutError={timeoutError}
+          validateConnectionTimeout={validateConnectionTimeout}
           serverImplementation={serverImplementation}
           // [spring-ai-mcp-inspector PATCH] VersionBadge handshake snapshot.
           initializeSnapshot={initializeSnapshot}
@@ -2748,15 +2843,32 @@ const App = () => {
               </p>
               {/* [spring-ai-mcp-inspector PATCH] Empty-state Connect CTA
                   (issue #269): the landing page needs a primary connect
-                  affordance; it reuses the same connect action the sidebar
-                  CTA wires instead of duplicating the flow. */}
+                  affordance; it routes through the same validated handler
+                  as the sidebar CTA, so an empty or invalid server URL
+                  disables the button and shows the URL validation error
+                  instead of connecting. */}
               <Button
                 data-testid="empty-state-connect-button"
-                onClick={() => void connectMcpServer()}
+                onClick={handleConnectRequest}
+                disabled={
+                  (transportType !== "stdio" && !!urlError) ||
+                  (connectionType === "proxy" && !!timeoutError)
+                }
               >
                 <Play className="w-4 h-4 mr-2" />
                 Connect
               </Button>
+              {/* [spring-ai-mcp-inspector PATCH] issue #269 rework: surface
+                  the shared URL validation error next to the canvas CTA. */}
+              {urlError && (
+                <p
+                  className="text-xs text-red-500"
+                  role="alert"
+                  data-testid="empty-state-url-error"
+                >
+                  {urlError}
+                </p>
+              )}
               <div className="flex items-center gap-2">
                 <p className="text-sm text-muted-foreground">
                   Need to configure authentication?

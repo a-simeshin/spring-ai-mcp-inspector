@@ -106,6 +106,20 @@ describe("App connection timeout persistence", () => {
     jest.clearAllMocks();
   });
 
+  const TIMEOUT_ERROR_TEXT =
+    "Must be a whole number of seconds between 1 and 600";
+
+  // [spring-ai-mcp-inspector PATCH] The #269 rework renders a second Connect
+  // CTA on the empty canvas (data-testid=empty-state-connect-button); the
+  // sidebar CTA is the name-match without that testid.
+  const sidebarConnectButton = () =>
+    screen
+      .getAllByRole("button", { name: /^connect$/i })
+      .find(
+        (button) =>
+          button.getAttribute("data-testid") !== "empty-state-connect-button",
+      );
+
   it("seeds the connection timeout field from localStorage on mount", async () => {
     localStorage.setItem("lastConnectionTimeout", "42");
     render(
@@ -156,14 +170,150 @@ describe("App connection timeout persistence", () => {
       expect(global.fetch).toHaveBeenCalled();
     });
 
-    const connectButton = screen.getByRole("button", { name: /^connect$/i });
+    const connectButton = sidebarConnectButton();
+    expect(connectButton).toBeDefined();
     expect(connectButton).toBeEnabled();
-    fireEvent.click(connectButton);
+    fireEvent.click(connectButton!);
     const connect = (useConnection() as unknown as { connect: jest.Mock })
       .connect;
     expect(connect).toHaveBeenCalledTimes(1);
     expect(
       screen.queryByText(/whole number of seconds/i),
     ).not.toBeInTheDocument();
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Owner decision on the #335 rebase
+  // (variant a): timeout validation lives in App's shared connect handler,
+  // so BOTH Connect CTAs must block on an invalid proxy timeout.
+  it("blocks connect from the sidebar CTA with an invalid persisted timeout in proxy mode", async () => {
+    localStorage.setItem("lastConnectionType", "proxy");
+    localStorage.setItem("lastConnectionTimeout", "700");
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalled();
+    });
+
+    const sidebarConnect = sidebarConnectButton();
+    expect(sidebarConnect).toBeDefined();
+    expect(sidebarConnect).toBeEnabled();
+    fireEvent.click(sidebarConnect!);
+    const connect = (useConnection() as unknown as { connect: jest.Mock })
+      .connect;
+    expect(connect).not.toHaveBeenCalled();
+    expect(screen.getByText(/whole number of seconds/i)).toBeInTheDocument();
+  });
+
+  it("blocks connect from the empty-state canvas CTA with an invalid persisted timeout in proxy mode", async () => {
+    localStorage.setItem("lastConnectionType", "proxy");
+    localStorage.setItem("lastConnectionTimeout", "700");
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalled();
+    });
+
+    const canvasConnect = screen.getByTestId("empty-state-connect-button");
+    expect(canvasConnect).toBeEnabled();
+    fireEvent.click(canvasConnect);
+    const connect = (useConnection() as unknown as { connect: jest.Mock })
+      .connect;
+    expect(connect).not.toHaveBeenCalled();
+    expect(screen.getByText(/whole number of seconds/i)).toBeInTheDocument();
+  });
+
+  it("connects from both CTAs with a valid persisted timeout in proxy mode", async () => {
+    localStorage.setItem("lastConnectionType", "proxy");
+    localStorage.setItem("lastConnectionTimeout", "45");
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalled();
+    });
+
+    const connect = (useConnection() as unknown as { connect: jest.Mock })
+      .connect;
+
+    const sidebarConnect = sidebarConnectButton();
+    expect(sidebarConnect).toBeDefined();
+    expect(sidebarConnect).toBeEnabled();
+    fireEvent.click(sidebarConnect!);
+    expect(connect).toHaveBeenCalledTimes(1);
+
+    const canvasConnect = screen.getByTestId("empty-state-connect-button");
+    expect(canvasConnect).toBeEnabled();
+    fireEvent.click(canvasConnect);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(
+      screen.queryByText(/whole number of seconds/i),
+    ).not.toBeInTheDocument();
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Value matrix moved here from
+  // Sidebar.test.tsx: the timeout validator lives in App since the #335
+  // rebase owner decision (variant a), so blur re-validation is observable
+  // through the shared handler's state.
+  it("rejects non-decimal and out-of-range timeouts on blur", async () => {
+    for (const value of [
+      "abc",
+      "0",
+      "1.5",
+      "601",
+      "1e3",
+      "1e2",
+      "0x10",
+      "1e1",
+      "+30",
+    ]) {
+      localStorage.clear();
+      localStorage.setItem("lastConnectionType", "proxy");
+      localStorage.setItem("lastConnectionTimeout", value);
+      const { unmount } = render(
+        <TooltipProvider>
+          <App />
+        </TooltipProvider>,
+      );
+
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalled();
+      });
+
+      fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
+      expect(screen.getByText(TIMEOUT_ERROR_TEXT)).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("accepts decimal in-range timeouts on blur", async () => {
+    for (const value of ["1", "120", "600", "45", ""]) {
+      localStorage.clear();
+      localStorage.setItem("lastConnectionType", "proxy");
+      localStorage.setItem("lastConnectionTimeout", value);
+      const { unmount } = render(
+        <TooltipProvider>
+          <App />
+        </TooltipProvider>,
+      );
+
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalled();
+      });
+
+      fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
+      expect(screen.queryByText(TIMEOUT_ERROR_TEXT)).not.toBeInTheDocument();
+      unmount();
+    }
   });
 });
