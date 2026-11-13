@@ -218,6 +218,11 @@ function isValidEntry(entry: unknown): entry is HistoryEntry {
   if (typeof e.at !== "number" || isNaN(e.at)) {
     return false;
   }
+  // isError is optional; when present it must be a real boolean so a
+  // corrupted value cannot leak into the UI error-styling path.
+  if (e.isError !== undefined && typeof e.isError !== "boolean") {
+    return false;
+  }
   return true;
 }
 
@@ -312,6 +317,9 @@ export function appendHistory(
       ? truncate(entry.response)
       : undefined,
     at: entry.at,
+    // Carried through so the error flag survives reloads (owner review on
+    // PR #218, 2026-11-13); the hook always stores a real boolean here.
+    isError: entry.isError,
   };
 
   // Append entry
@@ -343,5 +351,39 @@ export function clearHistory(connectionId: string): void {
   }
   const store = readStore();
   delete store.byConnection[connectionId];
+  writeStore(store);
+}
+
+/**
+ * Move all history entries from one connection bucket to another and
+ * remove the source bucket (owner review on PR #218, 2026-11-13: saving
+ * an ad-hoc session used to orphan its entries under the form-derived
+ * key while the panel moved to the saved entry's empty bucket).
+ * Entries are merged into the destination bucket and the per-connection
+ * FIFO cap and global size limit are re-applied to the result.
+ * Refuses to touch a store written by a different schema version.
+ * No-op when both ids are equal or the source bucket is missing/empty.
+ */
+export function migrateHistory(fromId: string, toId: string): void {
+  if (fromId === toId) {
+    return;
+  }
+  if (isForeignSchemaVersion()) {
+    console.warn(
+      "[persistentHistory] Refusing to migrate: store schema version is newer than supported",
+    );
+    return;
+  }
+  const store = readStore();
+  const source = store.byConnection[fromId];
+  if (!Array.isArray(source) || source.length === 0) {
+    return;
+  }
+  const destination = store.byConnection[toId] ?? [];
+  store.byConnection[toId] = trimBucket([...destination, ...source]);
+  delete store.byConnection[fromId];
+  // The destination bucket is spared from wholesale eviction so the
+  // entries just carried over are not the first thing dropped.
+  evictGlobal(store, toId);
   writeStore(store);
 }

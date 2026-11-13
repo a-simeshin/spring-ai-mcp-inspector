@@ -2756,6 +2756,56 @@ describe("useConnection", () => {
       expect(JSON.parse(lastEntry.response!)).toEqual(successResponse);
     });
 
+    it("persists the isError flag with the stored entry", async () => {
+      const connId = "sse:http://localhost:8080-persist-error";
+      mockRequest.mockResolvedValueOnce({ isError: true });
+      const { result } = renderHook(() =>
+        useConnection({ ...defaultProps, connectionId: connId }),
+      );
+      await act(async () => {
+        await result.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      await act(async () => {
+        await result.current.makeRequest(pingRequest, pingSchemaAny);
+      });
+
+      const stored = loadHistory(connId);
+      expect(stored.length).toBeGreaterThan(0);
+      const lastStored = stored[stored.length - 1];
+      // Owner review on PR #218, 2026-11-13: the flag must reach the
+      // storage layer, not stay in-memory only.
+      expect(lastStored.isError).toBe(true);
+      expect(JSON.parse(lastStored.request)).toEqual({
+        method: "ping",
+        params: {},
+      });
+    });
+
+    it("persists successful entries with isError=false", async () => {
+      const connId = "sse:http://localhost:8080-persist-ok";
+      mockRequest.mockResolvedValueOnce({ test: "response" });
+      const { result } = renderHook(() =>
+        useConnection({ ...defaultProps, connectionId: connId }),
+      );
+      await act(async () => {
+        await result.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      await act(async () => {
+        await result.current.makeRequest(pingRequest, pingSchemaAny);
+      });
+
+      const stored = loadHistory(connId);
+      expect(stored.length).toBeGreaterThan(0);
+      const lastStored = stored[stored.length - 1];
+      expect(lastStored.isError).toBe(false);
+    });
+
     it("sets isError=false for notifications without response", async () => {
       const result = await setupAndConnect();
 

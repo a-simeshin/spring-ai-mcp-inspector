@@ -120,6 +120,9 @@ import {
   stripSecrets,
   touchSavedConnection,
 } from "./lib/savedConnections";
+// [spring-ai-mcp-inspector PATCH] Persistent history (#218): bucket carry
+// over on the saved-connection lifecycle and cleanup on delete.
+import { clearHistory, migrateHistory } from "./lib/persistentHistory";
 import MetadataTab from "./components/MetadataTab";
 // [spring-ai-mcp-inspector PATCH] Named auth profiles + legacy secret
 // migration (issue #54, plan v15 D1/D2/D7/D9B/D10).
@@ -509,10 +512,22 @@ const App = () => {
   >(undefined);
   // [spring-ai-mcp-inspector PATCH] Saved connections state (#121),
   // declared before useConnection: the pending history bucket key follows
-  // the active saved entry.
+  // the active saved entry. Restored from localStorage on load and
+  // re-validated against the saved list (owner review on PR #218,
+  // 2026-11-13): without the restore a reload dropped the association,
+  // the history panel fell back to the ad-hoc sse:<url> bucket, and the
+  // saved connection's history became unreachable until re-selection.
   const [activeConnectionId, setActiveConnectionId] = useState<
     string | undefined
-  >(undefined);
+  >(() => {
+    const stored = localStorage.getItem("lastActiveConnectionId");
+    if (!stored) {
+      return undefined;
+    }
+    return loadSavedConnections().some((c) => c.id === stored)
+      ? stored
+      : undefined;
+  });
   // [spring-ai-mcp-inspector PATCH] Pending history bucket key (owner
   // decision on PR #218, 2026-10-24: the history layer is keyed on
   // activeConnectionId). A saved connection keys its bucket by the saved
@@ -694,6 +709,23 @@ const App = () => {
         // else no collision: targetId undefined -> creates a new entry.
       }
       const saved = saveConnection(draft, targetId);
+      // [spring-ai-mcp-inspector PATCH] Carry the session's history bucket
+      // over to the saved entry (owner review on PR #218, 2026-11-13):
+      // saving an ad-hoc session used to orphan its entries under the
+      // form-derived key while the panel moved to the saved entry's empty
+      // bucket. During a live session the frozen key keeps receiving
+      // writes, so the move is deferred to disconnect; when disconnected
+      // the entries move right away. Skipped when the live bucket already
+      // belongs to a saved entry (re-saving, or saving a variant of a
+      // selected connection): those entries stay with the connection that
+      // produced them.
+      const liveBucketKey = historyKeyForConnection();
+      if (
+        activeHistoryConnectionId === undefined &&
+        !loadSavedConnections().some((c) => c.id === liveBucketKey)
+      ) {
+        migrateHistory(liveBucketKey, saved.id);
+      }
       setActiveConnectionId(saved.id);
       setSavedConnections(loadSavedConnections());
       return saved;
@@ -707,12 +739,19 @@ const App = () => {
       env,
       customHeaders,
       activeConnectionId,
+      activeHistoryConnectionId,
+      historyKeyForConnection,
     ],
   );
 
   const handleDeleteConnection = useCallback(
     (id: string) => {
       deleteSavedConnection(id);
+      // [spring-ai-mcp-inspector PATCH] Also drop the deleted connection's
+      // history bucket (owner review on PR #218, 2026-11-13): previously
+      // the request/response bodies stayed in localStorage until LRU
+      // eviction.
+      clearHistory(id);
       if (activeConnectionId === id) {
         setActiveConnectionId(undefined);
       }
@@ -833,6 +872,18 @@ const App = () => {
     localStorage.setItem("lastConnectionType", connectionType);
   }, [connectionType]);
 
+  // [spring-ai-mcp-inspector PATCH] Persist the saved-connection
+  // association (#218 owner review, 2026-11-13): a reload restores it so
+  // the history panel and the next connect land in the saved bucket
+  // instead of splitting entries into an ad-hoc form-derived bucket.
+  useEffect(() => {
+    if (activeConnectionId === undefined) {
+      localStorage.removeItem("lastActiveConnectionId");
+    } else {
+      localStorage.setItem("lastActiveConnectionId", activeConnectionId);
+    }
+  }, [activeConnectionId]);
+
   // [spring-ai-mcp-inspector PATCH] D10: the six legacy auth persistence
   // effects (lastBearerToken / lastHeaderName / lastCustomHeaders /
   // lastOauthClientId / lastOauthScope / lastOauthClientSecret) are REMOVED.
@@ -870,9 +921,26 @@ const App = () => {
   }, [connectMcpServer, historyKeyForConnection]);
 
   const handleDisconnect = useCallback(async () => {
+    // [spring-ai-mcp-inspector PATCH] Before releasing the frozen key,
+    // carry entries written under it into the saved entry's bucket
+    // (owner review on PR #218, 2026-11-13): a mid-session Save defers
+    // the bucket move to here, because the frozen key keeps receiving
+    // writes until the session ends. Skipped when the frozen key is
+    // itself a saved bucket (selected-connection sessions) or no saved
+    // entry is pending.
+    const frozen = activeHistoryConnectionId;
+    if (
+      frozen !== undefined &&
+      activeConnectionId !== undefined &&
+      frozen !== activeConnectionId &&
+      !loadSavedConnections().some((c) => c.id === frozen) &&
+      loadSavedConnections().some((c) => c.id === activeConnectionId)
+    ) {
+      migrateHistory(frozen, activeConnectionId);
+    }
     setActiveHistoryConnectionId(undefined);
     await disconnectMcpServer();
-  }, [disconnectMcpServer]);
+  }, [activeHistoryConnectionId, activeConnectionId, disconnectMcpServer]);
 
   const onOAuthConnect = useCallback(
     (serverUrl: string) => {

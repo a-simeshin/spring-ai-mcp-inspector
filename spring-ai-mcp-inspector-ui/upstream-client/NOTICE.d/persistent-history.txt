@@ -55,6 +55,30 @@ activeConnectionId branch never applies on that path. Covered by the
 App.transportScoping.test.tsx profile-authorized OAuth callback describe
 (RED on dacbc6f, GREEN after the fix).
 
+Owner-review rework (PR #218, 2026-11-13):
+- Entries carry an isError flag end to end: historyEntry.ts gains
+  isError?: boolean, isValidEntry accepts only a real boolean for it,
+  appendHistory stores it, and useConnection.pushHistory passes it through,
+  so the History panel's error styling (#195) survives a reload.
+- migrateHistory(fromId, toId) carries a whole bucket over to a new key
+  (merge, then the per-connection FIFO cap and the global size limit are
+  re-applied). It refuses a store written by a foreign schemaVersion and is
+  a no-op for equal ids or an empty source. App.tsx calls it when an ad-hoc
+  session is saved under a name (immediately when disconnected, deferred to
+  disconnect while the live session is running, since the frozen key keeps
+  receiving entries) and when a manual disconnect lands on a saved
+  connection, so entries written under the ad-hoc key stay reachable under
+  the saved-connection id instead of being orphaned.
+- The saved-connection association survives a reload: App.tsx persists
+  activeConnectionId under localStorage key "lastActiveConnectionId" while
+  it is set, re-reads it at mount and re-validates it against the saved
+  list (a stale id, e.g. from a deleted connection, falls back to the
+  ad-hoc form-derived key). Previously a reload dropped the association and
+  the saved connection's history became unreachable until re-selection.
+- Deleting a saved connection (handleDeleteConnection) also clears its
+  history bucket (clearHistory), so the stored entries do not outlive the
+  entry they belong to.
+
 Covered by: src/lib/__tests__/persistentHistory.test.ts,
 src/__tests__/App.transportScoping.test.tsx,
 src/components/__tests__/HistoryAndNotifications.test.tsx

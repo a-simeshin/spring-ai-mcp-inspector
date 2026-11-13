@@ -316,13 +316,14 @@ export function useConnection({
     };
     setRequestHistory((prev) => [...prev, entry]);
     // [spring-ai-mcp-inspector PATCH] Persist to localStorage (#121). The
-    // stored entry keeps the storage-layer shape (request/response/at);
-    // the isError flag lives in the in-memory entry only, matching the
-    // storage schema the persistence layer owns.
+    // isError flag travels with the stored entry (owner review on PR #218,
+    // 2026-11-13): keeping it in-memory only made failed calls come back
+    // styled as successful after a reload, losing the #195 error styling.
     appendHistory(connectionId, {
       request: entry.request,
       response: entry.response,
       at: Date.now(),
+      isError: entry.isError,
     });
   };
 

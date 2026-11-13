@@ -89,6 +89,7 @@ jest.mock("../components/Sidebar", () => ({
     activeConnectionId?: string;
     onSaveConnection?: (name: string) => unknown;
     onSelectConnection?: (connection: { id: string; name: string }) => void;
+    onDeleteConnection?: (id: string) => void;
   }) => (
     <div>
       Sidebar
@@ -141,6 +142,18 @@ jest.mock("../components/Sidebar", () => ({
       >
         Select
       </button>
+      <button
+        data-testid="mock-delete-connection"
+        onClick={() =>
+          props.onDeleteConnection?.(
+            props.activeConnectionId ??
+              (props.savedConnections ?? [])[0]?.id ??
+              "missing",
+          )
+        }
+      >
+        Delete
+      </button>
     </div>
   ),
 }));
@@ -166,6 +179,11 @@ describe("App - transport scoping connectionId", () => {
 
   beforeEach(() => {
     jest.restoreAllMocks();
+    // useConnection is a module-scoped mock: mock.calls accumulate across
+    // the whole file (the frozen-key describes below rely on that and read
+    // only the last call). These tests read calls[0], so they need the
+    // history reset to their own first render.
+    jest.clearAllMocks();
 
     // Inspector starts disconnected.
     mockUseConnection.mockReturnValue(disconnectedConnectionState);
@@ -474,6 +492,14 @@ describe("App - history key follows activeConnectionId for saved connections", (
     return id;
   };
 
+  afterEach(() => {
+    // jest.config randomizes test order; these tests leave a seeded saved
+    // connection (and, once connected, the persisted association) behind.
+    // The transport-scoping describe expects a pristine localStorage and
+    // does not clear it, so the seeds must not leak into it.
+    localStorage.clear();
+  });
+
   test("after save and disconnect the key follows the saved-connection id, not the URL", async () => {
     localStorage.clear();
     mockUseConnection.mockReturnValue(disconnectedConnectionState);
@@ -489,6 +515,19 @@ describe("App - history key follows activeConnectionId for saved connections", (
     mockUseConnection.mockReturnValue(connectedState);
     await act(async () => {
       getByTestId("mock-connect").click();
+    });
+    // Entries written under the frozen (form-derived) key while the live
+    // session runs: the bucket carry-over must move them on disconnect.
+    appendHistory("sse:http://localhost:3001/sse", {
+      request: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
+      response: JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+      at: 1000,
+    });
+    appendHistory("sse:http://localhost:3001/sse", {
+      request: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 2 }),
+      response: JSON.stringify({ jsonrpc: "2.0", id: 2, result: {} }),
+      at: 2000,
+      isError: true,
     });
     await act(async () => {
       getByTestId("mock-save-connection").click();
@@ -513,6 +552,15 @@ describe("App - history key follows activeConnectionId for saved connections", (
       mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
         .connectionId,
     ).not.toBe("sse:http://localhost:3001/sse");
+
+    // Owner review 2026-11-13: the carry-over must also move the entries,
+    // not just the key. A mid-session Save defers the move to disconnect;
+    // after disconnect the frozen bucket is empty and the saved bucket has
+    // the entries, including the persisted isError flag.
+    expect(loadHistory("sse:http://localhost:3001/sse")).toHaveLength(0);
+    const carried = loadHistory(savedId);
+    expect(carried).toHaveLength(2);
+    expect(carried[1].isError).toBe(true);
   });
 
   test("two saved connections with the same URL get separate history buckets", async () => {
@@ -753,5 +801,133 @@ describe("App - profile-authorized OAuth callback (D9B) freezes the bucket key",
     await waitFor(() => {
       expect(lastConnectionId()).toBe(`sse:${formUrl}`);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Owner review 2026-11-13 (rework on PR #218): reloading the page used to
+// drop the saved-connection association, so the history panel fell back to
+// the ad-hoc form-derived bucket and the saved connection's history became
+// unreachable until re-selection. The association is now persisted under
+// lastActiveConnectionId and re-validated against the saved list on load.
+// ---------------------------------------------------------------------------
+
+describe("App - activeConnectionId survives reload (owner review 2026-11-13)", () => {
+  const mockUseConnection = jest.mocked(useConnection);
+
+  const connectedState = {
+    ...disconnectedConnectionState,
+    connectionStatus: "connected" as const,
+  };
+
+  const seedSavedConnection = (name: string, url: string): string => {
+    const raw = localStorage.getItem(SAVED_CONNECTIONS_KEY);
+    const existing = raw
+      ? (JSON.parse(raw) as {
+          schemaVersion: number;
+          connections: Array<Record<string, unknown>>;
+        })
+      : { schemaVersion: 1, connections: [] };
+    const nowMs = Date.now();
+    const id = `saved-${name.replace(/\s+/g, "-").toLowerCase()}`;
+    existing.connections.push({
+      id,
+      name,
+      transport: "sse",
+      connectionType: "proxy",
+      url,
+      customHeaders: [],
+      lastUsedAt: nowMs,
+      createdAt: nowMs,
+    });
+    localStorage.setItem(SAVED_CONNECTIONS_KEY, JSON.stringify(existing));
+    return id;
+  };
+
+  const lastConnectionId = () =>
+    mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+      .connectionId;
+
+  afterEach(() => {
+    // jest.config randomizes test order; these tests seed the saved
+    // connection and the persisted association. The transport-scoping
+    // describe expects a pristine localStorage and does not clear it, so
+    // the seeds must not leak into it.
+    localStorage.clear();
+  });
+
+  test("reload restores the saved-connection bucket key without re-selecting", async () => {
+    localStorage.clear();
+    const savedId = seedSavedConnection(
+      "Team Server",
+      "http://localhost:3001/sse",
+    );
+    localStorage.setItem("lastActiveConnectionId", savedId);
+    appendHistory(savedId, {
+      request: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
+      at: 1000,
+    });
+
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    const { getByTestId } = render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+    // A remount equals a reload: the restored association keys the bucket
+    // before any interaction.
+    expect(lastConnectionId()).toBe(savedId);
+
+    // Connect lands in the saved bucket too.
+    mockUseConnection.mockReturnValue(connectedState);
+    await act(async () => {
+      getByTestId("mock-connect").click();
+    });
+    expect(lastConnectionId()).toBe(savedId);
+    expect(lastConnectionId()).not.toBe("sse:http://localhost:3001/sse");
+  });
+
+  test("a stale persisted id (deleted elsewhere) falls back to the ad-hoc key", async () => {
+    localStorage.clear();
+    localStorage.setItem("lastActiveConnectionId", "saved-vanished");
+
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+    expect(lastConnectionId()).toBe("sse:http://localhost:3001/sse");
+  });
+
+  test("deleting the active saved connection clears its bucket and the association", async () => {
+    localStorage.clear();
+    const savedId = seedSavedConnection(
+      "Team Server",
+      "http://localhost:3001/sse",
+    );
+    localStorage.setItem("lastActiveConnectionId", savedId);
+    appendHistory(savedId, {
+      request: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
+      at: 1000,
+    });
+
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    const { getByTestId } = render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+    expect(lastConnectionId()).toBe(savedId);
+
+    await act(async () => {
+      getByTestId("mock-delete-connection").click();
+    });
+
+    // The stored bucket is gone...
+    expect(loadHistory(savedId)).toHaveLength(0);
+    // ...and the association is cleared: the key falls back to the
+    // form-derived ad-hoc bucket.
+    await waitFor(() => {
+      expect(lastConnectionId()).toBe("sse:http://localhost:3001/sse");
+    });
+    expect(localStorage.getItem("lastActiveConnectionId")).toBeNull();
   });
 });

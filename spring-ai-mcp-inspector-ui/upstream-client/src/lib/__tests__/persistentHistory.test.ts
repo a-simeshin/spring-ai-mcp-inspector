@@ -8,6 +8,7 @@ import {
   appendHistory,
   clearHistory,
   isForeignSchemaVersion,
+  migrateHistory,
 } from "../persistentHistory";
 
 // ---------------------------------------------------------------------------
@@ -641,5 +642,149 @@ describe("truncation preserves the envelope fields", () => {
     // RED on the pre-rework code: the body became {"jsonrpc":"2.0","truncated":true}
     // and the History panel rendered the entry with no label.
     expect(parsed.method).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isError flag persistence (owner review on PR #218, 2026-11-13): the flag
+// used to live in the in-memory entry only, so failed calls came back
+// styled as successful after a reload (#195 styling was lost).
+// ---------------------------------------------------------------------------
+
+describe("isError flag persistence", () => {
+  const CONN_ID = "sse:http://localhost:3001/sse";
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("persists isError=true and reads it back", () => {
+    appendHistory(CONN_ID, {
+      request: '{"jsonrpc":"2.0","method":"ping","id":1}',
+      response: '{"jsonrpc":"2.0","id":1,"error":{"code":-32601}}',
+      at: 1000,
+      isError: true,
+    });
+    const loaded = loadHistory(CONN_ID);
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0].isError).toBe(true);
+  });
+
+  it("stores isError=false for successful entries", () => {
+    appendHistory(CONN_ID, {
+      request: '{"jsonrpc":"2.0","method":"ping","id":1}',
+      response: '{"jsonrpc":"2.0","id":1,"result":{}}',
+      at: 1000,
+      isError: false,
+    });
+    expect(loadHistory(CONN_ID)[0].isError).toBe(false);
+  });
+
+  it("drops entries whose isError is not a boolean", () => {
+    localStorage.setItem(
+      HISTORY_KEY,
+      JSON.stringify({
+        schemaVersion: 1,
+        byConnection: {
+          [CONN_ID]: [
+            { request: '{"ok":true}', at: 1, isError: true }, // valid
+            { request: '{"ok":true}', at: 2, isError: "yes" }, // invalid
+          ],
+        },
+      }),
+    );
+    const store = readStore();
+    expect(store.byConnection[CONN_ID]).toHaveLength(1);
+    expect(store.byConnection[CONN_ID][0].at).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// migrateHistory: bucket carry-over (owner review on PR #218, 2026-11-13):
+// saving an ad-hoc session used to orphan its entries under the form-derived
+// key while the panel moved to the saved entry's empty bucket.
+// ---------------------------------------------------------------------------
+
+describe("migrateHistory", () => {
+  const FROM = "sse:http://localhost:3001/sse";
+  const TO = "saved-team-server";
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("moves all entries to the destination and removes the source bucket", () => {
+    appendHistory(FROM, {
+      request: '{"jsonrpc":"2.0","method":"ping","id":1}',
+      at: 1000,
+    });
+    appendHistory(FROM, {
+      request: '{"jsonrpc":"2.0","method":"ping","id":2}',
+      at: 2000,
+      isError: true,
+    });
+    migrateHistory(FROM, TO);
+    expect(loadHistory(FROM)).toHaveLength(0);
+    const moved = loadHistory(TO);
+    expect(moved).toHaveLength(2);
+    expect(moved[1].isError).toBe(true);
+  });
+
+  it("merges into an existing destination bucket", () => {
+    appendHistory(FROM, { request: '{"a":1}', at: 1000 });
+    appendHistory(TO, { request: '{"b":2}', at: 500 });
+    migrateHistory(FROM, TO);
+    const merged = loadHistory(TO);
+    expect(merged).toHaveLength(2);
+    // Source entries land after the destination's own.
+    expect(merged[0].at).toBe(500);
+    expect(merged[1].at).toBe(1000);
+  });
+
+  it("is a no-op when both ids are equal", () => {
+    appendHistory(FROM, { request: '{"a":1}', at: 1000 });
+    migrateHistory(FROM, FROM);
+    expect(loadHistory(FROM)).toHaveLength(1);
+  });
+
+  it("is a no-op when the source bucket is missing", () => {
+    appendHistory(TO, { request: '{"b":2}', at: 500 });
+    migrateHistory(FROM, TO);
+    expect(loadHistory(TO)).toHaveLength(1);
+    expect(loadHistory(FROM)).toHaveLength(0);
+  });
+
+  it("applies the per-connection FIFO cap to the merged bucket", () => {
+    // MAX_ENTRIES_PER_CONNECTION is 100 (not exported; see
+    // persistentHistory.ts). Seeding past the cap from both buckets proves
+    // the merged bucket is trimmed, not concatenated.
+    const CAP = 100;
+    for (let i = 0; i < CAP; i++) {
+      appendHistory(FROM, { request: `{"i":${i}}`, at: i });
+    }
+    for (let i = 0; i < CAP; i++) {
+      appendHistory(TO, { request: `{"j":${i}}`, at: i });
+    }
+    migrateHistory(FROM, TO);
+    const merged = loadHistory(TO);
+    expect(merged.length).toBeLessThanOrEqual(CAP);
+    // The newest entries survive; the source entries are the newest.
+    const last = JSON.parse(merged[merged.length - 1].request) as {
+      i?: number;
+    };
+    expect(last.i).toBe(CAP - 1);
+  });
+
+  it("refuses to touch a store written by a newer schema version", () => {
+    localStorage.setItem(
+      HISTORY_KEY,
+      JSON.stringify({
+        schemaVersion: 2,
+        byConnection: { [FROM]: [{ request: '{"x":1}', at: 1 }] },
+      }),
+    );
+    const before = localStorage.getItem(HISTORY_KEY);
+    migrateHistory(FROM, TO);
+    expect(localStorage.getItem(HISTORY_KEY)).toBe(before);
   });
 });
