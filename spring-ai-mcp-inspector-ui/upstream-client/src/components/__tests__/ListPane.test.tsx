@@ -75,6 +75,33 @@ describe("ListPane", () => {
     });
   });
 
+  describe("Selected row", () => {
+    it("should highlight the row for which isSelected returns true", () => {
+      renderListPane({
+        isSelected: (item: (typeof mockItems)[0]) => item.id === 2,
+      });
+
+      const selectedRow = screen
+        .getByText("Tool 2")
+        .closest("[data-testid^='tool-row-']");
+      expect(selectedRow).toHaveClass("bg-muted");
+
+      const unselectedRow = screen
+        .getByText("Tool 1")
+        .closest("[data-testid^='tool-row-']");
+      expect(unselectedRow).not.toHaveClass("bg-muted");
+    });
+
+    it("should not highlight any row when isSelected is omitted", () => {
+      renderListPane();
+
+      const row = screen
+        .getByText("Tool 1")
+        .closest("[data-testid^='tool-row-']");
+      expect(row).not.toHaveClass("bg-muted");
+    });
+  });
+
   describe("Search Functionality", () => {
     it("should show search icon initially", () => {
       renderListPane();

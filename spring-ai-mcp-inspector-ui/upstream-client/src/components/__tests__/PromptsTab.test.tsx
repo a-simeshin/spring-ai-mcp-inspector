@@ -7,6 +7,7 @@
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { describe, it, jest } from "@jest/globals";
+import { useState } from "react";
 import PromptsTab, { Prompt } from "../PromptsTab";
 import { Tabs } from "../ui/tabs";
 
@@ -245,5 +246,38 @@ describe("PromptsTab", () => {
     expect(
       screen.queryByText("This field is required"),
     ).not.toBeInTheDocument();
+  });
+
+  it("should highlight the clicked prompt row as selected", async () => {
+    // Stateful harness: clicking a row drives real selectedPrompt state,
+    // so the isSelected wiring into ListPane is exercised end to end.
+    const Harness = () => {
+      const [selected, setSelected] = useState<Prompt | null>(null);
+      return (
+        <Tabs defaultValue="prompts">
+          <PromptsTab
+            {...defaultProps}
+            selectedPrompt={selected}
+            setSelectedPrompt={setSelected}
+          />
+        </Tabs>
+      );
+    };
+    render(<Harness />);
+
+    const greetingRow = screen
+      .getByText("greeting")
+      .closest("[data-testid^='tool-row-']") as HTMLElement;
+    await act(async () => {
+      fireEvent.click(greetingRow);
+    });
+
+    // The clicked row carries the selection marker
+    expect(greetingRow).toHaveClass("bg-muted");
+    // The other prompt row does not
+    const echoRow = screen
+      .getByText("echo")
+      .closest("[data-testid^='tool-row-']") as HTMLElement;
+    expect(echoRow).not.toHaveClass("bg-muted");
   });
 });

@@ -149,6 +149,9 @@ const PromptsTab = ({
   return (
     <TabsContent value="prompts">
       <div className="grid grid-cols-2 gap-4">
+        {/* [spring-ai-mcp-inspector PATCH] isSelected: highlight the row of
+            the selected prompt (#276); upstream list pane had no selection
+            state. */}
         <ListPane
           items={prompts}
           listItems={listPrompts}
@@ -161,6 +164,7 @@ const PromptsTab = ({
             setPromptArgs({});
             setFieldErrors({});
           }}
+          isSelected={(prompt) => selectedPrompt?.name === prompt.name}
           renderItem={(prompt) => (
             <div className="flex items-start w-full gap-2">
               <div className="flex-shrink-0 mt-1">

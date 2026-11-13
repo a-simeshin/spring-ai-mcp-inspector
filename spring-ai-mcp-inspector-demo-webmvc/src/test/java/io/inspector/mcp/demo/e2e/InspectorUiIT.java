@@ -63,6 +63,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import io.inspector.mcp.demo.DemoApplication;
 
 import static com.codeborne.selenide.Condition.attributeMatching;
+import static com.codeborne.selenide.Condition.cssClass;
 import static com.codeborne.selenide.Condition.disabled;
 import static com.codeborne.selenide.Condition.exactText;
 import static com.codeborne.selenide.Condition.text;
@@ -70,6 +71,7 @@ import static com.codeborne.selenide.Condition.visible;
 import static com.codeborne.selenide.Selectors.byText;
 import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.$$;
+import static com.codeborne.selenide.Selenide.$x;
 import static com.codeborne.selenide.Selenide.open;
 
 /**
@@ -1564,6 +1566,26 @@ class InspectorUiIT {
 			activePanel().shouldHave(text("greeting"), Duration.ofSeconds(10));
 			activePanel().shouldHave(text("multiTurn"));
 			activePanel().shouldHave(text("optionalDescription"));
+		}
+
+		@Test
+		@Story("Prompt selection")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("The bg-muted selection marker follows the clicked prompt row.")
+		@DisplayName("selectedPrompt marker follows the clicked prompt row")
+		void selectedPrompt_markerFollowsClick() {
+			// given & when: click the greeting row, then the multiTurn row
+			SelenideElement greetingRow = $x("//*[normalize-space(text())='greeting']"
+					+ "/ancestor::*[starts-with(@data-testid, 'tool-row-')][1]");
+			greetingRow.click();
+			greetingRow.shouldHave(cssClass("bg-muted"), Duration.ofSeconds(10));
+
+			// then: the marker sits on the newly clicked row only
+			SelenideElement multiTurnRow = $x("//*[normalize-space(text())='multiTurn']"
+					+ "/ancestor::*[starts-with(@data-testid, 'tool-row-')][1]");
+			multiTurnRow.click();
+			multiTurnRow.shouldHave(cssClass("bg-muted"), Duration.ofSeconds(10));
+			greetingRow.shouldNotHave(cssClass("bg-muted"));
 		}
 
 		/**

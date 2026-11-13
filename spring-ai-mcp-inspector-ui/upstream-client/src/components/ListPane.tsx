@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils";
 import { Search } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -8,6 +9,7 @@ type ListPaneProps<T> = {
   listItems: () => void;
   clearItems?: () => void;
   setSelectedItem: (item: T) => void;
+  isSelected?: (item: T) => boolean;
   renderItem: (item: T) => React.ReactNode;
   title: string;
   buttonText: string;
@@ -19,6 +21,7 @@ const ListPane = <T extends object>({
   listItems,
   clearItems,
   setSelectedItem,
+  isSelected,
   renderItem,
   title,
   buttonText,
@@ -129,11 +132,17 @@ const ListPane = <T extends object>({
           </Button>
         )}
         <div className="space-y-2 overflow-y-auto max-h-96">
+          {/* [spring-ai-mcp-inspector PATCH] Selected row (#276): the row for
+              which isSelected(item) returns true gets the bg-muted marker;
+              upstream rows had no selection state. */}
           {filteredItems.map((item, index) => (
             <div
               key={index}
               data-testid={`tool-row-${index}`}
-              className="flex items-center py-2 px-4 rounded hover:bg-gray-50 dark:hover:bg-secondary cursor-pointer"
+              className={cn(
+                "flex items-center py-2 px-4 rounded hover:bg-gray-50 dark:hover:bg-secondary cursor-pointer",
+                isSelected?.(item) && "bg-muted",
+              )}
               onClick={() => setSelectedItem(item)}
             >
               {/* [spring-ai-mcp-inspector PATCH] Tool row (#58): data-testid

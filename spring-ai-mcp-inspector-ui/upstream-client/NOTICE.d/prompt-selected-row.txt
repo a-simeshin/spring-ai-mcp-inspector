@@ -1,0 +1,28 @@
+src/components/ListPane.tsx + src/components/PromptsTab.tsx: selected
+row highlight in the prompts list pane.
+
+What changed for the user:
+- The Prompts pane now marks the selected prompt: clicking a row gives
+  that row a subtle highlighted (bg-muted) background, and the marker
+  follows the next click. Previously the pane had no visual selection
+  state at all, so a picked prompt was indistinguishable from the rest
+  of the list (issue #276).
+
+Implementation:
+- `src/components/ListPane.tsx`: new optional `isSelected` prop,
+  `(item: T) => boolean`. When it returns true for a rendered row,
+  the row className gains `bg-muted`. The prop is optional, so the
+  other panes (tools, resources, apps) render exactly as before.
+- `src/components/PromptsTab.tsx`: passes
+  `isSelected={(prompt) => selectedPrompt?.name === prompt.name}`,
+  comparing by name so the marker survives re-listing.
+
+Covered by:
+- `src/components/__tests__/ListPane.test.tsx`: the row for which
+  isSelected returns true carries bg-muted, the others do not; no row
+  is highlighted when the prop is omitted.
+- `src/components/__tests__/PromptsTab.test.tsx`: clicking a prompt
+  row applies bg-muted to that row and not to the others (stateful
+  harness around selectedPrompt/setSelectedPrompt).
+- `InspectorUiIT` (demo-webmvc): e2e assertion that the marker sits
+  on the clicked row and moves when another prompt is selected.
