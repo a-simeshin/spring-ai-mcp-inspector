@@ -1188,7 +1188,13 @@ const Sidebar = ({
           {/* Connection error alert is rendered at the top of the config
               pane below (see NOTICE.d/connect-error-alert.txt). */}
 
-          <div className="space-y-2">
+          {/* [spring-ai-mcp-inspector PATCH] Issue #269: pin the connect CTA
+              block sticky to the bottom of the sidebar scroll area so the
+              Connect button stays inside the viewport however far the
+              sections above it expand (e.g. the auth profile editor). The
+              pristine Connect button below also gets a dedicated testid for
+              the fold-visibility checks (InspectorUiIT#ConnectCtaSticky). */}
+          <div className="space-y-2 sticky bottom-0 bg-card pt-2">
             {connectionStatus === "connected" && (
               <div className="grid grid-cols-2 gap-4">
                 <Button
@@ -1211,6 +1217,7 @@ const Sidebar = ({
             {connectionStatus !== "connected" && (
               <Button
                 className="w-full"
+                data-testid="sidebar-connect-button"
                 onClick={() => {
                   // Mark URL as touched on first connect attempt
                   if (transportType !== "stdio") {
