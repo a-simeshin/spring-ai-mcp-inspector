@@ -659,6 +659,11 @@ describe("App - profile-authorized OAuth callback (D9B) freezes the bucket key",
 
   beforeEach(() => {
     jest.restoreAllMocks();
+    // jest.config randomizes test order, and the module-level useConnection
+    // mock accumulates mock.calls across the whole file: the negative control
+    // below must only ever see calls made by this describe, so the history
+    // is cleared here (implementations are re-established right after).
+    mockUseConnection.mockClear();
     mockUseConnection.mockReturnValue(disconnectedConnectionState);
     sessionStorage.clear();
     localStorage.clear();
