@@ -1187,225 +1187,229 @@ const Sidebar = ({
 
           {/* Connection error alert is rendered at the top of the config
               pane below (see NOTICE.d/connect-error-alert.txt). */}
+        </div>
+      </div>
 
-          {/* [spring-ai-mcp-inspector PATCH] Issue #269: pin the connect CTA
-              block sticky to the bottom of the sidebar scroll area so the
-              Connect button stays inside the viewport however far the
-              sections above it expand (e.g. the auth profile editor). The
-              pristine Connect button below also gets a dedicated testid for
-              the fold-visibility checks (InspectorUiIT#ConnectCtaSticky). */}
-          <div className="space-y-2 sticky bottom-0 bg-card pt-2">
-            {connectionStatus === "connected" && (
-              <div className="grid grid-cols-2 gap-4">
-                <Button
-                  data-testid="connect-button"
-                  onClick={async () => {
-                    await onDisconnect();
-                    onConnect();
-                  }}
-                >
-                  <RotateCcw className="w-4 h-4 mr-2" />
-                  {transportType === "stdio" ? "Restart" : "Reconnect"}
-                </Button>
-                <Button onClick={onDisconnect}>
-                  <RefreshCwOff className="w-4 h-4 mr-2" />
-                  Disconnect
-                </Button>
-              </div>
-            )}
-            {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). Block onConnect when invalid. */}
-            {connectionStatus !== "connected" && (
-              <Button
-                className="w-full"
-                data-testid="sidebar-connect-button"
-                onClick={() => {
-                  // Mark URL as touched on first connect attempt
-                  if (transportType !== "stdio") {
-                    setUrlTouched(true);
-                    const result = validateServerUrl(sseUrl);
-                    if (!result.isValid) {
-                      setUrlError(result.errorMessage);
-                      return;
-                    }
-                  }
-                  onConnect();
-                }}
-                disabled={transportType !== "stdio" && !!urlError}
-              >
-                <Play className="w-4 h-4 mr-2" />
-                Connect
-              </Button>
-            )}
-
-            <div className="flex items-center justify-center space-x-2 mb-4">
-              <div
-                className={`w-2 h-2 rounded-full ${(() => {
-                  switch (connectionStatus) {
-                    case "connected":
-                      return "bg-green-500";
-                    case "error":
-                      return "bg-red-500";
-                    case "error-connecting-to-proxy":
-                      return "bg-red-500";
-                    default:
-                      return "bg-gray-500";
-                  }
-                })()}`}
-              />
-              <span className="text-sm text-gray-600 dark:text-gray-400">
-                {/* [spring-ai-mcp-inspector PATCH] Status text depends on error reason
-                    instead of proxy token presence: unauthorized shows token hint,
-                    connection_refused/dns show reachability hint, timeout shows
-                    server-not-responding (see NOTICE.d/connect-error-alert.txt). */}
-                {(() => {
-                  switch (connectionStatus) {
-                    case "connected":
-                      return "Connected";
-                    case "error": {
-                      const reason = connectionError?.reason;
-                      if (reason === "unauthorized") {
-                        return "Connection Error - Check if your proxy token is correct";
-                      }
-                      if (reason === "connection_refused" || reason === "dns") {
-                        return "Connection Error - Check if your MCP server is running and the URL is reachable";
-                      }
-                      if (reason === "timeout") {
-                        return "Connection Error - The server is not responding";
-                      }
-                      return "Connection Error - Check if your MCP server is running";
-                    }
-                    case "error-connecting-to-proxy":
-                      return "Error Connecting to MCP Inspector Proxy - Check Console logs";
-                    default:
-                      return "Disconnected";
-                  }
-                })()}
-              </span>
-            </div>
-
-            {/* [spring-ai-mcp-inspector PATCH] D3 structured error banner
-                (issue #54): exact code/reason/guidance/url from the proxy's
-                `ProxyErrorDto` (SSE named `error` event / streamable body). */}
-            {authError && (
-              <div
-                role="alert"
-                data-testid="connection-error-dto"
-                className="mb-4 rounded border border-red-300 bg-red-50 dark:bg-red-950 dark:border-red-800 p-3 text-xs space-y-1"
-              >
-                <div className="font-semibold text-red-700 dark:text-red-300">
-                  {authError.status} {authError.code}
-                </div>
-                <div className="text-red-700 dark:text-red-300">
-                  {authError.reason}
-                </div>
-                <div className="text-red-600 dark:text-red-400">
-                  {authError.guidance}
-                </div>
-                {authError.url && (
-                  <div className="break-all font-mono text-red-600 dark:text-red-400">
-                    URL: {authError.url}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {connectionStatus === "connected" &&
-              serverImplementation &&
-              (() => {
-                const websiteUrl = (
-                  serverImplementation as { websiteUrl?: string }
-                ).websiteUrl;
-                let isValidWebsiteUrl = false;
-                if (websiteUrl) {
-                  try {
-                    validateRedirectUrl(websiteUrl);
-                    isValidWebsiteUrl = true;
-                  } catch {
-                    isValidWebsiteUrl = false;
-                  }
+      {/* [spring-ai-mcp-inspector PATCH] Issue #269: render the connect CTA
+          block in a fixed region under the sidebar scroll area (a flex
+          sibling of the scroll container, not sticky). A sticky overlay
+          pinned over the scroll area intercepted clicks on sections
+          scrolled underneath it (auth/config toggles under the bar in
+          CI). As a flex region the Connect button stays inside the
+          viewport at any section expansion and never covers content.
+          The pristine Connect button also gets a dedicated testid for
+          the fold-visibility checks (InspectorUiIT#ConnectCtaSticky). */}
+      <div className="px-4 pb-4 pt-2 space-y-2">
+        {connectionStatus === "connected" && (
+          <div className="grid grid-cols-2 gap-4">
+            <Button
+              data-testid="connect-button"
+              onClick={async () => {
+                await onDisconnect();
+                onConnect();
+              }}
+            >
+              <RotateCcw className="w-4 h-4 mr-2" />
+              {transportType === "stdio" ? "Restart" : "Reconnect"}
+            </Button>
+            <Button onClick={onDisconnect}>
+              <RefreshCwOff className="w-4 h-4 mr-2" />
+              Disconnect
+            </Button>
+          </div>
+        )}
+        {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). Block onConnect when invalid. */}
+        {connectionStatus !== "connected" && (
+          <Button
+            className="w-full"
+            data-testid="sidebar-connect-button"
+            onClick={() => {
+              // Mark URL as touched on first connect attempt
+              if (transportType !== "stdio") {
+                setUrlTouched(true);
+                const result = validateServerUrl(sseUrl);
+                if (!result.isValid) {
+                  setUrlError(result.errorMessage);
+                  return;
                 }
-                const serverName = serverImplementation.name || "MCP Server";
-                return (
-                  <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg mb-4">
-                    <div className="flex items-center gap-2 mb-1">
-                      {(serverImplementation as WithIcons).icons &&
-                      (serverImplementation as WithIcons).icons!.length > 0 ? (
-                        <IconDisplay
-                          icons={(serverImplementation as WithIcons).icons}
-                          size="sm"
-                        />
-                      ) : (
-                        <Server className="w-4 h-4 text-gray-500" />
-                      )}
-                      {websiteUrl && isValidWebsiteUrl ? (
-                        <a
-                          href={websiteUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:underline transition-colors"
-                        >
-                          {serverName}
-                        </a>
-                      ) : (
-                        <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
-                          {serverName}
-                        </span>
-                      )}
-                    </div>
-                    {websiteUrl && !isValidWebsiteUrl && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div className="flex items-center gap-1 text-yellow-600 dark:text-yellow-500 mb-1">
-                            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                            <span className="text-xs font-normal">
-                              Potentially malicious websiteURL field
-                            </span>
-                          </div>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p className="max-w-xs break-all">{websiteUrl}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    )}
-                    {serverImplementation.version && (
-                      <div className="text-xs text-gray-500 dark:text-gray-400">
-                        Version: {serverImplementation.version}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
+              }
+              onConnect();
+            }}
+            disabled={transportType !== "stdio" && !!urlError}
+          >
+            <Play className="w-4 h-4 mr-2" />
+            Connect
+          </Button>
+        )}
 
-            {loggingSupported && connectionStatus === "connected" && (
-              <div className="space-y-2">
-                <label
-                  className="text-sm font-medium"
-                  htmlFor="logging-level-select"
-                >
-                  Logging Level
-                </label>
-                <Select
-                  value={logLevel}
-                  onValueChange={(value: LoggingLevel) =>
-                    sendLogLevelRequest(value)
+        <div className="flex items-center justify-center space-x-2 mb-4">
+          <div
+            className={`w-2 h-2 rounded-full ${(() => {
+              switch (connectionStatus) {
+                case "connected":
+                  return "bg-green-500";
+                case "error":
+                  return "bg-red-500";
+                case "error-connecting-to-proxy":
+                  return "bg-red-500";
+                default:
+                  return "bg-gray-500";
+              }
+            })()}`}
+          />
+          <span className="text-sm text-gray-600 dark:text-gray-400">
+            {/* [spring-ai-mcp-inspector PATCH] Status text depends on error reason
+                instead of proxy token presence: unauthorized shows token hint,
+                connection_refused/dns show reachability hint, timeout shows
+                server-not-responding (see NOTICE.d/connect-error-alert.txt). */}
+            {(() => {
+              switch (connectionStatus) {
+                case "connected":
+                  return "Connected";
+                case "error": {
+                  const reason = connectionError?.reason;
+                  if (reason === "unauthorized") {
+                    return "Connection Error - Check if your proxy token is correct";
                   }
-                >
-                  <SelectTrigger id="logging-level-select">
-                    <SelectValue placeholder="Select logging level" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.values(LoggingLevelSchema.enum).map((level) => (
-                      <SelectItem key={level} value={level}>
-                        {level}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  if (reason === "connection_refused" || reason === "dns") {
+                    return "Connection Error - Check if your MCP server is running and the URL is reachable";
+                  }
+                  if (reason === "timeout") {
+                    return "Connection Error - The server is not responding";
+                  }
+                  return "Connection Error - Check if your MCP server is running";
+                }
+                case "error-connecting-to-proxy":
+                  return "Error Connecting to MCP Inspector Proxy - Check Console logs";
+                default:
+                  return "Disconnected";
+              }
+            })()}
+          </span>
+        </div>
+
+        {/* [spring-ai-mcp-inspector PATCH] D3 structured error banner
+            (issue #54): exact code/reason/guidance/url from the proxy's
+            `ProxyErrorDto` (SSE named `error` event / streamable body). */}
+        {authError && (
+          <div
+            role="alert"
+            data-testid="connection-error-dto"
+            className="mb-4 rounded border border-red-300 bg-red-50 dark:bg-red-950 dark:border-red-800 p-3 text-xs space-y-1"
+          >
+            <div className="font-semibold text-red-700 dark:text-red-300">
+              {authError.status} {authError.code}
+            </div>
+            <div className="text-red-700 dark:text-red-300">
+              {authError.reason}
+            </div>
+            <div className="text-red-600 dark:text-red-400">
+              {authError.guidance}
+            </div>
+            {authError.url && (
+              <div className="break-all font-mono text-red-600 dark:text-red-400">
+                URL: {authError.url}
               </div>
             )}
           </div>
-        </div>
+        )}
+
+        {connectionStatus === "connected" &&
+          serverImplementation &&
+          (() => {
+            const websiteUrl = (
+              serverImplementation as { websiteUrl?: string }
+            ).websiteUrl;
+            let isValidWebsiteUrl = false;
+            if (websiteUrl) {
+              try {
+                validateRedirectUrl(websiteUrl);
+                isValidWebsiteUrl = true;
+              } catch {
+                isValidWebsiteUrl = false;
+              }
+            }
+            const serverName = serverImplementation.name || "MCP Server";
+            return (
+              <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg mb-4">
+                <div className="flex items-center gap-2 mb-1">
+                  {(serverImplementation as WithIcons).icons &&
+                  (serverImplementation as WithIcons).icons!.length > 0 ? (
+                    <IconDisplay
+                      icons={(serverImplementation as WithIcons).icons}
+                      size="sm"
+                    />
+                  ) : (
+                    <Server className="w-4 h-4 text-gray-500" />
+                  )}
+                  {websiteUrl && isValidWebsiteUrl ? (
+                    <a
+                      href={websiteUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:underline transition-colors"
+                    >
+                      {serverName}
+                    </a>
+                  ) : (
+                    <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                      {serverName}
+                    </span>
+                  )}
+                </div>
+                {websiteUrl && !isValidWebsiteUrl && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="flex items-center gap-1 text-yellow-600 dark:text-yellow-500 mb-1">
+                        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+                        <span className="text-xs font-normal">
+                          Potentially malicious websiteURL field
+                        </span>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p className="max-w-xs break-all">{websiteUrl}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+                {serverImplementation.version && (
+                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                    Version: {serverImplementation.version}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+        {loggingSupported && connectionStatus === "connected" && (
+          <div className="space-y-2">
+            <label
+              className="text-sm font-medium"
+              htmlFor="logging-level-select"
+            >
+              Logging Level
+            </label>
+            <Select
+              value={logLevel}
+              onValueChange={(value: LoggingLevel) =>
+                sendLogLevelRequest(value)
+              }
+            >
+              <SelectTrigger id="logging-level-select">
+                <SelectValue placeholder="Select logging level" />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.values(LoggingLevelSchema.enum).map((level) => (
+                  <SelectItem key={level} value={level}>
+                    {level}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
       </div>
+
       <div className="p-4 border-t">
         <div className="flex items-center justify-between">
           <Select
