@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { describe, it, beforeEach, jest } from "@jest/globals";
 // [spring-ai-mcp-inspector PATCH] Issue #269: contract test for the connect
-// CTA region of the sidebar (NOTICE.d/connect-cta-sticky.txt).
+// CTA region of the sidebar (NOTICE.d/connect-cta.txt).
 import Sidebar from "../Sidebar";
 import { DEFAULT_INSPECTOR_CONFIG } from "@/lib/constants";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -73,10 +73,12 @@ describe("Sidebar connect CTA region (#269)", () => {
     onSelectConnection: jest.fn(),
   };
 
-  const renderSidebar = () =>
+  const renderSidebar = (
+    overrides: Partial<Parameters<typeof Sidebar>[0]> = {},
+  ) =>
     render(
       <TooltipProvider>
-        <Sidebar {...defaultProps} />
+        <Sidebar {...defaultProps} {...overrides} />
       </TooltipProvider>,
     );
 
@@ -95,10 +97,32 @@ describe("Sidebar connect CTA region (#269)", () => {
     // than a sticky overlay: a sticky bar pinned over the scroll area
     // intercepted clicks on sections scrolled underneath it, while a
     // sibling region keeps the button visible at any expansion and
-    // never covers content.
-    const ctaRegion = connectButton.closest(".px-4.pb-4.pt-2");
+    // never covers content. The contract keys on the dedicated region
+    // testid, not on a Tailwind class list.
+    const ctaRegion = connectButton.closest(
+      '[data-testid="sidebar-connect-region"]',
+    );
     expect(ctaRegion).not.toBeNull();
-    expect(ctaRegion).toHaveClass("space-y-2");
     expect(connectButton.closest(".overflow-auto")).toBeNull();
+  });
+
+  it("keeps the status line and the server URL input in the scroll area, outside the fixed region", () => {
+    renderSidebar({ transportType: "sse" as const });
+
+    // A failed connect renders a tall error banner next to the status
+    // line; if any of that content lived in the fixed region it would
+    // squeeze the scroll area instead of extending it. The geometry is
+    // asserted in a real browser by InspectorUiIT#ConnectCtaArea.
+    const urlInput = screen.getByTestId("sse-url-input");
+    expect(
+      urlInput.closest('[data-testid="sidebar-connect-region"]'),
+    ).toBeNull();
+    expect(urlInput.closest(".overflow-auto")).not.toBeNull();
+
+    const statusLine = screen.getByText("Disconnected");
+    expect(
+      statusLine.closest('[data-testid="sidebar-connect-region"]'),
+    ).toBeNull();
+    expect(statusLine.closest(".overflow-auto")).not.toBeNull();
   });
 });

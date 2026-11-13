@@ -1,0 +1,24 @@
+src/components/Sidebar.tsx +
+ src/components/__tests__/Sidebar.connectCta.test.tsx: render the
+connect CTA buttons (Connect / Reconnect) in a fixed region under the
+sidebar's scroll area instead of the last section inside it (issue
+#269). On a pristine 1280x800 desktop load the primary Connect button
+used to sit below the fold (3px cut; ~213px below once the auth
+profile editor expanded); as a flex sibling of the scroll container
+(`px-4 pb-4 pt-2 space-y-2`) the buttons stay fully visible however
+far the sections expand. Only the buttons live in the region: the
+status line, the structured error banner, the server card and the
+logging level stay in the scroll area above, so a tall error banner
+extends the scroll area instead of squeezing it (a failed connect
+must keep the server URL input reachable at an exact 1280x800
+viewport). A sticky overlay was rejected: a bar pinned over the
+scroll area covered sections scrolled underneath it and intercepted
+clicks on the auth/config toggles. Also tags the pristine Connect
+button with `data-testid=sidebar-connect-button`, tags the fixed
+region with `data-testid=sidebar-connect-region` and the server URL
+input with `data-testid=sse-url-input` so the fold checks and the
+layout e2e can read geometry without scrolling elements into view.
+Covered by src/components/__tests__/Sidebar.connectCta.test.tsx and
+the InspectorUiIT#ConnectCtaArea e2e group (pristine load, expanded
+auth editor and failed-connect scenarios at an exact 1280x800
+viewport).

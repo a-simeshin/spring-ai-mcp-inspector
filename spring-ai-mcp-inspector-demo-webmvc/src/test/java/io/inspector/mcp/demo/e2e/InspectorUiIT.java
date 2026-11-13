@@ -568,6 +568,49 @@ class InspectorUiIT {
 				+ "el.dispatchEvent(new Event('change', { bubbles: true }));", cssSelector, value);
 	}
 
+	/**
+	 * Boots the app, opens the page, forces SSE transport and creates + selects a
+	 * {@code CLIENT_CREDENTIALS} profile via the real editor.
+	 */
+	private void bootAndCreateProfile(final E2eTokenServer tokenServer) {
+		startApp(new Combo("sse"));
+		open("/mcp-inspector/index.html");
+
+		// Auth profile panel must render first (issue #54).
+		$("[data-testid=auth-profiles-panel]").shouldBe(visible, Duration.ofSeconds(15));
+		// [spring-ai-mcp-inspector PATCH] Issue #268: the editor section starts
+		// collapsed; expand it explicitly before touching the fields.
+		$("[data-testid=auth-profile-editor-toggle]").shouldBe(visible, Duration.ofSeconds(15)).click();
+		// The auth-profile editor must render before we touch it.
+		$("[data-testid=auth-profile-type]").shouldBe(visible, Duration.ofSeconds(15));
+
+		// Force SSE — the proxy branch whose SSE error event drives the D3
+		// banner (the demo config already defaults to SSE, but be explicit).
+		$("#transport-type-select").shouldBe(visible).click();
+		$$("[role=option]").findBy(text("SSE")).shouldBe(visible).click();
+
+		// Create the CLIENT_CREDENTIALS profile (registration performs the
+		// initial token exchange server-side; the profile auto-selects on save).
+		$("[data-testid=auth-profile-type]").shouldBe(visible).click();
+		$$("[role=option]").findBy(text("OAuth2")).shouldBe(visible).click();
+		$("[data-testid=auth-profile-grant-mode]").shouldBe(visible).click();
+		$$("[role=option]").findBy(text("Client credentials")).shouldBe(visible).click();
+		setReactInputValue("[data-testid=auth-profile-name]", "e2e-cc");
+		setReactInputValue("[data-testid=auth-profile-token-url]", tokenServer.tokenUrl());
+		setReactInputValue("[data-testid=auth-profile-client-id]", "e2e-cid");
+		setReactInputValue("[data-testid=auth-profile-client-secret]", "e2e-secret");
+		$("[data-testid=auth-profile-save]").shouldBe(visible).click();
+
+		// The saved row appears in the list (auto-selected active profile).
+		$("[data-testid=auth-profiles-list]").shouldBe(visible, Duration.ofSeconds(15)).shouldHave(text("e2e-cc"));
+	}
+
+	/** Points the server-URL input at the SSE stub and clicks Connect. */
+	private void connectTo(final E2eSseMcpStub stub) {
+		setReactInputValue("#sse-url-input", stub.sseUrl());
+		connectButton().shouldBe(visible).click();
+	}
+
 	// =====================================================================
 	// A. Connect / Disconnect / Transport switch
 	// =====================================================================
@@ -3849,49 +3892,6 @@ class InspectorUiIT {
 		}
 
 		/**
-		 * Boots the app, opens the page, forces SSE transport and creates + selects a
-		 * {@code CLIENT_CREDENTIALS} profile via the real editor.
-		 */
-		private void bootAndCreateProfile(final E2eTokenServer tokenServer) {
-			startApp(new Combo("sse"));
-			open("/mcp-inspector/index.html");
-
-			// Auth profile panel must render first (issue #54).
-			$("[data-testid=auth-profiles-panel]").shouldBe(visible, Duration.ofSeconds(15));
-			// [spring-ai-mcp-inspector PATCH] Issue #268: the editor section starts
-			// collapsed; expand it explicitly before touching the fields.
-			$("[data-testid=auth-profile-editor-toggle]").shouldBe(visible, Duration.ofSeconds(15)).click();
-			// The auth-profile editor must render before we touch it.
-			$("[data-testid=auth-profile-type]").shouldBe(visible, Duration.ofSeconds(15));
-
-			// Force SSE — the proxy branch whose SSE error event drives the D3
-			// banner (the demo config already defaults to SSE, but be explicit).
-			$("#transport-type-select").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("SSE")).shouldBe(visible).click();
-
-			// Create the CLIENT_CREDENTIALS profile (registration performs the
-			// initial token exchange server-side; the profile auto-selects on save).
-			$("[data-testid=auth-profile-type]").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("OAuth2")).shouldBe(visible).click();
-			$("[data-testid=auth-profile-grant-mode]").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("Client credentials")).shouldBe(visible).click();
-			setReactInputValue("[data-testid=auth-profile-name]", "e2e-cc");
-			setReactInputValue("[data-testid=auth-profile-token-url]", tokenServer.tokenUrl());
-			setReactInputValue("[data-testid=auth-profile-client-id]", "e2e-cid");
-			setReactInputValue("[data-testid=auth-profile-client-secret]", "e2e-secret");
-			$("[data-testid=auth-profile-save]").shouldBe(visible).click();
-
-			// The saved row appears in the list (auto-selected active profile).
-			$("[data-testid=auth-profiles-list]").shouldBe(visible, Duration.ofSeconds(15)).shouldHave(text("e2e-cc"));
-		}
-
-		/** Points the server-URL input at the SSE stub and clicks Connect. */
-		private void connectTo(final E2eSseMcpStub stub) {
-			setReactInputValue("#sse-url-input", stub.sseUrl());
-			connectButton().shouldBe(visible).click();
-		}
-
-		/**
 		 * Awaits the token server's request count to reach {@code expected} within the
 		 * given timeout, polling every 100ms. Fails with a clear message when the count
 		 * never reaches the expected value, so the caller can assert the exact count
@@ -4774,17 +4774,21 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// Z. Connect CTA sticky (issue #269)
+	// Z. Connect CTA fixed region (issue #269)
 	// =====================================================================
 
 	/**
 	 * Live end-to-end coverage for the sidebar Connect CTA contract (issue #269, see
-	 * NOTICE.d/connect-cta-sticky.txt in the UI module): on a pristine desktop viewport
-	 * (exactly 1280x800) the primary Connect button is fully visible without scrolling
-	 * the sidebar, and manually expanding the auth profile editor (collapsed by default
-	 * since issue #268) does not push it below the fold. The CTA container is a fixed
-	 * flex region under the sidebar's scroll area (not a sticky overlay: a bar pinned
-	 * over the scroll area covers sections scrolled underneath it).
+	 * NOTICE.d/connect-cta.txt in the UI module): on a pristine desktop viewport (exactly
+	 * 1280x800) the primary Connect button is fully visible without scrolling the
+	 * sidebar, and manually expanding the auth profile editor (collapsed by default since
+	 * issue #268) does not push it below the fold. The CTA container is a fixed flex
+	 * region under the sidebar's scroll area (not a sticky overlay: a bar pinned over the
+	 * scroll area covers sections scrolled underneath it). Only the Connect/Reconnect
+	 * buttons live in the region: the status line, the structured error banner, the
+	 * server card and the logging level stay in the scroll area above, so a tall error
+	 * banner extends the scroll area instead of squeezing it (the failed-connect scenario
+	 * below asserts the server URL input stays reachable).
 	 *
 	 * <p>
 	 * Geometry is read via JavaScript probes only. Any Selenide probe or click that
@@ -4794,9 +4798,9 @@ class InspectorUiIT {
 	 * is reset before probing.
 	 */
 	@Nested
-	@DisplayName("Connect CTA sticky (pristine 1280x800, issue #269)")
+	@DisplayName("Connect CTA fixed region (pristine 1280x800, issue #269)")
 	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
-	class ConnectCtaSticky {
+	class ConnectCtaArea {
 
 		@BeforeAll
 		void boot() {
@@ -4820,7 +4824,7 @@ class InspectorUiIT {
 
 		@Test
 		@Feature("Sidebar")
-		@Story("Connect CTA sticky")
+		@Story("Connect CTA fixed region")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("On a pristine load at exactly 1280x800 the sidebar Connect "
 				+ "button is fully visible without scrolling the sidebar")
@@ -4842,7 +4846,7 @@ class InspectorUiIT {
 
 		@Test
 		@Feature("Sidebar")
-		@Story("Connect CTA sticky")
+		@Story("Connect CTA fixed region")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("Expanding the auth profile editor at 1280x800 must not push "
 				+ "the Connect button below the fold")
@@ -4856,6 +4860,55 @@ class InspectorUiIT {
 			Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("sidebar-connect-button"),
 					"expanded auth editor at 1280x800: Connect must stay fully visible, rect="
 							+ ResponsiveTestHelpers.paneRect("sidebar-connect-button"));
+		}
+
+		@Test
+		@Feature("Sidebar")
+		@Story("Connect CTA fixed region")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("After a failed connect at exactly 1280x800 the structured "
+				+ "error banner renders in the sidebar scroll area, not in the fixed "
+				+ "CTA region: the scroll area keeps a usable height and the server " + "URL input stays fully visible")
+		void failedConnect_errorBannerKeepsScrollAreaUsableAt1280x800() throws Exception {
+			// given: an upstream that rejects every message POST. The proxy
+			// refreshes the token once, the retry gets a second 401 and the
+			// structured banner surfaces (the OAuth2ClientCredentials recipe,
+			// which also supplies the client-credentials profile the flow needs).
+			try (final E2eTokenServer tokenServer = new E2eTokenServer();
+					final E2eSseMcpStub stub = new E2eSseMcpStub()) {
+				stub.rejectPosts(Integer.MAX_VALUE);
+				bootAndCreateProfile(tokenServer);
+				ResponsiveTestHelpers.setViewportExactly(1280, 800);
+
+				// when: the user connects and the banner renders.
+				connectTo(stub);
+				$("[data-testid=connection-error-dto]").shouldBe(visible, Duration.ofSeconds(30));
+
+				// then: the banner lives in the sidebar scroll area, not inside
+				// the fixed connect region. A banner inside the fixed region
+				// would squeeze the scroll area instead of extending it.
+				resetSidebarScroll();
+				final Boolean bannerInRegion = Selenide
+					.executeJavaScript("var b = document.querySelector('[data-testid=connection-error-dto]');"
+							+ "return b !== null && b.closest('[data-testid=sidebar-connect-region]') !== null;");
+				Assertions.assertNotNull(bannerInRegion, "banner region probe ran");
+				Assertions.assertFalse(bannerInRegion,
+						"the connection error banner must not render inside the fixed connect region");
+
+				// and: the scroll area keeps a usable height and the server URL
+				// input stays fully visible, so the failed connect extends the
+				// scroll area instead of squeezing it out of the viewport.
+				final Number scrollAreaHeight = Selenide
+					.executeJavaScript("var c = document.querySelector('.bg-card.border-r .overflow-auto');"
+							+ "return c ? Math.round(c.getBoundingClientRect().height) : -1;");
+				Assertions.assertNotNull(scrollAreaHeight, "scroll area probe ran");
+				Assertions.assertTrue(scrollAreaHeight.longValue() >= 400,
+						"scroll area must keep a usable height after a failed connect at 1280x800, got "
+								+ scrollAreaHeight + "px");
+				Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("sse-url-input"),
+						"failed connect at 1280x800: the server URL input must stay fully visible, rect="
+								+ ResponsiveTestHelpers.paneRect("sse-url-input"));
+			}
 		}
 
 	}
