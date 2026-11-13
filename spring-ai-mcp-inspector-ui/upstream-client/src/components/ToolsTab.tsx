@@ -559,11 +559,13 @@ const ToolsTab = ({
                   );
                 })()}
                 {/* [spring-ai-mcp-inspector PATCH] Pitfalls panel: hint
-                    reachable from the tool-detail view. When sibling detector
-                    PRs land (unresolved $ref, missing output schema,
-                    isError=true), they can pass active flags here. Without
-                    flags the panel renders static entries with links only. */}
-                <SpringAiPitfallsPanel />
+                    reachable from the tool-detail view. The unresolved-$ref
+                    entry activates when the schema detector flags this tool
+                    (#204 toolWarnings); otherwise the panel renders static
+                    entries with links only. */}
+                <SpringAiPitfallsPanel
+                  hasUnresolvedRefWarning={toolWarnings.has(selectedTool.name)}
+                />
                 {Object.entries(selectedTool.inputSchema.properties ?? []).map(
                   ([key, value]) => {
                     // First resolve any $ref references

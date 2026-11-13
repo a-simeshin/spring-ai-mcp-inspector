@@ -9,6 +9,9 @@ a historical Spring AI 1.1.x-only issue fixed in 2.0.0-M7 that does not
 affect Spring AI 2.0 users; schema generation silently skipping
 primitive/simple return types per spring-projects/spring-ai#6773), each
 with a one-line symptom and an upstream link. Optional props
-(hasUnresolvedRefWarning, hasIsErrorWarning) let sibling detector PRs
-surface "detector active" notes next to the matching entry;
-without flags the panel degrades to static entries with links only.
+(hasUnresolvedRefWarning, hasIsErrorWarning) surface "detector active"
+notes next to the matching entry from the live detectors: ToolsTab passes
+hasUnresolvedRefWarning from the schema-warning detector map (PR #204
+toolWarnings), TimelineTab passes hasIsErrorWarning computed over the
+fetched timeline events (isError=true detector); without flags the panel
+degrades to static entries with links only.
