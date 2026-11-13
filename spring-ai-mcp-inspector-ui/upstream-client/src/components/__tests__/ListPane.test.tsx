@@ -75,6 +75,8 @@ describe("ListPane", () => {
     });
   });
 
+  // [spring-ai-mcp-inspector PATCH] Selected row highlight (#276): tests for
+  // the optional isSelected predicate prop.
   describe("Selected row", () => {
     it("should highlight the row for which isSelected returns true", () => {
       renderListPane({
