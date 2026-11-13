@@ -19,8 +19,8 @@ interface SpringAiPitfallsPanelProps {
   className?: string;
 }
 
-const SPRING_AI_VALIDATION_MEDIUM_URL =
-  "https://medium.com/javarevisited/spring-ai-2-tool-calling-not-working-9f06e76b1a32";
+const SPRING_AI_UPGRADE_NOTES_URL =
+  "https://docs.spring.io/spring-ai/reference/upgrade-notes.html";
 const SPRING_AI_5888_URL =
   "https://github.com/spring-projects/spring-ai/issues/5888";
 const SPRING_AI_6773_URL =
@@ -40,8 +40,8 @@ export function SpringAiPitfallsPanel({
     {
       symptom:
         "Server-side validation is on by default in 2.0; failures return silent isError=true results with no exception.",
-      link: SPRING_AI_VALIDATION_MEDIUM_URL,
-      linkText: "Medium: production tools failing with zero exceptions",
+      link: SPRING_AI_UPGRADE_NOTES_URL,
+      linkText: "Spring AI reference: Upgrade Notes (Upgrading to 2.0.0)",
       detectorNote: hasIsErrorWarning
         ? "Detector active: check Timeline for isError=true rows"
         : undefined,
@@ -59,7 +59,7 @@ export function SpringAiPitfallsPanel({
     },
     {
       symptom:
-        "Schema generation silently skips primitive/simple return types, leaving tools without an output schema.",
+        "Schema generation silently skips primitive/simple return types, leaving tools without an output schema. Applies when the tool opts in via @McpTool(generateOutputSchema = true).",
       link: SPRING_AI_6773_URL,
       linkText: "spring-projects/spring-ai#6773",
       // No live detector reference available for this entry yet.

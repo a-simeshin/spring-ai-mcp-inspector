@@ -31,15 +31,15 @@ describe("SpringAiPitfallsPanel", () => {
       ),
     ).toBeInTheDocument();
 
-    const mediumLink = screen.getByRole("link", {
-      name: /Medium: production tools failing/,
+    const upgradeNotesLink = screen.getByRole("link", {
+      name: /Upgrade Notes \(Upgrading to 2\.0\.0\)/,
     });
-    expect(mediumLink).toHaveAttribute(
+    expect(upgradeNotesLink).toHaveAttribute(
       "href",
-      "https://medium.com/javarevisited/spring-ai-2-tool-calling-not-working-9f06e76b1a32",
+      "https://docs.spring.io/spring-ai/reference/upgrade-notes.html",
     );
-    expect(mediumLink).toHaveAttribute("target", "_blank");
-    expect(mediumLink).toHaveAttribute("rel", "noopener noreferrer");
+    expect(upgradeNotesLink).toHaveAttribute("target", "_blank");
+    expect(upgradeNotesLink).toHaveAttribute("rel", "noopener noreferrer");
 
     const refLink = screen.getByRole("link", {
       name: /spring-projects\/spring-ai#5888 \(fixed in 2\.0\.0-M7\)/,

@@ -508,7 +508,7 @@ describe("ToolsTab", () => {
       ).toBeInTheDocument();
       expect(
         screen.getByRole("link", {
-          name: /Medium: production tools failing/,
+          name: /Upgrade Notes/,
         }),
       ).toBeInTheDocument();
     });
