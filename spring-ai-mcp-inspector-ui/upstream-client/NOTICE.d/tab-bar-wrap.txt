@@ -1,22 +1,30 @@
-src/App.tsx — wrap the tab bar below `sm` (Tailwind default 640px).
+src/App.tsx: wrap the tab bar at every viewport width (CSS-only patch).
 The upstream TabsList base is `inline-flex h-9` with no wrapping,
 so at a 375px viewport the bar is ~1065px wide and the trailing
 tabs (Sampling/Elicitations/Roots/Auth/Metadata) render fully
 off-screen with no horizontal scroll (overflow visible) and no
 "more" affordance. Local fix (CSS-only, no JS/aria): `flex-wrap
-h-auto` on the TabsList lets the 11 triggers flow into multiple
-rows, and `sm:h-9 sm:flex-nowrap` restore the single-row upstream
-layout at >=640px (twMerge drops the base `h-9` in favour of
-`h-auto` below the breakpoint). Covered by the responsive tab-bar
-verification checklist at 375px/<640px (tester card t_ffb31393);
-the existing Selenide E2E suites keep exercising the >=640px layout
-and tab selection/routing.
+h-auto` on the TabsList lets the triggers flow into multiple
+rows instead of overflowing (twMerge drops the base `h-9` in
+favour of `h-auto`).
 
 Update (#253 input_required panel): the extra Input Required trigger
 adds one wrapped row at 375px, which pushed the tools detail pane to
 bottom 669.55 > 667 at scrollY=0 (InspectorUiIT
 ResponsiveLayout.configPane_listPane_detailPane_disjoint_375x667,
 byte-identical across CI runs). The bar's bottom margin is now mb-2
-below `sm` (upstream mb-4 kept from `sm` up), reclaiming 8px so every
+below `sm` (mb-4 kept from `sm` up), reclaiming 8px so every
 pane stays inside the first 375x667 viewport with the new tab present.
-The wrap itself, all triggers and the >=640px layout are unchanged.
+The wrap itself and all triggers are unchanged.
+
+Update (#275 desktop wrap): the bar had grown to 13 triggers
+(~1320px: 11 upstream + local Timeline #112 + Input Required #253),
+so the original patch's `sm:h-9 sm:flex-nowrap` override restored the
+overflowing single upstream row on desktop: at 1280x800 the 960px
+inspector column clipped the trailing triggers (Metadata, Timeline)
+with no horizontal page scroll and no affordance (the only workaround
+was typing location.hash = '#timeline'). The `sm:h-9 sm:flex-nowrap`
+override is dropped, so the same `flex-wrap h-auto` contract now
+applies at every width; `sm:mb-4` keeps the upstream spacing from
+640px up. Covered by InspectorUiIT.ResponsiveTabBar (375 / 639 /
+640+1024 / 1280x800 with a real Timeline click).

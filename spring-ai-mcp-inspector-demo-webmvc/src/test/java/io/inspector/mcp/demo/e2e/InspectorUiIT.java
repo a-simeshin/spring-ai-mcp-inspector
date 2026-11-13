@@ -99,8 +99,8 @@ import static com.codeborne.selenide.Selenide.open;
  * <li>{@link SidebarAndTheme} — collapsibles, custom header add/remove, theme
  * switch.</li>
  * <li>{@link TabsAvailability} — verifies the rendered tab list against expected.</li>
- * <li>{@link ResponsiveTabBar} — CI regression for the <640px wrap patch (375px /
- * sm-boundary / 1024px control).</li>
+ * <li>{@link ResponsiveTabBar}: CI regression for the tab-bar wrap patch at every width
+ * (375 / 639 / 640+1024 / 1280x800, #275).</li>
  * <li>{@link ResponsiveHistoryLayout}: CI regression for the <1024px compact layout patch
  * (History pane never overlaps tab content; elementFromPoint at 780x437 with both drag
  * handles absent and the History/Notifications columns scrolling under real overflow,
@@ -3279,27 +3279,34 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// X. Responsive tab bar — CI regression for the <sm wrap patch
-	// (upstream-client/src/App.tsx TabsList, NOTICE.d/tab-bar-wrap.txt). The shared
-	// suite browser is fixed at 1366x900 (setupBrowser), so each scenario
-	// resizes the live headless window to its target viewport and restores it
-	// afterwards.
+	// X. Responsive tab bar: CI regression for the tab-bar wrap patch at
+	// every width (upstream-client/src/App.tsx TabsList,
+	// NOTICE.d/tab-bar-wrap.txt). The shared suite browser is fixed at
+	// 1366x900 (setupBrowser), so each scenario resizes the live headless
+	// window to its target viewport and restores it afterwards.
 	//
-	// Tailwind's `sm` breakpoint is `min-width: 640px` (inclusive): computed
-	// flex-wrap at exactly 640px is already `nowrap` (verified in a real
-	// browser), so the wrap side of the boundary is exercised at 639px — the
-	// widest viewport that still wraps — and the flip back to the single
-	// upstream row is asserted at 640px as part of the desktop control.
+	// The wrap contract applies at ALL widths since #275. The original patch
+	// wrapped only below the Tailwind `sm` breakpoint (640px, inclusive);
+	// the desktop `sm:flex-nowrap` override kept a single 13-trigger row
+	// (~1320px) overflowing the 960px inspector column at 1280x800 with no
+	// horizontal page scroll and no affordance. 639px pins the widest
+	// strictly-below-sm viewport; 640px/1024px pin the former
+	// desktop-control widths under the new contract; 1280x800 pins the
+	// reported desktop viewport with a real click on the trailing Timeline
+	// trigger.
 	// =====================================================================
 
 	@Nested
-	@DisplayName("Responsive tab bar (375 / sm-boundary / desktop control)")
+	@DisplayName("Responsive tab bar (375 / 639 / 640+1024 / 1280x800)")
 	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 	class ResponsiveTabBar {
 
-		/** All 11 tab trigger values of the inspector bar (UPSTREAM_DOM_MAP §3). */
+		/**
+		 * All 13 tab trigger values of the inspector bar (11 upstream + local Timeline
+		 * #112 and Input Required #253).
+		 */
 		private static final List<String> ALL_TAB_VALUES = List.of("resources", "prompts", "tools", "tasks", "apps",
-				"ping", "sampling", "elicitations", "roots", "auth", "metadata");
+				"ping", "sampling", "elicitations", "roots", "auth", "metadata", "input-required", "timeline");
 
 		/**
 		 * The 10 always-enabled triggers. {@code tasks} is rendered disabled by design —
@@ -3331,19 +3338,12 @@ class InspectorUiIT {
 		}
 
 		/**
-		 * Computed {@code flex-wrap} of the TabsList — "wrap" below sm, "nowrap"
-		 * at/above.
+		 * Computed {@code flex-wrap} of the TabsList. The patch contract is "wrap" at
+		 * every width (#275); "nowrap" anywhere is a regression.
 		 */
 		private static String tabsListFlexWrap() {
 			return (String) Selenide
 				.executeJavaScript("return getComputedStyle(document.querySelector('[role=tablist]')).flexWrap;");
-		}
-
-		/** Computed height of the TabsList in px (single upstream row = h-9 = 36px). */
-		private static double tabsListHeight() {
-			return ((Number) Selenide
-				.executeJavaScript("return document.querySelector('[role=tablist]').getBoundingClientRect().height;"))
-				.doubleValue();
 		}
 
 		/** Right edge of the widest tab trigger, in CSS px, relative to the viewport. */
@@ -3357,7 +3357,7 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tab bar")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("At a 375px viewport the TabsList wraps (computed flex-wrap: wrap), keeps all 11 tab triggers in the DOM and causes no horizontal document overflow. Clickability/visibility of every tab at 375px is intentionally NOT asserted — the 320px sidebar still clips the inspector column there (separate card t_aa9b879f).")
+		@Description("At a 375px viewport the TabsList wraps (computed flex-wrap: wrap), keeps all 13 tab triggers in the DOM and causes no horizontal document overflow. Clickability/visibility of every tab at 375px is intentionally NOT asserted — the 320px sidebar still clips the inspector column there (separate card t_aa9b879f).")
 		@DisplayName("tabsAt375pxWrapKeepAllTriggersNoHScroll — mobile wrap")
 		void tabs_at375px_wrapKeepAllTriggersAndNoHorizontalOverflow() {
 			// given
@@ -3376,7 +3376,7 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tab bar")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("At the widest wrapping viewport (639px, just below the inclusive Tailwind sm breakpoint) the TabsList still wraps, all 11 triggers fit inside the viewport (right edge <= viewport width) and the 10 enabled ones are clickable by real input; the disabled tasks trigger is only presence-checked.")
+		@Description("At the widest wrapping viewport (639px, just below the inclusive Tailwind sm breakpoint) the TabsList still wraps, all 13 triggers fit inside the viewport (right edge <= viewport width) and the 10 enabled ones are clickable by real input; the disabled tasks trigger is only presence-checked.")
 		@DisplayName("tabsAt639pxWrapAllReachableClickableNoHScroll — sm boundary, wrap side")
 		void tabs_at639px_wrapAllTriggersReachableClickableNoHorizontalOverflow() {
 			// given
@@ -3400,18 +3400,47 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tab bar")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("Control scenario: at 640px (Tailwind sm, min-width:640px — inclusive) and at 1024px the TabsList returns to the single upstream row — computed flex-wrap: nowrap and height ~36px (h-9) — so the wrap patch causes no desktop regression.")
-		@DisplayName("tabsAt640And1024ControlSingleRowNoWrap — desktop geometry intact")
-		void tabs_at1024px_controlSingleRowNoWrap() {
-			// when & then — the exact sm flip point plus a wider desktop viewport
+		@Description("Control scenario: the wrap contract holds at the former desktop-control widths too. At 640px (Tailwind sm, min-width:640px, inclusive) and at 1024px the TabsList still wraps (#275: the single upstream row overflowed desktop columns once the bar grew to 13 triggers), every trigger fits inside the viewport, the 10 enabled ones are clickable by real input and the document does not overflow horizontally.")
+		@DisplayName("tabsAt640And1024ControlWrapAllReachableNoHScroll: former desktop-control widths under the all-width wrap contract")
+		void tabs_at640And1024px_controlWrapAllTriggersReachableNoHorizontalOverflow() {
+			// when & then: the exact former sm flip point (640) plus a wider desktop
+			// width (1024)
 			for (int width : new int[] { 640, 1024 }) {
 				ResponsiveTestHelpers.setViewport(width, 800);
-				Assertions.assertEquals("nowrap", tabsListFlexWrap(),
-						"TabsList must be a single row at " + width + "px (sm:flex-nowrap restores upstream geometry)");
-				double height = tabsListHeight();
-				Assertions.assertTrue(height >= 32 && height <= 40,
-						"TabsList must be a single ~36px row at " + width + "px, was " + height + "px");
+				Assertions.assertEquals("wrap", tabsListFlexWrap(),
+						"TabsList must wrap at " + width + "px too (#275 removed sm:flex-nowrap)");
+				Assertions.assertTrue(widestTriggerRightEdge() <= width,
+						"every tab trigger must fit inside the " + width + "px viewport");
+				for (String value : ENABLED_TAB_VALUES) {
+					clickTab(value); // real WebDriver click input; asserts the trigger
+										// becomes active
+				}
+				Assertions.assertTrue($("[role=tab][id$='-trigger-tasks']").exists(),
+						"disabled tasks trigger must be present at " + width + "px (#63)");
+				Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+						"document.documentElement must not overflow horizontally at " + width + "px");
 			}
+		}
+
+		@Test
+		@Story("Responsive tab bar")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Regression for #275: at 1280x800 the pre-fix bar rendered as a single nowrap row ~1320px wide inside the 960px inspector column, so trailing triggers (Metadata, Timeline) sat past the right edge with no horizontal page scroll and no affordance (the only workaround was typing location.hash = '#timeline'). Now the bar wraps, every trigger is inside the viewport and the trailing Timeline trigger is clickable by real input.")
+		@DisplayName("tabsAt1280x800DesktopWrapTimelineReachableNoHScroll: #275 desktop regression")
+		void tabs_at1280x800_wrapTimelineReachableNoHorizontalOverflow() {
+			// given: the desktop viewport reported in #275
+			ResponsiveTestHelpers.setViewport(1280, 800);
+
+			// then: the all-width wrap contract holds on the reported desktop viewport
+			Assertions.assertEquals("wrap", tabsListFlexWrap(),
+					"TabsList must wrap at 1280x800 instead of overflowing the inspector column (#275)");
+			Assertions.assertTrue(widestTriggerRightEdge() <= 1280,
+					"every tab trigger must fit inside the 1280px viewport (right edge <= 1280)");
+			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 1280x800");
+			// and: the trailing Timeline trigger is reachable by real input (no hash
+			// workaround)
+			clickTab("timeline");
 		}
 
 	}
