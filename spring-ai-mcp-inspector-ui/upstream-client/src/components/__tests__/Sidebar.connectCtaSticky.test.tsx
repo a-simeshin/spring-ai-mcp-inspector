@@ -1,8 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { describe, it, beforeEach, jest } from "@jest/globals";
-// [spring-ai-mcp-inspector PATCH] Issue #269: contract test for the sticky
-// connect CTA bar of the sidebar scroll area (NOTICE.d/connect-cta-sticky.txt).
+// [spring-ai-mcp-inspector PATCH] Issue #269: contract test for the connect
+// CTA region of the sidebar (NOTICE.d/connect-cta-sticky.txt).
 import Sidebar from "../Sidebar";
 import { DEFAULT_INSPECTOR_CONFIG } from "@/lib/constants";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -33,7 +33,7 @@ Object.defineProperty(navigator, "clipboard", {
 
 jest.useFakeTimers();
 
-describe("Sidebar connect CTA sticky pinning (#269)", () => {
+describe("Sidebar connect CTA region (#269)", () => {
   const defaultProps = {
     connectionStatus: "disconnected" as const,
     transportType: "stdio" as const,
@@ -85,14 +85,20 @@ describe("Sidebar connect CTA sticky pinning (#269)", () => {
     jest.clearAllTimers();
   });
 
-  it("renders the pristine Connect button inside a sticky bar pinned to the bottom of the sidebar scroll area", () => {
+  it("renders the pristine Connect button in a fixed region outside the sidebar scroll area", () => {
     renderSidebar();
 
     const connectButton = screen.getByTestId("sidebar-connect-button");
     expect(connectButton).toHaveTextContent("Connect");
 
-    const stickyBar = connectButton.closest(".sticky");
-    expect(stickyBar).not.toBeNull();
-    expect(stickyBar).toHaveClass("sticky", "bottom-0", "bg-card");
+    // The CTA region must be a flex sibling of the scroll area rather
+    // than a sticky overlay: a sticky bar pinned over the scroll area
+    // intercepted clicks on sections scrolled underneath it, while a
+    // sibling region keeps the button visible at any expansion and
+    // never covers content.
+    const ctaRegion = connectButton.closest(".px-4.pb-4.pt-2");
+    expect(ctaRegion).not.toBeNull();
+    expect(ctaRegion).toHaveClass("space-y-2");
+    expect(connectButton.closest(".overflow-auto")).toBeNull();
   });
 });

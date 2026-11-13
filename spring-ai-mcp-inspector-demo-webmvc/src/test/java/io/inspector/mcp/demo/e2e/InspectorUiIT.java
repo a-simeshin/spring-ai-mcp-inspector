@@ -4782,8 +4782,9 @@ class InspectorUiIT {
 	 * NOTICE.d/connect-cta-sticky.txt in the UI module): on a pristine desktop viewport
 	 * (exactly 1280x800) the primary Connect button is fully visible without scrolling
 	 * the sidebar, and manually expanding the auth profile editor (collapsed by default
-	 * since issue #268) does not push it below the fold. The CTA container is pinned
-	 * sticky to the bottom of the sidebar's scroll area.
+	 * since issue #268) does not push it below the fold. The CTA container is a fixed
+	 * flex region under the sidebar's scroll area (not a sticky overlay: a bar pinned
+	 * over the scroll area covers sections scrolled underneath it).
 	 *
 	 * <p>
 	 * Geometry is read via JavaScript probes only. Any Selenide probe or click that
