@@ -1,0 +1,7 @@
+src/App.tsx: in the pre-connect empty state (the "Connect to an MCP server
+to start inspecting" landing, shown when no client is connected and the auth
+debugger is hidden), add a primary Connect button above the "Open Auth
+Settings" row.  It invokes the same useConnection connect action the sidebar
+CTA wires through onConnect, so no connection flow is duplicated; "Open Auth
+Settings" stays as the secondary action.  Covered by
+src/__tests__/App.emptyStateConnect.test.tsx.
