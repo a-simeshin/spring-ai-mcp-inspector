@@ -1771,6 +1771,25 @@ class InspectorUiIT {
 			$(byText("Quick OAuth Flow")).shouldBe(visible);
 		}
 
+		@Test
+		@DisplayName("Empty-state Connect button starts the shared connect flow (issue #269)")
+		void connect_fromEmptyState_startsSharedConnectFlow() {
+			// given
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+
+			// when
+			// Empty pre-connect state; the canvas exposes its own Connect CTA
+			// wired to the same connect action as the sidebar one.
+			$(byText("Connect to an MCP server to start inspecting")).shouldBe(visible);
+			$("[data-testid=empty-state-connect-button]").shouldBe(visible).click();
+
+			// then
+			// Restart/Reconnect button is only mounted when connectionStatus ===
+			// "connected".
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+		}
+
 	}
 
 	// =====================================================================
