@@ -871,6 +871,7 @@ const Sidebar = ({
                     <TooltipTrigger asChild>
                       <Input
                         id="sse-url-input"
+                        data-testid="sse-url-input"
                         placeholder="URL"
                         value={sseUrl}
                         onChange={(e) => handleUrlChange(e.target.value)}
@@ -883,6 +884,7 @@ const Sidebar = ({
                 ) : (
                   <Input
                     id="sse-url-input"
+                    data-testid="sse-url-input"
                     placeholder="URL"
                     value={sseUrl}
                     onChange={(e) => handleUrlChange(e.target.value)}
