@@ -67,12 +67,31 @@ describe("AuthProfiles editor validation (AC1)", () => {
     delete (window as { location?: unknown }).location;
   });
 
-  it("blocks save on an empty name and shows the validation error", async () => {
+  // [spring-ai-mcp-inspector PATCH] Issue #268: a pristine load renders zero
+  // validation errors and keeps the editor collapsed; errors surface only via
+  // blur or a save attempt.
+  it("keeps the editor collapsed with zero validation errors on a pristine load (issue #268)", async () => {
     renderPanel();
-    const save = await screen.findByTestId("auth-profile-save");
-    expect(save).toBeDisabled();
-    fireEvent.click(save);
-    expect(await screen.findByTestId("auth-profile-validation")).toHaveTextContent(
+    expect(
+      await screen.findByTestId("auth-profile-editor-toggle"),
+    ).toBeEnabled();
+    expect(screen.queryByTestId("auth-profile-save")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("auth-profile-name")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("auth-profile-validation"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reveals the required-name error only after opening the editor and blurring the field (issue #268)", async () => {
+    renderPanel();
+    fireEvent.click(await screen.findByTestId("auth-profile-editor-toggle"));
+    expect(screen.getByTestId("auth-profile-save")).toBeDisabled();
+    // Opened but untouched: an empty name still shows no error.
+    expect(
+      screen.queryByTestId("auth-profile-validation"),
+    ).not.toBeInTheDocument();
+    fireEvent.blur(screen.getByTestId("auth-profile-name"));
+    expect(screen.getByTestId("auth-profile-validation")).toHaveTextContent(
       "Profile name is required",
     );
   });
@@ -87,6 +106,7 @@ describe("AuthProfiles editor validation (AC1)", () => {
         },
       ],
     });
+    fireEvent.click(await screen.findByTestId("auth-profile-editor-toggle"));
     const save = await screen.findByTestId("auth-profile-save");
     fireEvent.change(screen.getByTestId("auth-profile-name"), {
       target: { value: "prod" },
@@ -95,13 +115,19 @@ describe("AuthProfiles editor validation (AC1)", () => {
       target: { value: "tok" },
     });
     expect(save).toBeDisabled();
+    // Typed but not blurred: the duplicate-name error stays hidden (#268).
     expect(
-      await screen.findByTestId("auth-profile-validation"),
-    ).toHaveTextContent("Profile name already exists");
+      screen.queryByTestId("auth-profile-validation"),
+    ).not.toBeInTheDocument();
+    fireEvent.blur(screen.getByTestId("auth-profile-name"));
+    expect(screen.getByTestId("auth-profile-validation")).toHaveTextContent(
+      "Profile name already exists",
+    );
   });
 
   it("blocks save on an empty bearer token", async () => {
     renderPanel();
+    fireEvent.click(await screen.findByTestId("auth-profile-editor-toggle"));
     fireEvent.change(screen.getByTestId("auth-profile-name"), {
       target: { value: "Prod" },
     });
@@ -129,6 +155,7 @@ describe("AuthProfiles editor validation (AC1)", () => {
     });
 
     const { props } = renderPanel();
+    fireEvent.click(await screen.findByTestId("auth-profile-editor-toggle"));
     fireEvent.change(screen.getByTestId("auth-profile-name"), {
       target: { value: "Prod" },
     });
@@ -360,6 +387,8 @@ describe("AuthProfiles authorization-code flow (AC8 / D9B)", () => {
 
     renderPanel();
 
+    // [spring-ai-mcp-inspector PATCH] Issue #268: the editor starts collapsed.
+    fireEvent.click(await screen.findByTestId("auth-profile-editor-toggle"));
     await screen.findByTestId("auth-profile-save");
     await screen.findByTestId("auth-profile-type");
     await act(async () => {
