@@ -78,4 +78,21 @@ describe("Toaster viewport offset (issue #267)", () => {
       "",
     );
   });
+
+  it("consumes the offset variable through the viewport bottom utility", () => {
+    window.innerHeight = 800;
+    mountPane(600, 200);
+
+    render(<Toaster />);
+
+    // The measured offset only moves the viewport if its class actually
+    // positions the bottom edge with the variable (issue #267). Asserting the
+    // utility kills a regression to the static sm:bottom-0, which would pin
+    // the viewport back over the notifications pane regardless of the
+    // measured offset.
+    const viewport = document.querySelector("ol");
+    expect(viewport?.getAttribute("class")).toContain(
+      "sm:bottom-[var(--toast-viewport-offset",
+    );
+  });
 });

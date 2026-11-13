@@ -45,4 +45,6 @@ Covered by:
 - `src/components/__tests__/AuthProfiles.staleBinding.test.tsx` (404
   suppression for list and prefill, destructive toast kept for non-404)
 - `src/components/__tests__/Toaster.viewportOffset.test.tsx` (viewport
-  raised above the pane, default offset without/with hidden pane)
+  raised above the pane, default offset without/with hidden pane, and the
+  viewport class consuming the offset variable through its bottom utility,
+  pinning the placement line against a regression to the static bottom)
