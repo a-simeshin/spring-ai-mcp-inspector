@@ -834,7 +834,9 @@ describe("TimelineTab SEP-2322 input_required chain", () => {
 
     fireEvent.click(screen.getByText("Common Spring AI 2.0 pitfalls"));
     expect(
-      screen.getByText(/Recursive parameter types emit unresolvable \$ref/),
+      screen.getByText(
+        /Historical, Spring AI 1\.1\.x only: recursive parameter types emitted unresolvable \$ref/,
+      ),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: /spring-projects\/spring-ai#5888/ }),

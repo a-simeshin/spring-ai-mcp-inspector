@@ -49,9 +49,9 @@ export function SpringAiPitfallsPanel({
     },
     {
       symptom:
-        "Recursive parameter types emit unresolvable $ref pointers that break tool schemas.",
+        "Historical, Spring AI 1.1.x only: recursive parameter types emitted unresolvable $ref pointers that broke tool schemas. Fixed in 2.0.0-M7 ($defs hoisted to the schema root); does not affect Spring AI 2.0.",
       link: SPRING_AI_5888_URL,
-      linkText: "spring-projects/spring-ai#5888",
+      linkText: "spring-projects/spring-ai#5888 (fixed in 2.0.0-M7)",
       detectorNote: hasUnresolvedRefWarning
         ? "Detector active: see Schema Warning above"
         : undefined,

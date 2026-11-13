@@ -20,8 +20,11 @@ describe("SpringAiPitfallsPanel", () => {
       screen.getByText(/Server-side validation is on by default in 2\.0/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Recursive parameter types emit unresolvable \$ref/),
+      screen.getByText(
+        /Historical, Spring AI 1\.1\.x only: recursive parameter types emitted unresolvable \$ref/,
+      ),
     ).toBeInTheDocument();
+    expect(screen.getByText(/does not affect Spring AI 2\.0/)).toBeInTheDocument();
     expect(
       screen.getByText(
         /Schema generation silently skips primitive\/simple return types/,
@@ -39,7 +42,7 @@ describe("SpringAiPitfallsPanel", () => {
     expect(mediumLink).toHaveAttribute("rel", "noopener noreferrer");
 
     const refLink = screen.getByRole("link", {
-      name: /spring-projects\/spring-ai#5888/,
+      name: /spring-projects\/spring-ai#5888 \(fixed in 2\.0\.0-M7\)/,
     });
     expect(refLink).toHaveAttribute(
       "href",
@@ -86,11 +89,15 @@ describe("SpringAiPitfallsPanel", () => {
     const header = screen.getByText("Common Spring AI 2.0 pitfalls");
     fireEvent.click(header);
     expect(
-      screen.getByText(/Recursive parameter types emit unresolvable \$ref/),
+      screen.getByText(
+        /Historical, Spring AI 1\.1\.x only: recursive parameter types emitted unresolvable \$ref/,
+      ),
     ).toBeInTheDocument();
     fireEvent.click(header);
     expect(
-      screen.queryByText(/Recursive parameter types emit unresolvable \$ref/),
+      screen.queryByText(
+        /Historical, Spring AI 1\.1\.x only: recursive parameter types emitted unresolvable \$ref/,
+      ),
     ).not.toBeInTheDocument();
   });
 });
