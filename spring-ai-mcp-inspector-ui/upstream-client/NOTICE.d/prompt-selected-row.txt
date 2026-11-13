@@ -23,6 +23,9 @@ Covered by:
   is highlighted when the prop is omitted.
 - `src/components/__tests__/PromptsTab.test.tsx`: clicking a prompt
   row applies bg-muted to that row and not to the others (stateful
-  harness around selectedPrompt/setSelectedPrompt).
+  harness around selectedPrompt/setSelectedPrompt), and the marker
+  survives a re-list that replaces the collection with fresh prompt
+  objects carrying the same names (matching by name, not by
+  reference, is what keeps the highlight across re-listing).
 - `InspectorUiIT` (demo-webmvc): e2e assertion that the marker sits
   on the clicked row and moves when another prompt is selected.
