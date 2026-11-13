@@ -563,6 +563,59 @@ describe("App - history key follows activeConnectionId for saved connections", (
     expect(carried[1].isError).toBe(true);
   });
 
+  test("saving a disconnected session moves its history bucket immediately", async () => {
+    localStorage.clear();
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    const { getByTestId } = render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+
+    // Saving an ad-hoc session WITHOUT ever connecting: no live session was
+    // started, so there is no frozen key to defer the move to. The carry-over
+    // must happen right here, at save time. The entries below are seeded
+    // under the form-derived bucket before the save; a regression (no
+    // migration on save) leaves them orphaned there while the History panel
+    // moves to the saved entry's empty bucket.
+    appendHistory("sse:http://localhost:3001/sse", {
+      request: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
+      response: JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+      at: 1000,
+    });
+    appendHistory("sse:http://localhost:3001/sse", {
+      request: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 2 }),
+      response: JSON.stringify({ jsonrpc: "2.0", id: 2, result: {} }),
+      at: 2000,
+      isError: true,
+    });
+
+    await act(async () => {
+      getByTestId("mock-save-connection").click();
+    });
+    const stored = JSON.parse(
+      localStorage.getItem(SAVED_CONNECTIONS_KEY) ?? "null",
+    ) as { connections: Array<{ id: string; name: string }> } | null;
+    expect(stored?.connections).toHaveLength(1);
+    const savedId = stored!.connections[0].id;
+    expect(savedId).not.toBe("sse:http://localhost:3001/sse");
+
+    // The History panel follows the saved entry's bucket...
+    await waitFor(() => {
+      const keyAfterSave =
+        mockUseConnection.mock.calls[mockUseConnection.mock.calls.length - 1][0]
+          .connectionId;
+      expect(keyAfterSave).toBe(savedId);
+    });
+
+    // ...and the entries moved into it right away: the form-derived bucket
+    // is empty and the saved bucket holds both entries, including the
+    // persisted isError flag.
+    expect(loadHistory("sse:http://localhost:3001/sse")).toHaveLength(0);
+    const moved = loadHistory(savedId);
+    expect(moved).toHaveLength(2);
+    expect(moved[1].isError).toBe(true);
+  });
+
   test("two saved connections with the same URL get separate history buckets", async () => {
     localStorage.clear();
     const sharedUrl = "http://localhost:3001/sse";

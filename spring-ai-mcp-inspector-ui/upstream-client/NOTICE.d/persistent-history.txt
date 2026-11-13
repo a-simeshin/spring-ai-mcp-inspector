@@ -79,6 +79,14 @@ Owner-review rework (PR #218, 2026-11-13):
   history bucket (clearHistory), so the stored entries do not outlive the
   entry they belong to.
 
+Review rework (PR #218, 2026-11-13): regression test for the immediate
+save-time bucket move. A Save on a never-connected ad-hoc session (no
+frozen key, so no deferred path) must migrate the entries right away:
+the test seeds entries under the form-derived key, saves, and asserts
+the entries moved into the saved entry's bucket (isError preserved)
+while the form-derived bucket is left empty. RED on a suppressed
+migrateHistory call in App.tsx handleSaveConnection.
+
 Covered by: src/lib/__tests__/persistentHistory.test.ts,
 src/__tests__/App.transportScoping.test.tsx,
 src/components/__tests__/HistoryAndNotifications.test.tsx
