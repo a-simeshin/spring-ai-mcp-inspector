@@ -96,6 +96,12 @@ interface SidebarProps {
   // D3 authorization DTO (issue #54): the server answered and refused.
   // Distinct from connectionError, which means the server was never reached.
   authError?: ProxyErrorDto | null;
+  // [spring-ai-mcp-inspector PATCH] issue #269 rework: URL validation state
+  // is owned by App so the empty-state canvas CTA shares this exact state.
+  urlError: string | null;
+  setUrlError: (error: string | null) => void;
+  urlTouched: boolean;
+  setUrlTouched: (touched: boolean) => void;
   onConnect: () => void;
   onDisconnect: () => Promise<void>;
   onResetSession: () => void;
@@ -143,6 +149,10 @@ const Sidebar = ({
   activeProfileId,
   onActiveProfileChange,
   authError,
+  urlError,
+  setUrlError,
+  urlTouched,
+  setUrlTouched,
   onConnect,
   onDisconnect,
   onResetSession,
@@ -168,9 +178,9 @@ const Sidebar = ({
   const [showClientSecret, setShowClientSecret] = useState(false);
   const [copiedServerEntry, setCopiedServerEntry] = useState(false);
   const [copiedServerFile, setCopiedServerFile] = useState(false);
-  // [spring-ai-mcp-inspector PATCH] URL validation state: error message and touched flag.
-  const [urlError, setUrlError] = useState<string | null>(null);
-  const [urlTouched, setUrlTouched] = useState(false);
+  // [spring-ai-mcp-inspector PATCH] issue #269 rework: urlError/urlTouched
+  // moved up to App and arrive as props so the empty-state canvas CTA
+  // validates and disables under the same condition.
   const { toast } = useToast();
   // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
   const [showSavedConnections, setShowSavedConnections] = useState(true);
@@ -228,7 +238,7 @@ const Sidebar = ({
         setUrlError(result.errorMessage);
       }
     },
-    [setSseUrl, urlTouched],
+    [setSseUrl, urlTouched, setUrlError],
   );
 
   const handleUrlBlur = useCallback(
@@ -237,7 +247,7 @@ const Sidebar = ({
       const result = validateServerUrl(value);
       setUrlError(result.isValid ? null : result.errorMessage);
     },
-    [],
+    [setUrlTouched, setUrlError],
   );
 
   // Shared utility function to generate server config
@@ -1207,22 +1217,11 @@ const Sidebar = ({
                 </Button>
               </div>
             )}
-            {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). Block onConnect when invalid. */}
+            {/* [spring-ai-mcp-inspector PATCH] Disable Connect when the URL is invalid (non-STDIO transports); issue #269 rework: validation moved into the shared connect handler App passes via onConnect, so the canvas CTA validates identically. */}
             {connectionStatus !== "connected" && (
               <Button
                 className="w-full"
-                onClick={() => {
-                  // Mark URL as touched on first connect attempt
-                  if (transportType !== "stdio") {
-                    setUrlTouched(true);
-                    const result = validateServerUrl(sseUrl);
-                    if (!result.isValid) {
-                      setUrlError(result.errorMessage);
-                      return;
-                    }
-                  }
-                  onConnect();
-                }}
+                onClick={onConnect}
                 disabled={transportType !== "stdio" && !!urlError}
               >
                 <Play className="w-4 h-4 mr-2" />

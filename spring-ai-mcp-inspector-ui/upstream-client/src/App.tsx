@@ -108,6 +108,9 @@ import {
   saveInspectorConfig,
   getMCPTaskTtl,
 } from "./utils/configUtils";
+// [spring-ai-mcp-inspector PATCH] issue #269 rework: shared URL validation
+// for both Connect CTAs.
+import { validateServerUrl } from "./utils/urlValidation";
 import ElicitationTab, {
   PendingElicitationRequest,
   ElicitationResponse,
@@ -320,6 +323,11 @@ const App = () => {
   const [transportType, setTransportType] = useState<
     "stdio" | "sse" | "streamable-http"
   >(getInitialTransportType);
+  // [spring-ai-mcp-inspector PATCH] issue #269 rework: URL validation state
+  // lives here so the sidebar CTA and the empty-state canvas CTA share the
+  // exact same error message and disable condition.
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [urlTouched, setUrlTouched] = useState(false);
   const [connectionType, setConnectionType] = useState<"direct" | "proxy">(
     () => {
       return (
@@ -846,6 +854,23 @@ const App = () => {
   useEffect(() => {
     saveInspectorConfig(CONFIG_LOCAL_STORAGE_KEY, config);
   }, [config]);
+
+  // [spring-ai-mcp-inspector PATCH] issue #269 rework: one validated connect
+  // handler for both Connect buttons (the sidebar CTA and the empty-state
+  // canvas CTA). For URL-based transports an empty or invalid server URL
+  // surfaces the URL validation error and blocks the connect instead of
+  // falling back to the loopback demo server.
+  const handleConnectRequest = useCallback(() => {
+    if (transportType !== "stdio") {
+      setUrlTouched(true);
+      const result = validateServerUrl(sseUrl);
+      setUrlError(result.isValid ? null : result.errorMessage);
+      if (!result.isValid) {
+        return;
+      }
+    }
+    void connectMcpServer();
+  }, [transportType, sseUrl, connectMcpServer]);
 
   const onOAuthConnect = useCallback(
     (serverUrl: string) => {
@@ -1817,7 +1842,14 @@ const App = () => {
           activeProfileId={activeProfileId}
           onActiveProfileChange={setActiveProfileId}
           authError={authError}
-          onConnect={connectMcpServer}
+          // [spring-ai-mcp-inspector PATCH] issue #269 rework: onConnect is
+          // the shared validating handler; URL validation state is lifted to
+          // App so the canvas CTA validates under the same condition.
+          onConnect={handleConnectRequest}
+          urlError={urlError}
+          setUrlError={setUrlError}
+          urlTouched={urlTouched}
+          setUrlTouched={setUrlTouched}
           onDisconnect={disconnectMcpServer}
           onResetSession={resetSessionAndConnect}
           logLevel={logLevel}
@@ -2274,15 +2306,29 @@ const App = () => {
               </p>
               {/* [spring-ai-mcp-inspector PATCH] Empty-state Connect CTA
                   (issue #269): the landing page needs a primary connect
-                  affordance; it reuses the same connect action the sidebar
-                  CTA wires instead of duplicating the flow. */}
+                  affordance; it routes through the same validated handler
+                  as the sidebar CTA, so an empty or invalid server URL
+                  disables the button and shows the URL validation error
+                  instead of connecting. */}
               <Button
                 data-testid="empty-state-connect-button"
-                onClick={() => void connectMcpServer()}
+                onClick={handleConnectRequest}
+                disabled={transportType !== "stdio" && !!urlError}
               >
                 <Play className="w-4 h-4 mr-2" />
                 Connect
               </Button>
+              {/* [spring-ai-mcp-inspector PATCH] issue #269 rework: surface
+                  the shared URL validation error next to the canvas CTA. */}
+              {urlError && (
+                <p
+                  className="text-xs text-red-500"
+                  role="alert"
+                  data-testid="empty-state-url-error"
+                >
+                  {urlError}
+                </p>
+              )}
               <div className="flex items-center gap-2">
                 <p className="text-sm text-muted-foreground">
                   Need to configure authentication?
