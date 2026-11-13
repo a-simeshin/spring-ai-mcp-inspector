@@ -616,6 +616,101 @@ describe("App - history key follows activeConnectionId for saved connections", (
     expect(moved[1].isError).toBe(true);
   });
 
+  test("disconnecting an ad-hoc session does not move its history into a sidebar-selected connection", async () => {
+    localStorage.clear();
+    const selectedId = seedSavedConnection(
+      "Other Server",
+      "http://localhost:3999/other",
+    );
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    const { getByTestId } = render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+
+    // Entries from earlier ad-hoc sessions to server X live under the
+    // form-derived bucket before this session starts.
+    appendHistory("sse:http://localhost:3001/sse", {
+      request: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
+      response: JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+      at: 1000,
+    });
+
+    mockUseConnection.mockReturnValue(connectedState);
+    await act(async () => {
+      getByTestId("mock-connect").click();
+    });
+    appendHistory("sse:http://localhost:3001/sse", {
+      request: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 2 }),
+      response: JSON.stringify({ jsonrpc: "2.0", id: 2, result: {} }),
+      at: 2000,
+    });
+
+    // Owner review 2026-11-13: clicking a saved connection while the live
+    // session runs re-points the pending association, but the frozen key
+    // keeps receiving entries for server X. Disconnect must NOT carry the
+    // whole bucket (earlier sessions included) into the selected entry.
+    await act(async () => {
+      getByTestId("mock-select-connection").click();
+    });
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    await act(async () => {
+      getByTestId("mock-disconnect").click();
+    });
+
+    expect(loadHistory("sse:http://localhost:3001/sse")).toHaveLength(2);
+    expect(loadHistory(selectedId)).toHaveLength(0);
+  });
+
+  test("a mid-session URL edit followed by Save does not move the live history into the renamed entry", async () => {
+    localStorage.clear();
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    const { getByTestId } = render(<App />);
+    await waitFor(() => {
+      expect(mockUseConnection).toHaveBeenCalled();
+    });
+
+    mockUseConnection.mockReturnValue(connectedState);
+    await act(async () => {
+      getByTestId("mock-connect").click();
+    });
+    appendHistory("sse:http://localhost:3001/sse", {
+      request: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 }),
+      response: JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }),
+      at: 1000,
+    });
+    appendHistory("sse:http://localhost:3001/sse", {
+      request: JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 2 }),
+      response: JSON.stringify({ jsonrpc: "2.0", id: 2, result: {} }),
+      at: 2000,
+      isError: true,
+    });
+
+    // Owner review 2026-11-13: editing the URL mid-session and saving under
+    // a new name creates an entry pointing at the EDITED server. The live
+    // history belongs to the connect-time server; disconnect must not
+    // carry it into the renamed entry's bucket.
+    await act(async () => {
+      getByTestId("mock-edit-url").click();
+    });
+    await act(async () => {
+      getByTestId("mock-save-connection").click();
+    });
+    const stored = JSON.parse(
+      localStorage.getItem(SAVED_CONNECTIONS_KEY) ?? "null",
+    ) as { connections: Array<{ id: string; name: string }> } | null;
+    expect(stored?.connections).toHaveLength(1);
+    const savedId = stored!.connections[0].id;
+
+    mockUseConnection.mockReturnValue(disconnectedConnectionState);
+    await act(async () => {
+      getByTestId("mock-disconnect").click();
+    });
+
+    expect(loadHistory("sse:http://localhost:3001/sse")).toHaveLength(2);
+    expect(loadHistory(savedId)).toHaveLength(0);
+  });
+
   test("two saved connections with the same URL get separate history buckets", async () => {
     localStorage.clear();
     const sharedUrl = "http://localhost:3001/sse";

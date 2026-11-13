@@ -63,12 +63,12 @@ Owner-review rework (PR #218, 2026-11-13):
 - migrateHistory(fromId, toId) carries a whole bucket over to a new key
   (merge, then the per-connection FIFO cap and the global size limit are
   re-applied). It refuses a store written by a foreign schemaVersion and is
-  a no-op for equal ids or an empty source. App.tsx calls it when an ad-hoc
+  is a no-op for equal ids or an empty source. App.tsx calls it when an ad-hoc
   session is saved under a name (immediately when disconnected, deferred to
   disconnect while the live session is running, since the frozen key keeps
-  receiving entries) and when a manual disconnect lands on a saved
-  connection, so entries written under the ad-hoc key stay reachable under
-  the saved-connection id instead of being orphaned.
+  receiving entries) and at disconnect into the saved entry Save created
+  during that session, so entries written under the ad-hoc key stay reachable
+  under the saved-connection id instead of being orphaned.
 - The saved-connection association survives a reload: App.tsx persists
   activeConnectionId under localStorage key "lastActiveConnectionId" while
   it is set, re-reads it at mount and re-validates it against the saved
@@ -86,6 +86,24 @@ the test seeds entries under the form-derived key, saves, and asserts
 the entries moved into the saved entry's bucket (isError preserved)
 while the form-derived bucket is left empty. RED on a suppressed
 migrateHistory call in App.tsx handleSaveConnection.
+
+Review rework (PR #218, 2026-11-13): the disconnect-time bucket move is
+restricted to the saved entry Save CREATED in the same session. A ref
+(sessionSaveCreatedConnectionIdRef, set by handleSaveConnection only when
+targetId is undefined, reset by handleConnect / onOAuthConnect /
+onProfileAuthorized) identifies that entry; handleDisconnect migrates the
+frozen key into it only when the entry still points at the connect-time
+endpoint (savedConnectionHistoryKey(entry) equals the frozen key). Before,
+the move targeted whatever saved entry was active at disconnect, so (a)
+clicking a different saved connection in the sidebar while an ad-hoc
+session ran, then disconnecting, carried the WHOLE ad-hoc bucket (earlier
+sessions included) into the unrelated entry, and (b) editing the URL
+mid-session and saving under a new name moved the connect-time server's
+history into the renamed entry pointing at another server. Regression
+tests cover both scenarios in src/__tests__/App.transportScoping.test.tsx
+(RED on 5502c648). The legitimate path is unchanged: saving an ad-hoc
+session under a new name pointing at the same server still carries the
+bucket at disconnect (existing tests keep passing).
 
 Covered by: src/lib/__tests__/persistentHistory.test.ts,
 src/__tests__/App.transportScoping.test.tsx,

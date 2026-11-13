@@ -82,3 +82,11 @@ STORAGE KEY ALIGNMENT WITH #89 (auth profiles):
   stripped before persistence). The key holds only non-secret
   connection metadata (name, transport type, URL, header names
   without values, env keys with empty values).
+
+Owner-review rework (PR #218, 2026-11-13): added
+`savedConnectionHistoryKey(c)` returning the transport-scoped history
+bucket key for an entry (`stdio:<command> <args>` / `<transport>:<url>`,
+mirroring the form-derived key App.tsx captures at connect time). The UI
+layer compares it against the frozen session key so the disconnect-time
+history carry-over only targets an entry that still points at the
+connect-time endpoint (see NOTICE.d/persistent-history.txt).

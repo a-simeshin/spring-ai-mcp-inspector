@@ -117,6 +117,7 @@ import {
   saveConnection,
   deleteSavedConnection,
   findConnectionByName,
+  savedConnectionHistoryKey,
   stripSecrets,
   touchSavedConnection,
 } from "./lib/savedConnections";
@@ -510,6 +511,15 @@ const App = () => {
   const [activeHistoryConnectionId, setActiveHistoryConnectionId] = useState<
     string | undefined
   >(undefined);
+  // [spring-ai-mcp-inspector PATCH] Id of the saved entry Save CREATED
+  // during the current session (owner review on PR #218, 2026-11-13): the
+  // disconnect-time bucket carry-over moves entries only into this entry,
+  // never into whatever happens to be active at disconnect. Reset when a
+  // session starts; a Save that updates or overwrites an existing entry
+  // does not set it.
+  const sessionSaveCreatedConnectionIdRef = useRef<string | undefined>(
+    undefined,
+  );
   // [spring-ai-mcp-inspector PATCH] Saved connections state (#121),
   // declared before useConnection: the pending history bucket key follows
   // the active saved entry. Restored from localStorage on load and
@@ -709,6 +719,14 @@ const App = () => {
         // else no collision: targetId undefined -> creates a new entry.
       }
       const saved = saveConnection(draft, targetId);
+      // [spring-ai-mcp-inspector PATCH] Only a save that CREATES a new
+      // entry adopts the session's history bucket on disconnect (owner
+      // review on PR #218, 2026-11-13). Updates and confirmed overwrites
+      // of existing entries do not: their buckets already hold another
+      // server's history.
+      if (targetId === undefined) {
+        sessionSaveCreatedConnectionIdRef.current = saved.id;
+      }
       // [spring-ai-mcp-inspector PATCH] Carry the session's history bucket
       // over to the saved entry (owner review on PR #218, 2026-11-13):
       // saving an ad-hoc session used to orphan its entries under the
@@ -916,31 +934,35 @@ const App = () => {
   // during a live connection, the captured key keeps history writes and the
   // History panel on one stable bucket instead of following every keystroke.
   const handleConnect = useCallback(() => {
+    // [spring-ai-mcp-inspector PATCH] A new session starts with no
+    // Save-created entry (owner review on PR #218, 2026-11-13).
+    sessionSaveCreatedConnectionIdRef.current = undefined;
     setActiveHistoryConnectionId(historyKeyForConnection());
     void connectMcpServer();
   }, [connectMcpServer, historyKeyForConnection]);
 
   const handleDisconnect = useCallback(async () => {
     // [spring-ai-mcp-inspector PATCH] Before releasing the frozen key,
-    // carry entries written under it into the saved entry's bucket
-    // (owner review on PR #218, 2026-11-13): a mid-session Save defers
-    // the bucket move to here, because the frozen key keeps receiving
-    // writes until the session ends. Skipped when the frozen key is
-    // itself a saved bucket (selected-connection sessions) or no saved
-    // entry is pending.
+    // carry entries written under it into the saved entry Save created
+    // during this session (owner review on PR #218, 2026-11-13): a
+    // mid-session Save defers the bucket move to here, because the frozen
+    // key keeps receiving writes until the session ends. The move happens
+    // only into an entry Save created this session (a sidebar selection or
+    // a re-pointed URL must not adopt another server's history) and only
+    // while that entry still points at the connect-time endpoint.
     const frozen = activeHistoryConnectionId;
+    const savedId = sessionSaveCreatedConnectionIdRef.current;
+    const created = loadSavedConnections().find((c) => c.id === savedId);
     if (
       frozen !== undefined &&
-      activeConnectionId !== undefined &&
-      frozen !== activeConnectionId &&
-      !loadSavedConnections().some((c) => c.id === frozen) &&
-      loadSavedConnections().some((c) => c.id === activeConnectionId)
+      created !== undefined &&
+      savedConnectionHistoryKey(created) === frozen
     ) {
-      migrateHistory(frozen, activeConnectionId);
+      migrateHistory(frozen, created.id);
     }
     setActiveHistoryConnectionId(undefined);
     await disconnectMcpServer();
-  }, [activeHistoryConnectionId, activeConnectionId, disconnectMcpServer]);
+  }, [activeHistoryConnectionId, disconnectMcpServer]);
 
   const onOAuthConnect = useCallback(
     (serverUrl: string) => {
@@ -957,6 +979,9 @@ const App = () => {
       // historyKeyForConnection(): setSseUrl above does not update the
       // closure variable this render, so the helper would read the
       // pre-redirect URL for the ad-hoc branch.
+      // [spring-ai-mcp-inspector PATCH] A new session starts with no
+      // Save-created entry (owner review on PR #218, 2026-11-13).
+      sessionSaveCreatedConnectionIdRef.current = undefined;
       setActiveHistoryConnectionId(
         activeConnectionId ??
           (transportType === "stdio"
@@ -1714,6 +1739,9 @@ const App = () => {
             // saved connection id), so without the freeze the key would
             // follow the editable URL field for the whole session and a
             // mid-session edit would reshuffle the history buckets.
+            // [spring-ai-mcp-inspector PATCH] A new session starts with no
+            // Save-created entry (owner review on PR #218, 2026-11-13).
+            sessionSaveCreatedConnectionIdRef.current = undefined;
             setActiveHistoryConnectionId(historyKeyForConnection());
             void connectMcpServer(undefined, 0, profileId);
           }}
