@@ -1,0 +1,8 @@
+src/utils/mcpErrorHandling.ts + src/App.tsx — route fire-and-forget MCP
+requests from the Prompts tab (prompts/list via listPrompts, prompts/get via
+getPrompt) through the new swallowLoggedMcpError() helper. sendMCPRequest()
+already records the failure under the tab's error key (rendered as the
+destructive alert in PromptsTab) before rethrowing, but the PromptsTab
+props are typed `() => void` and drop the returned promise, so the rethrow
+surfaced as an unhandledrejection in the browser console on every
+server-side MCP error (issue #276).
