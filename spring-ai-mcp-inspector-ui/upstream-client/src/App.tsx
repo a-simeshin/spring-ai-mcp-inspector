@@ -449,7 +449,7 @@ const App = () => {
     null,
   );
   // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): live mirror of
-  // the selected resource for async guards in readResource; a ref stays
+  // the selected resource for the guards in readResource; a ref stays
   // current across awaits where a closed-over state snapshot would not.
   const selectedResourceRef = useRef<Resource | null>(null);
   const [resourceSubscriptions, setResourceSubscriptions] = useState<
@@ -1463,7 +1463,16 @@ const App = () => {
     // demo://clock timestamp advances on every read). Cached error payloads
     // are retried the same way.
     if (resourceContentMap[uri]) {
-      setResourceContent(resourceContentMap[uri]);
+      // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): commit the
+      // cached payload to the pane only while its uri is still the live
+      // selection. A Tools-result resource link reads a cached uri
+      // without touching the selection; an unguarded commit here used to
+      // overwrite the pane while a different row was selected, leaving
+      // pane and selection diverged (issue #344). The re-read below still
+      // happens: the guard gates only the sync pane commit.
+      if (selectedResourceRef.current?.uri === uri) {
+        setResourceContent(resourceContentMap[uri]);
+      }
     }
     if (fetchingResources.has(uri)) {
       return;
