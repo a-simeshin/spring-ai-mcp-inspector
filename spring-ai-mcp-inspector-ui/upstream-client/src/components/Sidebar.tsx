@@ -753,6 +753,7 @@ const Sidebar = ({
                     <TooltipTrigger asChild>
                       <Input
                         id="sse-url-input"
+                        data-testid="sse-url-input"
                         placeholder="URL"
                         value={sseUrl}
                         onChange={(e) => handleUrlChange(e.target.value)}
@@ -765,6 +766,7 @@ const Sidebar = ({
                 ) : (
                   <Input
                     id="sse-url-input"
+                    data-testid="sse-url-input"
                     placeholder="URL"
                     value={sseUrl}
                     onChange={(e) => handleUrlChange(e.target.value)}
@@ -1189,47 +1191,6 @@ const Sidebar = ({
               pane below (see NOTICE.d/connect-error-alert.txt). */}
 
           <div className="space-y-2">
-            {connectionStatus === "connected" && (
-              <div className="grid grid-cols-2 gap-4">
-                <Button
-                  data-testid="connect-button"
-                  onClick={async () => {
-                    await onDisconnect();
-                    onConnect();
-                  }}
-                >
-                  <RotateCcw className="w-4 h-4 mr-2" />
-                  {transportType === "stdio" ? "Restart" : "Reconnect"}
-                </Button>
-                <Button onClick={onDisconnect}>
-                  <RefreshCwOff className="w-4 h-4 mr-2" />
-                  Disconnect
-                </Button>
-              </div>
-            )}
-            {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). Block onConnect when invalid. */}
-            {connectionStatus !== "connected" && (
-              <Button
-                className="w-full"
-                onClick={() => {
-                  // Mark URL as touched on first connect attempt
-                  if (transportType !== "stdio") {
-                    setUrlTouched(true);
-                    const result = validateServerUrl(sseUrl);
-                    if (!result.isValid) {
-                      setUrlError(result.errorMessage);
-                      return;
-                    }
-                  }
-                  onConnect();
-                }}
-                disabled={transportType !== "stdio" && !!urlError}
-              >
-                <Play className="w-4 h-4 mr-2" />
-                Connect
-              </Button>
-            )}
-
             <div className="flex items-center justify-center space-x-2 mb-4">
               <div
                 className={`w-2 h-2 rounded-full ${(() => {
@@ -1399,6 +1360,67 @@ const Sidebar = ({
           </div>
         </div>
       </div>
+
+      {/* [spring-ai-mcp-inspector PATCH] Issue #269: render the connect CTA
+          buttons in a fixed region under the sidebar scroll area (a flex
+          sibling of the scroll container, not sticky). A sticky overlay
+          pinned over the scroll area intercepted clicks on sections
+          scrolled underneath it (auth/config toggles under the bar in
+          CI). As a flex region the Connect button stays inside the
+          viewport at any section expansion and never covers content.
+          Only the buttons live here: the status line, the connection
+          error banner, the server card and the logging level stay in
+          the scroll area above, so a tall error banner cannot squeeze
+          the scroll area. The region gets a dedicated testid for the
+          fold-visibility checks (InspectorUiIT#ConnectCtaArea). */}
+      <div
+        className="px-4 pb-4 pt-2 space-y-2"
+        data-testid="sidebar-connect-region"
+      >
+        {connectionStatus === "connected" && (
+          <div className="grid grid-cols-2 gap-4">
+            <Button
+              data-testid="connect-button"
+              onClick={async () => {
+                await onDisconnect();
+                onConnect();
+              }}
+            >
+              <RotateCcw className="w-4 h-4 mr-2" />
+              {transportType === "stdio" ? "Restart" : "Reconnect"}
+            </Button>
+            <Button onClick={onDisconnect}>
+              <RefreshCwOff className="w-4 h-4 mr-2" />
+              Disconnect
+            </Button>
+          </div>
+        )}
+        {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). Block onConnect when invalid. */}
+        {connectionStatus !== "connected" && (
+          <Button
+            className="w-full"
+            data-testid="sidebar-connect-button"
+            onClick={() => {
+              // Mark URL as touched on first connect attempt
+              if (transportType !== "stdio") {
+                setUrlTouched(true);
+                const result = validateServerUrl(sseUrl);
+                if (!result.isValid) {
+                  setUrlError(result.errorMessage);
+                  return;
+                }
+              }
+              onConnect();
+            }}
+            disabled={transportType !== "stdio" && !!urlError}
+          >
+            <Play className="w-4 h-4 mr-2" />
+            Connect
+          </Button>
+        )}
+
+      </div>
+
       <div className="p-4 border-t">
         <div className="flex items-center justify-between">
           <Select

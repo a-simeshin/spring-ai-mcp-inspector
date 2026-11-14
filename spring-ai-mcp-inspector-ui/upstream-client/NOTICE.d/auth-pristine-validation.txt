@@ -1,0 +1,16 @@
+src/components/AuthProfiles.tsx + src/components/__tests__/AuthProfiles.test.tsx
+- issue #268: on a pristine load (empty localStorage) the auth-profile editor
+rendered "Profile name is required" under the empty Name field before any user
+interaction, because validation output was derived directly from field
+emptiness and the editor section was always expanded. Fixes: (a) the always
+displayed validationError state is replaced by a `touched` gate; field errors
+render only after a blur inside the editor (onBlurCapture) or a save/update/
+authorize attempt, never on mount; save/update/authorize buttons keep their
+live disabled state from validateProfileDraft; (b) the editor section is
+collapsed on mount and expands only via the explicit "New profile" toggle
+(startCreate) or when the user starts editing an existing profile (handleEdit).
+Editing a loaded profile, blur-after-clear and save-time validation of empty
+required fields still surface errors. Tests updated to expand the editor
+before interacting and to pin the pristine-load contract.
+Covered by jest unit tests (AuthProfiles.test.tsx) in
+spring-ai-mcp-inspector-ui/upstream-client.
