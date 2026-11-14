@@ -349,14 +349,25 @@ public final class McpProxy {
 	 * @return the send result
 	 */
 	private Mono<Void> sendWithOneRetry(final ProxySession session, final JSONRPCMessage typed) {
-		return session.targetTransport().sendMessage(typed).onErrorResume((err) -> {
+		// Subscribe the upstream send on boundedElastic: the thread that subscribes
+		// this Mono is the thread that emitted the browser frame (on the reactive
+		// stack the Netty event loop of the inbound /message POST), and legacy
+		// transports execute a blocking HttpClient.send there, serializing all
+		// concurrent frames of one session behind the slowest one (issue #356).
+		// The handshake gate is unaffected: it opens when the initialize send
+		// completes, regardless of which thread ran it.
+		final Mono<Void> send = session.targetTransport().sendMessage(typed).subscribeOn(Schedulers.boundedElastic());
+		return send.onErrorResume((err) -> {
 			if (isRetryableAuthError(err, session)) {
-				return Mono.defer(() -> refreshToken(session).then(session.targetTransport().sendMessage(typed)))
-					.doOnError((err2) -> {
-						LOG.warn("proxy[{}] sendMessage failed after one retry: {}", session.sessionId(),
-								err2.toString());
-						session.failUpstream(err2);
-					});
+				return Mono.defer(() -> {
+					final Mono<Void> resend = session.targetTransport()
+						.sendMessage(typed)
+						.subscribeOn(Schedulers.boundedElastic());
+					return refreshToken(session).then(resend);
+				}).doOnError((err2) -> {
+					LOG.warn("proxy[{}] sendMessage failed after one retry: {}", session.sessionId(), err2.toString());
+					session.failUpstream(err2);
+				});
 			}
 			LOG.warn("proxy[{}] sendMessage failed: {}", session.sessionId(), err.toString());
 			session.failUpstream(err);
