@@ -170,7 +170,7 @@ describe("App - stale preview pane race guard (#344)", () => {
 
     // Switch to the fast resource while the slow read is still in flight.
     // The fast read resolves inside this act: its continuation (the
-    // unconditional App.readResource set at App.tsx:1219) commits here.
+    // guarded App.readResource pane set) commits here.
     await act(async () => {
       fireEvent.click(screen.getByTitle("demo://fast"));
       await Promise.resolve();
@@ -202,5 +202,73 @@ describe("App - stale preview pane race guard (#344)", () => {
     // slow resource name a second time (row list already has it once).
     expect(screen.getAllByText("slow-resource")).toHaveLength(1);
     expect(screen.getAllByText("fast-resource").length).toBeGreaterThan(0);
+  }, 15000);
+
+  it("returning to a resource shows its cached content without waiting for the fresh read", async () => {
+    mockUseConnection.mockReturnValue({
+      ...connectionState({ resources: { listChanged: true } }),
+      makeRequest,
+    } as ReturnType<typeof useConnection>);
+
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByText("List Resources"));
+    await waitFor(() => {
+      expect(screen.getByTitle("demo://slow")).toBeInTheDocument();
+    });
+
+    const { act } = await import("@testing-library/react");
+
+    // Select the slow resource: its read parks on the deferred promise.
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("demo://slow"));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+
+    // Switch to the fast resource: its read resolves immediately and the
+    // pane shows the fast payload.
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("demo://fast"));
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/fast-payload/)).toBeInTheDocument();
+    });
+
+    // Release the slow read. The pane keeps the fast payload (the pane
+    // set is guarded by the selected uri), but the slow payload must
+    // still land in the per-uri cache: the cache write in App.readResource
+    // stays unconditional because a response is always correct for its
+    // own uri.
+    await act(async () => {
+      resolveSlowRead({
+        contents: [
+          { uri: "demo://slow", mimeType: "text/plain", text: "slow-payload" },
+        ],
+      });
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(screen.queryByText(/slow-payload/)).not.toBeInTheDocument();
+
+    // Return to the slow resource. App.readResource is
+    // stale-while-revalidate: it shows the cached payload synchronously
+    // and re-issues resources/read. The fresh read parks on the deferred
+    // promise and is never resolved in this test, so whatever the pane
+    // shows from here on can only have come from the cache. If the cache
+    // write were moved inside the guard, the pane would keep showing the
+    // fast payload and this assertion would fail.
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("demo://slow"));
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(screen.getByText(/slow-payload/)).toBeInTheDocument();
+    expect(screen.queryByText(/fast-payload/)).not.toBeInTheDocument();
   }, 15000);
 });
