@@ -1,0 +1,28 @@
+src/components/PromptsTab.tsx: prompts/get payload filtering on submit.
+
+What changed for the user:
+- Get Prompt no longer sends blank optional arguments. When the user
+  types into an optional argument field and then clears it, the stale
+  empty string left in form state used to reach the prompts/get
+  payload as `{"suffix": ""}`; a whitespace-only optional value went
+  out as-is. Both are now omitted from the payload: the request
+  carries required values plus optional values the user actually
+  filled, matching what the Spring AI demo prompt templates expect
+  (blank optional values no longer override server-side defaults).
+
+Implementation:
+- In `handleGetPrompt`, before calling getPrompt, the submitted
+  arguments object is built from form state: entries whose name is a
+  required argument always pass (submit is blocked while any required
+  value is blank, see NOTICE.d/param-validation.txt); every other
+  entry passes only when its value is not whitespace-only. The form
+  state itself is untouched, so the fields keep showing what the user
+  typed.
+- Marked in place with a `[spring-ai-mcp-inspector PATCH]` comment in
+  PromptsTab.tsx.
+
+Covered by:
+- `src/components/__tests__/PromptsTab.test.tsx`: a cleared optional
+  argument and a whitespace-only optional argument are both omitted
+  from the getPrompt payload; a filled optional argument is included;
+  a whitespace-only required argument disables Get Prompt.

@@ -22,16 +22,20 @@ What changed for the user:
   stay strings for the server to reject instead of silently becoming
   0/31/null.
 - The Get Prompt button follows the same rules: disabled when a
-  prompt with required arguments is untouched.
+  prompt with required arguments is untouched. A required argument
+  holding only whitespace ("   ") also blocks submit: typed-but-blank
+  input counts as "not filled" (the demo server rejects it with
+  -32602).
 
 Implementation:
 - `src/utils/paramValidation.ts` (new): pure functions
   `validateToolParams(schema, params)` and
   `validatePromptArgs(args, promptArgs)` returning per-field errors.
   Rules: required array checked; undefined/null/empty-string is
-  "required"; integer must be a whole number; number must be a
-  number; boolean must be a boolean; `nullable: true` accepts null;
-  ambiguous schemas (no clear primitive type) are skipped. The
+  "required"; in validatePromptArgs a whitespace-only value also
+  counts as "required"; integer must be a whole number; number must
+  be a number; boolean must be a boolean; `nullable: true` accepts
+  null; ambiguous schemas (no clear primitive type) are skipped. The
   server round-trip handles them.
 - `src/components/ToolsTab.tsx`: fieldErrors state kept for blur/
   submit hint display only; the button's disabled state derives from
@@ -61,7 +65,9 @@ Implementation:
 Covered by:
 - `src/utils/__tests__/paramValidation.test.ts`: unit tests for
   both validation functions (required, type checks, nullable, union
-  types, ambiguous schemas).
+  types, ambiguous schemas), plus validatePromptArgs whitespace
+  cases: a whitespace-only required arg reports "required" and a
+  required arg padded with spaces stays accepted.
 - `src/components/__tests__/ToolsTab.test.tsx`: untouched sum tool
   → Run Tool disabled; submit payload regression test (a=2,b=3
   sends exactly {a:2,b:3}); aria-invalid and aria-describedby

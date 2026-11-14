@@ -112,7 +112,9 @@ export function validateToolParams(
  *
  * Prompt arguments are simpler than JSON Schema. Each argument has a
  * `required?: boolean` flag.  Required arguments with empty values block
- * submission.
+ * submission. A whitespace-only value counts as empty: the demo server
+ * (and typical Spring AI prompt templates) reject or default it, and the
+ * user intent of typed-but-blank input is "not filled".
  *
  * @param args   The prompt's argument definitions.
  * @param promptArgs  The current argument values as stored in state.
@@ -129,7 +131,7 @@ export function validatePromptArgs(
   for (const arg of args) {
     if (!arg.required) continue;
     const value = promptArgs[arg.name];
-    if (value === undefined || value === "") {
+    if (value === undefined || value.trim() === "") {
       errors.push({ field: arg.name, message: "required" });
     }
   }
