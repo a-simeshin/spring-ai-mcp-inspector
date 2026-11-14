@@ -559,6 +559,12 @@ public class StreamableHttpProxyController {
 				// is enabled only after this session's initialize response, so no
 				// mcp-session-id header needs to be attached here.
 				session.touch();
+				// Locally answered frames never reach the McpProxy pumps, so the
+				// request/response pair is recorded here to make the exchange
+				// visible in the traffic timeline.
+				if (taskResponse.getBody() instanceof JsonNode responseNode) {
+					this.mcpProxy.recordLocalExchange(session, body, responseNode);
+				}
 				return taskResponse;
 			}
 		}

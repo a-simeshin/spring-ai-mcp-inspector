@@ -457,6 +457,28 @@ public final class McpProxy {
 	}
 
 	/**
+	 * Records a JSON-RPC exchange that the proxy answered locally (e.g. an intercepted
+	 * {@code tasks/*} method) without relaying anything upstream. The request is recorded
+	 * as outbound traffic and the locally produced response as inbound traffic, so the
+	 * pair reaches the traffic timeline through the same instrumentation the relay path
+	 * uses. Frames that fail to deserialize are skipped on their side only; recording
+	 * failures never propagate to the caller.
+	 * @param session the proxy session (must not be {@code null})
+	 * @param request the raw request frame received from the browser
+	 * @param response the raw response frame produced locally
+	 */
+	public void recordLocalExchange(final ProxySession session, final JsonNode request, final JsonNode response) {
+		final JSONRPCMessage typedRequest = toTyped(request);
+		if (typedRequest != null) {
+			recordOutbound(session, typedRequest, request);
+		}
+		final JSONRPCMessage typedResponse = toTyped(response);
+		if (typedResponse != null) {
+			recordInbound(session, typedResponse, response);
+		}
+	}
+
+	/**
 	 * Deserializes a raw {@link JsonNode} into a typed JSON-RPC message via the SDK
 	 * schema parser.
 	 * @param frame the raw JSON node to deserialize

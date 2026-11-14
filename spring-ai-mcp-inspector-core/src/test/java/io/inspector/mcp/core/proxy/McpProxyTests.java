@@ -58,6 +58,11 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.auth.OAuth2GrantMode;
 import io.inspector.mcp.core.auth.OAuth2Profile;
+import io.inspector.mcp.core.timeline.BoundedTimelineService;
+import io.inspector.mcp.core.timeline.McpTrafficRecorder;
+import io.inspector.mcp.core.timeline.TimelineEvent;
+import io.inspector.mcp.core.timeline.TimelineEventType;
+import io.inspector.mcp.core.timeline.TimelineQuery;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -92,6 +97,58 @@ class McpProxyTests {
 		this.browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		this.targetToBrowser = Sinks.many().replay().limit(64);
 		this.session = new ProxySession("s-1", this.transport, this.browserToTarget, this.targetToBrowser);
+	}
+
+	@Nested
+	@DisplayName("recordLocalExchange() records locally answered frames")
+	class RecordLocalExchange {
+
+		@Test
+		@Story("Locally answered frames hit the traffic timeline")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered request/response pair is recorded as a correlated request and response in the traffic timeline")
+		void recordLocalExchange_emitsCorrelatedRequestAndResponse() throws Exception {
+			// given
+			final BoundedTimelineService timeline = new BoundedTimelineService(16);
+			final McpTrafficRecorder recorder = new McpTrafficRecorder(timeline);
+			final McpProxy localProxy = new McpProxy(McpProxyTests.this.mapper, recorder);
+			final JsonNode request = McpProxyTests.this.mapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}");
+			final JsonNode response = McpProxyTests.this.mapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"taskId\":\"t-1\",\"status\":\"working\"}}");
+
+			// when
+			localProxy.recordLocalExchange(McpProxyTests.this.session, request, response);
+
+			// then: the timeline contract is newest-first, so the locally produced
+			// response comes before the recorded request
+			final List<TimelineEvent> events = timeline.query(TimelineQuery.all());
+			assertThat(events).hasSize(2);
+			assertThat(events.get(0).type()).isEqualTo(TimelineEventType.MCP_JSONRPC_RESPONSE);
+			assertThat(events.get(0).sessionId()).isEqualTo("s-1");
+			assertThat(events.get(0).payload()).isEqualTo(response);
+			assertThat(events.get(1).type()).isEqualTo(TimelineEventType.MCP_JSONRPC_REQUEST);
+			assertThat(events.get(1).payload()).isEqualTo(request);
+			assertThat(events.get(0).correlationId()).isEqualTo(events.get(1).correlationId());
+			// the local exchange must not leave a dangling pending correlation behind
+			assertThat(recorder.pendingCorrelations()).isZero();
+		}
+
+		@Test
+		@Story("Locally answered frames hit the traffic timeline")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("recordLocalExchange without a configured recorder is a no-op")
+		void recordLocalExchange_withoutRecorder_isNoop() throws Exception {
+			// given: the default proxy from setUp has no traffic recorder
+			final JsonNode request = McpProxyTests.this.mapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tasks/list\"}");
+			final JsonNode response = McpProxyTests.this.mapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tasks\":[]}}");
+
+			// when + then: must not throw
+			McpProxyTests.this.proxy.recordLocalExchange(McpProxyTests.this.session, request, response);
+		}
+
 	}
 
 	@Nested

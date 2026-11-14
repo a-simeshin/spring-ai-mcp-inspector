@@ -36,6 +36,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -1364,6 +1365,56 @@ class StreamableHttpProxyControllerTests {
 			verify(this.taskService).getTask("t-123");
 			// The upstream is never consulted for task methods
 			verify(session.targetTransport(), never()).sendMessage(any());
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/get records the request and the locally produced response into the traffic timeline")
+		void tasksGet_interceptedLocally_recordsLocalExchange() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
+			final TaskHandle handle = new TaskHandle("t-123", "working", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000);
+			given(this.taskService.getTask("t-123")).willReturn(handle);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy).recordLocalExchange(eq(session), eq(body),
+					responseCaptor.capture());
+			final JsonNode recorded = responseCaptor.getValue();
+			assertThat(recorded.get("id").asInt()).isEqualTo(11);
+			assertThat(recorded.get("result").get("taskId").asText()).isEqualTo("t-123");
+			// the locally answered frame never reaches the upstream
+			verify(session.targetTransport(), never()).sendMessage(any());
+		}
+
+		@Test
+		@Story("no interception for non-task methods")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a non-task method relayed upstream is never recorded as a locally answered exchange")
+		void nonTaskMethod_neverRecordsLocalExchange() throws Exception {
+			// given: a notification (no id) so the relay path answers immediately
+			// instead of blocking on the await-response timeout
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willReturn(Mono.empty());
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: passthrough traffic keeps the plain relay timeline behavior
+			assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy, never()).recordLocalExchange(any(), any(), any());
 		}
 
 		@Test
