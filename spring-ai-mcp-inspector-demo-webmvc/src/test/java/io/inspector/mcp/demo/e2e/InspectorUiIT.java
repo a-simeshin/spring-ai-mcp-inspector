@@ -527,11 +527,14 @@ class InspectorUiIT {
 		open("/mcp-inspector/index.html");
 		// Auth profile panel must render first (issue #54).
 		$("[data-testid=auth-profiles-panel]").shouldBe(visible, Duration.ofSeconds(15));
-		// The auth-profile editor must render before we touch it (race condition).
-		$("[data-testid=auth-profile-type]").shouldBe(visible, Duration.ofSeconds(15));
 		// If no profiles exist, create a simple Bearer token profile.
 		// Check if the profiles list is empty (no auth-profile-row-* elements).
 		if ($$("[data-testid^=auth-profile-row-]").isEmpty()) {
+			// [spring-ai-mcp-inspector PATCH] Issue #268: the editor section starts
+			// collapsed; expand it explicitly before filling the fields.
+			$("[data-testid=auth-profile-editor-toggle]").shouldBe(visible, Duration.ofSeconds(15)).click();
+			// The auth-profile editor must render before we touch it (race condition).
+			$("[data-testid=auth-profile-type]").shouldBe(visible, Duration.ofSeconds(15));
 			// Type select defaults to BEARER.
 			setReactInputValue("[data-testid=auth-profile-name]", "e2e-default");
 			setReactInputValue("[data-testid=auth-profile-bearer-token]", "e2e-token");
@@ -3855,6 +3858,9 @@ class InspectorUiIT {
 
 			// Auth profile panel must render first (issue #54).
 			$("[data-testid=auth-profiles-panel]").shouldBe(visible, Duration.ofSeconds(15));
+			// [spring-ai-mcp-inspector PATCH] Issue #268: the editor section starts
+			// collapsed; expand it explicitly before touching the fields.
+			$("[data-testid=auth-profile-editor-toggle]").shouldBe(visible, Duration.ofSeconds(15)).click();
 			// The auth-profile editor must render before we touch it.
 			$("[data-testid=auth-profile-type]").shouldBe(visible, Duration.ofSeconds(15));
 
