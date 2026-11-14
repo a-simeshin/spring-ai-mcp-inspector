@@ -434,6 +434,11 @@ const App = () => {
   const [selectedResource, setSelectedResource] = useState<Resource | null>(
     null,
   );
+  // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): live mirror of
+  // the selected resource for the cache-hit pane guard in readResource;
+  // a ref stays current inside the same event batch where a closed-over
+  // state snapshot would still hold the previous selection.
+  const selectedResourceRef = useRef<Resource | null>(null);
   const [resourceSubscriptions, setResourceSubscriptions] = useState<
     Set<string>
   >(new Set<string>());
@@ -1372,7 +1377,15 @@ const App = () => {
     // previously-cached resource left the right pane showing stale content.
     // Upstream issue: https://github.com/modelcontextprotocol/inspector/issues/1266
     if (resourceContentMap[uri]) {
-      setResourceContent(resourceContentMap[uri]);
+      // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): commit the
+      // cached payload to the pane only while its uri is still the live
+      // selection. A Tools-result resource link reads a cached uri
+      // without touching the selection; an unguarded commit here used to
+      // overwrite the pane while a different row was selected, leaving
+      // pane and selection diverged (issue #344).
+      if (selectedResourceRef.current?.uri === uri) {
+        setResourceContent(resourceContentMap[uri]);
+      }
       return;
     }
     if (fetchingResources.has(uri)) {
@@ -2247,6 +2260,9 @@ const App = () => {
                       selectedResource={selectedResource}
                       setSelectedResource={(resource) => {
                         clearError("resources");
+                        // [spring-ai-mcp-inspector PATCH]: keep the guard
+                        // ref in sync with the selection (#344).
+                        selectedResourceRef.current = resource;
                         setSelectedResource(resource);
                       }}
                       resourceSubscriptionsSupported={
