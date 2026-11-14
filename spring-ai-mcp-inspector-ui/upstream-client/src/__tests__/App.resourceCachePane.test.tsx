@@ -1,11 +1,22 @@
-// [spring-ai-mcp-inspector PATCH] Regression guard for the tools-link
-// half of issue #344: clicking a resource_link in a tool result calls
+// [spring-ai-mcp-inspector PATCH] Regression guards for the cache-hit
+// pane handling of issue #344.
+//
+// Tools-link half: clicking a resource_link in a tool result calls
 // App.readResource for a uri that is already cached, and the cache-hit
 // pane commit used to overwrite the Resources pane while a different
 // row stayed selected, leaving pane and selection diverged. With the
 // guard, the cached payload stays visible inline in the Tools tab
 // (ResourceLinkView reads the same per-uri map) and only the pane
 // commit is suppressed.
+//
+// Positive half: the guarded commit must still run when it is
+// legitimate. Two pins:
+//   - re-clicking an already-cached row while it is the live selection
+//     (mirrored into the ref by the selectedResource handler) must
+//     commit the cached payload back into the pane;
+//   - reading a cached uri through a resource template
+//     (handleReadTemplateResource sets the selection before the read)
+//     must commit the template payload into the pane.
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
@@ -69,6 +80,32 @@ jest.mock("../components/Sidebar", () => ({
 jest.mock("../components/HistoryAndNotifications", () => ({
   __esModule: true,
   default: () => <div>HistoryAndNotifications</div>,
+}));
+
+// [spring-ai-mcp-inspector PATCH] The template form is the only place
+// the Resources pane uses Combobox; replaced with a plain input so
+// template values can be set with fireEvent (same mock as
+// ResourcesTab.test.tsx).
+jest.mock("@/components/ui/combobox", () => ({
+  Combobox: ({
+    id,
+    value,
+    onChange,
+    placeholder,
+  }: {
+    id: string;
+    value: string;
+    onChange: (value: string) => void;
+    placeholder: string;
+  }) => (
+    <input
+      id={id}
+      value={value || ""}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      data-testid={`combobox-${id}`}
+    />
+  ),
 }));
 
 global.fetch = jest.fn().mockResolvedValue({ json: () => Promise.resolve({}) });
@@ -137,6 +174,17 @@ describe("App - tools-link cache-hit pane guard (#344)", () => {
             ],
           };
         }
+        case "resources/templates/list":
+          return {
+            resourceTemplates: [
+              {
+                name: "cached-template",
+                uriTemplate: "demo://{name}",
+                description: "Expands to the cached resource uri",
+              },
+            ],
+            nextCursor: undefined,
+          };
         case "tools/list":
           return {
             tools: [
@@ -267,5 +315,130 @@ describe("App - tools-link cache-hit pane guard (#344)", () => {
     });
     expect(screen.getByText(/selected-payload/)).toBeInTheDocument();
     expect(screen.queryByText(/cached-payload/)).not.toBeInTheDocument();
+  }, 15000);
+
+  it("a re-click of an already-cached row commits the cached payload while the row is the live selection", async () => {
+    mockUseConnection.mockReturnValue({
+      ...connectionState({
+        resources: { listChanged: true },
+      }),
+      makeRequest,
+    } as ReturnType<typeof useConnection>);
+
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByText("List Resources"));
+    await waitFor(() => {
+      expect(screen.getByTitle("demo://cached")).toBeInTheDocument();
+    });
+
+    const { act } = await import("@testing-library/react");
+
+    // Cache both rows and leave the pane on the other row's payload.
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("demo://cached"));
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/cached-payload/)).toBeInTheDocument();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("demo://selected"));
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/selected-payload/)).toBeInTheDocument();
+    });
+
+    // Click back to the already-cached row: the read is a cache hit and
+    // the clicked row IS the live selection (mirrored into the ref by
+    // the selectedResource handler before the read starts), so the
+    // guarded commit must run and the pane must show the cached payload
+    // again. Without the ref sync the guard never matches and every
+    // cache-hit commit is suppressed.
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("demo://cached"));
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/cached-payload/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/selected-payload/)).not.toBeInTheDocument();
+  }, 15000);
+
+  it("a cached template read commits the template payload because the selection is set before the read", async () => {
+    mockUseConnection.mockReturnValue({
+      ...connectionState({
+        resources: { listChanged: true },
+      }),
+      makeRequest,
+    } as ReturnType<typeof useConnection>);
+
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByText("List Resources"));
+    await waitFor(() => {
+      expect(screen.getByTitle("demo://cached")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("List Templates"));
+    await waitFor(() => {
+      expect(screen.getByText("cached-template")).toBeInTheDocument();
+    });
+
+    const { act } = await import("@testing-library/react");
+
+    // Cache both rows and leave the pane on the selected row's payload:
+    // demo://cached is cached while the live selection sits on the
+    // other row.
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("demo://cached"));
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/cached-payload/)).toBeInTheDocument();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("demo://selected"));
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/selected-payload/)).toBeInTheDocument();
+    });
+
+    // Select the template (the selection resets to null), expand it to
+    // the cached uri, and read. handleReadTemplateResource must set the
+    // selection BEFORE the read: the cache-hit guard judges by the live
+    // selected uri, and reading first would make it see the previous
+    // (null) selection and skip the pane commit.
+    await act(async () => {
+      fireEvent.click(screen.getByText("cached-template"));
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    fireEvent.change(screen.getByTestId("combobox-name"), {
+      target: { value: "cached" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Read Resource"));
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/cached-payload/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/selected-payload/)).not.toBeInTheDocument();
   }, 15000);
 });
