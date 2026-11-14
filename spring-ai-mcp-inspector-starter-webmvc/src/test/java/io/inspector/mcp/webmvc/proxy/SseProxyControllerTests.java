@@ -661,7 +661,7 @@ class SseProxyControllerTests {
 			// when & then
 			// explicit 400, no transport built, no session registered
 			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
-					null, null, request))
+					null, null, null, request))
 				.isInstanceOf(ResponseStatusException.class)
 				.hasMessageContaining("400")
 				.hasMessageContaining("x-custom-auth-headers must be a JSON array of header names");
