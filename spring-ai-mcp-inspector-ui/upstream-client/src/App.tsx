@@ -434,6 +434,10 @@ const App = () => {
   const [selectedResource, setSelectedResource] = useState<Resource | null>(
     null,
   );
+  // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): live mirror of
+  // the selected resource for async guards in readResource; a ref stays
+  // current across awaits where a closed-over state snapshot would not.
+  const selectedResourceRef = useRef<Resource | null>(null);
   const [resourceSubscriptions, setResourceSubscriptions] = useState<
     Set<string>
   >(new Set<string>());
@@ -1365,15 +1369,19 @@ const App = () => {
   };
 
   const readResource = async (uri: string) => {
-    // Local patch (vs upstream v0.22.0):
+    // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0):
     // Original early-return on cache hit forgot to sync the singleton
     // `resourceContent` state that ResourcesTab renders in the right pane.
     // Result: after viewing a resource template, clicking back to a
     // previously-cached resource left the right pane showing stale content.
     // Upstream issue: https://github.com/modelcontextprotocol/inspector/issues/1266
+    // Cache hits no longer early-return: the cached value is shown
+    // immediately (stale-while-revalidate) and resources/read is sent again,
+    // so Refresh and re-selecting a row pick up fresh server state (the
+    // demo://clock timestamp advances on every read). Cached error payloads
+    // are retried the same way.
     if (resourceContentMap[uri]) {
       setResourceContent(resourceContentMap[uri]);
-      return;
     }
     if (fetchingResources.has(uri)) {
       return;
@@ -1390,14 +1398,28 @@ const App = () => {
           params: { uri },
         },
         ReadResourceResultSchema,
-        "resources",
       );
       console.log("[App] Resource read response:", {
         uri,
         responseLength: JSON.stringify(response).length,
         hasContents: !!(response as { contents?: unknown[] }).contents,
       });
-      setResourceContent(response);
+      // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): guard the
+      // pane update and the resources-tab error clear by the requested
+      // uri. By the time the resources/read response resolves, the user
+      // may have selected another row, and a late response for a
+      // deselected resource used to overwrite the preview pane and, on
+      // success, to clear the selected row's own error Alert. The
+      // request is deliberately sent without a tabKey so the resources
+      // tab error is owned here instead of being set and cleared
+      // unconditionally in sendMCPRequest. The per-uri cache below stays
+      // unconditional: a response is always correct for its own uri.
+      // Upstream has the same race (modelcontextprotocol/inspector
+      // #1266/#1274); its fix PRs #1267/#1275 were closed unmerged.
+      if (selectedResourceRef.current?.uri === uri) {
+        setResourceContent(response);
+        clearError("resources");
+      }
       setResourceContentMap((prev) => ({
         ...prev,
         [uri]: response,
@@ -1409,6 +1431,14 @@ const App = () => {
         ...prev,
         [uri]: JSON.stringify({ error: errorString }),
       }));
+      // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): surface
+      // the read failure as the resources-tab Alert only while its uri
+      // is still selected; the Alert renders in place of the whole pane,
+      // so an unguarded set would replace the resource the user has
+      // moved to. This is the error half of the #344 race guard.
+      if (selectedResourceRef.current?.uri === uri) {
+        setErrors((prev) => ({ ...prev, resources: errorString }));
+      }
     } finally {
       setFetchingResources((prev) => {
         const next = new Set(prev);
@@ -2247,6 +2277,9 @@ const App = () => {
                       selectedResource={selectedResource}
                       setSelectedResource={(resource) => {
                         clearError("resources");
+                        // [spring-ai-mcp-inspector PATCH]: keep the guard
+                        // ref in sync with the selection (#344).
+                        selectedResourceRef.current = resource;
                         setSelectedResource(resource);
                       }}
                       resourceSubscriptionsSupported={
