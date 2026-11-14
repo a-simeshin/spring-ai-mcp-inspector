@@ -28,6 +28,8 @@ describe("validateRootUri", () => {
   it.each([
     ["the seeded file:// default", "file://"],
     ["a host without a path", "file://localhost"],
+    ["a scheme-only file URI", "file:"],
+    ["a scheme-only file URI in a different letter case", "File:"],
   ])("rejects %s as a file URI without a path", (_label, value) => {
     expect(validateRootUri(value)).toEqual({
       valid: false,
