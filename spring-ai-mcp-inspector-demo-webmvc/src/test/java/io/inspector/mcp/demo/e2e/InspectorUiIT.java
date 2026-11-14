@@ -4877,6 +4877,153 @@ class InspectorUiIT {
 					"History section must be above Server Notifications at 375px (stacked, not side-by-side)");
 		}
 
+		/**
+		 * Number of columns of the Resources content grid, read from the computed
+		 * {@code gridTemplateColumns} of {@code [data-testid="resources-content-grid"]}:
+		 * one column below the Tailwind {@code md} breakpoint ({@code grid-cols-1}),
+		 * three at/above it ({@code md:grid-cols-3}).
+		 */
+		private static int resourcesGridColumns() {
+			Object result = Selenide
+				.executeJavaScript("const el = document.querySelector('[data-testid=\\'resources-content-grid\\']');"
+						+ "if (!el) { return 'grid-not-found'; }"
+						+ "const cols = getComputedStyle(el).gridTemplateColumns;"
+						+ "if (cols === 'none') { return 0; }" + "return cols.split(' ').length;");
+			if ("grid-not-found".equals(result)) {
+				Assertions.fail("resources-content-grid not found for columnCount probe");
+			}
+			return ((Number) result).intValue();
+		}
+
+		/**
+		 * Bounding boxes of the Resources content grid pane children as a list of maps
+		 * ({@code {left,top,right,bottom,width,height}}), in DOM order: resources list,
+		 * templates list, preview pane.
+		 */
+		@SuppressWarnings("unchecked")
+		private static List<Map<String, Number>> resourcesGridPaneRects() {
+			Object result = Selenide
+				.executeJavaScript("const grid = document.querySelector('[data-testid=\\'resources-content-grid\\']');"
+						+ "if (!grid) { return 'grid-not-found'; }" + "return Array.from(grid.children).map((el) => {"
+						+ "const r = el.getBoundingClientRect();"
+						+ "return {left: r.left, top: r.top, right: r.right, bottom: r.bottom,"
+						+ "width: r.width, height: r.height};" + "});");
+			if ("grid-not-found".equals(result)) {
+				Assertions.fail("resources-content-grid not found for pane rects probe");
+			}
+			return (List<Map<String, Number>>) result;
+		}
+
+		/**
+		 * True when the two pane boxes do not intersect (1px tolerance).
+		 */
+		private static boolean panesDisjoint(final Map<String, Number> a, final Map<String, Number> b) {
+			return a.get("right").doubleValue() <= b.get("left").doubleValue() + 1
+					|| b.get("right").doubleValue() <= a.get("left").doubleValue() + 1
+					|| a.get("bottom").doubleValue() <= b.get("top").doubleValue() + 1
+					|| b.get("bottom").doubleValue() <= a.get("top").doubleValue() + 1;
+		}
+
+		/**
+		 * {@code [left, top, right, bottom]} of the element bounding box, via
+		 * {@code getBoundingClientRect}.
+		 */
+		@SuppressWarnings("unchecked")
+		private static List<Number> rectBox(final SelenideElement element) {
+			return (List<Number>) Selenide.executeJavaScript("const el = arguments[0];"
+					+ "const r = el.getBoundingClientRect();" + "return [r.left, r.top, r.right, r.bottom];", element);
+		}
+
+		/**
+		 * Asserts the pane button keeps its card padding at the 375px viewport: the
+		 * button card spans the full viewport width and the {@code p-4} padding must
+		 * leave at least 12px between the button and the card (viewport) edges.
+		 */
+		private static void assertInsideCardWithPadding(final SelenideElement button) {
+			button.shouldBe(visible);
+			List<Number> box = rectBox(button);
+			Assertions.assertTrue(box.get(0).doubleValue() >= 11 && box.get(2).doubleValue() <= 364,
+					button.getText() + " button must keep card padding inside the 375px viewport, got " + box);
+		}
+
+		@Test
+		@Story("Mobile viewport")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At 375x812 the three Resources content panes (resources list, templates list, preview) stack vertically in one column: the grid resolves to a single column, pane boxes are pairwise disjoint, every pane is at most 375px wide, the List Resources / List Templates buttons keep their card padding, and the document has no horizontal overflow. Companion of the resources-mobile-stack patch (issue #296).")
+		@DisplayName("resourcesPanesStack_375x812: three panes in one column, controls not clipped")
+		void resourcesPanesStack_375x812() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+			// Set the exact mobile viewport right after opening.
+			ResponsiveTestHelpers.setViewportExactly(375, 812);
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+			connectButton().click();
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			ResponsiveTestHelpers.scrollToTop();
+
+			clickTab("resources");
+			activePanel().shouldHave(text("Resource Templates"), Duration.ofSeconds(10));
+
+			// then: the list buttons keep their card padding at the 375px
+			// viewport (full-width buttons inside the p-4 card, not stretched
+			// into the viewport edge).
+			assertInsideCardWithPadding(activePanel().$(byText("List Resources")));
+			assertInsideCardWithPadding(activePanel().$(byText("List Templates")));
+
+			// when: listing resources and templates populates the panes
+			activePanel().$(byText("List Resources")).shouldBe(Condition.enabled, Duration.ofSeconds(10)).click();
+			activePanel().shouldHave(text("demo-greeting"), Duration.ofSeconds(10));
+			activePanel().$(byText("List Templates")).shouldBe(Condition.enabled, Duration.ofSeconds(10)).click();
+			activePanel().shouldHave(text("demo-item"), Duration.ofSeconds(10));
+			ResponsiveTestHelpers.scrollToTop();
+
+			// then: single column, panes disjoint and unclipped.
+			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 375px");
+			Assertions.assertEquals(1, resourcesGridColumns(),
+					"resources-content-grid must be a single column at 375px (grid-cols-1)");
+			List<Map<String, Number>> rects = resourcesGridPaneRects();
+			Assertions.assertEquals(3, rects.size(), "resources-content-grid must render exactly three pane children");
+			for (Map<String, Number> rect : rects) {
+				Assertions.assertTrue(rect.get("left").doubleValue() >= -1 && rect.get("right").doubleValue() <= 376,
+						"every Resources pane must lie inside the 375px viewport, got " + rect);
+			}
+			for (int i = 0; i < rects.size(); i++) {
+				for (int j = i + 1; j < rects.size(); j++) {
+					Assertions.assertTrue(panesDisjoint(rects.get(i), rects.get(j)), "Resources panes " + i + " and "
+							+ j + " must not overlap at 375px, got " + rects.get(i) + " vs " + rects.get(j));
+				}
+			}
+		}
+
+		@Test
+		@Story("Mobile viewport")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("The Resources content grid flips from one column (grid-cols-1) to three (md:grid-cols-3) exactly at the inclusive Tailwind md breakpoint: 1 column at 767px, 3 columns at 768px.")
+		@DisplayName("md_767x800_and_768x800_resourcesGridFlip: grid-cols-1 -> md:grid-cols-3")
+		void md_767x800_and_768x800_resourcesGridFlip() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+			// given: just below the md breakpoint
+			ResponsiveTestHelpers.setViewportExactly(767, 800);
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+			connectButton().click();
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			clickTab("resources");
+			activePanel().shouldHave(text("Resource Templates"), Duration.ofSeconds(10));
+
+			// then: the resources-content-grid is still a single column.
+			Assertions.assertEquals(1, resourcesGridColumns(),
+					"resources-content-grid must be a single column at 767px (grid-cols-1)");
+
+			// when: at exactly 768px (Tailwind md, min-width: 768px)
+			ResponsiveTestHelpers.setViewportExactly(768, 800);
+
+			// then: the grid flips to three columns (md:grid-cols-3).
+			Assertions.assertEquals(3, resourcesGridColumns(),
+					"resources-content-grid must flip to three columns at 768px (md:grid-cols-3)");
+		}
+
 	}
 
 	// =====================================================================
