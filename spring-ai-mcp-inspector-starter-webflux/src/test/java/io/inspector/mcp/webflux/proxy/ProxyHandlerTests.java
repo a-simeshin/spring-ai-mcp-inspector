@@ -772,7 +772,8 @@ class ProxyHandlerTests {
 					assertThat(sse.data()).contains("\"url\":\"http://up/sse\"");
 				})
 				.then(() -> captured[0].targetToBrowser().tryEmitComplete())
-				.verifyComplete();
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 			verify(ProxyHandlerTests.this.registry, org.mockito.Mockito.atLeastOnce())
 				.removeAndClose(captured[0].sessionId());
 		}
@@ -818,7 +819,8 @@ class ProxyHandlerTests {
 						.contains("connection reset");
 				})
 				.then(() -> captured[0].targetToBrowser().tryEmitComplete())
-				.verifyComplete();
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 			verify(ProxyHandlerTests.this.registry, org.mockito.Mockito.atLeastOnce())
 				.removeAndClose(captured[0].sessionId());
 		}

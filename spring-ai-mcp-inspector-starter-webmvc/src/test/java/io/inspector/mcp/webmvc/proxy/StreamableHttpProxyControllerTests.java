@@ -817,7 +817,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
-					"http://target/mcp", body);
+					"http://target/mcp", null, body);
 
 			// then
 			// explicit 400, no session opened, no transport built
