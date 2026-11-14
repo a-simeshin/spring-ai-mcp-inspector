@@ -296,12 +296,17 @@ class McpProxyTests {
 		@Story("Handshake ordering")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("initialize and tools/list sent back-to-back must reach the transport in order: "
-				+ "initialize first, then tools/list. Without the handshake gate, flatMap would send "
-				+ "tools/list concurrently and the server could reject it as an unknown session")
-		void start_handshakeGate_ordersInitializeBeforeNonHandshakeFrames() {
-			// given
+				+ "initialize first, then tools/list. The sends are recorded when their sendMessage "
+				+ "Mono is subscribed (the actual send), not when the relay assembles the Mono: the "
+				+ "pump builds the gated send Mono before the gate opens, so only subscription-time "
+				+ "capture detects a gate that never opens")
+		void start_handshakeGate_ordersInitializeBeforeNonHandshakeFrames() throws InterruptedException {
+			// given - sendMessage records the frame when the returned Mono is
+			// subscribed (the actual send), not at Mono assembly time
+			final List<JSONRPCMessage> sent = new java.util.concurrent.CopyOnWriteArrayList<>();
 			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
-			given(McpProxyTests.this.transport.sendMessage(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any()))
+				.willAnswer((inv) -> Mono.<Void>fromRunnable(() -> sent.add(inv.getArgument(0))));
 			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
 
 			// when: send initialize and tools/list back-to-back without waiting for a
@@ -317,14 +322,67 @@ class McpProxyTests {
 			McpProxyTests.this.browserToTarget.tryEmitNext(initFrame);
 			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame);
 
-			// then: initialize must be sent before tools/list
-			final ArgumentCaptor<JSONRPCMessage> captor = ArgumentCaptor.forClass(JSONRPCMessage.class);
-			verify(McpProxyTests.this.transport, timeout(1000).times(2)).sendMessage(captor.capture());
-			final java.util.List<JSONRPCMessage> messages = captor.getAllValues();
-			assertThat(messages).hasSize(2);
-			assertThat(messages.get(0)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+			// then: both sends subscribed, initialize first, then tools/list
+			final long deadline = System.currentTimeMillis() + 1000;
+			while (sent.size() < 2 && System.currentTimeMillis() < deadline) {
+				Thread.sleep(10);
+			}
+			assertThat(sent).hasSize(2);
+			assertThat(sent.get(0)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
 					(req) -> assertThat(req.method()).isEqualTo("initialize"));
-			assertThat(messages.get(1)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+			assertThat(sent.get(1)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+					(req) -> assertThat(req.method()).isEqualTo("tools/list"));
+		}
+
+		@Test
+		@Story("Handshake ordering")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("while the initialize send is still in flight, the gate stays closed: the "
+				+ "tools/list send subscribes only after the initialize send completes and opens the "
+				+ "gate, so a gate that never opens (e.g. a no-op success path) leaves tools/list "
+				+ "unsent instead of letting it through")
+		void start_whenInitializeSendStillInFlight_toolsListSendSubscribesOnlyAfterGateOpens()
+				throws InterruptedException {
+			// given - the initialize send blocks in the transport until the test
+			// releases the latch; the tools/list send records its subscription
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			final java.util.concurrent.CountDownLatch initSendLatch = new java.util.concurrent.CountDownLatch(1);
+			final List<JSONRPCMessage> sent = new java.util.concurrent.CopyOnWriteArrayList<>();
+			given(McpProxyTests.this.transport.sendMessage(any())).willAnswer((inv) -> {
+				final JSONRPCMessage message = inv.getArgument(0);
+				if (message instanceof McpSchema.JSONRPCRequest request
+						&& McpSchema.METHOD_INITIALIZE.equals(request.method())) {
+					return Mono.<Void>fromRunnable(() -> {
+						try {
+							initSendLatch.await();
+						}
+						catch (final InterruptedException interrupted) {
+							Thread.currentThread().interrupt();
+						}
+					});
+				}
+				return Mono.<Void>fromRunnable(() -> sent.add(message));
+			});
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+
+			// when
+			McpProxyTests.this.browserToTarget.tryEmitNext(initFrame());
+			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
+
+			// then - while the initialize send is in flight the gate is closed and the
+			// tools/list send has not subscribed (RED if the gate opens early)
+			Thread.sleep(300);
+			assertThat(sent).isEmpty();
+
+			// releasing the initialize send completes it and opens the gate: now the
+			// tools/list send subscribes (RED if the success path never opens the gate)
+			initSendLatch.countDown();
+			final long gateDeadline = System.currentTimeMillis() + 1000;
+			while (sent.isEmpty() && System.currentTimeMillis() < gateDeadline) {
+				Thread.sleep(10);
+			}
+			assertThat(sent).hasSize(1);
+			assertThat(sent.get(0)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
 					(req) -> assertThat(req.method()).isEqualTo("tools/list"));
 		}
 
