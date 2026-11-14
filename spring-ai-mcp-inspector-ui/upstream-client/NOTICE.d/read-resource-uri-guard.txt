@@ -1,0 +1,28 @@
+src/App.tsx#readResource — guard the preview-pane update and the
+resources-tab error transitions by the requested uri. The
+resources/read response resolves asynchronously, and by then the user
+may have selected another row; the response still flowed into the
+singleton `resourceContent` state that ResourcesTab renders, so a
+late response for a deselected resource overwrote the preview pane.
+The error half: sendMCPRequest set and cleared `errors.resources`
+unconditionally, and the error Alert renders in place of the whole
+pane, so a late reject for a deselected resource replaced the
+selected pane with its own Alert, and a late success cleared the
+selected row's own error Alert. The race predates the stale-pane
+rework above and became reachable through ordinary interaction once
+every Refresh / re-select started issuing an in-flight read. Local
+fix: keep the live selection in a `selectedResourceRef` mirror
+(updated wherever the selection changes) and commit `resourceContent`
+and the resources-tab error set/clear only when
+`selectedResourceRef.current?.uri` still equals the requested uri;
+readResource sends its request without a tabKey so the tab error is
+owned by these guarded transitions instead of sendMCPRequest's
+unconditional set/clear, while the uri-agnostic resources operations
+(list, templates, subscribe, unsubscribe) keep their tabKey behavior.
+The per-uri `resourceContentMap` cache stays unconditional because a
+response is always correct for its own uri. Covered by
+App.resourceRace.test.tsx (pane race, error half, and the
+stale-while-revalidate cache pin). Upstream has the same race:
+https://github.com/modelcontextprotocol/inspector/issues/1266 and
+#1274 acknowledge it; upstream fix PRs #1267 and #1275 were closed
+unmerged (v1 deprecated, security-only), so this is fixed locally.

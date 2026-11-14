@@ -1,6 +1,12 @@
 src/App.tsx#readResource — fix stale right-pane after switching
-between resources and templates. Upstream early-returns on cache
-hit without syncing the singleton `resourceContent` state that
-ResourcesTab renders. Local fix: on cache hit, call
-`setResourceContent(resourceContentMap[uri])` before returning.
+between resources and templates, and fix Refresh / re-selecting a
+row never re-reading the resource: the pane froze at the first-read
+snapshot until a page reload. Upstream early-returns on cache hit
+without syncing the singleton `resourceContent` state that
+ResourcesTab renders, and never sends resources/read again. Local
+fix: on cache hit, sync `resourceContent` from the cache and keep
+going: resources/read is sent every time (stale-while-revalidate),
+the response refreshes the pane and the cache, and cached error
+payloads are retried the same way. Covered by
+App.resourceRefresh.test.tsx and the demo E2E resource refresh IT.
 Upstream: https://github.com/modelcontextprotocol/inspector/issues/1266
