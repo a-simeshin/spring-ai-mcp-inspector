@@ -305,4 +305,20 @@ describe("ResourcesTab - Template Query Parameters", () => {
       ),
     ).toBeInTheDocument();
   });
+
+  describe("Responsive layout", () => {
+    // [spring-ai-mcp-inspector PATCH] Resources content grid (#296):
+    // upstream hard-codes three side-by-side columns, which squeeze each
+    // pane to ~110px at a 375px phone. The local fix stacks the grid into
+    // one full-width column below the `md` (768px) breakpoint and keeps
+    // three columns at and above it; the testid anchors let Selenide
+    // assert the geometry deterministically.
+    it("should stack the resources content grid below the md breakpoint", () => {
+      renderResourcesTab();
+
+      const grid = screen.getByTestId("resources-content-grid");
+      expect(grid).toHaveClass("grid-cols-1");
+      expect(grid).toHaveClass("md:grid-cols-3");
+    });
+  });
 });

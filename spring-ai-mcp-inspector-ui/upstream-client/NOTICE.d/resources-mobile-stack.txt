@@ -1,0 +1,23 @@
+src/components/ResourcesTab.tsx + src/components/ListPane.tsx: the
+Resources tab content grid (resources list, resource templates list,
+preview pane) stacks into a single full-width column below the `md`
+(768px) breakpoint instead of rendering three side-by-side columns at
+every viewport. Upstream hard-codes `grid-cols-3`, so at a 375px phone
+each pane gets about 110px: card titles truncate to "Resource T...",
+the preview helper text breaks mid-word ("vie"/"w"), the List
+Resources / List Templates labels touch the card borders and the
+panes' inner scrollbars stick out of the cards. Local fix, companion
+of the compact-layout, mobile-layout-grid and
+history-notifications-mobile-stack patches (issue #58/#60 mobile
+contract): the grid becomes `grid-cols-1 md:grid-cols-3` and gains a
+`resources-content-grid` testid for Selenide geometry assertions;
+`min-w-0` on the shared ListPane root and on the preview pane lets
+each child shrink inside its grid cell so the inner scroll areas
+never overflow the card borders; desktop (>=768px) three-column
+geometry is unchanged. Covered by the Selenide InspectorUiIT updates
+delivered with this change set: the new MobileViewport375x812
+resourcesPanesStack_375x812 test (single column, pairwise disjoint
+panes, no horizontal document overflow, buttons inside the viewport)
+and the md 767x800/768x800 grid flip test, plus the jest pin
+ResourcesTab "Responsive layout" (grid-cols-1 + md:grid-cols-3 +
+testid).
