@@ -48,6 +48,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -107,7 +108,7 @@ class SseProxyControllerWireTests {
 		this.mockMvc
 			.perform(get(SSE_PATH).queryParam("transportType", "sse")
 				.queryParam("url", DEAD_TARGET)
-				.header("x-custom-auth-headers", "host")
+				.header("x-custom-auth-headers", "[\"host\"]")
 				.header("host", "secret-value-that-must-leak-nowhere")
 				.accept(MediaType.TEXT_EVENT_STREAM))
 			.andExpect(status().isBadGateway())
@@ -131,13 +132,34 @@ class SseProxyControllerWireTests {
 		this.mockMvc
 			.perform(get(SSE_PATH).queryParam("transportType", "sse")
 				.queryParam("url", DEAD_TARGET)
-				.header("x-custom-auth-headers", "X-Cu:stom")
+				.header("x-custom-auth-headers", "[\"X-Cu:stom\"]")
 				.header("X-Cu:stom", "v")
 				.accept(MediaType.ALL))
 			.andExpect(status().isBadGateway())
 			.andExpect(jsonPath("$.error.reason").value("invalid_request"))
 			.andExpect(jsonPath("$.error.message", containsString("'X-Cu:stom'")))
 			.andExpect(jsonPath("$.error.message", containsString("invalid header name")));
+	}
+
+	@Test
+	@DisplayName("GET /sse with a malformed x-custom-auth-headers payload answers 400 whose BODY is the explicit single-key error JSON")
+	@Story("Header forwarding")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("The legacy comma-separated x-custom-auth-headers shape is rejected with a 400 before any stream opens; the @ExceptionHandler advice must translate the ResponseStatusException into an "
+			+ "application/json body carrying exactly the 'error' key with the reason message, so the browser sees the offending header shape; without the advice the error dispatch answers with an empty body")
+	void openSse_whenMalformedCustomHeaderList_answersExplicit400ErrorBody() throws Exception {
+		this.mockMvc
+			.perform(get(SSE_PATH).queryParam("transportType", "sse")
+				.queryParam("url", DEAD_TARGET)
+				.header("x-custom-auth-headers", "X-Tenant, X-Trace")
+				.header("X-Tenant", "acme")
+				.accept(MediaType.TEXT_EVENT_STREAM))
+			.andExpect(status().isBadRequest())
+			.andExpect(content().contentType(MediaType.APPLICATION_JSON))
+			.andExpect(jsonPath("$.error")
+				.value("x-custom-auth-headers must be a JSON array of header names, but is not valid JSON"))
+			.andExpect((result) -> assertThat(result.getResponse().getContentAsString()).isEqualTo(
+					"{\"error\":\"x-custom-auth-headers must be a JSON array of header names, but is not valid JSON\"}"));
 	}
 
 	@Test

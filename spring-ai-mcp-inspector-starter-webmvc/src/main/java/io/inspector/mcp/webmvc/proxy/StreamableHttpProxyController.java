@@ -19,7 +19,6 @@ package io.inspector.mcp.webmvc.proxy;
 import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -61,6 +60,7 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.CustomHeaderNames;
 import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxyConnectFailure;
@@ -309,8 +309,23 @@ public class StreamableHttpProxyController {
 				.contentType(MediaType.APPLICATION_JSON)
 				.body(ProxyConnectionBudgets.invalidParameterBody(connectionTimeout, ex.getMessage()));
 		}
+		// Parsed before the session branch: an invalid x-custom-auth-headers payload is
+		// a client bug and must surface as an explicit 400, not as a session that
+		// silently forwards no custom headers.
+		final HttpServletRequest request = currentRequest();
+		final Map<String, String> customHeaders;
+		try {
+			customHeaders = CustomHeaderNames.resolve(
+					(request != null) ? request.getHeader(CustomHeaderNames.HEADER) : null,
+					(name) -> (request != null) ? request.getHeader(name) : null);
+		}
+		catch (final IllegalArgumentException ex) {
+			return ResponseEntity.badRequest()
+				.contentType(MediaType.APPLICATION_JSON)
+				.body(Map.of("error", ex.getMessage()));
+		}
 		if (mcpSessionId == null || mcpSessionId.isBlank()) {
-			return openSessionAndForward(url, profileId, body, connectionTimeout);
+			return openSessionAndForward(url, profileId, body, customHeaders, connectionTimeout);
 		}
 		final ProxySession session = this.registry.get(mcpSessionId);
 		if (session == null || !isOwnerOf(session)) {
@@ -357,12 +372,14 @@ public class StreamableHttpProxyController {
 	 * @param url the streamable-HTTP target URL
 	 * @param profileId the owner-scoped auth profile id, or {@code null}
 	 * @param body the JSON-RPC frame to forward
+	 * @param customHeaders extra headers (named by {@code x-custom-auth-headers}) to
+	 * forward upstream, may be empty
 	 * @param connectionTimeout optional per-phase budget as raw query-parameter text
 	 * (whole seconds); when absent the configured default (30s) applies
 	 * @return the HTTP response entity
 	 */
 	private ResponseEntity<Object> openSessionAndForward(final String url, final String profileId, final JsonNode body,
-			final String connectionTimeout) {
+			final Map<String, String> customHeaders, final String connectionTimeout) {
 		// A blank/relative url is the WAF-safe same-origin default — the proxy resolves
 		// it
 		// to the loopback MCP endpoint server-side (see ProxyTargetResolver). Only an
@@ -379,7 +396,7 @@ public class StreamableHttpProxyController {
 		}
 		final ProxySession session;
 		try {
-			session = openSession(url, profileId, connectionBudget);
+			session = openSession(url, profileId, customHeaders, connectionBudget);
 		}
 		catch (final ProxyConnectFailureException ex) {
 			return connectFailureResponse(ex.failure());
@@ -472,35 +489,6 @@ public class StreamableHttpProxyController {
 	private static String inboundAuthorization() {
 		final HttpServletRequest request = currentRequest();
 		return (request != null) ? request.getHeader("Authorization") : null;
-	}
-
-	/**
-	 * Reads the custom headers named by the {@code x-custom-auth-headers} request header
-	 * (comma-separated header names) and returns their inbound values, so they can be
-	 * forwarded verbatim to the upstream MCP server.
-	 * @return a map of custom header name → value (never {@code null})
-	 */
-	private static Map<String, String> inboundCustomHeaders() {
-		final HttpServletRequest request = currentRequest();
-		if (request == null) {
-			return Map.of();
-		}
-		final String named = request.getHeader("x-custom-auth-headers");
-		if (named == null || named.isBlank()) {
-			return Map.of();
-		}
-		final Map<String, String> out = new LinkedHashMap<>();
-		for (final String raw : named.split(",")) {
-			final String name = raw.trim();
-			if (name.isEmpty()) {
-				continue;
-			}
-			final String value = request.getHeader(name);
-			if (value != null) {
-				out.put(name, value);
-			}
-		}
-		return out;
 	}
 
 	private static HttpServletRequest currentRequest() {
@@ -648,11 +636,14 @@ public class StreamableHttpProxyController {
 	 * Allocates the {@link ProxySession} and kicks off the {@link McpProxy} pumps.
 	 * @param url the streamable-HTTP target URL
 	 * @param profileId the owner-scoped auth profile id, or {@code null}
+	 * @param customHeaders extra headers (named by {@code x-custom-auth-headers}) to
+	 * forward upstream, may be empty
 	 * @param connectionBudget per-phase budget applied to the session bring-up
 	 * @return a live {@link ProxySession}, or {@code null} if the transport could not be
 	 * created or the profile handoff failed
 	 */
-	private ProxySession openSession(final String url, final String profileId, final Duration connectionBudget) {
+	private ProxySession openSession(final String url, final String profileId, final Map<String, String> customHeaders,
+			final Duration connectionBudget) {
 		final String sessionId = UUID.randomUUID().toString();
 		// D8: resolve the owner from the signed session cookie and the bound profile
 		// when a profileId is supplied. A foreign/unknown profileId is a structured 400.
@@ -680,7 +671,7 @@ public class StreamableHttpProxyController {
 			resolved = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
 			target = (headers != null)
 					? this.transportFactory.openStreamableWithAuth(resolved, headers, authorizationRef)
-					: openStreamableWithInboundHeaders(resolved);
+					: openStreamableWithInboundHeaders(resolved, customHeaders);
 		}
 		catch (final Exception ex) {
 			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
@@ -728,11 +719,13 @@ public class StreamableHttpProxyController {
 	 * Opens a streamable transport forwarding the inbound {@code Authorization} header
 	 * and the headers named by {@code x-custom-auth-headers} (legacy no-profile path).
 	 * @param resolved the resolved target URI
+	 * @param customHeaders the custom headers (named by {@code x-custom-auth-headers}) to
+	 * forward upstream, may be empty
 	 * @return a configured streamable transport
 	 */
-	private McpClientTransport openStreamableWithInboundHeaders(final URI resolved) {
+	private McpClientTransport openStreamableWithInboundHeaders(final URI resolved,
+			final Map<String, String> customHeaders) {
 		final String authorization = inboundAuthorization();
-		final Map<String, String> customHeaders = inboundCustomHeaders();
 		return (authorization == null && customHeaders.isEmpty()) ? this.transportFactory.openStreamable(resolved)
 				: this.transportFactory.openStreamable(resolved, authorization, customHeaders);
 	}
