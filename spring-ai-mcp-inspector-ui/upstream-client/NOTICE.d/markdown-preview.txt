@@ -1,0 +1,27 @@
+Rendered markdown preview with a View source toggle (issue #170)
+
+text/markdown resource payloads now render through a new MarkdownPreview
+component instead of the plain text view: marked parses the markdown and the
+resulting HTML is sanitized with DOMPurify before insertion, so raw HTML in
+untrusted sources cannot inject script elements, event handler attributes,
+javascript: URLs or data: URLs. The only allowed data: URIs are raster image
+payloads (a DOMPurify attribute hook narrows the library default, which keeps
+any data: URI on media elements). The rendered view is the default; a toggle
+switches to the raw markdown source in a monospace, selectable and copyable
+block. Every other text/* mime type keeps the existing plain text view, and
+application/json keeps the JsonView tree. Dispatch is case-insensitive.
+
+New exact-pinned dependencies: marked 18.2.0 and dompurify 3.4.18 (see
+NOTICE.d/security-overrides.txt). jest.config.cjs maps the marked import to
+its UMD build for the test runtime: the package resolves to its ESM build
+through package exports, which jest cannot parse without transforming
+node_modules.
+
+Touches:
+- src/components/MarkdownPreview.tsx (new component)
+- src/components/__tests__/MarkdownPreview.test.tsx (new tests)
+- src/components/MediaContentView.tsx (text/markdown dispatch branch)
+- src/components/__tests__/MediaContentView.test.tsx (dispatch tests)
+- jest.config.cjs (marked CJS/UMD mapping for the test runtime)
+- src/index.css (markdown preview styles)
+- package.json, package-lock.json (marked 18.2.0, dompurify 3.4.18 exact pins)

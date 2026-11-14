@@ -1356,21 +1356,54 @@ class InspectorUiIT {
 		@Test
 		@Story("Resource read")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("Reading the demo-readme resource renders markdown content with a text/markdown mime type.")
-		@DisplayName("readsMarkdownResource — demo-readme content includes markdown text")
+		@Description("Reading the demo-readme resource renders the markdown preview with headings, emphasis, inline code, nested lists and links, and the View source toggle switches to the raw markdown and back.")
+		@DisplayName("readsMarkdownResource: demo-readme renders the markdown preview with a View source toggle")
 		void readResource_markdown_showsMarkdownMimeType() {
 			// given & when
 			selectRow("demo-readme");
 
-			// then
-			// We don't know the exact markdown body without reading the provider; assert
-			// the
-			// JsonView rendered *something* by checking the resource content panel
-			// materialized.
+			// then: the rendered preview is the default view for text/markdown
 			activePanel().$(byText("demo-readme")).shouldBe(visible);
-			// The body is wrapped in a JsonView; assert at least one rendered character
-			// (`text/markdown` mime appears in the JsonView output as a `mimeType` key).
+			// the mimeType badge stays visible in the resource content header
 			activePanel().shouldHave(text("text/markdown"), Duration.ofSeconds(15));
+			SelenideElement rendered = activePanel().$("[data-testid=markdown-rendered-view]")
+				.shouldBe(visible, Duration.ofSeconds(15));
+			// heading hierarchy from the demo markdown body
+			rendered.$("h1").shouldHave(text("MCP Inspector Demo"));
+			rendered.$("h2").shouldHave(text("Sections"));
+			rendered.$("h3").shouldHave(text("Nested lists and links"));
+			// bold and italic are styled, not raw asterisks
+			rendered.$("strong").shouldHave(text("markdown"));
+			rendered.$("em").shouldHave(text("Italic"));
+			String boldWeight = Selenide.executeJavaScript("return getComputedStyle("
+					+ "document.querySelector('[data-testid=markdown-rendered-view] strong')).fontWeight;");
+			Assertions.assertTrue(Integer.parseInt(boldWeight.trim()) >= 600,
+					"Bold text should have an emphasized font weight, got: " + boldWeight);
+			String italicStyle = Selenide.executeJavaScript("return getComputedStyle("
+					+ "document.querySelector('[data-testid=markdown-rendered-view] em')).fontStyle;");
+			Assertions.assertEquals("italic", italicStyle.trim(),
+					"Italic text should be rendered with the italic font style, got: " + italicStyle);
+			// inline code renders on a distinct background, not transparent
+			rendered.$("code").shouldHave(text("inline code"));
+			String codeBackground = Selenide.executeJavaScript("return getComputedStyle("
+					+ "document.querySelector('[data-testid=markdown-rendered-view] code')).backgroundColor;");
+			Assertions.assertNotEquals("rgba(0, 0, 0, 0)", codeBackground,
+					"Inline code should have a distinct background, got: " + codeBackground);
+			// nested list is indented through a nested ul
+			rendered.$("ul ul").shouldBe(visible);
+			String nestedPadding = Selenide.executeJavaScript("return getComputedStyle("
+					+ "document.querySelector('[data-testid=markdown-rendered-view] ul ul')).paddingLeft;");
+			Assertions.assertTrue(Double.parseDouble(nestedPadding.replace("px", "")) > 0,
+					"Nested list should be indented, got paddingLeft: " + nestedPadding);
+			// the demo link renders as a real anchor with its target URL
+			rendered.$("a[href='https://example.com/docs']").shouldHave(text("demo link"));
+			// the View source toggle switches to the raw markdown and back
+			activePanel().$("[data-testid=markdown-view-toggle]").shouldHave(text("View source")).click();
+			SelenideElement source = activePanel().$("[data-testid=markdown-source-view]")
+				.shouldBe(visible, Duration.ofSeconds(15));
+			source.shouldHave(text("### Nested lists and links"));
+			activePanel().$("[data-testid=markdown-view-toggle]").shouldHave(text("View rendered")).click();
+			activePanel().$("[data-testid=markdown-rendered-view]").shouldBe(visible, Duration.ofSeconds(15));
 		}
 
 		@Test

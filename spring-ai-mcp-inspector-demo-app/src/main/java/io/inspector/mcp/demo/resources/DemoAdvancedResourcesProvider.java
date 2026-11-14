@@ -88,7 +88,8 @@ public class DemoAdvancedResourcesProvider {
 		return String.join("\n", "# MCP Inspector Demo", "",
 				"This resource exercises the **markdown** preview pane of the inspector UI.", "", "## Sections", "",
 				"- _Italic_ rendering", "- **Bold** rendering", "- `inline code`", "", "```java",
-				"System.out.println(\"hello, mcp\");", "```", "");
+				"System.out.println(\"hello, mcp\");", "```", "", "### Nested lists and links", "", "- top level item",
+				"  - nested item", "  - nested item with a [demo link](https://example.com/docs)", "");
 	}
 
 	/**
