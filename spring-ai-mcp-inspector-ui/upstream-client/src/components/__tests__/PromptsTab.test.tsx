@@ -3,10 +3,12 @@
 // via validatePromptArgs(), and submit is blocked by validateAll().
 // fieldErrors state is only for showing hints after blur/submit.
 // [spring-ai-mcp-inspector PATCH] Component tests for PromptsTab validation
-// (see NOTICE.d/param-validation.txt).
+// (see NOTICE.d/param-validation.txt) and for the selected prompt row
+// marker (see NOTICE.d/prompt-selected-row.txt).
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { describe, it, jest } from "@jest/globals";
+import { useState } from "react";
 import PromptsTab, { Prompt } from "../PromptsTab";
 import { Tabs } from "../ui/tabs";
 
@@ -245,5 +247,88 @@ describe("PromptsTab", () => {
     expect(
       screen.queryByText("This field is required"),
     ).not.toBeInTheDocument();
+  });
+
+  it("should highlight the clicked prompt row as selected", async () => {
+    // Stateful harness: clicking a row drives real selectedPrompt state,
+    // so the isSelected wiring into ListPane is exercised end to end.
+    const Harness = () => {
+      const [selected, setSelected] = useState<Prompt | null>(null);
+      return (
+        <Tabs defaultValue="prompts">
+          <PromptsTab
+            {...defaultProps}
+            selectedPrompt={selected}
+            setSelectedPrompt={setSelected}
+          />
+        </Tabs>
+      );
+    };
+    render(<Harness />);
+
+    const greetingRow = screen
+      .getByText("greeting")
+      .closest("[data-testid^='tool-row-']") as HTMLElement;
+    await act(async () => {
+      fireEvent.click(greetingRow);
+    });
+
+    // The clicked row carries the selection marker
+    expect(greetingRow).toHaveClass("bg-muted");
+    // The other prompt row does not
+    const echoRow = screen
+      .getByText("echo")
+      .closest("[data-testid^='tool-row-']") as HTMLElement;
+    expect(echoRow).not.toHaveClass("bg-muted");
+  });
+
+  it("should keep the selected row highlighted when re-listing returns fresh prompt objects", async () => {
+    // Live-app contract (App.tsx): a re-list replaces the prompt collection
+    // with fresh objects from the server response (setPrompts(response.prompts))
+    // while selectedPrompt state survives the re-list. The isSelected wiring
+    // must therefore match by name, not by reference, or every re-list would
+    // silently drop the marker from the row the user picked.
+    const Harness = () => {
+      const [prompts, setPrompts] = useState<Prompt[]>(mockPrompts);
+      const [selected, setSelected] = useState<Prompt | null>(null);
+      return (
+        <Tabs defaultValue="prompts">
+          <PromptsTab
+            {...defaultProps}
+            prompts={prompts}
+            selectedPrompt={selected}
+            setSelectedPrompt={setSelected}
+            nextCursor="page-2"
+            listPrompts={() => {
+              // Same names, fresh objects, as the server response does
+              setPrompts(mockPrompts.map((p) => ({ ...p })));
+            }}
+          />
+        </Tabs>
+      );
+    };
+    render(<Harness />);
+
+    // Row testids are stable: same names, same order, keyed by index
+    const greetingRow = screen.getByTestId("tool-row-0");
+    const echoRow = screen.getByTestId("tool-row-1");
+    await act(async () => {
+      fireEvent.click(greetingRow);
+    });
+    expect(greetingRow).toHaveClass("bg-muted");
+    expect(echoRow).not.toHaveClass("bg-muted");
+
+    // Re-list via the pane button, as the app's List button does
+    const listButton = screen.getByRole("button", {
+      name: /list more prompts/i,
+    });
+    await act(async () => {
+      fireEvent.click(listButton);
+    });
+
+    // The collection now holds fresh objects: the marker must stay on the
+    // selected row and stay off the others
+    expect(screen.getByTestId("tool-row-0")).toHaveClass("bg-muted");
+    expect(screen.getByTestId("tool-row-1")).not.toHaveClass("bg-muted");
   });
 });
