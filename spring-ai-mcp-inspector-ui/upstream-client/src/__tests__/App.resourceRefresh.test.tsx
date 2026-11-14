@@ -290,6 +290,61 @@ describe("App - readResource re-issues resources/read (#288)", () => {
     expect(countReadRequests()).toBe(3);
   }, 15000);
 
+  it("returning to a row whose last read failed renders the cached error payload while the re-read is in flight", async () => {
+    // First read of demo://clock fails: the alert comes from the errors
+    // state, and the error payload is recorded in resourceContentMap.
+    readShouldFail = true;
+    await renderConnectedApp();
+    fireEvent.click(screen.getByTitle("demo://clock"));
+    await waitFor(() => {
+      expect(screen.getByText("boom")).toBeInTheDocument();
+    });
+
+    // Move the pane to the second resource with a successful read: the
+    // clock error payload now lives only in resourceContentMap.
+    readShouldFail = false;
+    fireEvent.click(screen.getByTitle("demo://log"));
+    await waitFor(() => {
+      expect(screen.getByText(/log=0/)).toBeInTheDocument();
+    });
+
+    // Return to the failed row with the re-read parked on a deferred
+    // promise: the cached error payload must render synchronously,
+    // exactly like a cached success (stale-while-revalidate), before any
+    // fresh response exists. If the error write into resourceContentMap
+    // were removed, the pane would keep showing the log payload and this
+    // test would fail.
+    parkNextRead = true;
+    fireEvent.click(screen.getByTitle("demo://clock"));
+    // The cached payload is a JSON string, rendered by JsonView as a tree:
+    // "boom" survives in the pane only if the cached error payload was
+    // written. The errors state is clean at this point (cleared on row
+    // select, the log read succeeded), so this text can only come from
+    // the cache.
+    expect(screen.getByText(/boom/)).toBeInTheDocument();
+    expect(screen.queryByText(/log=0/)).not.toBeInTheDocument();
+
+    // The re-read was still issued; releasing it replaces the pane.
+    parkNextRead = false;
+    await act(async () => {
+      parkedReads.forEach((resolve) => {
+        resolve({
+          contents: [
+            {
+              uri: "demo://clock",
+              mimeType: "text/plain",
+              text: "clock=0",
+            },
+          ],
+        });
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/clock=0/)).toBeInTheDocument();
+    });
+    expect(countReadRequests()).toBe(3);
+  }, 15000);
+
   function countReadRequests(): number {
     return makeRequest.mock.calls.filter(
       ([request]) =>
