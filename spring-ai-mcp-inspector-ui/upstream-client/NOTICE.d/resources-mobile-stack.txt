@@ -20,4 +20,6 @@ resourcesPanesStack_375x812 test (single column, pairwise disjoint
 panes, no horizontal document overflow, buttons inside the viewport)
 and the md 767x800/768x800 grid flip test, plus the jest pin
 ResourcesTab "Responsive layout" (grid-cols-1 + md:grid-cols-3 +
-testid).
+resources-content-grid testid; min-w-0 on the pane roots asserted for
+every tools-list-pane instance and for the preview pane, which gains a
+resources-preview-pane testid as its jest anchor).

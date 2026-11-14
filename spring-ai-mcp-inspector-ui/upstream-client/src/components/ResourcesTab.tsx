@@ -258,8 +258,12 @@ const ResourcesTab = ({
 
         {/* [spring-ai-mcp-inspector PATCH] Resources preview pane
             (#296): min-w-0 lets the pane shrink inside its grid cell
-            so the inner scroll area never overflows the card borders. */}
-        <div className="bg-card border border-border rounded-lg shadow min-w-0">
+            so the inner scroll area never overflows the card borders;
+            the testid anchors the jest assertion on that promise. */}
+        <div
+          className="bg-card border border-border rounded-lg shadow min-w-0"
+          data-testid="resources-preview-pane"
+        >
           <div className="p-4 border-b border-gray-200 dark:border-border flex justify-between items-center">
             <div className="flex items-center gap-2 truncate">
               {(selectedResource || selectedTemplate) && (
