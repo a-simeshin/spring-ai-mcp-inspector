@@ -2062,19 +2062,25 @@ const App = () => {
                 window.location.hash = value;
               }}
             >
-              {/* [spring-ai-mcp-inspector PATCH] Below `sm` (640px) the tab
-                  bar wraps instead of overflowing: the upstream TabsList base
-                  is `inline-flex h-9` with no wrap, so on a 375px viewport
-                  the trailing tabs (Sampling/Elicitations/Roots/Auth/Metadata)
-                  render off-screen with no scroll and no affordance. flex-wrap
-                  + h-auto let the triggers flow into rows; sm:h-9 +
-                  sm:flex-nowrap restore the single upstream row at >=640px.
-                  The wrapped row that the Input Required entry adds (#253)
+              {/* [spring-ai-mcp-inspector PATCH] The tab bar wraps instead of
+                  overflowing at every viewport width. The upstream TabsList
+                  base is `inline-flex h-9` with no wrap, so at a 375px
+                  viewport the trailing tabs (Sampling/Elicitations/Roots/
+                  Auth/Metadata) rendered off-screen with no scroll and no
+                  affordance; flex-wrap + h-auto let the triggers flow into
+                  rows. The desktop `sm:h-9 sm:flex-nowrap` override that
+                  originally restored the single upstream row from 640px up
+                  is dropped (#275): with the local Timeline (#112) and Input
+                  Required (#253) entries the bar carries 13 triggers
+                  (~1320px), which overflows the 960px inspector column at
+                  1280x800, leaving trailing triggers unreachable while the
+                  page itself never scrolls horizontally, so nothing signals
+                  the loss. The wrapped row that Input Required adds (#253)
                   was pushing the tools detail pane past the 375x667 fold
                   (InspectorUiIT ResponsiveLayout), so the bar's bottom
-                  margin is mb-2 below `sm`; the upstream mb-4 spacing is
-                  restored from `sm` up. */}
-              <TabsList className="mb-2 py-0 flex-wrap h-auto sm:mb-4 sm:h-9 sm:flex-nowrap">
+                  margin is mb-2 below `sm`; the upstream mb-4 spacing
+                  applies from `sm` up. */}
+              <TabsList className="mb-2 py-0 flex-wrap h-auto sm:mb-4">
                 <TabsTrigger
                   value="resources"
                   disabled={!serverCapabilities?.resources}
