@@ -539,7 +539,8 @@ class ProxyHandlerTests {
 					assertThat(sse.event()).isEqualTo("message");
 					assertThat(sse.data()).contains("world");
 				})
-				.verifyComplete();
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 		}
 
 		@Test
@@ -569,7 +570,10 @@ class ProxyHandlerTests {
 			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
 					response);
 			final java.util.List<org.springframework.http.codec.ServerSentEvent<String>> seen = new java.util.ArrayList<>();
-			reactor.test.StepVerifier.create(body.doOnNext(seen::add)).thenConsumeWhile((sse) -> true).verifyError();
+			reactor.test.StepVerifier.create(body.doOnNext(seen::add))
+				.thenConsumeWhile((sse) -> true)
+				.expectError()
+				.verify(Duration.ofSeconds(5));
 			assertThat(seen).anyMatch((sse) -> "endpoint".equals(sse.event()));
 			assertThat(seen)
 				.anyMatch((sse) -> java.time.Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS)
@@ -614,7 +618,10 @@ class ProxyHandlerTests {
 			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
 					response);
 			final java.util.List<org.springframework.http.codec.ServerSentEvent<String>> seen = new java.util.ArrayList<>();
-			reactor.test.StepVerifier.create(body.doOnNext(seen::add)).thenConsumeWhile((sse) -> true).verifyComplete();
+			reactor.test.StepVerifier.create(body.doOnNext(seen::add))
+				.thenConsumeWhile((sse) -> true)
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 			assertThat(seen).anyMatch((sse) -> "endpoint".equals(sse.event()));
 			assertThat(seen)
 				.anyMatch((sse) -> java.time.Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS)
@@ -721,7 +728,8 @@ class ProxyHandlerTests {
 					response);
 			reactor.test.StepVerifier.create(body)
 				.assertNext((sse) -> assertThat(sse.event()).isEqualTo("endpoint"))
-				.verifyError();
+				.expectError()
+				.verify(Duration.ofSeconds(5));
 		}
 
 		@Test
@@ -752,7 +760,8 @@ class ProxyHandlerTests {
 					response);
 			reactor.test.StepVerifier.create(body)
 				.assertNext((sse) -> assertThat(sse.data()).startsWith("/app/mcp-inspector-api/message?sessionId="))
-				.verifyComplete();
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 		}
 
 		@Test
@@ -1776,7 +1785,8 @@ class ProxyHandlerTests {
 					response);
 			reactor.test.StepVerifier.create(body)
 				.assertNext((sse) -> assertThat(sse.data()).startsWith("/mcp-inspector-api/message?sessionId="))
-				.verifyComplete();
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 		}
 
 		@Test
