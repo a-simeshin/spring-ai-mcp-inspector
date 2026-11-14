@@ -1213,7 +1213,6 @@ const App = () => {
           params: { uri },
         },
         ReadResourceResultSchema,
-        "resources",
       );
       console.log("[App] Resource read response:", {
         uri,
@@ -1221,15 +1220,20 @@ const App = () => {
         hasContents: !!(response as { contents?: unknown[] }).contents,
       });
       // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): guard the
-      // pane update by the requested uri. By the time the resources/read
-      // response resolves, the user may have selected another row, and a
-      // late response for a deselected resource used to overwrite the
-      // preview pane. The per-uri cache below stays unconditional: a
-      // response is always correct for its own uri.
+      // pane update and the resources-tab error clear by the requested
+      // uri. By the time the resources/read response resolves, the user
+      // may have selected another row, and a late response for a
+      // deselected resource used to overwrite the preview pane and, on
+      // success, to clear the selected row's own error Alert. The
+      // request is deliberately sent without a tabKey so the resources
+      // tab error is owned here instead of being set and cleared
+      // unconditionally in sendMCPRequest. The per-uri cache below stays
+      // unconditional: a response is always correct for its own uri.
       // Upstream has the same race (modelcontextprotocol/inspector
       // #1266/#1274); its fix PRs #1267/#1275 were closed unmerged.
       if (selectedResourceRef.current?.uri === uri) {
         setResourceContent(response);
+        clearError("resources");
       }
       setResourceContentMap((prev) => ({
         ...prev,
@@ -1242,6 +1246,14 @@ const App = () => {
         ...prev,
         [uri]: JSON.stringify({ error: errorString }),
       }));
+      // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): surface
+      // the read failure as the resources-tab Alert only while its uri
+      // is still selected; the Alert renders in place of the whole pane,
+      // so an unguarded set would replace the resource the user has
+      // moved to. This is the error half of the #344 race guard.
+      if (selectedResourceRef.current?.uri === uri) {
+        setErrors((prev) => ({ ...prev, resources: errorString }));
+      }
     } finally {
       setFetchingResources((prev) => {
         const next = new Set(prev);
