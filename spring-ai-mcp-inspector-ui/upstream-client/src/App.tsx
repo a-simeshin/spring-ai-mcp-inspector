@@ -37,6 +37,9 @@ import { OAuthStateMachine } from "./lib/oauth-state-machine";
 import { createProxyFetch } from "./lib/proxyFetch";
 import { cacheToolOutputSchemas } from "./utils/schemaUtils";
 import { cleanParams } from "./utils/paramUtils";
+// [spring-ai-mcp-inspector PATCH] Fire-and-forget MCP calls must not leak
+// their rethrow as unhandledrejection (#276).
+import { swallowLoggedMcpError } from "./utils/mcpErrorHandling";
 import type { JsonSchemaType } from "./utils/jsonUtils";
 import React, {
   Suspense,
@@ -2272,7 +2275,11 @@ const App = () => {
                       prompts={prompts}
                       listPrompts={() => {
                         clearError("prompts");
-                        listPrompts();
+                        // [spring-ai-mcp-inspector PATCH] sendMCPRequest
+                        // already renders the failure as the prompts error
+                        // alert; swallow its rethrow so the dropped promise
+                        // cannot become an unhandledrejection (#276).
+                        swallowLoggedMcpError(listPrompts());
                       }}
                       clearPrompts={() => {
                         setPrompts([]);
@@ -2280,7 +2287,10 @@ const App = () => {
                       }}
                       getPrompt={(name, args) => {
                         clearError("prompts");
-                        getPrompt(name, args);
+                        // [spring-ai-mcp-inspector PATCH] Same as
+                        // listPrompts: error already surfaced via
+                        // errors.prompts; swallow the rethrow (#276).
+                        swallowLoggedMcpError(getPrompt(name, args));
                       }}
                       selectedPrompt={selectedPrompt}
                       setSelectedPrompt={(prompt) => {

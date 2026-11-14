@@ -1524,7 +1524,8 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// E. PromptsTab — list, render greeting / multiTurn / optionalDescription.
+	// E. PromptsTab: list, render greeting / multiTurn / optionalDescription,
+	// error path (alwaysFails).
 	// =====================================================================
 
 	@Nested
@@ -1556,9 +1557,9 @@ class InspectorUiIT {
 		@Test
 		@Story("Prompt list")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("After listing prompts, greeting, multiTurn and optionalDescription all appear.")
-		@DisplayName("promptsListShowsThree — greeting, multiTurn, optionalDescription appear")
-		void promptsList_afterList_showsThreePrompts() {
+		@Description("After listing prompts, greeting, multiTurn, optionalDescription and alwaysFails all appear.")
+		@DisplayName("promptsListShowsFour: greeting, multiTurn, optionalDescription, alwaysFails appear")
+		void promptsList_afterList_showsFourPrompts() {
 			// given & when
 			// (prompts were listed in @BeforeEach goToPromptsTab)
 
@@ -1566,6 +1567,7 @@ class InspectorUiIT {
 			activePanel().shouldHave(text("greeting"), Duration.ofSeconds(10));
 			activePanel().shouldHave(text("multiTurn"));
 			activePanel().shouldHave(text("optionalDescription"));
+			activePanel().shouldHave(text("alwaysFails"));
 		}
 
 		@Test
@@ -1687,6 +1689,49 @@ class InspectorUiIT {
 			// then
 			// Successful render → JsonView appears with the prompt payload.
 			activePanel().shouldHave(text("hello"), Duration.ofSeconds(15));
+		}
+
+		/**
+		 * Regression for issue #276: a server-side prompts/get failure used to surface as
+		 * an unhandledrejection in the browser console because the App-level getPrompt
+		 * wrapper dropped the rejected promise. Now the failure renders as the
+		 * destructive error alert (RPC code + message) and the browser console stays
+		 * clean.
+		 */
+		@Test
+		@Story("Prompt error path")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("A server-side prompts/get failure renders the destructive error alert with the JSON-RPC code and raises no uncaught browser console entries.")
+		@DisplayName("getPromptServerErrorShowsAlert: RPC code in UI, no uncaught console errors")
+		void getPrompt_serverError_showsAlertWithoutUncaughtConsoleErrors() {
+			// given
+			selectRow("alwaysFails");
+			Assertions.assertTrue(promptArgsRendered(),
+					"prompts/list returned no argument schemas for `alwaysFails`; the test "
+							+ "cannot fill the `text` argument and fails here");
+			fillPromptArg("text", "anything");
+
+			// when
+			activePanel().$(byText("Get Prompt")).click();
+
+			// then: the destructive alert surfaces the RPC code and message...
+			activePanel().shouldHave(text("MCP error -32602"), Duration.ofSeconds(15));
+
+			// ...and the browser console has no uncaught (unhandledrejection)
+			// entries from the same request: an unhandledrejection from
+			// inspector code logs as SEVERE "Uncaught (in promise) ...".
+			WebDriver driver = com.codeborne.selenide.WebDriverRunner.getWebDriver();
+			LogEntries entries = driver.manage().logs().get(LogType.BROWSER);
+			List<String> uncaught = new ArrayList<>();
+			for (LogEntry entry : entries) {
+				if (entry.getLevel() == Level.SEVERE && entry.getMessage().contains("Uncaught")) {
+					uncaught.add(entry.getMessage());
+				}
+			}
+			if (!uncaught.isEmpty()) {
+				throw new AssertionError("prompts/get failure produced uncaught browser console entries:\n"
+						+ String.join("\n", uncaught));
+			}
 		}
 
 	}
