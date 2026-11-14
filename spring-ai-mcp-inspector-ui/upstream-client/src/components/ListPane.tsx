@@ -134,14 +134,20 @@ const ListPane = <T extends object>({
         <div className="space-y-2 overflow-y-auto max-h-96">
           {/* [spring-ai-mcp-inspector PATCH] Selected row (#276): the row for
               which isSelected(item) returns true gets the bg-muted marker;
-              upstream rows had no selection state. */}
+              upstream rows had no selection state. The hover backgrounds
+              apply only to unselected rows, so they never paint over the
+              marker, and the selected row carries aria-current="true" for
+              assistive tech. */}
           {filteredItems.map((item, index) => (
             <div
               key={index}
               data-testid={`tool-row-${index}`}
+              aria-current={isSelected?.(item) ? true : undefined}
               className={cn(
-                "flex items-center py-2 px-4 rounded hover:bg-gray-50 dark:hover:bg-secondary cursor-pointer",
-                isSelected?.(item) && "bg-muted",
+                "flex items-center py-2 px-4 rounded cursor-pointer",
+                isSelected?.(item)
+                  ? "bg-muted"
+                  : "hover:bg-gray-50 dark:hover:bg-secondary",
               )}
               onClick={() => setSelectedItem(item)}
             >
