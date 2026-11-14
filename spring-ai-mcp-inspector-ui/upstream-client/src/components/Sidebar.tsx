@@ -106,6 +106,11 @@ interface SidebarProps {
   setConfig: (config: InspectorConfig) => void;
   connectionType: "direct" | "proxy";
   setConnectionType: (type: "direct" | "proxy") => void;
+  // [spring-ai-mcp-inspector PATCH] Optional connection timeout in seconds.
+  // Empty string = proxy default (30s). Applies to all transport types;
+  // for stdio the budget covers spawn + initialize.
+  connectionTimeout: string;
+  setConnectionTimeout: (value: string) => void;
   serverImplementation?:
     | (WithIcons & { name?: string; version?: string; websiteUrl?: string })
     | null;
@@ -116,6 +121,28 @@ interface SidebarProps {
   onDeleteConnection: (id: string) => void;
   onSelectConnection: (connection: SavedConnection) => void;
 }
+
+// [spring-ai-mcp-inspector PATCH] Connection timeout bounds mirror the proxy
+// contract (ProxyConnectionBudgets): a whole number of seconds 1..600.
+// Anything else must be rejected client-side, otherwise the request reaches
+// the proxy and fails with a bare 400 banner. Accepted input is decimal
+// digits only, matching the proxy's Long.parseLong of the raw string:
+// JS numeric literals ("1e1", "0x10", "+30") fail here with the field-level
+// error instead of surfacing as a generic banner after a proxy 400.
+const CONNECTION_TIMEOUT_MAX_SECONDS = 600;
+const CONNECTION_TIMEOUT_ERROR = `Must be a whole number of seconds between 1 and ${CONNECTION_TIMEOUT_MAX_SECONDS}`;
+
+const isValidConnectionTimeout = (raw: string): boolean => {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return true;
+  }
+  if (!/^[0-9]+$/.test(trimmed)) {
+    return false;
+  }
+  const n = Number(trimmed);
+  return n >= 1 && n <= CONNECTION_TIMEOUT_MAX_SECONDS;
+};
 
 const Sidebar = ({
   connectionStatus,
@@ -153,6 +180,8 @@ const Sidebar = ({
   setConfig,
   connectionType,
   setConnectionType,
+  connectionTimeout,
+  setConnectionTimeout,
   serverImplementation,
   savedConnections,
   activeConnectionId,
@@ -171,6 +200,8 @@ const Sidebar = ({
   // [spring-ai-mcp-inspector PATCH] URL validation state: error message and touched flag.
   const [urlError, setUrlError] = useState<string | null>(null);
   const [urlTouched, setUrlTouched] = useState(false);
+  // [spring-ai-mcp-inspector PATCH] Connection timeout validation state.
+  const [timeoutError, setTimeoutError] = useState<string | null>(null);
   const { toast } = useToast();
   // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
   const [showSavedConnections, setShowSavedConnections] = useState(true);
@@ -811,6 +842,43 @@ const Sidebar = ({
             </>
           )}
 
+          {/* [spring-ai-mcp-inspector PATCH] Connection timeout field.
+               Proxy connections only: the budget is applied by the proxy
+               (stdio: spawn+initialize, SSE/HTTP: connect+initialize) and
+               direct connections never build a proxy URL, so the field is
+               hidden for them. Empty = proxy default (30s). Validation:
+               whole seconds 1..600, matching ProxyConnectionBudgets. */}
+          {connectionType === "proxy" && (
+          <div className="space-y-2">
+            <label className="text-sm font-medium" htmlFor="connection-timeout-input">
+              Connection timeout (s)
+            </label>
+            <Input
+              id="connection-timeout-input"
+              type="number"
+              min="1"
+              max="600"
+              step="1"
+              placeholder="30 (default)"
+              value={connectionTimeout}
+              onChange={(e) => setConnectionTimeout(e.target.value)}
+              onBlur={() => {
+                if (isValidConnectionTimeout(connectionTimeout)) {
+                  setTimeoutError(null);
+                } else {
+                  setTimeoutError(CONNECTION_TIMEOUT_ERROR);
+                }
+              }}
+              className={`font-mono ${timeoutError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
+            />
+            {timeoutError && (
+              <p className="text-xs text-red-500 mt-1" role="alert">
+                {timeoutError}
+              </p>
+            )}
+          </div>
+          )}
+
           {transportType === "stdio" && (
             <div className="space-y-2">
               <Button
@@ -1208,6 +1276,7 @@ const Sidebar = ({
               </div>
             )}
             {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). Block onConnect when invalid. */}
+            {/* [spring-ai-mcp-inspector PATCH] Also block Connect when connection timeout is invalid (proxy connections only: direct never forwards the timeout, so a stale invalid persisted value must not silently lock Connect). */}
             {connectionStatus !== "connected" && (
               <Button
                 className="w-full"
@@ -1221,9 +1290,20 @@ const Sidebar = ({
                       return;
                     }
                   }
+                  // Block connect if connection timeout is invalid (proxy only)
+                  if (
+                    connectionType === "proxy" &&
+                    !isValidConnectionTimeout(connectionTimeout)
+                  ) {
+                    setTimeoutError(CONNECTION_TIMEOUT_ERROR);
+                    return;
+                  }
                   onConnect();
                 }}
-                disabled={transportType !== "stdio" && !!urlError}
+                disabled={
+                  (transportType !== "stdio" && !!urlError) ||
+                  (connectionType === "proxy" && !!timeoutError)
+                }
               >
                 <Play className="w-4 h-4 mr-2" />
                 Connect
