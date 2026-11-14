@@ -480,6 +480,47 @@ describe("ToolsTab", () => {
     expect(submitButton.getAttribute("disabled")).toBeNull();
   });
 
+  describe("Pitfalls Panel", () => {
+    // [spring-ai-mcp-inspector PATCH] Pitfalls panel reachable from the
+    // tool-detail view (t_406cfdce).
+    it("renders the Common Spring AI 2.0 pitfalls panel in the tool detail", () => {
+      renderToolsTab({
+        selectedTool: mockTools[0],
+      });
+
+      expect(
+        screen.getByText("Common Spring AI 2.0 pitfalls"),
+      ).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText("Common Spring AI 2.0 pitfalls"));
+      expect(
+        screen.getByText(/Server-side validation is on by default in 2\.0/),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("link", {
+          name: /spring-projects\/spring-ai#5888/,
+        }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("link", {
+          name: /spring-projects\/spring-ai#6773/,
+        }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("link", {
+          name: /Upgrade Notes/,
+        }),
+      ).toBeInTheDocument();
+    });
+
+    it("does not render the panel when no tool is selected", () => {
+      renderToolsTab({ selectedTool: null });
+      expect(
+        screen.queryByText("Common Spring AI 2.0 pitfalls"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
   describe("Output Schema Display", () => {
     const toolWithOutputSchema: Tool = {
       name: "weatherTool",
@@ -1541,6 +1582,54 @@ describe("ToolsTab", () => {
         "href",
         "https://github.com/spring-projects/spring-ai/issues/5888",
       );
+    });
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Pitfalls panel wiring (PR #203 review):
+  // the unresolved-$ref entry activates only when the selected tool's
+  // schema actually carries unresolvable $ref warnings (#204 detector).
+  describe("Pitfalls panel wiring", () => {
+    const toolWithBrokenRef: Tool = {
+      name: "brokenRefTool",
+      description: "Tool with an unresolvable $ref",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          missing: { $ref: "#/properties/nonexistent" },
+        },
+      },
+    };
+    const cleanTool: Tool = {
+      name: "cleanTool",
+      description: "Tool with a resolvable schema",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          name: { type: "string" as const },
+        },
+      },
+    };
+
+    it("activates the unresolved-$ref entry for a tool with schema warnings", () => {
+      renderToolsTab({
+        tools: [toolWithBrokenRef],
+        selectedTool: toolWithBrokenRef,
+      });
+
+      fireEvent.click(screen.getByText("Common Spring AI 2.0 pitfalls"));
+      expect(
+        screen.getByText(/Detector active: see Schema Warning above/),
+      ).toBeInTheDocument();
+    });
+
+    it("keeps the unresolved-$ref entry static for a clean tool", () => {
+      renderToolsTab({
+        tools: [cleanTool],
+        selectedTool: cleanTool,
+      });
+
+      fireEvent.click(screen.getByText("Common Spring AI 2.0 pitfalls"));
+      expect(screen.queryByText(/Detector active:/)).not.toBeInTheDocument();
     });
   });
 

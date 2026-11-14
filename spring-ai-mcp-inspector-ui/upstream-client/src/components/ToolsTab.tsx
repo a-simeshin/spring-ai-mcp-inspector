@@ -48,6 +48,9 @@ import useCopy from "@/lib/hooks/useCopy";
 import IconDisplay, { WithIcons } from "./IconDisplay";
 import { cn } from "@/lib/utils";
 import { validateToolParams } from "@/utils/paramValidation";
+// [spring-ai-mcp-inspector PATCH] Common Spring AI 2.0 pitfalls hint panel
+// reachable from the tool-detail view (t_406cfdce).
+import { SpringAiPitfallsPanel } from "./SpringAiPitfallsPanel";
 import {
   META_NAME_RULES_MESSAGE,
   META_PREFIX_RULES_MESSAGE,
@@ -555,6 +558,14 @@ const ToolsTab = ({
                     </Alert>
                   );
                 })()}
+                {/* [spring-ai-mcp-inspector PATCH] Pitfalls panel: hint
+                    reachable from the tool-detail view. The unresolved-$ref
+                    entry activates when the schema detector flags this tool
+                    (#204 toolWarnings); otherwise the panel renders static
+                    entries with links only. */}
+                <SpringAiPitfallsPanel
+                  hasUnresolvedRefWarning={toolWarnings.has(selectedTool.name)}
+                />
                 {Object.entries(selectedTool.inputSchema.properties ?? []).map(
                   ([key, value]) => {
                     // First resolve any $ref references

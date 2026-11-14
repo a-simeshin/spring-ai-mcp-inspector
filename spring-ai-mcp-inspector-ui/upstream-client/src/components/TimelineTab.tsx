@@ -15,6 +15,9 @@ import {
   onTimelineScrollTo,
   parseLeakAnnotation,
 } from "@/lib/leakAnnotations";
+// [spring-ai-mcp-inspector PATCH] Common Spring AI 2.0 pitfalls hint panel
+// reachable from the Timeline view (t_406cfdce).
+import { SpringAiPitfallsPanel } from "./SpringAiPitfallsPanel";
 
 // [spring-ai-mcp-inspector PATCH] New TimelineTab — MCP event timeline panel (#112).
 // [spring-ai-mcp-inspector PATCH] Protocol-version negotiation badge on initialize
@@ -560,6 +563,19 @@ const TimelineTab = () => {
     return items;
   }, [events]);
 
+  // [spring-ai-mcp-inspector PATCH] Pitfalls panel detector (#184): the
+  // isError=true entry activates when the timeline holds a CallToolResult
+  // response with isError=true.
+  const hasIsErrorWarning = useMemo(
+    () =>
+      events.some(
+        (event) =>
+          event.type === "MCP_JSONRPC_RESPONSE" &&
+          isCallToolError(event.payload ?? {}),
+      ),
+    [events],
+  );
+
   return (
     <TabsContent value="timeline" className="h-96">
       <div className="bg-gray-900 text-gray-100 p-4 rounded-lg h-full font-mono text-sm overflow-auto flex flex-col">
@@ -577,6 +593,13 @@ const TimelineTab = () => {
             Auto-refresh (3s)
           </label>
         </div>
+        {/* [spring-ai-mcp-inspector PATCH] Pitfalls panel: hint reachable
+            from the Timeline view. The isError=true entry activates when a
+            tool-error row exists in this timeline (#184 detector). */}
+        <SpringAiPitfallsPanel
+          className="mb-2 shrink-0"
+          hasIsErrorWarning={hasIsErrorWarning}
+        />
         <div className="flex-1 overflow-y-auto">
           {events.length === 0 ? (
             <div className="opacity-50 text-center mt-8">No timeline events yet</div>

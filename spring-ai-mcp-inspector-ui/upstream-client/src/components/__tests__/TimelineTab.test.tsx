@@ -425,6 +425,62 @@ describe("TimelineTab", () => {
     expect(row.className).not.toContain("red");
   });
 
+  // [spring-ai-mcp-inspector PATCH] Pitfalls panel wiring (PR #203 review):
+  // the isError=true entry activates only when the timeline holds a
+  // CallToolResult response with isError=true.
+  it("activates the pitfalls isError entry when a tool-error response exists", async () => {
+    mockFetch([VALIDATION_ERROR_RESPONSE_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("1 event")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Common Spring AI 2.0 pitfalls"));
+    expect(
+      screen.getByText(/Detector active: check Timeline for isError=true/),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the pitfalls isError entry static when all responses succeed", async () => {
+    mockFetch([SUCCESS_CALL_RESPONSE_EVENT]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("1 event")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Common Spring AI 2.0 pitfalls"));
+    expect(screen.queryByText(/Detector active:/)).not.toBeInTheDocument();
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Pitfalls panel reachable from Timeline
+  // (t_406cfdce).
+  it("renders the Common Spring AI 2.0 pitfalls panel from the Timeline view", async () => {
+    mockFetch([]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Common Spring AI 2.0 pitfalls"),
+      ).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByText("Common Spring AI 2.0 pitfalls"));
+    expect(
+      screen.getByText(
+        /Historical, Spring AI 1\.1\.x only: recursive parameter types emitted unresolvable \$ref/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /spring-projects\/spring-ai#5888/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /spring-projects\/spring-ai#6773/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /Upgrade Notes/ }),
+    ).toBeInTheDocument();
+  });
+
   // [spring-ai-mcp-inspector PATCH] Exception-leak badge tests (#251). Fixtures
   // follow the D5 wire shape as serialized by
   // ExceptionLeakDetector#toLeakNode (verified on the engine branch).
@@ -819,4 +875,5 @@ describe("TimelineTab SEP-2322 input_required chain", () => {
       "awaiting input",
     );
   });
+
 });
