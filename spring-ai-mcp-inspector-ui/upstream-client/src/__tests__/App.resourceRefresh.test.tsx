@@ -3,9 +3,11 @@
 // send resources/read again instead of serving the eternal
 // resourceContentMap cache (the pane froze at the first-read snapshot until
 // a page reload), and a read failure must surface gracefully without
-// freezing the panel. Uses the real ResourcesTab so the row click and the
+// freezing the panel. Returning to a cached row must also render the
+// cached payload immediately, while the fresh read is still in flight.
+// Uses the real ResourcesTab so the row click and the
 // Refresh button exercise App.readResource end to end.
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import App from "../App";
 import { useConnection } from "../lib/hooks/useConnection";
@@ -96,9 +98,11 @@ function connectionState(serverCapabilities: Record<string, unknown>) {
 
 describe("App - readResource re-issues resources/read (#288)", () => {
   const mockUseConnection = jest.mocked(useConnection);
-  let readCount: number;
+  let readCounts: Record<string, number>;
   let readShouldFail: boolean;
   let readFailureText: string;
+  let parkNextRead: boolean;
+  const parkedReads: Array<(payload: unknown) => void> = [];
   const makeRequest = jest.fn(
     async (request: { method: string; params?: { uri?: string } }) => {
       switch (request.method) {
@@ -110,6 +114,11 @@ describe("App - readResource re-issues resources/read (#288)", () => {
                 name: "demo-clock",
                 mimeType: "text/plain",
               },
+              {
+                uri: "demo://log",
+                name: "demo-log",
+                mimeType: "text/plain",
+              },
             ],
             nextCursor: undefined,
           };
@@ -117,15 +126,26 @@ describe("App - readResource re-issues resources/read (#288)", () => {
           if (readShouldFail) {
             throw new Error(readFailureText);
           }
-          return {
+          const uri = request.params?.uri ?? "demo://clock";
+          const count = readCounts[uri] ?? 0;
+          readCounts[uri] = count + 1;
+          const payload = {
             contents: [
               {
-                uri: request.params?.uri ?? "demo://clock",
+                uri,
                 mimeType: "text/plain",
-                text: `clock=${readCount++}`,
+                text: `${uri === "demo://log" ? "log" : "clock"}=${count}`,
               },
             ],
           };
+          if (parkNextRead) {
+            // Parked: the test releases the read explicitly, so pane
+            // content can be asserted before any fresh response lands.
+            return new Promise((resolve) => {
+              parkedReads.push(resolve);
+            });
+          }
+          return payload;
         }
         default:
           return {};
@@ -135,9 +155,11 @@ describe("App - readResource re-issues resources/read (#288)", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    readCount = 0;
+    readCounts = {};
     readShouldFail = false;
     readFailureText = "boom";
+    parkNextRead = false;
+    parkedReads.length = 0;
   });
 
   async function renderConnectedApp() {
@@ -224,6 +246,48 @@ describe("App - readResource re-issues resources/read (#288)", () => {
       expect(screen.getByText(/clock=0/)).toBeInTheDocument();
     });
     expect(countReadRequests()).toBe(2);
+  }, 15000);
+
+  it("returning to a cached row renders the cached content before the re-read lands", async () => {
+    await renderConnectedApp();
+    await selectDemoClock();
+
+    // Move the pane to the second resource: the clock payload now lives
+    // only in resourceContentMap.
+    fireEvent.click(screen.getByTitle("demo://log"));
+    await waitFor(() => {
+      expect(screen.getByText(/log=0/)).toBeInTheDocument();
+    });
+
+    // Return to the clock row with the re-read parked on a deferred
+    // promise: the pane must show the cached clock payload synchronously
+    // (stale-while-revalidate), before any fresh response exists. If the
+    // cache-hit pane set were removed, the pane would keep showing the
+    // log payload and this test would fail.
+    parkNextRead = true;
+    fireEvent.click(screen.getByTitle("demo://clock"));
+    expect(screen.getByText(/clock=0/)).toBeInTheDocument();
+    expect(screen.queryByText(/log=0/)).not.toBeInTheDocument();
+
+    // The re-read was still issued; releasing it refreshes the pane.
+    parkNextRead = false;
+    await act(async () => {
+      parkedReads.forEach((resolve) => {
+        resolve({
+          contents: [
+            {
+              uri: "demo://clock",
+              mimeType: "text/plain",
+              text: "clock=1",
+            },
+          ],
+        });
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/clock=1/)).toBeInTheDocument();
+    });
+    expect(countReadRequests()).toBe(3);
   }, 15000);
 
   function countReadRequests(): number {
