@@ -317,6 +317,17 @@ class ExceptionLeakDetectorTests {
 		}
 
 		@Test
+		void t3cFragmentAbove50PercentButBelow24CharFloorDoesNotMatch() {
+			final TimelineEvent log = logEvent("log-3c1", T.minusSeconds(1), "WARN", "timeout occurred here",
+					"java.lang.IllegalStateException: background refresh failed\n\tat a.B(B.java:1)");
+			// 21 chars: above half of the 36-char error text, below the 24-char floor, so
+			// PARTIAL_MIN_CHARS is the only thing blocking this false positive family
+			final TimelineEvent response = responseEvent("resp-3c1", T, "wrapper prefix timeout occurred here");
+
+			assertThat(DETECTOR.detect(List.of(response, log))).isEmpty();
+		}
+
+		@Test
 		void s3ContainmentWorksInTheOtherDirection() {
 			// The logged WARN message is the contained fragment, the error text is
 			// longer. The unrelated throwable only qualifies the log (spec E8)
