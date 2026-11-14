@@ -22,6 +22,9 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import java.util.stream.Stream;
 
 import com.codeborne.selenide.CollectionCondition;
@@ -3113,6 +3116,123 @@ class InspectorUiIT {
 			SelenideElement notifications = $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications"));
 			// Wait up to 10s for the first scheduled tick to reach the panel.
 			notifications.$$("li").shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(12));
+		}
+
+	}
+
+	// =====================================================================
+	// U2. Resource read re-read: Refresh and re-selecting a row must
+	// send resources/read again and re-render the preview (issue #288,
+	// local patch read-resource-stale-pane). Regression: the upstream
+	// client served an eternal resourceContentMap cache on cache hit, so
+	// the pane froze at the first-read demo-clock timestamp until a page
+	// reload. demo://clock returns Instant.now() on every read, which
+	// makes a re-read observable through the pane text.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Resource read re-read (demo://clock)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class ResourceReadReRead {
+
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			openAndConnect();
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		private void listAndSelectClock() {
+			clickTab("resources");
+			for (SelenideElement clear : activePanel().$$(byText("Clear"))) {
+				if (clear.exists() && clear.isEnabled()) {
+					clear.click();
+				}
+			}
+			SelenideElement listResources = activePanel().$(byText("List Resources"));
+			if (listResources.exists() && listResources.isEnabled()) {
+				listResources.click();
+			}
+			activePanel().shouldHave(text("demo-clock"), Duration.ofSeconds(15));
+			selectRow("demo-clock");
+		}
+
+		/** The ISO-8601 instant rendered by the demo-clock preview, or null. */
+		private String paneClockTimestamp() {
+			final Matcher matcher = Pattern.compile("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z?")
+				.matcher(activePanel().getText());
+			return matcher.find() ? matcher.group() : null;
+		}
+
+		private int historyResourcesReadCount() {
+			return historyColumn().$$("li").filterBy(text("resources/read")).size();
+		}
+
+		@Test
+		@Story("Resource refresh re-read")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Clicking Refresh re-issues resources/read: the History pane gains an entry and the demo-clock preview advances to a new Instant.")
+		@DisplayName("refreshReIssuesResourcesRead: History grows and the clock advances on every Refresh")
+		void refresh_clickReIssuesResourcesRead_historyGrowsAndClockAdvances() {
+			// given
+			listAndSelectClock();
+			final String firstRead = paneClockTimestamp();
+			Assertions.assertNotNull(firstRead,
+					"demo-clock preview must render an ISO-8601 timestamp after the first read");
+			final int readsBeforeRefresh = historyResourcesReadCount();
+
+			// when
+			activePanel().$(byText("Refresh")).shouldBe(visible, Duration.ofSeconds(5)).click();
+
+			// then
+			// The re-read must land in History and the pane must advance:
+			// demo://clock returns Instant.now() with sub-second precision, so
+			// any later read renders a different string.
+			historyColumn().$$("li")
+				.filterBy(text("resources/read"))
+				.shouldHave(CollectionCondition.sizeGreaterThan(readsBeforeRefresh), Duration.ofSeconds(15));
+			final long deadline = System.currentTimeMillis() + Duration.ofSeconds(15).toMillis();
+			String secondRead = paneClockTimestamp();
+			while ((secondRead == null || secondRead.equals(firstRead)) && System.currentTimeMillis() < deadline) {
+				Selenide.sleep(250);
+				secondRead = paneClockTimestamp();
+			}
+			Assertions.assertNotNull(secondRead,
+					"demo-clock preview must keep rendering an ISO-8601 timestamp after Refresh");
+			Assertions.assertNotEquals(firstRead, secondRead,
+					"Refresh must re-issue resources/read: the demo-clock timestamp must advance instead of freezing");
+		}
+
+		@Test
+		@Story("Resource re-select re-read")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Re-clicking an already-read row re-issues resources/read (chosen semantics: a cached row re-reads, never inert), so the demo-clock preview advances.")
+		@DisplayName("reselectReIssuesResourcesRead: clicking the same row again re-reads instead of serving the cache")
+		void reselectRow_clickReIssuesResourcesRead_clockAdvances() {
+			// given
+			listAndSelectClock();
+			final String firstRead = paneClockTimestamp();
+			Assertions.assertNotNull(firstRead,
+					"demo-clock preview must render an ISO-8601 timestamp after the first read");
+
+			// when
+			selectRow("demo-clock");
+
+			// then
+			final long deadline = System.currentTimeMillis() + Duration.ofSeconds(15).toMillis();
+			String secondRead = paneClockTimestamp();
+			while ((secondRead == null || secondRead.equals(firstRead)) && System.currentTimeMillis() < deadline) {
+				Selenide.sleep(250);
+				secondRead = paneClockTimestamp();
+			}
+			Assertions.assertNotNull(secondRead,
+					"demo-clock preview must keep rendering an ISO-8601 timestamp after re-select");
+			Assertions.assertNotEquals(firstRead, secondRead,
+					"Re-selecting a read row must re-issue resources/read (never inert semantics): the demo-clock timestamp must advance");
 		}
 
 	}
