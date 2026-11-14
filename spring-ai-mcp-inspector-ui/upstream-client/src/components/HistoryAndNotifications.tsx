@@ -47,6 +47,14 @@ const HistoryAndNotifications = ({
             Clear
           </Button>
         </div>
+        {/* [spring-ai-mcp-inspector PATCH] Persistent history (#218):
+            entries (including tool arguments and responses) are stored in
+            localStorage in plain text, unencrypted and without expiry.
+            Users must not treat the panel as a safe place for secrets. */}
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+          Stored locally on this device. Tool arguments and responses are
+          saved unencrypted in your browser storage: avoid sending secrets.
+        </p>
         {requestHistory.length === 0 ? (
           <p className="text-sm text-gray-500 dark:text-gray-400 italic">
             No history yet

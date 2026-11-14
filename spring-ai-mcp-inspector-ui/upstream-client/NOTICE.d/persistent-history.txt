@@ -1,0 +1,118 @@
+persistentHistory.ts : History persistence layer for request/response entries
+in localStorage, keyed by connection id. On every successful (and failed) tool
+call, appends the entry to localStorage under key "mcp-inspector.history.v1".
+On page load (connectionId change), restores entries from localStorage back
+into React state. Per-connection FIFO eviction at 100 entries; global 500 KB
+store limit. No upstream equivalent exists; this is a Spring AI MCP Inspector
+custom extension.
+
+Owner-review rework (PR #218, 2026-10-24):
+- The global limit never evicts the CURRENT connection bucket wholesale; when
+  only the current bucket remains over budget, its oldest entries are trimmed
+  one by one, so an active session never loses the entry it just wrote.
+- The history bucket key is captured once when Connect is clicked
+  (App.tsx handleConnect, frozen while connected, released on disconnect):
+  editing the URL/transport fields mid-session no longer reshuffles buckets.
+  Owner decision on the 2026-10-24 review: a saved connection keys its
+  history bucket by the saved-connection id (activeConnectionId), so two
+  saved connections pointing at the same URL never share a bucket and
+  editing a saved connection's URL cannot orphan its history; ad-hoc
+  (unsaved) connections keep the transport-scoped key derived from the form
+  fields. The OAuth-callback path (onOAuthConnect) uses the same precedence
+  and captures with the live transportType prefix, not a hardcoded
+  "streamable-http:" (the OAuth flow is reachable on the SSE transport too,
+  which carries the same authProvider); otherwise an SSE OAuth session would
+  write into a wrong-transport bucket invisible to a later manual reconnect.
+- The fallback that returned the raw cut for a body that is not JSON at all
+  was removed: the app path only stores JSON.stringify output, and a raw cut
+  would produce an entry that isValidEntry discards on read anyway.
+- A store written by an unknown (e.g. newer) schemaVersion is never rewritten:
+  readStore exposes an empty view, appendHistory/clearHistory refuse to write.
+- Overlong bodies that still exceed the cap after inner-field truncation keep
+  the JSON-RPC envelope fields (jsonrpc, method, id) plus a truncated marker.
+- The History panel shows a plain-text storage warning: arguments and
+  responses are persisted unencrypted in browser storage.
+- Dead clearAllHistory export removed (Clear always scoped to the current
+  connection).
+
+Changed files:
+- src/lib/persistentHistory.ts (new)
+- src/lib/types/historyEntry.ts (new)
+- src/lib/hooks/useConnection.ts (imports + loadHistory on mount + appendHistory
+  in pushHistory + clearHistory in clearRequestHistory)
+- src/App.tsx (connectionId wiring: key captured at connect() via
+  handleConnect/handleDisconnect wrappers, frozen while connected;
+  onOAuthConnect derives the prefix from the live transportType;
+  onProfileAuthorized captures the same frozen key for the D9B
+  profile-authorized connect)
+- src/components/HistoryAndNotifications.tsx (localStorage plaintext warning)
+
+Review rework (PR #218, 2026-11-12): the D9B profile-authorized connect
+(onProfileAuthorized in App.tsx) captures the same transport-scoped form key
+frozen at connect and held until disconnect, exactly like handleConnect: a
+profile-authorized session is ad-hoc (no saved connection id), so the
+activeConnectionId branch never applies on that path. Covered by the
+App.transportScoping.test.tsx profile-authorized OAuth callback describe
+(RED on dacbc6f, GREEN after the fix).
+
+Owner-review rework (PR #218, 2026-11-13):
+- Entries carry an isError flag end to end: historyEntry.ts gains
+  isError?: boolean, isValidEntry accepts only a real boolean for it,
+  appendHistory stores it, and useConnection.pushHistory passes it through,
+  so the History panel's error styling (#195) survives a reload.
+- migrateHistory(fromId, toId) carries a whole bucket over to a new key
+  (merge, then the per-connection FIFO cap and the global size limit are
+  re-applied). It refuses a store written by a foreign schemaVersion and is
+  is a no-op for equal ids or an empty source. App.tsx calls it when an ad-hoc
+  session is saved under a name (immediately when disconnected, deferred to
+  disconnect while the live session is running, since the frozen key keeps
+  receiving entries) and at disconnect into the saved entry Save created
+  during that session, so entries written under the ad-hoc key stay reachable
+  under the saved-connection id instead of being orphaned.
+- The saved-connection association survives a reload: App.tsx persists
+  activeConnectionId under localStorage key "lastActiveConnectionId" while
+  it is set, re-reads it at mount and re-validates it against the saved
+  list (a stale id, e.g. from a deleted connection, falls back to the
+  ad-hoc form-derived key). Previously a reload dropped the association and
+  the saved connection's history became unreachable until re-selection.
+- Deleting a saved connection (handleDeleteConnection) also clears its
+  history bucket (clearHistory), so the stored entries do not outlive the
+  entry they belong to.
+
+Review rework (PR #218, 2026-11-13): regression test for the immediate
+save-time bucket move. A Save on a never-connected ad-hoc session (no
+frozen key, so no deferred path) must migrate the entries right away:
+the test seeds entries under the form-derived key, saves, and asserts
+the entries moved into the saved entry's bucket (isError preserved)
+while the form-derived bucket is left empty. RED on a suppressed
+migrateHistory call in App.tsx handleSaveConnection.
+
+Review rework (PR #218, 2026-11-13): the disconnect-time bucket move is
+restricted to the saved entry Save CREATED in the same session. A ref
+(sessionSaveCreatedConnectionIdRef, set by handleSaveConnection only when
+targetId is undefined, reset by handleConnect / onOAuthConnect /
+onProfileAuthorized) identifies that entry; handleDisconnect migrates the
+frozen key into it only when the entry still points at the connect-time
+endpoint (savedConnectionHistoryKey(entry) equals the frozen key). Before,
+the move targeted whatever saved entry was active at disconnect, so (a)
+clicking a different saved connection in the sidebar while an ad-hoc
+session ran, then disconnecting, carried the WHOLE ad-hoc bucket (earlier
+sessions included) into the unrelated entry, and (b) editing the URL
+mid-session and saving under a new name moved the connect-time server's
+history into the renamed entry pointing at another server. Regression
+tests cover both scenarios in src/__tests__/App.transportScoping.test.tsx
+(RED on 5502c648). The legitimate path is unchanged: saving an ad-hoc
+session under a new name pointing at the same server still carries the
+bucket at disconnect (existing tests keep passing).
+
+Review rework (PR #218, 2026-11-13): regression test for the write side of
+the reload association. Selecting a saved connection in the sidebar must
+persist it under "lastActiveConnectionId" (the persist-on-change effect in
+App.tsx), and a remount restores the saved bucket from that key alone.
+The test performs a real selection and a remount with no manual seeding
+of the key; RED when the setItem call in App.tsx is suppressed while the
+rest of the suite stays green (src/__tests__/App.transportScoping.test.tsx).
+
+Covered by: src/lib/__tests__/persistentHistory.test.ts,
+src/__tests__/App.transportScoping.test.tsx,
+src/components/__tests__/HistoryAndNotifications.test.tsx

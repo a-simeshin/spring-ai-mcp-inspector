@@ -275,3 +275,16 @@ export function migrateSavedConnections(raw: string | null): SavedConnectionsV1 
 
   return { schemaVersion: 1, connections: valid };
 }
+
+/**
+ * History bucket key for a saved connection: the same transport-scoped
+ * key an ad-hoc session captures at connect time (owner review on PR
+ * #218, 2026-11-13). The UI layer compares it against the frozen session
+ * key so the disconnect-time history carry-over only targets an entry
+ * that still points at the connect-time endpoint.
+ */
+export function savedConnectionHistoryKey(c: SavedConnection): string {
+  return c.transport === "stdio"
+    ? `stdio:${c.command ?? ""} ${c.args ?? ""}`
+    : `${c.transport}:${c.url || "ephemeral"}`;
+}

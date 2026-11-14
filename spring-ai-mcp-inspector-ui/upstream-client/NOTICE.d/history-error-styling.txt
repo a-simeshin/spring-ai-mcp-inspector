@@ -20,3 +20,10 @@ transparent left border). useConnection.test.tsx covers the producer side
 `isError: true` and for thrown transport errors; isError=false for successful
 responses and notifications without response. Forcing either branch to a
 constant fails these hook tests.
+
+Owner-review rework (PR #218, 2026-11-13): the flag is now persisted with the
+entry (historyEntry.ts isError?: boolean, validated by persistentHistory's
+isValidEntry, written by appendHistory via useConnection.pushHistory), so the
+red styling survives a page reload instead of silently downgrading failed
+calls to successful-looking rows. useConnection.test.tsx asserts the stored
+entry and persistentHistory.test.ts the round-trip and the boolean validation.
