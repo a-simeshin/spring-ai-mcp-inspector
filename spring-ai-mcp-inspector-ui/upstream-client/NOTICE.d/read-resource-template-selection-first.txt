@@ -1,0 +1,5 @@
+src/components/ResourcesTab.tsx#handleReadTemplateResource: set the
+selection before starting the read, mirroring the row-click order. The
+cache-hit pane guard (#344) judges by the live selected uri; reading
+first would make the guard see the previous selection and skip the pane
+commit for a cached template read.
