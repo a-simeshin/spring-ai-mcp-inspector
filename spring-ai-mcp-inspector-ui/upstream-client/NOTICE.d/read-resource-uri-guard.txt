@@ -1,0 +1,17 @@
+src/App.tsx#readResource — guard the preview-pane update by the
+requested uri. The resources/read response resolves asynchronously,
+and by then the user may have selected another row; the response
+still flowed into the singleton `resourceContent` state that
+ResourcesTab renders, so a late response for a deselected resource
+overwrote the preview pane. The race predates the stale-pane rework
+above and became reachable through ordinary interaction once every
+Refresh / re-select started issuing an in-flight read. Local fix:
+keep the live selection in a `selectedResourceRef` mirror (updated
+wherever the selection changes) and commit `resourceContent` only
+when `selectedResourceRef.current?.uri` still equals the requested
+uri; the per-uri `resourceContentMap` cache stays unconditional
+because a response is always correct for its own uri. Covered by
+App.resourceRace.test.tsx. Upstream has the same race:
+https://github.com/modelcontextprotocol/inspector/issues/1266 and
+#1274 acknowledge it; upstream fix PRs #1267 and #1275 were closed
+unmerged (v1 deprecated, security-only), so this is fixed locally.
