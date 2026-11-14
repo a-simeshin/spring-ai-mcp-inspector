@@ -1365,15 +1365,19 @@ const App = () => {
   };
 
   const readResource = async (uri: string) => {
-    // Local patch (vs upstream v0.22.0):
+    // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0):
     // Original early-return on cache hit forgot to sync the singleton
     // `resourceContent` state that ResourcesTab renders in the right pane.
     // Result: after viewing a resource template, clicking back to a
     // previously-cached resource left the right pane showing stale content.
     // Upstream issue: https://github.com/modelcontextprotocol/inspector/issues/1266
+    // Cache hits no longer early-return: the cached value is shown
+    // immediately (stale-while-revalidate) and resources/read is sent again,
+    // so Refresh and re-selecting a row pick up fresh server state (the
+    // demo://clock timestamp advances on every read). Cached error payloads
+    // are retried the same way.
     if (resourceContentMap[uri]) {
       setResourceContent(resourceContentMap[uri]);
-      return;
     }
     if (fetchingResources.has(uri)) {
       return;
