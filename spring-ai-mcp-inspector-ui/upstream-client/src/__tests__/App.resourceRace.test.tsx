@@ -5,6 +5,11 @@
 // response resolved). Test drives the real ResourcesTab: slow read is
 // parked on a deferred promise, fast read resolves immediately, then
 // the slow response lands last; the pane must keep the fast payload.
+// The error half of the contract is pinned here too: the resources-tab
+// error set (on reject) and clear (on success) are guarded by the same
+// selected-uri check, so a late reject cannot replace the selected
+// pane with its Alert and a late success cannot clear the selected
+// row's own error Alert.
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import App from "../App";
@@ -97,6 +102,8 @@ function connectionState(serverCapabilities: Record<string, unknown>) {
 describe("App - stale preview pane race guard (#344)", () => {
   const mockUseConnection = jest.mocked(useConnection);
   let resolveSlowRead: (payload: unknown) => void;
+  let rejectSlowRead: (error: unknown) => void;
+  let failFastRead = false;
 
   const makeRequest = jest.fn(
     async (request: { method: string; params?: { uri?: string } }) => {
@@ -120,11 +127,15 @@ describe("App - stale preview pane race guard (#344)", () => {
         case "resources/read": {
           const uri = request.params?.uri ?? "";
           if (uri === "demo://slow") {
-            // Park the slow read on a deferred promise: it resolves only
+            // Park the slow read on a deferred promise: it settles only
             // when the test releases it, after the fast read is done.
-            return new Promise((resolve) => {
+            return new Promise((resolve, reject) => {
               resolveSlowRead = resolve;
+              rejectSlowRead = reject;
             });
+          }
+          if (failFastRead) {
+            return Promise.reject(new Error("fast-read-failed"));
           }
           return {
             contents: [
@@ -141,6 +152,8 @@ describe("App - stale preview pane race guard (#344)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     resolveSlowRead = () => {};
+    rejectSlowRead = () => {};
+    failFastRead = false;
   });
 
   it("a late slow read does not overwrite the pane while the fast row is selected", async () => {
@@ -270,5 +283,104 @@ describe("App - stale preview pane race guard (#344)", () => {
     });
     expect(screen.getByText(/slow-payload/)).toBeInTheDocument();
     expect(screen.queryByText(/fast-payload/)).not.toBeInTheDocument();
+  }, 15000);
+
+  it("a late rejected read for a deselected resource does not replace the pane with its error", async () => {
+    mockUseConnection.mockReturnValue({
+      ...connectionState({ resources: { listChanged: true } }),
+      makeRequest,
+    } as ReturnType<typeof useConnection>);
+
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByText("List Resources"));
+    await waitFor(() => {
+      expect(screen.getByTitle("demo://slow")).toBeInTheDocument();
+    });
+
+    const { act } = await import("@testing-library/react");
+
+    // Select the slow resource: its read stays in flight.
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("demo://slow"));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+
+    // Switch to the fast resource while the slow read is still in flight.
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("demo://fast"));
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/fast-payload/)).toBeInTheDocument();
+    });
+
+    // The slow read rejects after the user moved to the fast row. Its
+    // failure must not surface as the resources-tab Alert, which renders
+    // in place of the whole pane: the error set in App.readResource is
+    // guarded by the selected uri, exactly like the pane commit.
+    await act(async () => {
+      rejectSlowRead(new Error("slow-read-failed"));
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(screen.queryByText(/slow-read-failed/)).not.toBeInTheDocument();
+    expect(screen.getByText(/fast-payload/)).toBeInTheDocument();
+  }, 15000);
+
+  it("a late successful read for a deselected resource does not clear the selected row's error", async () => {
+    failFastRead = true;
+    mockUseConnection.mockReturnValue({
+      ...connectionState({ resources: { listChanged: true } }),
+      makeRequest,
+    } as ReturnType<typeof useConnection>);
+
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByText("List Resources"));
+    await waitFor(() => {
+      expect(screen.getByTitle("demo://slow")).toBeInTheDocument();
+    });
+
+    const { act } = await import("@testing-library/react");
+
+    // Select the slow resource: its read stays in flight.
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("demo://slow"));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+
+    // Select the fast row: its read fails while it is selected, so its
+    // error Alert is the correct pane content here.
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("demo://fast"));
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(screen.getByText(/fast-read-failed/)).toBeInTheDocument();
+
+    // The slow read succeeds late. Its success must not clear the fast
+    // row's error Alert: the error clear in App.readResource is guarded
+    // by the selected uri, exactly like the pane commit.
+    await act(async () => {
+      resolveSlowRead({
+        contents: [
+          { uri: "demo://slow", mimeType: "text/plain", text: "slow-payload" },
+        ],
+      });
+      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(screen.getByText(/fast-read-failed/)).toBeInTheDocument();
+    expect(screen.queryByText(/slow-payload/)).not.toBeInTheDocument();
   }, 15000);
 });
