@@ -10,10 +10,14 @@ const ToastViewport = React.forwardRef<
   React.ElementRef<typeof ToastPrimitives.Viewport>,
   React.ComponentPropsWithoutRef<typeof ToastPrimitives.Viewport>
 >(({ className, ...props }, ref) => (
+  // [spring-ai-mcp-inspector PATCH] Toast placement vs. the notifications pane
+  // (issue #267): the viewport bottom is a CSS variable so Toaster can raise
+  // toasts above the server notifications pane; the fallback 0px keeps the
+  // original position when the pane is absent.
   <ToastPrimitives.Viewport
     ref={ref}
     className={cn(
-      "fixed top-0 z-[100] flex max-h-screen w-full flex-col-reverse p-4 sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col md:max-w-[420px]",
+      "fixed top-0 z-[100] flex max-h-screen w-full flex-col-reverse p-4 sm:bottom-[var(--toast-viewport-offset,0px)] sm:right-0 sm:top-auto sm:flex-col md:max-w-[420px]",
       className,
     )}
     {...props}
