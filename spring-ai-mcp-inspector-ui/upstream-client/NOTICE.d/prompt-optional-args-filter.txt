@@ -25,4 +25,6 @@ Covered by:
 - `src/components/__tests__/PromptsTab.test.tsx`: a cleared optional
   argument and a whitespace-only optional argument are both omitted
   from the getPrompt payload; a filled optional argument is included;
-  a whitespace-only required argument disables Get Prompt.
+  a whitespace-only required argument disables Get Prompt. The filled
+  optional test also pins the untouched form state: after clicking
+  Get Prompt, both fields still show the values the user typed.

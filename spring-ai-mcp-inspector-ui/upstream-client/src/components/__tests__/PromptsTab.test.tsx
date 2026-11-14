@@ -283,6 +283,12 @@ describe("PromptsTab", () => {
       name: "World",
       suffix: "!!",
     });
+
+    // Submitting must not disturb the form: both fields keep showing what
+    // the user typed (form state untouched, see
+    // NOTICE.d/prompt-optional-args-filter.txt).
+    expect(nameInput).toHaveValue("World");
+    expect(suffixInput).toHaveValue("!!");
   });
 
   it("should show required field error on blur when required argument is empty", async () => {
