@@ -1,0 +1,6 @@
+src/components/__tests__/PromptsTab.test.tsx: adds the whitespace-only
+required-argument blur case to the marked component-test block. Changing
+the required name argument to spaces and blurring must surface the
+per-field "This field is required" hint and mark the combobox
+aria-invalid. Fails if the trim-based required check or the per-field
+hint lookup in PromptsTab's handleBlur regresses.

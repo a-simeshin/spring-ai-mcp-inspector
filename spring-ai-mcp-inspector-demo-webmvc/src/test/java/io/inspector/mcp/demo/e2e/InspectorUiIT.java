@@ -1736,6 +1736,76 @@ class InspectorUiIT {
 			}
 		}
 
+		/**
+		 * Regression for PR #359 review: the component suite mocks the Combobox, so the
+		 * whitespace-only required title behavior also needs a real browser story.
+		 * Whitespace-only input must keep the Get Prompt button disabled exactly like an
+		 * empty value does.
+		 */
+		@Test
+		@Story("Prompt validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("A whitespace-only required title keeps the Get Prompt button disabled.")
+		@DisplayName("getPromptWhitespaceOnlyTitle: Get Prompt stays disabled")
+		void getPrompt_whitespaceOnlyTitle_staysDisabled() {
+			// given
+			selectRow("optionalDescription");
+			Assertions.assertTrue(promptArgsRendered(),
+					"prompts/list returned no argument schemas for `optionalDescription`; the test "
+							+ "cannot fill the `title` argument and fails here");
+
+			// when: the required `title` argument gets a whitespace-only value
+			fillPromptArg("title", "   ");
+
+			// then
+			activePanel().$(byText("Get Prompt")).shouldBe(disabled);
+		}
+
+		/**
+		 * Regression for PR #359 review: the component suite mocks the Combobox, so the
+		 * cleared-optional-argument behavior also needs a real browser story. A
+		 * whitespace-only optional `detail` must be dropped from the prompts/get request
+		 * payload instead of being sent. The page fetch is wrapped before Get Prompt is
+		 * clicked; the captured body must not mention the argument at all. The demo
+		 * connects through the proxy, so bodies may sit inside a proxy envelope, and a
+		 * plain substring check works for both shapes.
+		 */
+		@Test
+		@Story("Prompt validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("A whitespace-only optional detail is omitted from the prompts/get request payload.")
+		@DisplayName("getPromptWhitespaceOnlyOptionalDetail: detail omitted from prompts/get request")
+		void getPrompt_whitespaceOnlyOptionalDetail_omittedFromRequest() {
+			// given
+			selectRow("optionalDescription");
+			Assertions.assertTrue(promptArgsRendered(),
+					"prompts/list returned no argument schemas for `optionalDescription`; the test "
+							+ "cannot fill the arguments and fails here");
+
+			// Capture every JSON-RPC body the page sends through fetch.
+			Selenide.executeJavaScript("" + "window.__promptsGetPayloads = window.__promptsGetPayloads || [];"
+					+ "if (!window.__promptsGetHooked) {" + "  window.__promptsGetHooked = true;"
+					+ "  const orig = window.fetch;" + "  window.fetch = function(input, init) {" + "    try {"
+					+ "      if (init && typeof init.body === 'string'"
+					+ "          && init.body.indexOf('prompts/get') !== -1) {"
+					+ "        window.__promptsGetPayloads.push(init.body);" + "      }" + "    } catch (e) {}"
+					+ "    return orig.apply(this, arguments);" + "  };" + "}");
+
+			// when
+			fillPromptArg("title", "hello");
+			// Whitespace-only `detail` behaves like an empty optional argument.
+			fillPromptArg("detail", "   ");
+			activePanel().$(byText("Get Prompt")).click();
+			activePanel().shouldHave(text("hello"), Duration.ofSeconds(15));
+
+			// then: the request that produced this render must not mention `detail`
+			String payload = Selenide.executeJavaScript("return (window.__promptsGetPayloads || []).length > 0"
+					+ " ? window.__promptsGetPayloads[window.__promptsGetPayloads.length - 1]" + " : null;");
+			Assertions.assertNotNull(payload, "no prompts/get request body was captured by the fetch hook");
+			Assertions.assertFalse(payload.contains("detail"),
+					"whitespace-only optional `detail` leaked into the prompts/get payload: " + payload);
+		}
+
 	}
 
 	// =====================================================================

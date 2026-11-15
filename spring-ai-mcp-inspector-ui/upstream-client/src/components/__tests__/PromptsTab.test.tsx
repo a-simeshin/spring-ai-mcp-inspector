@@ -309,6 +309,25 @@ describe("PromptsTab", () => {
     expect(screen.getByText("This field is required")).toBeInTheDocument();
   });
 
+  it("should show required field error on blur when required argument is whitespace only", async () => {
+    renderPromptsTab({ selectedPrompt: mockPrompts[0] });
+
+    // A whitespace-only value must behave exactly like an empty one: fill
+    // the required name field with spaces, then blur to trigger validation.
+    const nameInput = screen.getByTestId("combobox-name");
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "   " } });
+    });
+
+    await act(async () => {
+      fireEvent.blur(nameInput);
+    });
+
+    // The per-field hint appears and the combobox is marked invalid.
+    expect(screen.getByText("This field is required")).toBeInTheDocument();
+    expect(nameInput).toHaveAttribute("aria-invalid", "true");
+  });
+
   it("should set aria-invalid and aria-describedby on combobox after blur", async () => {
     renderPromptsTab({ selectedPrompt: mockPrompts[0] });
 
