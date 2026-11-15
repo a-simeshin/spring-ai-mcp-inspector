@@ -180,11 +180,126 @@ class ProxyAuthFilterTests {
 		@Test
 		@Story("Bypass")
 		@Severity(SeverityLevel.NORMAL)
+		@Description("the sandbox proxy page is allowed through without any token (exact path match)")
+		void doFilter_forSandboxPath_passesWithoutToken() throws Exception {
+			// given
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sandbox");
+			request.setRequestURI("/mcp-inspector-api/sandbox");
+			final MockHttpServletResponse response = new MockHttpServletResponse();
+			final MockFilterChain chain = new MockFilterChain();
+
+			// when
+			ProxyAuthFilterTests.this.filter.doFilter(request, response, chain);
+
+			// then
+			assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_OK);
+			assertThat(chain.getRequest()).isNotNull();
+		}
+
+		@Test
+		@Story("Deny")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a path that merely ends with /sandbox is NOT exempt (exact match only)")
+		void doFilter_forPathEndingInSandbox_requiresToken() throws Exception {
+			// given
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/mcp/sandbox");
+			request.setRequestURI("/mcp-inspector-api/mcp/sandbox");
+			final MockHttpServletResponse response = new MockHttpServletResponse();
+			final MockFilterChain chain = new MockFilterChain();
+
+			// when
+			ProxyAuthFilterTests.this.filter.doFilter(request, response, chain);
+
+			// then
+			assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_UNAUTHORIZED);
+			assertThat(chain.getRequest()).isNull();
+		}
+
+		@Test
+		@Story("Deny")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a path that merely ends with /health is NOT exempt (exact match only)")
+		void doFilter_forPathEndingInHealth_requiresToken() throws Exception {
+			// given
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/mcp/health");
+			request.setRequestURI("/mcp-inspector-api/mcp/health");
+			final MockHttpServletResponse response = new MockHttpServletResponse();
+			final MockFilterChain chain = new MockFilterChain();
+
+			// when
+			ProxyAuthFilterTests.this.filter.doFilter(request, response, chain);
+
+			// then
+			assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_UNAUTHORIZED);
+			assertThat(chain.getRequest()).isNull();
+		}
+
+		@Test
+		@Story("Bypass")
+		@Severity(SeverityLevel.NORMAL)
 		@Description("when auth is disabled every request is forwarded without checking the token")
 		void doFilter_whenAuthDisabled_passesChain() throws Exception {
 			// given
 			ProxyAuthFilterTests.this.properties.setAuthEnabled(false);
 			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
+			final MockHttpServletResponse response = new MockHttpServletResponse();
+			final MockFilterChain chain = new MockFilterChain();
+
+			// when
+			ProxyAuthFilterTests.this.filter.doFilter(request, response, chain);
+
+			// then
+			assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_OK);
+			assertThat(chain.getRequest()).isNotNull();
+		}
+
+		@Test
+		@Story("Bypass")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("CORS preflight (OPTIONS) is allowed through without a token so the CORS layer answers it")
+		void doFilter_optionsRequest_passesWithoutToken() throws Exception {
+			// given
+			final MockHttpServletRequest request = new MockHttpServletRequest("OPTIONS", "/mcp-inspector-api/mcp");
+			final MockHttpServletResponse response = new MockHttpServletResponse();
+			final MockFilterChain chain = new MockFilterChain();
+
+			// when
+			ProxyAuthFilterTests.this.filter.doFilter(request, response, chain);
+
+			// then
+			assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_OK);
+			assertThat(chain.getRequest()).isNotNull();
+		}
+
+		@Test
+		@Story("Deny")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("under a context path, a URI that does not carry the prefix is not treated as exempt")
+		void doFilter_uriMissingContextPathPrefix_requiresToken() throws Exception {
+			// given
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/mcp");
+			request.setContextPath("/app");
+			request.setRequestURI("/mcp-inspector-api/mcp");
+			final MockHttpServletResponse response = new MockHttpServletResponse();
+			final MockFilterChain chain = new MockFilterChain();
+
+			// when
+			ProxyAuthFilterTests.this.filter.doFilter(request, response, chain);
+
+			// then
+			assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_UNAUTHORIZED);
+			assertThat(chain.getRequest()).isNull();
+		}
+
+		@Test
+		@Story("Allow")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("an empty Bearer header falls back to the query-param token")
+		void doFilter_blankBearerHeader_usesQueryParamFallback() throws Exception {
+			// given
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
+			request.addHeader(ProxyConstants.AUTH_HEADER, "Bearer ");
+			request.setParameter(ProxyConstants.AUTH_QUERY_PARAM, ProxyAuthFilterTests.this.token);
 			final MockHttpServletResponse response = new MockHttpServletResponse();
 			final MockFilterChain chain = new MockFilterChain();
 

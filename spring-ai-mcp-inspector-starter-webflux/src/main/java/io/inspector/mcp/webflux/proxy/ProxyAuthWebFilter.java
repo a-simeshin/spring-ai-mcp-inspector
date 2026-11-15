@@ -56,6 +56,10 @@ public class ProxyAuthWebFilter implements WebFilter, Ordered {
 
 	private final String proxyPrefix;
 
+	private final String healthPath;
+
+	private final String sandboxPath;
+
 	public ProxyAuthWebFilter(final McpInspectorProperties properties, final InspectorAuthTokenProvider tokenProvider) {
 		this(properties, tokenProvider, Ordered.HIGHEST_PRECEDENCE + 110);
 	}
@@ -68,7 +72,13 @@ public class ProxyAuthWebFilter implements WebFilter, Ordered {
 		// Derive the proxy URL prefix once at construction time from the configured
 		// path; falling back to the legacy default if no properties bean is wired
 		// (defensive — in production the autoconfig always supplies one).
-		this.proxyPrefix = (properties != null) ? properties.getProxyPath() + "/" : "/mcp-inspector-api/";
+		final String prefix = (properties != null) ? properties.getProxyPath() + "/" : "/mcp-inspector-api/";
+		this.proxyPrefix = prefix;
+		// Exact open-endpoint paths (health probe, sandbox proxy page): matched by
+		// equality, never by suffix, so no other endpoint that merely ends with
+		// /health or /sandbox is exempted.
+		this.healthPath = prefix + "health";
+		this.sandboxPath = prefix + "sandbox";
 	}
 
 	@Override
@@ -88,8 +98,8 @@ public class ProxyAuthWebFilter implements WebFilter, Ordered {
 		if (!path.startsWith(this.proxyPrefix)) {
 			return chain.filter(exchange);
 		}
-		// Health is intentionally open.
-		if (path.endsWith("/health")) {
+		// Health and sandbox proxy are intentionally open, matched by exact path.
+		if (this.healthPath.equals(path) || this.sandboxPath.equals(path)) {
 			return chain.filter(exchange);
 		}
 		// CORS preflight requests carry no credentials; let them pass so the CORS

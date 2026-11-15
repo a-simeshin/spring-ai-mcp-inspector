@@ -60,15 +60,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>
  * Contract under test:
  * <ul>
- * <li>29 tool entries (the 2.x line includes {@code authorizeViaUrl}, which needs SDK 2.0
+ * <li>32 tool entries (the 2.x line includes {@code authorizeViaUrl}, which needs SDK 2.0
  * URL-mode elicitation, the issue #251 leak-detector demos {@code leakyInsert} and
- * {@code leakyChainInsert}, and the SEP-2322 round-trip fixture
- * {@code multiRoundTripEcho});</li>
- * <li>22 entries with {@code annotations.readOnlyHint=true, destructiveHint=false} (echo,
+ * {@code leakyChainInsert}, the SEP-2322 round-trip fixture {@code multiRoundTripEcho},
+ * and the three MCP Apps fixtures from {@code DemoUiAppsProvider});</li>
+ * <li>25 entries with {@code annotations.readOnlyHint=true, destructiveHint=false} (echo,
  * sum, currentTime, addNumbers, concatenate, lookupUser, chooseColor, toggleFlag,
  * optionalGreeting, errorTool, largeOutput, structuredOutput, multiContent, deepJson,
  * blobAttachment, findFiles, listMyRoots, generateReport, getTaskStatus, cancelTask,
- * keepAliveTask, multiRoundTripEcho);</li>
+ * keepAliveTask, multiRoundTripEcho, formApp, dashboardApp, malformedAppTool);</li>
  * <li>6 entries with {@code annotations.readOnlyHint=false, destructiveHint=false}
  * (askLlm, askUser, deployService, authorizeViaUrl, leakyInsert, leakyChainInsert);</li>
  * <li>{@code slowEcho} carries NO {@code annotations} field at all — it is registered as
@@ -93,7 +93,8 @@ class ToolsListContractIT {
 	private static final List<String> READ_ONLY_TOOLS = List.of("echo", "sum", "currentTime", "addNumbers",
 			"concatenate", "lookupUser", "chooseColor", "toggleFlag", "optionalGreeting", "errorTool", "largeOutput",
 			"structuredOutput", "multiContent", "deepJson", "blobAttachment", "findFiles", "listMyRoots",
-			"generateReport", "getTaskStatus", "cancelTask", "keepAliveTask", "multiRoundTripEcho");
+			"generateReport", "getTaskStatus", "cancelTask", "keepAliveTask", "multiRoundTripEcho", "formApp",
+			"dashboardApp", "malformedAppTool");
 
 	private static final List<String> INTERACTIVE_TOOLS = List.of("askLlm", "askUser", "deployService",
 			"authorizeViaUrl", "leakyInsert", "leakyChainInsert");
@@ -113,11 +114,12 @@ class ToolsListContractIT {
 	@Test
 	@Story("tools/list contract")
 	@Severity(SeverityLevel.CRITICAL)
-	@DisplayName("toolsList29Entries - 29 entries; 22 read-only + 6 interactive annotated; no declared destructive")
-	@Description("tools/list through the relay returns 29 tools; 22 carry readOnlyHint=true/destructiveHint=false, "
+	@DisplayName("toolsList32Entries - 32 entries; 25 read-only + 6 interactive annotated; no declared destructive")
+	@Description("tools/list through the relay returns 32 tools; 25 carry readOnlyHint=true/destructiveHint=false "
+			+ "(including the MCP Apps fixtures formApp, dashboardApp, malformedAppTool), "
 			+ "6 (askLlm, askUser, deployService, authorizeViaUrl, leakyInsert, leakyChainInsert) carry "
 			+ "readOnlyHint=false/destructiveHint=false, and no entry declares destructiveHint=true.")
-	void toolsList29EntriesWithExplicitAnnotations() throws Exception {
+	void toolsList32EntriesWithExplicitAnnotations() throws Exception {
 		// given: a connected proxy session
 		final String sessionId = connect();
 		try {
@@ -126,8 +128,8 @@ class ToolsListContractIT {
 			final JsonNode tools = result.path("tools");
 			assertThat(tools.isArray()).as("tools/list must return a tools array").isTrue();
 
-			// then: 29 entries, exact matrix
-			assertThat(tools.size()).as("demo must advertise exactly 29 tools").isEqualTo(29);
+			// then: 32 entries, exact matrix
+			assertThat(tools.size()).as("demo must advertise exactly 32 tools").isEqualTo(32);
 
 			final List<String> names = new ArrayList<>();
 			for (final JsonNode tool : tools) {
