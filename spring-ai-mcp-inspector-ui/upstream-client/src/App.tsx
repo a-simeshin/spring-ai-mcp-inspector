@@ -479,6 +479,13 @@ const App = () => {
   // tracked, matching lastToolCallOriginTabRef above.
   const nextToolCallIdRef = useRef(0);
   const activeToolCallIdRef = useRef<number | null>(null);
+  // [spring-ai-mcp-inspector PATCH] Issue #298: ids of calls that already
+  // settled. A card can arrive (SSE delivery) after its call settled (POST
+  // response), and the finally block only expires cards that exist at that
+  // moment, so at arrival the card must be created already expired.
+  // activeToolCallIdRef is deliberately never reset: after a call settles it
+  // keeps that call's id, which is the id a late-arriving card maps to.
+  const settledToolCallIdsRef = useRef<Set<number>>(new Set());
   // [spring-ai-mcp-inspector PATCH] Answering a sampling or elicitation request
   // re-asserts the originating tab once more after 100 ms. Upstream never keeps the
   // handle, so that timer outlives the component and rewrites window.location.hash
@@ -707,8 +714,13 @@ const App = () => {
           originatingTab: currentTab,
           // [spring-ai-mcp-inspector PATCH] Issue #298: remember which
           // tools/call is waiting on this card so its settlement can
-          // expire the form. Undefined outside of any tool call.
+          // expire the form. The ref keeps the last started call id, so a
+          // card arriving after that call already settled (fast settle wins
+          // the race against SSE delivery) is created expired right away.
           toolCallId: activeToolCallIdRef.current ?? undefined,
+          expired:
+            activeToolCallIdRef.current != null &&
+            settledToolCallIdsRef.current.has(activeToolCallIdRef.current),
           resolve,
           decline: (error: Error) => {
             console.error("Elicitation request rejected:", error);
@@ -1846,10 +1858,10 @@ const App = () => {
       // terminal state (result, tool error, or transport failure). Expire
       // correlated elicitation cards instead of leaving their forms active:
       // the server stopped waiting, and a late Submit used to close them
-      // silently while losing the answer.
-      if (activeToolCallIdRef.current === toolCallId) {
-        activeToolCallIdRef.current = null;
-      }
+      // silently while losing the answer. The correlation ref is NOT reset:
+      // it keeps the last started call id so a card delivered after this
+      // moment (fast settle outracing SSE) still maps to its call.
+      settledToolCallIdsRef.current.add(toolCallId);
       expireElicitationsForToolCall(toolCallId);
     }
   };

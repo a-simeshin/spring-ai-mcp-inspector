@@ -9,7 +9,13 @@ covering success, tool error, and transport failure alike. A guard in
 handleResolveElicitation refuses resolution of an expired card, so a
 late Submit can no longer silently close the form while the server has
 already timed out (default SDK elicitation timeout, about 20 seconds).
+A fast-settling call can also outrace SSE delivery of the card: the
+settle runs before the card exists, so expiring at settle time is not
+enough. The finally block records the settled id
+(settledToolCallIdsRef), and the onElicitationRequest handler creates
+a card already expired when its correlated call is in that set.
 The wiring test drives the app with a deferred tools/call, delivers a
 mid-flight elicitation, settles the call with the timeout error, and
 asserts the expired flag, the refused late resolve, a timely resolve
-delivering as before, and the resolve/settlement race.
+delivering as before, the resolve/settlement race, and a card arriving
+after the settle being created already expired.

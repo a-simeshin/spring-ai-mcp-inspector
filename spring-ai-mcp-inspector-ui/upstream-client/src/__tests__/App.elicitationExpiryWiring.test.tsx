@@ -407,4 +407,63 @@ describe("App - elicitation expiry wiring (Issue #298)", () => {
     });
     expect(resolveSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("creates a card already expired when it arrives after the call settled", async () => {
+    // The CI repro: a fast-settling call (tool error) outraces SSE delivery,
+    // so the settle runs while the card does not exist yet. The card must be
+    // created expired rather than arriving live and staying live forever.
+    const deferred = createDeferred();
+    const makeRequest = jest.fn(async (request: { method: string }) => {
+      if (request.method === "tools/call") {
+        return deferred.promise;
+      }
+      throw new Error(`Unexpected method: ${request.method}`);
+    });
+    const captured: Record<string, unknown> = {};
+    mockConnection(makeRequest, captured);
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /mock call tool/i }));
+
+    await waitFor(() => {
+      expect(makeRequest).toHaveBeenCalled();
+    });
+
+    // The call settles before any elicitation card arrives.
+    await act(async () => {
+      deferred.reject(new Error("askUser: elicitation request failed: boom"));
+    });
+    await waitFor(() => {
+      const rendered = JSON.parse(
+        screen.getByTestId("tools-result").textContent || "null",
+      );
+      expect(rendered.isError).toBe(true);
+    });
+
+    // The card arrives now, after the settle: it is correlated with the
+    // settled call and born expired, and a late resolve is refused.
+    const resolveSpy = jest.fn();
+    const declineSpy = jest.fn();
+    await act(async () => {
+      (captured.onElicitationRequest as (
+        request: ElicitationRequestPayload,
+        resolve: (response: unknown) => void,
+        decline: (error: Error) => void,
+      ) => void)(elicitationRequest, resolveSpy, declineSpy);
+    });
+    expect(screen.getByTestId("elicitation-card-0")).toHaveAttribute(
+      "data-expired",
+      "true",
+    );
+    expect(screen.getByTestId("elicitation-card-0")).toHaveAttribute(
+      "data-tool-call-id",
+      "0",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /mock resolve card 0/i }),
+    );
+    expect(screen.getByTestId("elicitation-card-0")).toBeInTheDocument();
+    expect(resolveSpy).not.toHaveBeenCalled();
+    expect(declineSpy).not.toHaveBeenCalled();
+  });
 });
