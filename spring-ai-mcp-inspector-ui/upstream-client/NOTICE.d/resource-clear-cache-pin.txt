@@ -1,0 +1,14 @@
+src/__tests__/App.resourceRefresh.test.tsx: pin the resources Clear
+button contract for the per-uri content cache. Clear only empties the
+resource list (App.tsx clearResources clears the list and the
+pagination cursor); it never resets resourceContentMap, so after
+clearing and re-listing, the first click on a previously-read row
+still renders the cached payload instantly while the fresh
+resources/read is in flight (stale-while-revalidate, the cache
+contract pinned by read-resource-stale-pane.txt and
+read-resource-uri-guard.txt). The test drives the real ResourcesTab
+Clear button, re-lists, and re-selects a row whose payload lives only
+in the cache, with the re-read parked on a deferred promise; if Clear
+reset resourceContentMap, the pane would keep showing the other
+resource's payload and the test would fail. No production code
+change. Review follow-up of PR #342.
