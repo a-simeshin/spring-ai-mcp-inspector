@@ -179,6 +179,118 @@ describe("PromptsTab", () => {
     expect(getPromptButton).toBeDisabled();
   });
 
+  it("should disable Get Prompt when required argument is whitespace only", async () => {
+    renderPromptsTab({ selectedPrompt: mockPrompts[0] });
+
+    const getPromptButton = screen.getByRole("button", {
+      name: /get prompt/i,
+    });
+
+    const nameInput = screen.getByTestId("combobox-name");
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "   " } });
+    });
+
+    expect(getPromptButton).toBeDisabled();
+  });
+
+  it("should not send a cleared optional argument in the payload", async () => {
+    const mockGetPrompt = jest.fn();
+    renderPromptsTab({
+      selectedPrompt: mockPrompts[0],
+      getPrompt: mockGetPrompt,
+    });
+
+    const nameInput = screen.getByTestId("combobox-name");
+    const suffixInput = screen.getByTestId("combobox-suffix");
+
+    // Type into the optional argument, then clear it: the stale "" left in
+    // state must not reach the prompts/get payload.
+    await act(async () => {
+      fireEvent.change(suffixInput, { target: { value: "!!" } });
+    });
+    await act(async () => {
+      fireEvent.change(suffixInput, { target: { value: "" } });
+    });
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "World" } });
+    });
+
+    const getPromptButton = screen.getByRole("button", {
+      name: /get prompt/i,
+    });
+    await act(async () => {
+      fireEvent.click(getPromptButton);
+    });
+
+    expect(mockGetPrompt).toHaveBeenCalledWith(mockPrompts[0].name, {
+      name: "World",
+    });
+  });
+
+  it("should not send a whitespace-only optional argument in the payload", async () => {
+    const mockGetPrompt = jest.fn();
+    renderPromptsTab({
+      selectedPrompt: mockPrompts[0],
+      getPrompt: mockGetPrompt,
+    });
+
+    const suffixInput = screen.getByTestId("combobox-suffix");
+    await act(async () => {
+      fireEvent.change(suffixInput, { target: { value: "   " } });
+    });
+    const nameInput = screen.getByTestId("combobox-name");
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "World" } });
+    });
+
+    const getPromptButton = screen.getByRole("button", {
+      name: /get prompt/i,
+    });
+    await act(async () => {
+      fireEvent.click(getPromptButton);
+    });
+
+    expect(mockGetPrompt).toHaveBeenCalledWith(mockPrompts[0].name, {
+      name: "World",
+    });
+  });
+
+  it("should send a filled optional argument in the payload", async () => {
+    const mockGetPrompt = jest.fn();
+    renderPromptsTab({
+      selectedPrompt: mockPrompts[0],
+      getPrompt: mockGetPrompt,
+    });
+
+    const nameInput = screen.getByTestId("combobox-name");
+    const suffixInput = screen.getByTestId("combobox-suffix");
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "World" } });
+    });
+    await act(async () => {
+      fireEvent.change(suffixInput, { target: { value: "!!" } });
+    });
+
+    const getPromptButton = screen.getByRole("button", {
+      name: /get prompt/i,
+    });
+    await act(async () => {
+      fireEvent.click(getPromptButton);
+    });
+
+    expect(mockGetPrompt).toHaveBeenCalledWith(mockPrompts[0].name, {
+      name: "World",
+      suffix: "!!",
+    });
+
+    // Submitting must not disturb the form: both fields keep showing what
+    // the user typed (form state untouched, see
+    // NOTICE.d/prompt-optional-args-filter.txt).
+    expect(nameInput).toHaveValue("World");
+    expect(suffixInput).toHaveValue("!!");
+  });
+
   it("should show required field error on blur when required argument is empty", async () => {
     renderPromptsTab({ selectedPrompt: mockPrompts[0] });
 

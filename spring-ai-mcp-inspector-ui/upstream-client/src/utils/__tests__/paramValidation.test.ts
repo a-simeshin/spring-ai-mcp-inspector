@@ -355,6 +355,13 @@ describe("validatePromptArgs", () => {
     ]);
   });
 
+  it("reports required error for whitespace-only required arg", () => {
+    const args = [{ name: "name", required: true }];
+    expect(validatePromptArgs(args, { name: "   " })).toEqual([
+      { field: "name", message: "required" },
+    ]);
+  });
+
   it("reports required error for undefined required arg", () => {
     const args = [{ name: "name", required: true }];
     expect(validatePromptArgs(args, {})).toEqual([
@@ -365,6 +372,11 @@ describe("validatePromptArgs", () => {
   it("accepts filled required arg", () => {
     const args = [{ name: "name", required: true }];
     expect(validatePromptArgs(args, { name: "World" })).toEqual([]);
+  });
+
+  it("accepts required arg padded with spaces", () => {
+    const args = [{ name: "name", required: true }];
+    expect(validatePromptArgs(args, { name: "  World  " })).toEqual([]);
   });
 
   it("skips optional args even when empty", () => {

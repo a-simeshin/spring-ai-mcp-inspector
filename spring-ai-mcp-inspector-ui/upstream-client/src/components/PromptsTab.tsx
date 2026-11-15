@@ -142,7 +142,23 @@ const PromptsTab = ({
   const handleGetPrompt = () => {
     if (selectedPrompt) {
       if (!validateAll()) return;
-      getPrompt(selectedPrompt.name, promptArgs);
+      // [spring-ai-mcp-inspector PATCH] prompts/get carries only the values
+      // the form actually holds: required values (submit is blocked while
+      // any of them is blank) and optional values that are not blank.
+      // Optional arguments typed and then cleared ("") or left
+      // whitespace-only are omitted from the payload instead of being sent
+      // as empty strings.
+      const requiredNames = new Set(
+        (selectedPrompt.arguments ?? [])
+          .filter((arg) => arg.required)
+          .map((arg) => arg.name),
+      );
+      const submittedArgs = Object.fromEntries(
+        Object.entries(promptArgs).filter(
+          ([name, value]) => requiredNames.has(name) || value.trim() !== "",
+        ),
+      );
+      getPrompt(selectedPrompt.name, submittedArgs);
     }
   };
 
