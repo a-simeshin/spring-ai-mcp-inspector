@@ -1,0 +1,15 @@
+spring-ai-mcp-inspector-ui/upstream-client/src/App.tsx, spring-ai-mcp-inspector-ui/upstream-client/src/components/ElicitationTab.tsx, spring-ai-mcp-inspector-ui/upstream-client/src/__tests__/App.elicitationExpiryWiring.test.tsx:
+Issue #298: a legacy elicitation card created while a tools/call is in
+flight is now correlated with that call. App.callTool stamps each call
+with a monotonically increasing id (activeToolCallIdRef), the
+onElicitationRequest handler records it on every pending card
+(PendingElicitationRequest.toolCallId), and a finally block after the
+existing try/catch expires all cards correlated with the settled call,
+covering success, tool error, and transport failure alike. A guard in
+handleResolveElicitation refuses resolution of an expired card, so a
+late Submit can no longer silently close the form while the server has
+already timed out (default SDK elicitation timeout, about 20 seconds).
+The wiring test drives the app with a deferred tools/call, delivers a
+mid-flight elicitation, settles the call with the timeout error, and
+asserts the expired flag, the refused late resolve, a timely resolve
+delivering as before, and the resolve/settlement race.

@@ -34,6 +34,10 @@ const ElicitationRequest = ({
 
   const requestData = request.request;
   const isUrlMode = requestData.mode === "url";
+  // [spring-ai-mcp-inspector PATCH] Issue #298: once the correlated tools/call
+  // has settled the server no longer waits for this answer, so the form is
+  // locked and every action is refused instead of closing the card silently.
+  const expired = request.expired === true;
 
   useEffect(() => {
     if (isUrlMode) return;
@@ -74,10 +78,32 @@ const ElicitationRequest = ({
       >
         <div className="bg-gray-50 dark:bg-gray-800 dark:text-gray-100 p-2 rounded">
           <div className="space-y-2">
-            <h4 className="font-semibold">URL Request</h4>
+            <h4 className="font-semibold">
+              URL Request
+              {/* [spring-ai-mcp-inspector PATCH] Issue #298 */}
+              {expired && (
+                <span
+                  data-testid="elicitation-expired-badge"
+                  className="ml-2 inline-flex items-center rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300"
+                >
+                  Expired
+                </span>
+              )}
+            </h4>
             <p className="text-sm">{requestData.message}</p>
           </div>
         </div>
+        {/* [spring-ai-mcp-inspector PATCH] Issue #298: explicit terminal state */}
+        {expired && (
+          <div
+            data-testid="elicitation-expired"
+            className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md text-sm text-red-600 dark:text-red-400"
+          >
+            <strong>Request expired:</strong> the tool call that asked for this
+            information has already finished (for example, it timed out
+            server-side). Your answer cannot be delivered.
+          </div>
+        )}
         {urlError && (
           <div
             data-testid="url-error"
@@ -89,28 +115,39 @@ const ElicitationRequest = ({
         <div className="flex space-x-2">
           <Button
             type="button"
-            disabled={!!urlError}
+            disabled={!!urlError || expired}
             onClick={() => setShowUrlConfirm(true)}
           >
             Open URL
           </Button>
+          {/* [spring-ai-mcp-inspector PATCH] Issue #298: expired cards refuse */}
+          {/* every action and stay open so the banner stays visible. */}
           <Button
             type="button"
-            onClick={() => onResolve(request.id, { action: "accept" })}
+            onClick={() => {
+              if (expired) return;
+              onResolve(request.id, { action: "accept" });
+            }}
           >
             Accept
           </Button>
           <Button
             type="button"
             variant="outline"
-            onClick={() => onResolve(request.id, { action: "decline" })}
+            onClick={() => {
+              if (expired) return;
+              onResolve(request.id, { action: "decline" });
+            }}
           >
             Decline
           </Button>
           <Button
             type="button"
             variant="outline"
-            onClick={() => onResolve(request.id, { action: "cancel" })}
+            onClick={() => {
+              if (expired) return;
+              onResolve(request.id, { action: "cancel" });
+            }}
           >
             Cancel
           </Button>
@@ -205,6 +242,9 @@ const ElicitationRequest = ({
   };
 
   const handleAccept = () => {
+    // [spring-ai-mcp-inspector PATCH] Issue #298: an expired form is never
+    // submitted; the banner keeps telling the user why.
+    if (expired) return;
     try {
       if (!validateFormData(formData, formRequest.requestedSchema)) {
         return;
@@ -232,10 +272,13 @@ const ElicitationRequest = ({
   };
 
   const handleDecline = () => {
+    if (expired) return; // [spring-ai-mcp-inspector PATCH] Issue #298
+
     onResolve(request.id, { action: "decline" });
   };
 
   const handleCancel = () => {
+    if (expired) return; // [spring-ai-mcp-inspector PATCH] Issue #298
     onResolve(request.id, { action: "cancel" });
   };
 
@@ -250,7 +293,18 @@ const ElicitationRequest = ({
     >
       <div className="flex-1 bg-gray-50 dark:bg-gray-800 dark:text-gray-100 p-2 rounded">
         <div className="space-y-2">
-          <h4 className="font-semibold">{schemaTitle}</h4>
+          <h4 className="font-semibold">
+            {schemaTitle}
+            {/* [spring-ai-mcp-inspector PATCH] Issue #298 */}
+            {expired && (
+              <span
+                data-testid="elicitation-expired-badge"
+                className="ml-2 inline-flex items-center rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300"
+              >
+                Expired
+              </span>
+            )}
+          </h4>
           <p className="text-sm">{formRequest.message}</p>
           {schemaDescription && (
             <p className="text-xs text-muted-foreground">{schemaDescription}</p>
@@ -265,16 +319,38 @@ const ElicitationRequest = ({
       </div>
 
       <div className="flex-1 space-y-4">
+        {/* [spring-ai-mcp-inspector PATCH] Issue #298: explicit terminal state */}
+        {expired && (
+          <div
+            data-testid="elicitation-expired"
+            className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md text-sm text-red-600 dark:text-red-400"
+          >
+            <strong>Request expired:</strong> the tool call that asked for this
+            information has already finished (for example, it timed out
+            server-side). Your answer cannot be delivered.
+          </div>
+        )}
         <div className="space-y-2">
           <h4 className="font-medium">Response Form</h4>
-          <DynamicJsonForm
-            schema={formRequest.requestedSchema}
-            value={formData}
-            onChange={(newValue: JsonValue) => {
-              setFormData(newValue);
-              setValidationError(null);
-            }}
-          />
+          {/* [spring-ai-mcp-inspector PATCH] Issue #298: lock the input fields */}
+          {/* once the request has expired so late input cannot be typed in. */}
+          <div
+            className={
+              expired
+                ? "pointer-events-none select-none opacity-60"
+                : undefined
+            }
+            aria-disabled={expired}
+          >
+            <DynamicJsonForm
+              schema={formRequest.requestedSchema}
+              value={formData}
+              onChange={(newValue: JsonValue) => {
+                setFormData(newValue);
+                setValidationError(null);
+              }}
+            />
+          </div>
 
           {validationError && (
             <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md">

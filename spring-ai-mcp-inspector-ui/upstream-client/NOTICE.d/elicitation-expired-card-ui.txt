@@ -1,0 +1,12 @@
+spring-ai-mcp-inspector-ui/upstream-client/src/components/ElicitationRequest.tsx, spring-ai-mcp-inspector-ui/upstream-client/src/components/__tests__/ElicitationRequest.expiry.test.tsx:
+Issue #298: expired elicitation cards render as such instead of looking
+like a live form. When request.expired is set, both the form branch and
+the URL branch show a red Expired badge in the card header plus a
+banner explaining that the tool call which asked for the information
+has already finished and the answer cannot be delivered; the input
+fields are locked through an aria-disabled wrapper (pointer-events
+disabled, reduced opacity), and Accept/Decline/Cancel/Open URL are
+refused with early returns, so no action can silently resolve the card.
+Live cards render exactly as before. Component tests cover badge,
+banner, locked fields, refused actions in both branches, and the
+unchanged live-card flow.
