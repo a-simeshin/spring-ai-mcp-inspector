@@ -807,6 +807,7 @@ const App = () => {
       args,
       env,
       customHeaders,
+      connectionTimeout,
       activeConnectionId,
       activeHistoryConnectionId,
       historyKeyForConnection,

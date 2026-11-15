@@ -2,7 +2,13 @@
 // connections save/overwrite/select flow with real callbacks and storage.
 // See NOTICE.d/saved-connections.txt for details.
 
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  act,
+} from "@testing-library/react";
 import "@testing-library/jest-dom";
 import App from "../App";
 import { DEFAULT_INSPECTOR_CONFIG } from "../lib/constants";
@@ -188,6 +194,55 @@ describe("App saved connections integration", () => {
     );
     return { first, second };
   }
+
+  it("persists connectionTimeout on a plain save and restores it on select (stale-closure regression)", async () => {
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalled();
+    });
+
+    // Flush the config-load chain (setEnv/setCommand/setArgs from the
+    // mocked /config response) so component state matches a fully loaded
+    // page. The timeout edit below must be the ONLY state change before
+    // saving; on a stale build the memoized save callback then still
+    // holds the initial empty timeout, exactly like on the live stand.
+    await act(async () => {});
+
+    // Set ONLY the timeout field. The save callback is memoized: if its
+    // dependency array omits connectionTimeout, this exact flow (edit
+    // timeout, then save without touching any other dependency field)
+    // stores the entry without the key because the stale closure still
+    // holds the initial empty value.
+    const timeoutInput = screen.getByLabelText("Connection timeout (s)");
+    fireEvent.change(timeoutInput, { target: { value: "60" } });
+
+    fireEvent.click(screen.getByTestId("save-current-connection"));
+    fireEvent.change(screen.getByTestId("save-connection-name-input"), {
+      target: { value: "slow-server" },
+    });
+    fireEvent.click(screen.getByTestId("confirm-save-connection"));
+
+    const stored = localStorage.getItem(SAVED_CONNECTIONS_KEY);
+    expect(stored).toBeTruthy();
+    const parsed = JSON.parse(stored!);
+    expect(parsed.connections).toHaveLength(1);
+    expect(parsed.connections[0].name).toBe("slow-server");
+    expect(parsed.connections[0].connectionTimeout).toBe("60");
+
+    // Selecting the entry restores the timeout into the form.
+    fireEvent.click(
+      screen.getByTestId(`saved-connection-${parsed.connections[0].id}`),
+    );
+    expect(
+      (screen.getByLabelText("Connection timeout (s)") as HTMLInputElement)
+        .value,
+    ).toBe("60");
+  });
 
   it("shows confirm dialog when saving selected entry under duplicate name and cancel keeps both entries with original ids", async () => {
     const { first, second } = seedTwoConnections();
