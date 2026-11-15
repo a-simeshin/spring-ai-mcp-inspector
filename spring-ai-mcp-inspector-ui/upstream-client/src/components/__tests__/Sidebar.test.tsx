@@ -346,6 +346,48 @@ describe("Sidebar", () => {
       expect(onConnect).toHaveBeenCalledTimes(1);
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
+
+    // [spring-ai-mcp-inspector PATCH] Guard regressions
+    // (connection-timeout.txt): the guard once converted with Number(),
+    // which accepted JS numeric literals ("1e1", "0x10", "+30"). The
+    // proxy's Long.parseLong rejects the first two and accepts "+30";
+    // the client rejects it too, stricter than the proxy on purpose.
+    it("rejects JS numeric literals that Number() would accept and issues no connect request", () => {
+      for (const value of ["1e1", "0x10", "+30", "1.5"]) {
+        const onConnect = jest.fn();
+        const { unmount } = renderSidebar({
+          connectionTimeout: value,
+          onConnect,
+        });
+        fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
+        expect(screen.getByRole("alert")).toHaveTextContent(
+          "Must be a whole number of seconds between 1 and 600",
+        );
+        fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
+        expect(onConnect).not.toHaveBeenCalled();
+        unmount();
+      }
+    });
+
+    it("accepts 120 like the proxy's Long.parseLong", () => {
+      const onConnect = jest.fn();
+      renderSidebar({ connectionTimeout: "120", onConnect });
+      fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
+      expect(onConnect).toHaveBeenCalledTimes(1);
+    });
+
+    it("renders the timeout error and disables Connect in proxy mode for invalid timeout 700", () => {
+      renderSidebar({ connectionTimeout: "700" });
+      fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Must be a whole number of seconds between 1 and 600",
+      );
+      expect(
+        screen.getByRole("button", { name: /^connect$/i }),
+      ).toBeDisabled();
+    });
   });
 
   describe("Environment Variables", () => {

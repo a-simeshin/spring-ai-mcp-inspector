@@ -5,6 +5,7 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import App from "../App";
+import { useConnection } from "../lib/hooks/useConnection";
 import { DEFAULT_INSPECTOR_CONFIG } from "../lib/constants";
 import { InspectorConfig } from "../lib/configurationTypes";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -46,9 +47,11 @@ jest.mock("../utils/configUtils", () => ({
   saveInspectorConfig: jest.fn(),
 }));
 
-// Mock other dependencies
-jest.mock("../lib/hooks/useConnection", () => ({
-  useConnection: () => ({
+// Mock other dependencies. The hook object is created once so the tests
+// can reach the same jest.fn() instances (for example connect) that the
+// component tree actually calls.
+jest.mock("../lib/hooks/useConnection", () => {
+  const mocks = {
     connectionStatus: "disconnected",
     serverCapabilities: null,
     mcpClient: null,
@@ -60,8 +63,9 @@ jest.mock("../lib/hooks/useConnection", () => ({
     completionsSupported: false,
     connect: jest.fn(),
     disconnect: jest.fn(),
-  }),
-}));
+  };
+  return { useConnection: () => mocks };
+});
 
 jest.mock("../lib/hooks/useDraggablePane", () => ({
   useDraggablePane: () => ({
@@ -134,5 +138,32 @@ describe("App connection timeout persistence", () => {
     await waitFor(() => {
       expect(localStorage.getItem("lastConnectionTimeout")).toBe("120");
     });
+  });
+
+  // Regression: a stale invalid persisted timeout used to swallow the
+  // Connect click in direct mode, where the field and its error never
+  // render, leaving the button enabled but dead.
+  it("connects in direct mode with a stale invalid persisted timeout in localStorage", async () => {
+    localStorage.setItem("lastConnectionType", "direct");
+    localStorage.setItem("lastConnectionTimeout", "700");
+    render(
+      <TooltipProvider>
+        <App />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalled();
+    });
+
+    const connectButton = screen.getByRole("button", { name: /^connect$/i });
+    expect(connectButton).toBeEnabled();
+    fireEvent.click(connectButton);
+    const connect = (useConnection() as unknown as { connect: jest.Mock })
+      .connect;
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByText(/whole number of seconds/i),
+    ).not.toBeInTheDocument();
   });
 });
