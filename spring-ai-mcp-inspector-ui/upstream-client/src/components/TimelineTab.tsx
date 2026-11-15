@@ -455,6 +455,13 @@ function ChainGroup({
 const TimelineTab = () => {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  // [spring-ai-mcp-inspector PATCH] #316: last failed timeline fetch, so a
+  // failed/unauthorized refresh is visible instead of rendering as an empty
+  // "0 events" tab. status is null for network-level failures.
+  const [timelineError, setTimelineError] = useState<{
+    status: number | null;
+    message: string;
+  } | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // [spring-ai-mcp-inspector PATCH] Exception-leak jump (#251): row refs by
@@ -511,9 +518,19 @@ const TimelineTab = () => {
       if (res.ok) {
         const data = (await res.json()) as TimelineEvent[];
         setEvents(data);
+        setTimelineError(null);
+      } else {
+        // [spring-ai-mcp-inspector PATCH] #316: surface non-OK responses
+        // instead of silently keeping the previous (possibly empty) view.
+        setTimelineError({ status: res.status, message: res.statusText });
       }
-    } catch {
-      // Silently ignore fetch errors
+    } catch (err) {
+      // [spring-ai-mcp-inspector PATCH] #316: network-level failures get the
+      // same treatment; the message never contains credentials.
+      setTimelineError({
+        status: null,
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   }, []);
 
@@ -581,7 +598,9 @@ const TimelineTab = () => {
       <div className="bg-gray-900 text-gray-100 p-4 rounded-lg h-full font-mono text-sm overflow-auto flex flex-col">
         <div className="flex items-center justify-between mb-2 shrink-0">
           <span className="text-xs opacity-50">
-            {events.length} event{events.length !== 1 ? "s" : ""}
+            {timelineError && events.length === 0
+              ? "unavailable"
+              : `${events.length} event${events.length !== 1 ? "s" : ""}`}
           </span>
           <label className="flex items-center gap-1 text-xs opacity-70 cursor-pointer">
             <input
@@ -600,9 +619,32 @@ const TimelineTab = () => {
           className="mb-2 shrink-0"
           hasIsErrorWarning={hasIsErrorWarning}
         />
+        {/* [spring-ai-mcp-inspector PATCH] #316: a failed/unauthorized
+            timeline fetch renders as an explicit error state instead of the
+            empty "0 events" tab. The token value itself is never displayed. */}
+        {timelineError ? (
+          <div
+            data-testid="timeline-error-banner"
+            className="mb-2 shrink-0 rounded border border-red-500/40 bg-red-950/30 p-2 text-xs text-red-300"
+          >
+            <div className="font-semibold">
+              {timelineError.status !== null
+                ? `Timeline unavailable: HTTP ${timelineError.status}`
+                : `Timeline unavailable: ${timelineError.message}`}
+            </div>
+            {timelineError.status !== null && (
+              <div className="mt-1 opacity-70">
+                On auth-enabled stands the MCP_PROXY_AUTH_TOKEN may be missing
+                or rejected.
+              </div>
+            )}
+          </div>
+        ) : null}
         <div className="flex-1 overflow-y-auto">
           {events.length === 0 ? (
-            <div className="opacity-50 text-center mt-8">No timeline events yet</div>
+            timelineError === null && (
+              <div className="opacity-50 text-center mt-8">No timeline events yet</div>
+            )
           ) : (
             renderItems.map((item) =>
               item.kind === "chain" ? (

@@ -1,0 +1,15 @@
+TimelineTab.tsx, __tests__/TimelineTab.test.tsx — surface non-OK timeline API
+responses instead of swallowing them (#316): a failed/unauthorized fetch of
+/api/timeline used to fall through silently and render the empty "0 events"
+tab even when live events existed. The tab now keeps the last successfully
+fetched list, shows the events counter as "unavailable" only while the first
+load has failed, and renders an error banner (data-testid
+timeline-error-banner) with the HTTP status code and, for HTTP rejections,
+a hint that on auth-enabled stands the MCP_PROXY_AUTH_TOKEN may be missing or
+rejected; the token value itself is never logged or displayed. Network-level
+fetch failures render the same banner with the error message and no auth
+hint. The "No timeline events yet" empty state (and the "0 events" counter)
+now appears only after a genuine 200 with an empty payload, and a later
+successful refresh clears the banner. Covered by TimelineTab tests: the 401
+banner, the network-failure variant, keep-lists-through-failure with
+recovery on a subsequent 200 (fake timers), and the genuine-empty 200 case.

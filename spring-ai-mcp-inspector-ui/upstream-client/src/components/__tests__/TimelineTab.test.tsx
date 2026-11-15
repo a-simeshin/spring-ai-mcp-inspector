@@ -1,6 +1,6 @@
 // [spring-ai-mcp-inspector PATCH] TimelineTab test: schema alignment, APP_LOG rendering, empty state (#130).
 // [spring-ai-mcp-inspector PATCH] Protocol negotiation badge test: _protocolNegotiation enrichment (#129, #130).
-import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import TimelineTab from "../TimelineTab";
 import { Tabs } from "@/components/ui/tabs";
@@ -721,6 +721,94 @@ describe("TimelineTab", () => {
     } finally {
       restoreScrollIntoView();
     }
+  });
+
+  // [spring-ai-mcp-inspector PATCH] #316: non-OK timeline responses surface as
+  // an explicit error state instead of the silent "0 events" tab.
+  it("shows an error banner instead of the empty state when the timeline API returns 401", async () => {
+    (global as unknown as { fetch: jest.Mock }).fetch = jest
+      .fn()
+      .mockResolvedValue({ ok: false, status: 401, statusText: "Unauthorized" });
+    renderTab();
+
+    const banner = await screen.findByTestId("timeline-error-banner");
+    expect(banner).toHaveTextContent("Timeline unavailable: HTTP 401");
+    expect(banner).toHaveTextContent(
+      "On auth-enabled stands the MCP_PROXY_AUTH_TOKEN may be missing or rejected.",
+    );
+    // The misleading empty state must not render on a failed fetch.
+    expect(screen.queryByText("No timeline events yet")).not.toBeInTheDocument();
+    expect(screen.queryByText("0 events")).not.toBeInTheDocument();
+    expect(screen.getByText("unavailable")).toBeInTheDocument();
+  });
+
+  it("renders the plain error message without the auth hint on a network failure", async () => {
+    (global as unknown as { fetch: jest.Mock }).fetch = jest
+      .fn()
+      .mockRejectedValue(new TypeError("Failed to fetch"));
+    renderTab();
+
+    const banner = await screen.findByTestId("timeline-error-banner");
+    expect(banner).toHaveTextContent("Timeline unavailable: Failed to fetch");
+    // The auth hint only applies to HTTP rejections.
+    expect(banner).not.toHaveTextContent("MCP_PROXY_AUTH_TOKEN");
+    expect(screen.queryByText("No timeline events yet")).not.toBeInTheDocument();
+  });
+
+  it("keeps the last events through a failed refresh and clears the banner on recovery", async () => {
+    jest.useFakeTimers();
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => [APP_LOG_EVENT] })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        statusText: "Unauthorized",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [APP_LOG_EVENT, REQUEST_EVENT],
+      });
+    (global as unknown as { fetch: jest.Mock }).fetch = fetchMock;
+    try {
+      renderTab();
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByText("1 event")).toBeInTheDocument();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(3000);
+      });
+      expect(
+        screen.getByTestId("timeline-error-banner"),
+      ).toHaveTextContent("HTTP 401");
+      // The previously fetched events stay rendered through the failure.
+      expect(screen.getByText("tool executed")).toBeInTheDocument();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(3000);
+      });
+      expect(
+        screen.queryByTestId("timeline-error-banner"),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText("2 events")).toBeInTheDocument();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("keeps the 0 events empty state on a genuine 200 with no events", async () => {
+    mockFetch([]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("0 events")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("No timeline events yet")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("timeline-error-banner"),
+    ).not.toBeInTheDocument();
   });
 });
 
