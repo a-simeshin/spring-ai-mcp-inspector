@@ -12,10 +12,11 @@ Description:
   query parameter to the proxy. Proxy connections only (the field is
   hidden for direct connections, which never build a proxy URL).
   Validation: whole seconds 1..600 (matching ProxyConnectionBudgets),
-  decimal digits only (the proxy parses the raw string with Long.parseLong,
-  so JS numeric literals like 1e1 or +30 are rejected client-side with the
-  field-level error), enforced on blur and on the Connect click guard,
-  both scoped to proxy connections: direct mode neither renders the field
-  nor enforces the guard, so a stale invalid persisted value cannot
-  silently lock Connect.
+  decimal digits only. The proxy parses the raw string with Long.parseLong,
+  so literals like 1e1 fail there and are rejected client-side with the
+  field-level error instead; +30 parses as 30 at the proxy but is rejected
+  too, stricter than the proxy on purpose. Enforced on blur and on the
+  Connect click guard, both scoped to proxy connections: direct mode
+  neither renders the field nor enforces the guard, so a stale invalid
+  persisted value cannot silently lock Connect.
   Value persisted to localStorage (lastConnectionTimeout).

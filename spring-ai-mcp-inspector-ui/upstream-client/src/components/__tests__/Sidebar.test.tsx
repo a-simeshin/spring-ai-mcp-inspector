@@ -192,6 +192,24 @@ describe("Sidebar", () => {
       );
     });
 
+    it("shows inline error for exponent notation within range on blur", () => {
+      renderSidebar({ connectionTimeout: "1e2" });
+      const input = screen.getByLabelText("Connection timeout (s)");
+      fireEvent.blur(input);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Must be a whole number of seconds between 1 and 600",
+      );
+    });
+
+    it("shows inline error for hex notation within range on blur", () => {
+      renderSidebar({ connectionTimeout: "0x10" });
+      const input = screen.getByLabelText("Connection timeout (s)");
+      fireEvent.blur(input);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Must be a whole number of seconds between 1 and 600",
+      );
+    });
+
     it("accepts boundary values 1 and 600", () => {
       for (const value of ["1", "600"]) {
         const { unmount } = renderSidebar({ connectionTimeout: value });
@@ -249,6 +267,17 @@ describe("Sidebar", () => {
     it("blocks connect when timeout is above 600 on click", () => {
       const onConnect = jest.fn();
       renderSidebar({ connectionTimeout: "601", onConnect });
+      const connectButton = screen.getByRole("button", { name: /^connect$/i });
+      fireEvent.click(connectButton);
+      expect(onConnect).not.toHaveBeenCalled();
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Must be a whole number of seconds between 1 and 600",
+      );
+    });
+
+    it("blocks connect when timeout is exponent notation within range on click", () => {
+      const onConnect = jest.fn();
+      renderSidebar({ connectionTimeout: "1e2", onConnect });
       const connectButton = screen.getByRole("button", { name: /^connect$/i });
       fireEvent.click(connectButton);
       expect(onConnect).not.toHaveBeenCalled();

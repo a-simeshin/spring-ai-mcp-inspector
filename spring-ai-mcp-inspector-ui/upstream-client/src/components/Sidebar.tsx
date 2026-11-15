@@ -126,9 +126,10 @@ interface SidebarProps {
 // contract (ProxyConnectionBudgets): a whole number of seconds 1..600.
 // Anything else must be rejected client-side, otherwise the request reaches
 // the proxy and fails with a bare 400 banner. Accepted input is decimal
-// digits only, matching the proxy's Long.parseLong of the raw string:
-// JS numeric literals ("1e1", "0x10", "+30") fail here with the field-level
-// error instead of surfacing as a generic banner after a proxy 400.
+// digits only: the proxy parses the raw string with Long.parseLong, so
+// "1e1" and "0x10" fail there and are caught here with the field-level
+// error instead. "+30" parses as 30 at the proxy, so rejecting it is
+// stricter than the proxy on purpose (one accepted notation per value).
 const CONNECTION_TIMEOUT_MAX_SECONDS = 600;
 const CONNECTION_TIMEOUT_ERROR = `Must be a whole number of seconds between 1 and ${CONNECTION_TIMEOUT_MAX_SECONDS}`;
 
