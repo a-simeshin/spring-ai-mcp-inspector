@@ -27,6 +27,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -124,6 +125,38 @@ class McpProxyTests {
 		}
 
 		@Test
+		@Story("Upstream send runs off the emitting thread")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("sendMessage is subscribed on boundedElastic, not on the thread that emitted the frame: on the "
+				+ "reactive stack the emitter is the Netty event loop of the inbound POST and legacy transports block "
+				+ "it for the whole upstream round trip (issue #356)")
+		void start_whenFrameEmittedFromTestThread_sendRunsOffEmitterThread() throws InterruptedException {
+			// given - sendMessage records the thread it executes on (the subscription
+			// thread, same as the blocking HttpClient.send of the legacy transport)
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			final AtomicReference<String> sendThread = new AtomicReference<>();
+			given(McpProxyTests.this.transport.sendMessage(any()))
+				.willAnswer((inv) -> Mono.<Void>fromRunnable(() -> sendThread.set(Thread.currentThread().getName())));
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+			final String emitterThread = Thread.currentThread().getName();
+
+			// when
+			McpProxyTests.this.browserToTarget.tryEmitNext(McpProxyTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 7)
+				.put("method", "tools/list"));
+
+			// then - the send ran, and on a boundedElastic worker, not on the
+			// emitting thread (RED before the fix: the send ran on the emitter)
+			verify(McpProxyTests.this.transport, timeout(1000)).sendMessage(any());
+			final long deadline = System.currentTimeMillis() + 1000;
+			while (sendThread.get() == null && System.currentTimeMillis() < deadline) {
+				Thread.sleep(10);
+			}
+			assertThat(sendThread.get()).isNotEqualTo(emitterThread).startsWith("boundedElastic");
+		}
+
+		@Test
 		@Story("Malformed frame is dropped")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("a malformed JSON-RPC frame is dropped and never reaches the target transport")
@@ -168,7 +201,7 @@ class McpProxyTests {
 		@Story("sendMessage failure is surfaced")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("a sendMessage failure (e.g. connection refused) fails the session upstream so per-request awaiters and the SSE backchannel wake fast")
-		void start_whenSendMessageFails_terminatesUpstream() {
+		void start_whenSendMessageFails_terminatesUpstream() throws InterruptedException {
 			// given — the SDK masks sendMessage errors and re-surfaces them on the
 			// pump as a wrapped completion failure
 			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
@@ -186,6 +219,14 @@ class McpProxyTests {
 			// then — the upstream failure is propagated to the browser side instead of
 			// being swallowed until the streamable-request timeout
 			verify(McpProxyTests.this.transport, timeout(1000)).sendMessage(any());
+			// the send failure now surfaces from the boundedElastic worker the send
+			// is subscribed on (issue #356), so poll instead of asserting
+			// synchronously after the send's assembly
+			final long terminationDeadline = System.currentTimeMillis() + 1000;
+			while (!McpProxyTests.this.session.isUpstreamTerminated()
+					&& System.currentTimeMillis() < terminationDeadline) {
+				Thread.sleep(10);
+			}
 			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
 			StepVerifier.create(McpProxyTests.this.targetToBrowser.asFlux())
 				.expectError()
@@ -197,7 +238,7 @@ class McpProxyTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("a proxy invalid_request rejection (restricted custom header name) fails the session: every "
 				+ "further frame would fail the same customizer check, so the session is unusable")
-		void start_whenSendFailsWithInvalidProxyRequest_terminatesUpstream() {
+		void start_whenSendFailsWithInvalidProxyRequest_terminatesUpstream() throws InterruptedException {
 			// given: the factory's fail-fast rejection surfaces on the pump
 			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
 			given(McpProxyTests.this.transport.sendMessage(any()))
@@ -213,6 +254,14 @@ class McpProxyTests {
 
 			// then: classified invalid_request, the session is torn down
 			verify(McpProxyTests.this.transport, timeout(1000)).sendMessage(any());
+			// the send failure now surfaces from the boundedElastic worker the send
+			// is subscribed on (issue #356), so poll instead of asserting
+			// synchronously after the send's assembly
+			final long terminationDeadline = System.currentTimeMillis() + 1000;
+			while (!McpProxyTests.this.session.isUpstreamTerminated()
+					&& System.currentTimeMillis() < terminationDeadline) {
+				Thread.sleep(10);
+			}
 			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
 		}
 
@@ -247,12 +296,17 @@ class McpProxyTests {
 		@Story("Handshake ordering")
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("initialize and tools/list sent back-to-back must reach the transport in order: "
-				+ "initialize first, then tools/list. Without the handshake gate, flatMap would send "
-				+ "tools/list concurrently and the server could reject it as an unknown session")
-		void start_handshakeGate_ordersInitializeBeforeNonHandshakeFrames() {
-			// given
+				+ "initialize first, then tools/list. The sends are recorded when their sendMessage "
+				+ "Mono is subscribed (the actual send), not when the relay assembles the Mono: the "
+				+ "pump builds the gated send Mono before the gate opens, so only subscription-time "
+				+ "capture detects a gate that never opens")
+		void start_handshakeGate_ordersInitializeBeforeNonHandshakeFrames() throws InterruptedException {
+			// given - sendMessage records the frame when the returned Mono is
+			// subscribed (the actual send), not at Mono assembly time
+			final List<JSONRPCMessage> sent = new java.util.concurrent.CopyOnWriteArrayList<>();
 			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
-			given(McpProxyTests.this.transport.sendMessage(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any()))
+				.willAnswer((inv) -> Mono.<Void>fromRunnable(() -> sent.add(inv.getArgument(0))));
 			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
 
 			// when: send initialize and tools/list back-to-back without waiting for a
@@ -268,14 +322,67 @@ class McpProxyTests {
 			McpProxyTests.this.browserToTarget.tryEmitNext(initFrame);
 			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame);
 
-			// then: initialize must be sent before tools/list
-			final ArgumentCaptor<JSONRPCMessage> captor = ArgumentCaptor.forClass(JSONRPCMessage.class);
-			verify(McpProxyTests.this.transport, timeout(1000).times(2)).sendMessage(captor.capture());
-			final java.util.List<JSONRPCMessage> messages = captor.getAllValues();
-			assertThat(messages).hasSize(2);
-			assertThat(messages.get(0)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+			// then: both sends subscribed, initialize first, then tools/list
+			final long deadline = System.currentTimeMillis() + 1000;
+			while (sent.size() < 2 && System.currentTimeMillis() < deadline) {
+				Thread.sleep(10);
+			}
+			assertThat(sent).hasSize(2);
+			assertThat(sent.get(0)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
 					(req) -> assertThat(req.method()).isEqualTo("initialize"));
-			assertThat(messages.get(1)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+			assertThat(sent.get(1)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+					(req) -> assertThat(req.method()).isEqualTo("tools/list"));
+		}
+
+		@Test
+		@Story("Handshake ordering")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("while the initialize send is still in flight, the gate stays closed: the "
+				+ "tools/list send subscribes only after the initialize send completes and opens the "
+				+ "gate, so a gate that never opens (e.g. a no-op success path) leaves tools/list "
+				+ "unsent instead of letting it through")
+		void start_whenInitializeSendStillInFlight_toolsListSendSubscribesOnlyAfterGateOpens()
+				throws InterruptedException {
+			// given - the initialize send blocks in the transport until the test
+			// releases the latch; the tools/list send records its subscription
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			final java.util.concurrent.CountDownLatch initSendLatch = new java.util.concurrent.CountDownLatch(1);
+			final List<JSONRPCMessage> sent = new java.util.concurrent.CopyOnWriteArrayList<>();
+			given(McpProxyTests.this.transport.sendMessage(any())).willAnswer((inv) -> {
+				final JSONRPCMessage message = inv.getArgument(0);
+				if (message instanceof McpSchema.JSONRPCRequest request
+						&& McpSchema.METHOD_INITIALIZE.equals(request.method())) {
+					return Mono.<Void>fromRunnable(() -> {
+						try {
+							initSendLatch.await();
+						}
+						catch (final InterruptedException interrupted) {
+							Thread.currentThread().interrupt();
+						}
+					});
+				}
+				return Mono.<Void>fromRunnable(() -> sent.add(message));
+			});
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+
+			// when
+			McpProxyTests.this.browserToTarget.tryEmitNext(initFrame());
+			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
+
+			// then - while the initialize send is in flight the gate is closed and the
+			// tools/list send has not subscribed (RED if the gate opens early)
+			Thread.sleep(300);
+			assertThat(sent).isEmpty();
+
+			// releasing the initialize send completes it and opens the gate: now the
+			// tools/list send subscribes (RED if the success path never opens the gate)
+			initSendLatch.countDown();
+			final long gateDeadline = System.currentTimeMillis() + 1000;
+			while (sent.isEmpty() && System.currentTimeMillis() < gateDeadline) {
+				Thread.sleep(10);
+			}
+			assertThat(sent).hasSize(1);
+			assertThat(sent.get(0)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
 					(req) -> assertThat(req.method()).isEqualTo("tools/list"));
 		}
 
@@ -654,6 +761,33 @@ class McpProxyTests {
 			assertThat(this.tokenServer.requestCount()).isEqualTo(2);
 			assertThat(McpProxyTests.this.session.authorizationRef().get()).isEqualTo("Bearer tok-2");
 			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isFalse();
+		}
+
+		@Test
+		@Story("One-retry")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("the re-send after the token refresh also subscribes on boundedElastic, not on the thread that "
+				+ "emitted the frame (issue #356)")
+		void sendMessage_retrySendAlsoRunsOffEmitterThread() {
+			// given
+			bindClientCredentialsSession();
+			this.tokenServer.respond(200, "{\"access_token\":\"tok-2\",\"expires_in\":3600,\"token_type\":\"Bearer\"}");
+			final Throwable unauthorized = authz401();
+			final AtomicReference<String> retryThread = new AtomicReference<>();
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any())).willReturn(Mono.error(unauthorized))
+				.willReturn(Mono.<Void>fromRunnable(() -> retryThread.set(Thread.currentThread().getName())));
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+			final String emitterThread = Thread.currentThread().getName();
+
+			// when
+			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
+
+			// then - two send attempts, and the re-send ran on boundedElastic,
+			// not on the emitting thread
+			verify(McpProxyTests.this.transport, timeout(3000).times(2)).sendMessage(any());
+			awaitTrue(() -> retryThread.get() != null, Duration.ofSeconds(3));
+			assertThat(retryThread.get()).isNotNull().isNotEqualTo(emitterThread).startsWith("boundedElastic");
 		}
 
 		@Test
