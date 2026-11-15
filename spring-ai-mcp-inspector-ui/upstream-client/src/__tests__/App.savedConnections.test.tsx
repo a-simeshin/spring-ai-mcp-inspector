@@ -234,6 +234,11 @@ describe("App saved connections integration", () => {
     expect(parsed.connections[0].name).toBe("slow-server");
     expect(parsed.connections[0].connectionTimeout).toBe("60");
 
+    // Clear the form field first: with the field empty, the "60" below can
+    // only come from the restore-on-select line, so a build that drops it
+    // fails here instead of passing on the value typed before the save.
+    fireEvent.change(timeoutInput, { target: { value: "" } });
+
     // Selecting the entry restores the timeout into the form.
     fireEvent.click(
       screen.getByTestId(`saved-connection-${parsed.connections[0].id}`),
