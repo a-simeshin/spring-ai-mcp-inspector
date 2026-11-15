@@ -2951,6 +2951,38 @@ class ProxyHandlerTests {
 			assertThat(error.get("message").asText()).contains("not-a-number");
 		}
 
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/list error records the request and the -32602 error envelope into the timeline")
+		void tasksList_nonNumericCursor_recordsRequestAndErrorEnvelopeInTimeline() throws Exception {
+			// given: a cursor that is not a decimal offset
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final java.util.List<io.inspector.mcp.core.task.TaskHandle> noTasks = java.util.List.of();
+			given(this.taskService.listTasks()).willReturn(noTasks);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"not-a-number\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then: the request and the locally produced -32602 error envelope are
+			// recorded together into the traffic timeline, request first
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> requestCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(ProxyHandlerTests.this.mcpProxy).recordLocalExchange(eq(session), requestCaptor.capture(),
+					responseCaptor.capture());
+			assertThat(requestCaptor.getValue().get("method").asText()).isEqualTo("tasks/list");
+			assertThat(requestCaptor.getValue().get("id").asInt()).isEqualTo(44);
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(44);
+			assertThat(recordedResponse.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(recordedResponse.get("error").get("message").asText()).contains("not-a-number");
+		}
+
 	}
 
 	@Nested
