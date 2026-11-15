@@ -5135,7 +5135,7 @@ class InspectorUiIT {
 		@Test
 		@Story("Mobile viewport")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("At 375x812 the three Resources content panes (resources list, templates list, preview) stack vertically in one column: the grid resolves to a single column, pane boxes are pairwise disjoint, every pane is at most 375px wide, the List Resources / List Templates buttons keep their card padding, and the document has no horizontal overflow. Companion of the resources-mobile-stack patch (issue #296).")
+		@Description("At 375x812 the three Resources content panes (resources list, templates list, preview) stack vertically in one column: the grid resolves to a single column, pane boxes are pairwise disjoint, every pane is at most 375px wide, the List Resources / List Templates buttons keep their card padding, the document has no horizontal overflow, and the preview pane renders below both list panes. Companion of the resources-mobile-stack patch (issue #296).")
 		@DisplayName("resourcesPanesStack_375x812: three panes in one column, controls not clipped")
 		void resourcesPanesStack_375x812() {
 			startApp(new Combo("sse"));
@@ -5180,12 +5180,18 @@ class InspectorUiIT {
 							+ j + " must not overlap at 375px, got " + rects.get(i) + " vs " + rects.get(j));
 				}
 			}
+			// and: the preview pane sits below both list panes in the stacked
+			// single column (it is the third grid child in DOM order).
+			Assertions.assertTrue(rects.get(2).get("top").doubleValue() >= rects.get(0).get("bottom").doubleValue() - 1,
+					"preview pane must render below the resources list pane at 375px, got " + rects);
+			Assertions.assertTrue(rects.get(2).get("top").doubleValue() >= rects.get(1).get("bottom").doubleValue() - 1,
+					"preview pane must render below the templates list pane at 375px, got " + rects);
 		}
 
 		@Test
 		@Story("Mobile viewport")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("The Resources content grid flips from one column (grid-cols-1) to three (md:grid-cols-3) exactly at the inclusive Tailwind md breakpoint: 1 column at 767px, 3 columns at 768px.")
+		@Description("The Resources content grid flips from one column (grid-cols-1) to three (md:grid-cols-3) exactly at the inclusive Tailwind md breakpoint: 1 column at 767px, 3 columns at 768px, and the desktop layout stays at three columns at 1280px.")
 		@DisplayName("md_767x800_and_768x800_resourcesGridFlip: grid-cols-1 -> md:grid-cols-3")
 		void md_767x800_and_768x800_resourcesGridFlip() {
 			startApp(new Combo("sse"));
@@ -5208,6 +5214,13 @@ class InspectorUiIT {
 			// then: the grid flips to three columns (md:grid-cols-3).
 			Assertions.assertEquals(3, resourcesGridColumns(),
 					"resources-content-grid must flip to three columns at 768px (md:grid-cols-3)");
+
+			// when: a desktop width well past the breakpoint
+			ResponsiveTestHelpers.setViewportExactly(1280, 800);
+
+			// then: the desktop layout keeps exactly three columns at 1280px.
+			Assertions.assertEquals(3, resourcesGridColumns(),
+					"resources-content-grid must stay at three columns at 1280px (md:grid-cols-3)");
 		}
 
 	}

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Tabs } from "../ui/tabs";
 import ResourcesTab from "../ResourcesTab";
@@ -319,6 +319,66 @@ describe("ResourcesTab - Template Query Parameters", () => {
       const grid = screen.getByTestId("resources-content-grid");
       expect(grid).toHaveClass("grid-cols-1");
       expect(grid).toHaveClass("md:grid-cols-3");
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Resources tab test guards (PR #346
+    // owner review): pin the exact column class set of the content grid
+    // so a stray breakpoint variant (a live sm:grid-cols-3 mutant) fails
+    // jest too, cover the selected-resource preview pane order below the
+    // two list panes and the resource read error state, and pin the same
+    // geometry plus the 1280px three-column layout in the Selenide IT.
+    // See NOTICE.d/resources-preview-tests.txt.
+    it("should pin the exact column class set so no stray breakpoint variant survives", () => {
+      renderResourcesTab();
+
+      const grid = screen.getByTestId("resources-content-grid");
+      const columnClasses = grid.className
+        .split(/\s+/)
+        .filter((cls) => cls.includes("grid-cols-"));
+      expect(columnClasses).toEqual(["grid-cols-1", "md:grid-cols-3"]);
+    });
+  });
+
+  describe("Selected resource preview and error states", () => {
+    // DOM order is the visual order in the stacked (< md) layout, so the
+    // preview pane must come after both list panes: at 375px it renders
+    // below them, and the Selenide IT asserts the same geometry live.
+    it("renders the selected-resource preview pane below both list panes", () => {
+      renderResourcesTab({
+        selectedResource: mockResource,
+        resourceContent: '{"users": [{"id": 1, "name": "John"}]}',
+      });
+
+      const grid = screen.getByTestId("resources-content-grid");
+      const panes = Array.from(grid.children) as HTMLElement[];
+      // the preview pane is the third grid child in DOM order (same anchor
+      // the Selenide IT uses for its 375px geometry assertion)
+      const preview = panes[2];
+      const listPanes = screen.getAllByTestId("tools-list-pane");
+
+      expect(preview).toBeDefined();
+      expect(panes.indexOf(preview)).toBe(2);
+      expect(panes.indexOf(listPanes[0])).toBeLessThan(panes.indexOf(preview));
+      expect(panes.indexOf(listPanes[1])).toBeLessThan(panes.indexOf(preview));
+      expect(within(preview).getByTestId("json-view")).toBeInTheDocument();
+    });
+
+    it("renders the error alert in the preview pane when the resource read fails", () => {
+      renderResourcesTab({
+        selectedResource: mockResource,
+        error: "boom: resource read failed",
+      });
+
+      // the preview pane is the third grid child in DOM order
+      const grid = screen.getByTestId("resources-content-grid");
+      const preview = grid.children[2] as HTMLElement;
+      expect(within(preview).getByText("Error")).toBeInTheDocument();
+      expect(
+        within(preview).getByText("boom: resource read failed"),
+      ).toBeInTheDocument();
+      expect(
+        within(preview).queryByTestId("json-view"),
+      ).not.toBeInTheDocument();
     });
   });
 });
