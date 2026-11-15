@@ -178,7 +178,17 @@ const ResourcesTab = ({
 
   return (
     <TabsContent value="resources">
-      <div className="grid grid-cols-3 gap-4">
+      {/* [spring-ai-mcp-inspector PATCH] Resources content grid (#296):
+          upstream hard-codes three side-by-side columns, which squeeze
+          the list, templates and preview panes to ~110px slivers at a
+          375px phone. Stack the panes into one full-width column below
+          the `md` (768px) breakpoint; the desktop three-column grid is
+          unchanged at and above it. The testid anchors Selenide
+          geometry assertions. */}
+      <div
+        className="grid grid-cols-1 gap-4 md:grid-cols-3"
+        data-testid="resources-content-grid"
+      >
         <ListPane
           items={resources}
           listItems={listResources}

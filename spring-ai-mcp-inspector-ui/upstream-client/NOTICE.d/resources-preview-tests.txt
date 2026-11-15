@@ -1,0 +1,16 @@
+src/components/__tests__/ResourcesTab.test.tsx +
+spring-ai-mcp-inspector-demo-webmvc InspectorUiIT (mentioned for
+context, lives outside the vendored tree): test-only guards from the
+owner review of PR #346. The jest suite now pins the exact column
+class set of the resources content grid (["grid-cols-1",
+"md:grid-cols-3"]), which kills the sm:grid-cols-3 mutant that
+survived the previous toHaveClass pin: adding a stray breakpoint
+variant next to the md one no longer passes jest. Two selected-
+resource pane tests are added: the preview pane renders below both
+list panes in the stacked layout (DOM order anchor matching the 375px
+Selenide geometry) and a failed resource read renders the error alert
+in the preview pane instead of the JSON view. The Selenide
+resourcesPanesStack_375x812 test gains the same below-both-list-panes
+assertion on the collected pane rects, and the 767/768 grid flip test
+also pins three columns at a 1280px desktop viewport. No production
+code change.
