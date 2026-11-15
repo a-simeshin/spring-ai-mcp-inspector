@@ -499,8 +499,6 @@ public class SseProxyController {
 						connectionBudget.toMillis());
 				session.failUpstream(timeoutEx);
 				this.registry.removeAndClose(sessionId);
-				sendErrorEvent(emitter, err);
-				emitter.complete();
 			}
 			else {
 				LOG.warn("proxy[{}] failed to start mcp proxy: {}", sessionId, err.toString());
@@ -512,7 +510,6 @@ public class SseProxyController {
 				completeWithMappedError(emitter, err, TransportKind.SSE, targetUri(transportType, url));
 				this.registry.removeAndClose(sessionId);
 			}
-			this.registry.removeAndClose(sessionId);
 		});
 
 		return emitter;

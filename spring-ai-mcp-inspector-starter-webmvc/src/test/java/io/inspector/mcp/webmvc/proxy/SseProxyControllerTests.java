@@ -68,9 +68,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -516,7 +516,8 @@ class SseProxyControllerTests {
 			assertThat(frames).contains("proxy-error")
 				.contains("MCP_CONNECT_FAILED")
 				.contains(expected)
-				.contains("\"budgetMs\":1000");
+				.contains("\"budgetMs\":1000")
+				.doesNotContain("\"reason\":\"unknown\"");
 			// elapsedMs is measured from the start of the bring-up and the Reactor
 			// timeout callback lands on a shared parallel scheduler thread, so under
 			// load it can trail the budget (a full-suite local run measured 2562ms for
@@ -526,10 +527,10 @@ class SseProxyControllerTests {
 			assertThat(elapsedMs).isGreaterThanOrEqualTo(1000L);
 			assertThat(elapsedMs).isLessThan(1000L + 5000L);
 			// removeAndClose runs on the start-handler thread, racing the sink
-			// subscriber that delivered the event above: poll instead of asserting
-			// the call has already happened.
-			verify(SseProxyControllerTests.this.registry, timeout(5000).atLeastOnce())
-				.removeAndClose(any(String.class));
+			// subscriber that delivered the event above: after() waits the full
+			// second, then pins exactly one cleanup call, so a restored duplicate
+			// removeAndClose fails with TooManyActualInvocations.
+			verify(SseProxyControllerTests.this.registry, after(1000).times(1)).removeAndClose(any(String.class));
 		}
 
 		@Test
@@ -553,7 +554,8 @@ class SseProxyControllerTests {
 			assertThat(frames).contains("proxy-error")
 				.contains("MCP_CONNECT_FAILED")
 				.contains(expected)
-				.contains("\"budgetMs\":1000");
+				.contains("\"budgetMs\":1000")
+				.doesNotContain("\"reason\":\"unknown\"");
 			// elapsedMs is measured from the start of the bring-up and the Reactor
 			// timeout callback lands on a shared parallel scheduler thread, so under
 			// load it can trail the budget (a full-suite local run measured 2562ms for
@@ -562,8 +564,7 @@ class SseProxyControllerTests {
 			final long elapsedMs = longField(frames, "elapsedMs");
 			assertThat(elapsedMs).isGreaterThanOrEqualTo(1000L);
 			assertThat(elapsedMs).isLessThan(1000L + 5000L);
-			verify(SseProxyControllerTests.this.registry, timeout(5000).atLeastOnce())
-				.removeAndClose(any(String.class));
+			verify(SseProxyControllerTests.this.registry, after(1000).times(1)).removeAndClose(any(String.class));
 		}
 
 		@Test
