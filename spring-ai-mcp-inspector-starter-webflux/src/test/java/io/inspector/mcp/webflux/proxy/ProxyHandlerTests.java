@@ -2477,6 +2477,8 @@ class ProxyHandlerTests {
 			// explicit 400, no transport built
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(entityBody(response).get("error"))
+				.isEqualTo("x-custom-auth-headers must be a JSON array of header names, but is not valid JSON");
 			verify(ProxyHandlerTests.this.transportFactory, never()).buildSse(any(URI.class));
 			verify(ProxyHandlerTests.this.transportFactory, never()).buildSse(any(URI.class), any(), any());
 		}
@@ -2502,6 +2504,8 @@ class ProxyHandlerTests {
 			// explicit 400, no transport built
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(entityBody(response).get("error"))
+				.isEqualTo("x-custom-auth-headers must be a JSON array of header names, but is an object");
 			verify(ProxyHandlerTests.this.transportFactory, never()).openStreamable(any(URI.class));
 			verify(ProxyHandlerTests.this.transportFactory, never()).openStreamable(any(URI.class), any(), any());
 		}
@@ -2635,6 +2639,8 @@ class ProxyHandlerTests {
 			// explicit 400, no transport built
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(entityBody(response).get("error"))
+				.isEqualTo("x-custom-auth-headers must be a JSON array of header names, but is not valid JSON");
 			verify(ProxyHandlerTests.this.transportFactory, never()).openStdio(any(), any());
 		}
 

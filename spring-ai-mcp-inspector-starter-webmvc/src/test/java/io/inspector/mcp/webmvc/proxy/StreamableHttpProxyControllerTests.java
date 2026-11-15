@@ -823,6 +823,10 @@ class StreamableHttpProxyControllerTests {
 			// explicit 400, no session opened, no transport built
 			assertThat(response).isNotNull();
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(response.getBody())
+				.path("error");
+			assertThat(error.asText())
+				.isEqualTo("x-custom-auth-headers must be a JSON array of header names, but is not valid JSON");
 			verify(StreamableHttpProxyControllerTests.this.transportFactory, never()).openStreamable(any(URI.class));
 			verify(StreamableHttpProxyControllerTests.this.transportFactory, never()).openStreamable(any(URI.class),
 					any(), any());
