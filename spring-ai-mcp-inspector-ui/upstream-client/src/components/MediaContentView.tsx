@@ -3,7 +3,7 @@
 // in ToolResults.tsx and raw JSON.stringify rendering in ResourcesTab.tsx/
 // ResourceLinkView.tsx.
 // Supports image/* → <img>, audio/* → <audio>, other binary → <a download>,
-// text/* → JsonView fallback.
+// text/* → decoded plain text, application/json → JsonView tree (#170).
 // Security: "Open in new tab" is restricted to inert MIME types only
 // (text/plain, image/*, audio/*, video/*, application/pdf) to prevent
 // execution of attacker-controlled HTML/JS via data: URIs.
@@ -62,7 +62,8 @@ const isInertMimeType = (mt: string): boolean => {
  * - `audio/*` (with base64Data)  → `<audio controls>` with data URI
  * - binary/* or other non-text mimeTypes with base64Data → `<a download>`
  *   (+ "Open in new tab" only for inert MIME types)
- * - text/* or no base64Data      → `<JsonView>` (preserves existing rendering)
+ * - text/* or no base64Data      → decoded plain text (#170);
+ *   application/json             → `<JsonView>` collapsible tree
  */
 const MediaContentView = ({
   mimeType,
@@ -179,12 +180,26 @@ const MediaContentView = ({
     );
   }
 
-  // Text content — render via JsonView (preserves existing behaviour)
+  // Text content. Plain text payloads render decoded in a <pre> block: real
+  // line breaks, no surrounding JSON quotes (issue #170). A JSON payload
+  // keeps the collapsible JsonView tree. Blob/base64 dispatch above is
+  // unchanged; no unescaping is applied, so literal backslash-n sequences
+  // in the payload are shown verbatim.
   const displayData = text ?? "";
+  const isJsonMimeType = normalisedMimeType === "application/json";
   return (
     <div className={className}>
       {mimeTypeBadge}
-      <JsonView data={displayData} />
+      {isJsonMimeType ? (
+        <JsonView data={displayData} />
+      ) : (
+        <pre
+          className="p-4 border rounded font-mono text-sm whitespace-pre-wrap break-words max-h-96 overflow-auto"
+          data-testid="plain-text-view"
+        >
+          {displayData}
+        </pre>
+      )}
     </div>
   );
 };

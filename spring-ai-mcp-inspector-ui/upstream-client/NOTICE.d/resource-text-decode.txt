@@ -1,0 +1,12 @@
+Plain text decoding in resource previews (issue #170)
+
+Text payloads of TextResourceContents now render decoded in MediaContentView:
+a <pre> block with real line breaks and no surrounding JSON quotes instead of
+the JsonView string-literal view. application/json payloads keep the
+collapsible JsonView tree. No unescaping is applied, so a payload that
+legitimately contains backslash-n sequences is rendered verbatim. Blob/base64
+and multi-content dispatch are unchanged.
+
+Touches:
+- src/components/MediaContentView.tsx (text dispatch branch)
+- src/components/__tests__/MediaContentView.test.tsx (patch marker + tests)
