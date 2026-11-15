@@ -307,7 +307,9 @@ describe("fetchTimelineEvents", () => {
     ];
   });
 
-  it("sends the bootstrap path and the bearer token, and returns the page", async () => {
+  // [spring-ai-mcp-inspector PATCH] Timeline auth header (#316): the
+  // inspector guard reads a raw X-MCP-Inspector-Auth value, not Bearer.
+  it("sends the bootstrap path and the raw inspector token, and returns the page", async () => {
     sessionStorage.setItem(
       "inspectorConfig_v1_ephemeral",
       JSON.stringify({ MCP_PROXY_AUTH_TOKEN: { value: "tok" } }),
@@ -326,7 +328,7 @@ describe("fetchTimelineEvents", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/app/insp/api/timeline?limit=200",
       expect.objectContaining({
-        headers: { Authorization: "Bearer tok" },
+        headers: { "X-MCP-Inspector-Auth": "tok" },
       }),
     );
     expect(events).toEqual([{ id: "a", type: "APP_LOG", payload: null }]);
