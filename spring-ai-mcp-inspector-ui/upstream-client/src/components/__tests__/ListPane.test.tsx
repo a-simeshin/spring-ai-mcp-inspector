@@ -94,6 +94,28 @@ describe("ListPane", () => {
       expect(unselectedRow).not.toHaveClass("bg-muted");
     });
 
+    it("should keep the muted marker visible under hover in both themes", () => {
+      renderListPane({
+        isSelected: (item: (typeof mockItems)[0]) => item.id === 2,
+      });
+
+      const selectedRow = screen
+        .getByText("Tool 2")
+        .closest("[data-testid^='tool-row-']");
+      // Hover backgrounds would paint over the bg-muted marker; the
+      // selected row must not carry them in either theme.
+      expect(selectedRow).toHaveClass("bg-muted");
+      expect(selectedRow).not.toHaveClass("hover:bg-gray-50");
+      expect(selectedRow).not.toHaveClass("dark:hover:bg-secondary");
+
+      const unselectedRow = screen
+        .getByText("Tool 1")
+        .closest("[data-testid^='tool-row-']");
+      expect(unselectedRow).not.toHaveClass("bg-muted");
+      expect(unselectedRow).toHaveClass("hover:bg-gray-50");
+      expect(unselectedRow).toHaveClass("dark:hover:bg-secondary");
+    });
+
     it("should not highlight any row when isSelected is omitted", () => {
       renderListPane();
 
@@ -101,6 +123,33 @@ describe("ListPane", () => {
         .getByText("Tool 1")
         .closest("[data-testid^='tool-row-']");
       expect(row).not.toHaveClass("bg-muted");
+    });
+
+    it("should mark the selected row with aria-current", () => {
+      renderListPane({
+        isSelected: (item: (typeof mockItems)[0]) => item.id === 2,
+      });
+
+      const selectedRow = screen
+        .getByText("Tool 2")
+        .closest("[data-testid^='tool-row-']");
+      expect(selectedRow).toHaveAttribute("aria-current", "true");
+
+      const unselectedRow = screen
+        .getByText("Tool 1")
+        .closest("[data-testid^='tool-row-']");
+      expect(unselectedRow).not.toHaveAttribute("aria-current");
+    });
+
+    it("should not set aria-current on any row when isSelected is omitted", () => {
+      renderListPane();
+
+      for (const name of ["Tool 1", "Tool 2", "Another Tool"]) {
+        const row = screen
+          .getByText(name)
+          .closest("[data-testid^='tool-row-']");
+        expect(row).not.toHaveAttribute("aria-current");
+      }
     });
   });
 

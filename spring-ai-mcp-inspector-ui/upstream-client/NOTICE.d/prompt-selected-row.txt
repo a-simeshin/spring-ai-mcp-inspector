@@ -29,3 +29,17 @@ Covered by:
   reference, is what keeps the highlight across re-listing).
 - `InspectorUiIT` (demo-webmvc): e2e assertion that the marker sits
   on the clicked row and moves when another prompt is selected.
+
+Follow-up (hover and a11y, same patch):
+- `src/components/ListPane.tsx`: the hover backgrounds
+  (hover:bg-gray-50 in light theme, dark:hover:bg-secondary in dark)
+  now apply only to unselected rows. Previously hovering the selected
+  row painted its hover background over the bg-muted marker, so the
+  selection highlight vanished under the cursor; now the marker stays
+  visible on hover in both themes. The selected row also carries
+  aria-current="true" (and only it), so assistive tech can announce
+  the selection.
+- `src/components/__tests__/ListPane.test.tsx`: the selected row keeps
+  bg-muted and carries none of the hover classes while unselected rows
+  keep them (both themes), and aria-current="true" sits on the
+  selected row only, with no attribute when isSelected is omitted.
