@@ -30,6 +30,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import io.inspector.mcp.demo.tools.SlowEchoToolConfiguration;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -59,8 +60,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>
  * Ceiling: 10 concurrent {@code slowEcho} calls (server sleeps 2s per call) must finish
- * in {@code ≤ 8s}. The serial baseline would be 20s; the slack absorbs session setup and
- * fixed relay overhead while still failing loudly on a serialized session.
+ * within {@link #TEN_SLOW_ECHO_BUDGET} (the serial baseline would be 20s), and the
+ * server-side in-flight witness must observe at least two overlapping executions: a
+ * serialized session never exceeds one. The session runs with the upstream connection
+ * warm-up enabled (issue #325), which is what lets the burst spread across the upstream's
+ * event loops instead of racing its acceptor.
  */
 @Epic("Inspector Proxy")
 @Feature("Concurrent tool calls through the proxy")
@@ -87,6 +91,13 @@ class ProxyConcurrentToolCallsIT {
 	 * still fails loudly.
 	 */
 	private static final Duration TEN_SLOW_ECHO_BUDGET = Duration.ofSeconds(16);
+
+	/**
+	 * The harness boots ITs with the upstream warm-up off (its pings are upstream-visible
+	 * POSTs other ITs must not see); this IT's subject IS the warmed pool, so it opts
+	 * back in at the production default.
+	 */
+	private static final String WARMUP_ARG = "--spring.ai.mcp.inspector.proxy.upstream-warm-connections=10";
 
 	private static final int CALLS = 10;
 
@@ -116,14 +127,18 @@ class ProxyConcurrentToolCallsIT {
 	@Severity(SeverityLevel.CRITICAL)
 	@Description("Opens one proxy session, sends 10 concurrent 2s slowEcho tools/call POSTs through "
 			+ "/mcp-inspector-api/mcp and asserts wall time <= 16s, well below the 20s sequential baseline, "
-			+ "on both stacks")
+			+ "and that the server-side max in-flight count reaches at least 2, on both stacks")
 	void tenConcurrentSlowEchoes_throughProxy_onSameSession_runInParallel() throws Exception {
 		// given
-		this.app = ProxyAppHarness.start("STREAMABLE", false, null);
+		this.app = ProxyAppHarness.start("STREAMABLE", false, null, WARMUP_ARG);
 		int port = ProxyAppHarness.port(this.app);
 		String targetUrl = "http://127.0.0.1:" + port + "/mcp";
 		String proxyMcp = "http://127.0.0.1:" + port + "/mcp-inspector-api/mcp";
 		String sessionId = openProxySession(proxyMcp, targetUrl);
+		// The burst below is the only measured window: reset the server-side witness
+		// after
+		// session setup so its counters carry nothing from setup traffic.
+		SlowEchoToolConfiguration.resetInFlightWitness();
 
 		ExecutorService pool = Executors.newFixedThreadPool(CALLS);
 		try {
@@ -179,6 +194,12 @@ class ProxyConcurrentToolCallsIT {
 				.as("10 x slowEcho through the proxy must finish in <16s on %s - sequential 20s baseline "
 						+ "would prove the proxy serializes one session", ProxyAppHarness.stack())
 				.isLessThanOrEqualTo(TEN_SLOW_ECHO_BUDGET);
+			final int maxInFlight = SlowEchoToolConfiguration.maxInFlightWitness();
+			System.err.printf("proxy-concurrency %s max in-flight %d%n", ProxyAppHarness.stack(), maxInFlight);
+			assertThat(maxInFlight)
+				.as("server-side max in-flight slowEcho on %s - a serialized session never exceeds 1",
+						ProxyAppHarness.stack())
+				.isGreaterThanOrEqualTo(2);
 		}
 		finally {
 			pool.shutdownNow();

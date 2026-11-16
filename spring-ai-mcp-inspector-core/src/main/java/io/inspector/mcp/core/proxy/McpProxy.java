@@ -389,15 +389,6 @@ public final class McpProxy {
 	}
 
 	/**
-	 * Sends one frame upstream, applying the D9 one-retry: a {@code 401} on a session
-	 * bound to a client-credentials profile triggers a token refresh and a single re-send
-	 * with the fresh token. The first {@code 401} does NOT fail the session (the awaiter
-	 * must see the retried response); any later failure does.
-	 * @param session the session
-	 * @param typed the typed frame to send
-	 * @return the send result
-	 */
-	/**
 	 * Warms spare upstream keep-alive connections with concurrent JSON-RPC pings and
 	 * opens the handshake gate once the pool has settled (or the cap elapses).
 	 *
@@ -492,6 +483,15 @@ public final class McpProxy {
 		handshakeGate.tryEmitEmpty();
 	}
 
+	/**
+	 * Sends one frame upstream, applying the D9 one-retry: a {@code 401} on a session
+	 * bound to a client-credentials profile triggers a token refresh and a single re-send
+	 * with the fresh token. The first {@code 401} does NOT fail the session (the awaiter
+	 * must see the retried response); any later failure does.
+	 * @param session the session
+	 * @param typed the typed frame to send
+	 * @return the send result
+	 */
 	private Mono<Void> sendWithOneRetry(final ProxySession session, final JSONRPCMessage typed) {
 		// Subscribe the upstream send on boundedElastic: the thread that subscribes
 		// this Mono is the thread that emitted the browser frame (on the reactive
