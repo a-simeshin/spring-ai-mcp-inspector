@@ -7,6 +7,9 @@ ResourcesTab renders, and never sends resources/read again. Local
 fix: on cache hit, sync `resourceContent` from the cache and keep
 going: resources/read is sent every time (stale-while-revalidate),
 the response refreshes the pane and the cache, and cached error
-payloads are retried the same way. Covered by
-App.resourceRefresh.test.tsx and the demo E2E resource refresh IT.
+payloads are retried the same way. The sync pane commit into
+`resourceContent` is additionally guarded by the live selected uri
+(see read-resource-cache-hit-guard.txt). Covered by
+App.resourceRefresh.test.tsx, App.resourceCachePane.test.tsx and the
+demo E2E resource refresh IT.
 Upstream: https://github.com/modelcontextprotocol/inspector/issues/1266

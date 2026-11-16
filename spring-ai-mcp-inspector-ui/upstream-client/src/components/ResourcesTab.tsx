@@ -170,9 +170,14 @@ const ResourcesTab = ({
   const handleReadTemplateResource = () => {
     if (selectedTemplate) {
       const uri = fillTemplate(selectedTemplate.uriTemplate, templateValues);
-      readResource(uri);
+      // [spring-ai-mcp-inspector PATCH]: sync the selection before the
+      // read, mirroring the row-click order. App.readResource guards the
+      // cached pane commit by the live selected uri (#344); reading
+      // first would make that guard judge by the previous selection and
+      // skip the pane commit for a cached template read.
       // We don't have the full Resource object here, so we create a partial one
       setSelectedResource({ uri, name: uri } as Resource);
+      readResource(uri);
     }
   };
 
