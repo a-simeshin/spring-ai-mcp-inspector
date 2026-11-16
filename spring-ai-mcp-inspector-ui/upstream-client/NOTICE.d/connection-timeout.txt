@@ -1,0 +1,29 @@
+connection-timeout: optional Connection timeout (s) field in Connect form
+Files:
+  spring-ai-mcp-inspector-ui/upstream-client/src/components/Sidebar.tsx
+  spring-ai-mcp-inspector-ui/upstream-client/src/components/__tests__/Sidebar.test.tsx
+  spring-ai-mcp-inspector-ui/upstream-client/src/lib/hooks/useConnection.ts
+  spring-ai-mcp-inspector-ui/upstream-client/src/lib/hooks/__tests__/useConnection.test.tsx
+  spring-ai-mcp-inspector-ui/upstream-client/src/App.tsx
+  spring-ai-mcp-inspector-ui/upstream-client/src/__tests__/App.connectionTimeoutPersistence.test.tsx
+Description:
+  Adds an optional numeric input for connection timeout in seconds.
+  Empty = proxy default (30s). Filled = forwarded as connectionTimeout
+  query parameter to the proxy. Proxy connections only (the field is
+  hidden for direct connections, which never build a proxy URL).
+  Validation: whole seconds 1..600 (matching ProxyConnectionBudgets),
+  decimal digits only. The proxy parses the raw string with Long.parseLong,
+  so literals like 1e1 fail there and are rejected client-side with the
+  field-level error instead; +30 parses as 30 at the proxy but is rejected
+  too, stricter than the proxy on purpose. Enforced on blur and on the
+  Connect click guard, both scoped to proxy connections: direct mode
+  neither renders the field nor enforces the guard, so a stale invalid
+  persisted value cannot silently lock Connect.
+  Value persisted to localStorage (lastConnectionTimeout). Regression
+  tests pin both follow-up fixes: decimal-guard regressions for JS
+  numeric literals ("1e1", "0x10", "+30", "1.5" set the field-level
+  error and issue no connect request; "120" passes), the proxy-mode
+  error + disabled pin for an invalid timeout (700), and the App-level
+  persisted direct-mode case (lastConnectionType=direct +
+  lastConnectionTimeout=700 connects instead of silently swallowing
+  the click).

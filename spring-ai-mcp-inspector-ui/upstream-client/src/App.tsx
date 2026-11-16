@@ -336,6 +336,11 @@ const App = () => {
       );
     },
   );
+  // [spring-ai-mcp-inspector PATCH] Optional connection timeout (seconds).
+  // Empty string = proxy default (30s). Persisted in localStorage.
+  const [connectionTimeout, setConnectionTimeout] = useState<string>(() => {
+    return localStorage.getItem("lastConnectionTimeout") || "";
+  });
   const [logLevel, setLogLevel] = useState<LoggingLevel>("debug");
   const [notifications, setNotifications] = useState<ServerNotification[]>([]);
   const [roots, setRoots] = useState<Root[]>([]);
@@ -439,6 +444,10 @@ const App = () => {
   const [selectedResource, setSelectedResource] = useState<Resource | null>(
     null,
   );
+  // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): live mirror of
+  // the selected resource for async guards in readResource; a ref stays
+  // current across awaits where a closed-over state snapshot would not.
+  const selectedResourceRef = useRef<Resource | null>(null);
   const [resourceSubscriptions, setResourceSubscriptions] = useState<
     Set<string>
   >(new Set<string>());
@@ -633,6 +642,7 @@ const App = () => {
     activeProfileId,
     config,
     connectionType,
+    connectionTimeout,
     // [spring-ai-mcp-inspector PATCH] Persistent history (#121). The bucket
     // key is frozen from the Connect click until disconnect (review
     // blocker 2 on PR #218): while a session id is captured, editing the
@@ -971,6 +981,10 @@ const App = () => {
   // `/auth-profile` handoff; nothing secret-bearing is written to
   // localStorage anymore. migrateLegacyAuthStorage() consumed and removed any
   // pre-existing values on mount.
+  // [spring-ai-mcp-inspector PATCH] Persist connection timeout to localStorage.
+  useEffect(() => {
+    localStorage.setItem("lastConnectionTimeout", connectionTimeout);
+  }, [connectionTimeout]);
 
   // Auto-migrate from legacy auth when custom headers are empty but legacy auth exists
   useEffect(() => {
@@ -1409,14 +1423,28 @@ const App = () => {
           params: { uri },
         },
         ReadResourceResultSchema,
-        "resources",
       );
       console.log("[App] Resource read response:", {
         uri,
         responseLength: JSON.stringify(response).length,
         hasContents: !!(response as { contents?: unknown[] }).contents,
       });
-      setResourceContent(response);
+      // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): guard the
+      // pane update and the resources-tab error clear by the requested
+      // uri. By the time the resources/read response resolves, the user
+      // may have selected another row, and a late response for a
+      // deselected resource used to overwrite the preview pane and, on
+      // success, to clear the selected row's own error Alert. The
+      // request is deliberately sent without a tabKey so the resources
+      // tab error is owned here instead of being set and cleared
+      // unconditionally in sendMCPRequest. The per-uri cache below stays
+      // unconditional: a response is always correct for its own uri.
+      // Upstream has the same race (modelcontextprotocol/inspector
+      // #1266/#1274); its fix PRs #1267/#1275 were closed unmerged.
+      if (selectedResourceRef.current?.uri === uri) {
+        setResourceContent(response);
+        clearError("resources");
+      }
       setResourceContentMap((prev) => ({
         ...prev,
         [uri]: response,
@@ -1428,6 +1456,14 @@ const App = () => {
         ...prev,
         [uri]: JSON.stringify({ error: errorString }),
       }));
+      // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): surface
+      // the read failure as the resources-tab Alert only while its uri
+      // is still selected; the Alert renders in place of the whole pane,
+      // so an unguarded set would replace the resource the user has
+      // moved to. This is the error half of the #344 race guard.
+      if (selectedResourceRef.current?.uri === uri) {
+        setErrors((prev) => ({ ...prev, resources: errorString }));
+      }
     } finally {
       setFetchingResources((prev) => {
         const next = new Set(prev);
@@ -2046,6 +2082,8 @@ const App = () => {
           loggingSupported={!!serverCapabilities?.logging || false}
           connectionType={connectionType}
           setConnectionType={setConnectionType}
+          connectionTimeout={connectionTimeout}
+          setConnectionTimeout={setConnectionTimeout}
           serverImplementation={serverImplementation}
           // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
           savedConnections={savedConnections}
@@ -2088,19 +2126,25 @@ const App = () => {
                 window.location.hash = value;
               }}
             >
-              {/* [spring-ai-mcp-inspector PATCH] Below `sm` (640px) the tab
-                  bar wraps instead of overflowing: the upstream TabsList base
-                  is `inline-flex h-9` with no wrap, so on a 375px viewport
-                  the trailing tabs (Sampling/Elicitations/Roots/Auth/Metadata)
-                  render off-screen with no scroll and no affordance. flex-wrap
-                  + h-auto let the triggers flow into rows; sm:h-9 +
-                  sm:flex-nowrap restore the single upstream row at >=640px.
-                  The wrapped row that the Input Required entry adds (#253)
+              {/* [spring-ai-mcp-inspector PATCH] The tab bar wraps instead of
+                  overflowing at every viewport width. The upstream TabsList
+                  base is `inline-flex h-9` with no wrap, so at a 375px
+                  viewport the trailing tabs (Sampling/Elicitations/Roots/
+                  Auth/Metadata) rendered off-screen with no scroll and no
+                  affordance; flex-wrap + h-auto let the triggers flow into
+                  rows. The desktop `sm:h-9 sm:flex-nowrap` override that
+                  originally restored the single upstream row from 640px up
+                  is dropped (#275): with the local Timeline (#112) and Input
+                  Required (#253) entries the bar carries 13 triggers
+                  (~1320px), which overflows the 960px inspector column at
+                  1280x800, leaving trailing triggers unreachable while the
+                  page itself never scrolls horizontally, so nothing signals
+                  the loss. The wrapped row that Input Required adds (#253)
                   was pushing the tools detail pane past the 375x667 fold
                   (InspectorUiIT ResponsiveLayout), so the bar's bottom
-                  margin is mb-2 below `sm`; the upstream mb-4 spacing is
-                  restored from `sm` up. */}
-              <TabsList className="mb-2 py-0 flex-wrap h-auto sm:mb-4 sm:h-9 sm:flex-nowrap">
+                  margin is mb-2 below `sm`; the upstream mb-4 spacing
+                  applies from `sm` up. */}
+              <TabsList className="mb-2 py-0 flex-wrap h-auto sm:mb-4">
                 <TabsTrigger
                   value="resources"
                   disabled={!serverCapabilities?.resources}
@@ -2276,6 +2320,9 @@ const App = () => {
                       selectedResource={selectedResource}
                       setSelectedResource={(resource) => {
                         clearError("resources");
+                        // [spring-ai-mcp-inspector PATCH]: keep the guard
+                        // ref in sync with the selection (#344).
+                        selectedResourceRef.current = resource;
                         setSelectedResource(resource);
                       }}
                       resourceSubscriptionsSupported={

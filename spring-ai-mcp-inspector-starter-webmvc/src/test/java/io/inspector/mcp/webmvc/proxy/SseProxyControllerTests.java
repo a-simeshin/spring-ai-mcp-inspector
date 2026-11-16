@@ -535,6 +535,13 @@ class SseProxyControllerTests {
 			// second, then pins exactly one cleanup call, so a restored duplicate
 			// removeAndClose fails with TooManyActualInvocations.
 			verify(SseProxyControllerTests.this.registry, after(1000).times(1)).removeAndClose(any(String.class));
+			// terminal state: the connect-budget timeout path ends the stream with
+			// complete() after the structured proxy-error event (complete=true,
+			// failure=null): the browser sees the error and then a finished stream.
+			assertThat(emitterState(emitter, "complete")).as("the connect-budget timeout completed the emitter")
+				.isEqualTo(true);
+			assertThat(emitterState(emitter, "failure")).as("the timeout path uses complete(), not completeWithError")
+				.isNull();
 		}
 
 		@Test
@@ -569,6 +576,13 @@ class SseProxyControllerTests {
 			assertThat(elapsedMs).isGreaterThanOrEqualTo(1000L);
 			assertThat(elapsedMs).isLessThan(1000L + 5000L);
 			verify(SseProxyControllerTests.this.registry, after(1000).times(1)).removeAndClose(any(String.class));
+			// terminal state: the connect-budget timeout path ends the stream with
+			// complete() after the structured proxy-error event (complete=true,
+			// failure=null): the browser sees the error and then a finished stream.
+			assertThat(emitterState(emitter, "complete")).as("the connect-budget timeout completed the emitter")
+				.isEqualTo(true);
+			assertThat(emitterState(emitter, "failure")).as("the timeout path uses complete(), not completeWithError")
+				.isNull();
 		}
 
 		@Test

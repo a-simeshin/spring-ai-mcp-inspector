@@ -5,9 +5,19 @@
 // a page reload), and a read failure must surface gracefully without
 // freezing the panel. Returning to a cached row must also render the
 // cached payload immediately, while the fresh read is still in flight.
+// The resources Clear button only empties the list: resourceContentMap
+// survives it, so the first click on a previously-read row after
+// clearing still renders the cached payload instantly.
 // Uses the real ResourcesTab so the row click and the
 // Refresh button exercise App.readResource end to end.
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import "@testing-library/jest-dom";
 import App from "../App";
 import { useConnection } from "../lib/hooks/useConnection";
@@ -341,6 +351,64 @@ describe("App - readResource re-issues resources/read (#288)", () => {
     });
     await waitFor(() => {
       expect(screen.getByText(/clock=0/)).toBeInTheDocument();
+    });
+    expect(countReadRequests()).toBe(3);
+  }, 15000);
+
+  it("Clear empties the resource list but keeps the content cache: the first re-click still renders the cached payload", async () => {
+    await renderConnectedApp();
+    await selectDemoClock();
+
+    // Move the pane to the log row: the clock payload now lives only in
+    // resourceContentMap.
+    fireEvent.click(screen.getByTitle("demo://log"));
+    await waitFor(() => {
+      expect(screen.getByText(/log=0/)).toBeInTheDocument();
+    });
+
+    // Clear empties the resources list. The templates pane has its own
+    // Clear button, so scope to the resources pane via its unique
+    // List Resources button.
+    const resourcesPane = screen
+      .getByText("List Resources")
+      .parentElement as HTMLElement;
+    fireEvent.click(within(resourcesPane).getByText("Clear"));
+    expect(screen.queryByText("demo-clock")).not.toBeInTheDocument();
+    expect(screen.queryByText("demo-log")).not.toBeInTheDocument();
+
+    // Re-list: the rows are back. Return to the clock row with the
+    // re-read parked on a deferred promise: the pane must render the
+    // cached clock payload synchronously (the cache survived Clear),
+    // before any fresh response exists. If Clear reset
+    // resourceContentMap, the pane would keep showing the log payload
+    // and this test would fail.
+    fireEvent.click(screen.getByText("List Resources"));
+    await waitFor(() => {
+      expect(screen.getByText("demo-clock")).toBeInTheDocument();
+    });
+
+    parkNextRead = true;
+    fireEvent.click(screen.getByTitle("demo://clock"));
+    expect(screen.getByText(/clock=0/)).toBeInTheDocument();
+    expect(screen.queryByText(/log=0/)).not.toBeInTheDocument();
+
+    // The re-read was still issued; releasing it refreshes the pane.
+    parkNextRead = false;
+    await act(async () => {
+      parkedReads.forEach((resolve) => {
+        resolve({
+          contents: [
+            {
+              uri: "demo://clock",
+              mimeType: "text/plain",
+              text: "clock=1",
+            },
+          ],
+        });
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/clock=1/)).toBeInTheDocument();
     });
     expect(countReadRequests()).toBe(3);
   }, 15000);
