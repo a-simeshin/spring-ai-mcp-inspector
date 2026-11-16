@@ -334,6 +334,11 @@ const App = () => {
       );
     },
   );
+  // [spring-ai-mcp-inspector PATCH] Optional connection timeout (seconds).
+  // Empty string = proxy default (30s). Persisted in localStorage.
+  const [connectionTimeout, setConnectionTimeout] = useState<string>(() => {
+    return localStorage.getItem("lastConnectionTimeout") || "";
+  });
   const [logLevel, setLogLevel] = useState<LoggingLevel>("debug");
   const [notifications, setNotifications] = useState<ServerNotification[]>([]);
   const [roots, setRoots] = useState<Root[]>([]);
@@ -632,6 +637,7 @@ const App = () => {
     activeProfileId,
     config,
     connectionType,
+    connectionTimeout,
     // [spring-ai-mcp-inspector PATCH] Persistent history (#121). The bucket
     // key is frozen from the Connect click until disconnect (review
     // blocker 2 on PR #218): while a session id is captured, editing the
@@ -963,6 +969,10 @@ const App = () => {
   // `/auth-profile` handoff; nothing secret-bearing is written to
   // localStorage anymore. migrateLegacyAuthStorage() consumed and removed any
   // pre-existing values on mount.
+  // [spring-ai-mcp-inspector PATCH] Persist connection timeout to localStorage.
+  useEffect(() => {
+    localStorage.setItem("lastConnectionTimeout", connectionTimeout);
+  }, [connectionTimeout]);
 
   // Auto-migrate from legacy auth when custom headers are empty but legacy auth exists
   useEffect(() => {
@@ -2055,6 +2065,8 @@ const App = () => {
           loggingSupported={!!serverCapabilities?.logging || false}
           connectionType={connectionType}
           setConnectionType={setConnectionType}
+          connectionTimeout={connectionTimeout}
+          setConnectionTimeout={setConnectionTimeout}
           serverImplementation={serverImplementation}
           // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
           savedConnections={savedConnections}
