@@ -4,7 +4,7 @@
 // URL and kept the relative default "/sse"). The second test pins the
 // intended auto-populate when the user has not typed yet.
 
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import App from "../App";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -129,6 +129,15 @@ describe("App - config defaults must not clobber user-typed sseUrl", () => {
 
     // The /config response lands AFTER the user edit.
     resolveConfig();
+
+    // Flush the /config microtask chain (fetch resolve -> response.json ->
+    // state updates) BEFORE reading the URL field. A bare waitFor would pass
+    // on its first poll, while the typed value is still on screen and the
+    // late response has not applied the default yet, so the clobber this
+    // test pins would happen after the test stopped looking.
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     await waitFor(() => {
       expect(screen.getByLabelText("URL")).toHaveValue(
