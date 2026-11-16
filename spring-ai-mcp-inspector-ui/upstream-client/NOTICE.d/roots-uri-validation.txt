@@ -1,0 +1,15 @@
+src/lib/rootsUriValidation.ts, src/lib/__tests__/rootsUriValidation.test.ts,
+src/components/RootsTab.tsx,
+src/components/__tests__/RootsTab.rootUriValidation.test.tsx: add
+client-side validation of root URIs in the Roots tab. Save Changes now
+blocks values that are empty, lack a URI scheme, contain characters that
+are not allowed in a URI per RFC 3986 (spaces, control or unencoded
+non-ASCII characters, stray percent signs), or are file:// URIs without a
+path, showing a human-readable reason next to the offending field
+(aria-invalid plus a role=alert paragraph). When blocked, the roots state
+is untouched and the notifications/roots/list_changed notification is not
+sent, so servers no longer receive junk roots. Valid file://, http(s)://
+and other syntactically valid RFC 3986 URIs (percent-encoded octets,
+uppercase schemes, single-slash file URIs, custom schemes) still save and
+notify. Covered by jest unit specs for the pure validator and component
+specs for the save flow.

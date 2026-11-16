@@ -3319,6 +3319,95 @@ class InspectorUiIT {
 					Duration.ofSeconds(20));
 		}
 
+		/**
+		 * Regression coverage for the Roots tab save-block promise (PR #355 review): the
+		 * promise was pinned only by jsdom specs, so it also needs a real browser story.
+		 * An invalid root URI must block Save Changes with the reason shown inline next
+		 * to the field and without sending notifications/roots/list_changed; fixing the
+		 * URI clears the alert and the save propagates. The page fetch is wrapped before
+		 * Save Changes is clicked; the demo connects through the proxy, so bodies may sit
+		 * inside a proxy envelope, and a plain substring check works for both shapes.
+		 */
+		@Test
+		@Story("Roots validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("An invalid root URI blocks Save Changes: the reason shows inline next to the field and notifications/roots/list_changed stays unsent until the URI is fixed.")
+		@DisplayName("saveWithInvalidRootUri: inline alert shown and list_changed held back until the URI is fixed")
+		void saveWithInvalidRootUri_holdsNotification_untilUriFixed() {
+			// given
+			clickTab("roots");
+
+			// Capture every JSON-RPC body the page sends through fetch.
+			Selenide
+				.executeJavaScript("" + "window.__rootsListChangedPayloads = window.__rootsListChangedPayloads || [];"
+						+ "if (!window.__rootsListChangedHooked) {" + "  window.__rootsListChangedHooked = true;"
+						+ "  const orig = window.fetch;" + "  window.fetch = function(input, init) {" + "    try {"
+						+ "      if (init && typeof init.body === 'string'"
+						+ "          && init.body.indexOf('roots/list_changed') !== -1) {"
+						+ "        window.__rootsListChangedPayloads.push(init.body);" + "      }"
+						+ "    } catch (e) {}" + "    return orig.apply(this, arguments);" + "  };" + "}");
+
+			// Add Root creates an entry pre-filled with "file://". A root saved by a
+			// sibling story may already exist, so the new row is the last one.
+			activePanel().$(byText("Add Root")).shouldBe(visible, Duration.ofSeconds(10)).click();
+			int target = activePanel().$$("input[placeholder='file:// URI']").size() - 1;
+			SelenideElement rootUri = activePanel().$$("input[placeholder='file:// URI']")
+				.get(target)
+				.shouldBe(visible);
+			rootUri.click();
+			rootUri.sendKeys(org.openqa.selenium.Keys.END);
+			int len = rootUri.getValue() == null ? 0 : rootUri.getValue().length();
+			for (int i = 0; i < len + 2; i++) {
+				rootUri.sendKeys(org.openqa.selenium.Keys.BACK_SPACE);
+			}
+			rootUri.setValue("not a uri");
+
+			// when: save with an invalid URI
+			activePanel().$(byText("Save Changes")).shouldBe(visible).click();
+
+			// then: the reason shows inline next to the field (role=alert, linked
+			// through aria-describedby) and no roots/list_changed is sent.
+			SelenideElement alert = $("#root-uri-error-" + target).shouldBe(visible, Duration.ofSeconds(5));
+			Assertions.assertEquals("alert", alert.attr("role"), "the inline reason must be a role=alert element");
+			Assertions.assertEquals("true", rootUri.getAttribute("aria-invalid"),
+					"the offending field must be marked aria-invalid");
+			Number blockedSent = null;
+			for (int i = 0; i < 6 && (blockedSent == null || blockedSent.longValue() == 0); i++) {
+				blockedSent = Selenide.executeJavaScript("return (window.__rootsListChangedPayloads || []).length;");
+				if (blockedSent == null || blockedSent.longValue() == 0) {
+					Selenide.sleep(250);
+				}
+			}
+			Assertions.assertEquals(0L, blockedSent == null ? 0L : blockedSent.longValue(),
+					"a blocked save must not send notifications/roots/list_changed");
+
+			// when: fix the URI and save again
+			rootUri.click();
+			rootUri.sendKeys(org.openqa.selenium.Keys.END);
+			len = rootUri.getValue() == null ? 0 : rootUri.getValue().length();
+			for (int i = 0; i < len + 2; i++) {
+				rootUri.sendKeys(org.openqa.selenium.Keys.BACK_SPACE);
+			}
+			rootUri.setValue("file:///valid/path");
+			activePanel().$(byText("Save Changes")).shouldBe(visible).click();
+
+			// then: the alert is gone and the save propagates as list_changed.
+			$("#root-uri-error-" + target).shouldNot(Condition.exist);
+			Number sent = null;
+			for (int i = 0; i < 60 && (sent == null || sent.longValue() == 0); i++) {
+				sent = Selenide.executeJavaScript("return (window.__rootsListChangedPayloads || []).length;");
+				if (sent == null || sent.longValue() == 0) {
+					Selenide.sleep(250);
+				}
+			}
+			Assertions.assertNotNull(sent, "the fetch hook observed no request at all");
+			Assertions.assertTrue(sent.longValue() >= 1,
+					"saving a valid root URI must send notifications/roots/list_changed; captured=" + sent);
+			String payload = Selenide.executeJavaScript(
+					"var a = window.__rootsListChangedPayloads || []; return a.length > 0 ? a[a.length - 1] : null;");
+			Assertions.assertNotNull(payload, "no roots/list_changed request body was captured by the fetch hook");
+		}
+
 	}
 
 	// =====================================================================
