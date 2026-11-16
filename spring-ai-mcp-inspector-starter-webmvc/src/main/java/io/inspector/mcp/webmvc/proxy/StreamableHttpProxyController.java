@@ -60,6 +60,8 @@ import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
+import io.inspector.mcp.core.keepalive.PingDetectingClientTransport;
 import io.inspector.mcp.core.proxy.CustomHeaderNames;
 import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
@@ -81,6 +83,7 @@ import io.inspector.mcp.core.task.TaskNotFoundException;
 import io.inspector.mcp.core.task.TaskService;
 import io.inspector.mcp.webmvc.InspectorServerPortHolder;
 import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
+import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
 
 /**
  * Streamable-HTTP transport ports.
@@ -111,6 +114,11 @@ import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
 public class StreamableHttpProxyController {
 
 	private static final Logger LOG = LoggerFactory.getLogger(StreamableHttpProxyController.class);
+
+	/**
+	 * SSE event name used to broadcast a keep-alive ping timestamp to the UI.
+	 */
+	private static final String KEEPALIVE_PING_EVENT = "mcp:keepalive-ping";
 
 	/**
 	 * Error code of the structured connect-failure payload (see
@@ -145,6 +153,8 @@ public class StreamableHttpProxyController {
 	private final OAuth2AuthCodeTokenExchanger authCodeExchanger;
 
 	private final ObjectProvider<TaskService> taskServiceProvider;
+
+	private final InspectorSseEmitterRegistry emitterRegistry;
 
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper) {
@@ -215,6 +225,7 @@ public class StreamableHttpProxyController {
 		this.ccTokenManager = ccTokenManager;
 		this.authCodeExchanger = authCodeExchanger;
 		this.taskServiceProvider = null;
+		this.emitterRegistry = null;
 	}
 
 	/**
@@ -233,7 +244,6 @@ public class StreamableHttpProxyController {
 	 * @param authCodeExchanger the auth-code exchanger
 	 * @param taskServiceProvider provider for an optional {@link TaskService}
 	 */
-	@Autowired
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
 			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,
@@ -241,6 +251,36 @@ public class StreamableHttpProxyController {
 			final OAuth2ClientCredentialsTokenManager ccTokenManager,
 			final OAuth2AuthCodeTokenExchanger authCodeExchanger,
 			final ObjectProvider<TaskService> taskServiceProvider) {
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, sessionOwnerResolver,
+				authProfileStore, ccTokenManager, authCodeExchanger, taskServiceProvider, null);
+	}
+
+	/**
+	 * Primary constructor: wires the D8/D9 auth context, the optional {@link TaskService}
+	 * and per-session keep-alive tracking so the UI can follow pings on the streamable
+	 * proxy path.
+	 * @param registry the proxy session registry
+	 * @param transportFactory the proxy transport factory
+	 * @param mcpProxy the MCP proxy relay
+	 * @param objectMapper the JSON object mapper
+	 * @param properties the inspector properties
+	 * @param portHolder the server port holder
+	 * @param sessionOwnerResolver the signed-cookie owner resolver
+	 * @param authProfileStore the owner-scoped profile store
+	 * @param ccTokenManager the client-credentials token manager
+	 * @param authCodeExchanger the auth-code exchanger
+	 * @param taskServiceProvider provider for an optional {@link TaskService}
+	 * @param emitterRegistry the SSE emitter registry used to broadcast
+	 * {@code mcp:keepalive-ping} events to UI subscribers
+	 */
+	@Autowired
+	public StreamableHttpProxyController(final ProxySessionRegistry registry,
+			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
+			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,
+			final ServletSessionOwnerResolver sessionOwnerResolver, final AuthProfileStore authProfileStore,
+			final OAuth2ClientCredentialsTokenManager ccTokenManager,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger, final ObjectProvider<TaskService> taskServiceProvider,
+			final InspectorSseEmitterRegistry emitterRegistry) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
@@ -252,15 +292,23 @@ public class StreamableHttpProxyController {
 		this.ccTokenManager = ccTokenManager;
 		this.authCodeExchanger = authCodeExchanger;
 		this.taskServiceProvider = taskServiceProvider;
+		this.emitterRegistry = emitterRegistry;
+	}
+
+	private TaskService taskService() {
+		return (this.taskServiceProvider != null) ? this.taskServiceProvider.getIfAvailable() : null;
 	}
 
 	/**
-	 * Lazily resolves the optional {@link TaskService} bean. Resolved on first use so the
-	 * constructor stays trivially safe (no method calls that could throw).
-	 * @return the resolved service, or {@code null} when unavailable
+	 * Broadcasts a keep-alive ping timestamp to UI subscribers of the given proxy session
+	 * as an SSE {@code mcp:keepalive-ping} event.
+	 * @param sessionId the proxy session identifier
+	 * @param at the ping timestamp in ISO-8601 form
 	 */
-	private TaskService taskService() {
-		return (this.taskServiceProvider != null) ? this.taskServiceProvider.getIfAvailable() : null;
+	private void broadcastKeepAlivePing(final String sessionId, final String at) {
+		if (this.emitterRegistry != null) {
+			this.emitterRegistry.broadcast(sessionId, KEEPALIVE_PING_EVENT, Map.of("at", at));
+		}
 	}
 
 	private int loopbackPort() {
@@ -680,8 +728,11 @@ public class StreamableHttpProxyController {
 		}
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(REPLAY_BUFFER);
-		final ProxySession session = new ProxySession(sessionId, target, browserToTarget, targetToBrowser,
-				authorizationRef);
+		final KeepAliveTracker keepAliveTracker = new KeepAliveTracker();
+		keepAliveTracker.setListener((at) -> broadcastKeepAlivePing(sessionId, at.toString()));
+		final ProxySession session = new ProxySession(sessionId,
+				new PingDetectingClientTransport(target, keepAliveTracker), browserToTarget, targetToBrowser,
+				authorizationRef, keepAliveTracker);
 		// D5: remember the resolved upstream target so streamable error DTOs can attach
 		// the redacted url (scheme://host[:port]/path, query/fragment stripped).
 		session.targetUri(resolved);
