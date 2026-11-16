@@ -3,6 +3,90 @@
 Notable changes per release, grouped as features, fixes and internal work.
 Every line references the pull request it landed through.
 
+## 2.3.0
+
+Stack: Spring Boot `4.1.0`, Spring AI `2.0.1`, Java MCP SDK `2.0.1`, bundled
+MCP Inspector UI `0.22.0`, Java 17+.
+
+### Features
+
+- Keep-alive tracking (#239): inbound JSON-RPC pings on loopback SSE and
+  streamable-http sessions are recorded per session, the rolling median
+  interval and staleness are exposed live through `mcp:keepalive-ping` SSE
+  events and a `GET /api/keepalive` polling snapshot, and the Timeline and
+  the sidebar surface the state.
+- SEP-2322 input-required round trip (#313, #315, #317): when a tool call
+  comes back with an input-required request, the UI collects the follow-up
+  input and resumes the call in the same Timeline chain; the demo app ships
+  a `multiRoundTripEcho` tool exercising the flow end to end.
+- Connection timeout in the Connect form (#241, #244): an optional
+  per-connect timeout (whole seconds, 1..600) forwarded as
+  `connectionTimeout`, with inline validation and persistence in saved
+  connections.
+- The connect error banner shows the timeout phase and the budget
+  breakdown (#243).
+- Primitive tool results that advertise no outputSchema are warned about in
+  the tool panel (#202).
+- A hint panel lists common Spring AI 2.0 pitfalls (#203).
+- History persists per connection in localStorage buckets, frozen at
+  connect time and restored on reconnect (#218).
+- Exception-leak badge in the Timeline and a verbatim note in Tool
+  Results (#292).
+- Markdown resource preview (#354): `text/markdown` renders as sanitized
+  HTML (marked + DOMPurify) with a View source toggle for the raw payload.
+- Root URI validation in the Roots tab (#355): Save Changes blocks empty,
+  scheme-less or otherwise malformed root URIs with an inline reason, so
+  servers no longer receive junk roots.
+
+### Fixes
+
+- Concurrent tool calls on one session overlap instead of serializing
+  (#379): the proxy opens spare keep-alive connections to the upstream at
+  session open (`spring.ai.mcp.inspector.proxy.upstream-warm-connections`,
+  default `10`, `0` restores the old behavior) so a burst of calls no
+  longer trails one tool duration per accept wave on WebFlux servers.
+- Custom header names the JDK HTTP client refuses (restricted names such as
+  `host`, or names containing a colon) fail the connect up front with one
+  non-retryable `invalid_request` error listing every offender, never
+  echoing the header value (#188).
+- A non-numeric `tasks/list` cursor returns a `-32602` invalid params
+  error instead of a silent empty page (#320).
+- The reactive proxy shifts the upstream send off the emitting thread, so
+  a slow frame no longer serializes the session (#358).
+- The timeline API auth sends the raw inspector token header (#365).
+- Elicitation cards expire when their `tools/call` settles (#361).
+- The Resources pane is guarded by the selected uri (#345) and re-issued on
+  Refresh and row re-select (#342), so a stale pane no longer masquerades
+  as the selection.
+- `text/*` resource payloads render decoded, without JSON quoting (#353).
+- `x-custom-auth-headers` parses as a JSON array on every endpoint (#189).
+- Get Prompt is blocked on blank required args and blank optional args are
+  dropped from the payload (#359).
+- `prompts/get` MCP errors surface without an unhandled rejection (#339).
+- The selected prompt row keeps its highlight (#338).
+- The ListPane hover no longer hides the selected row marker; the row is
+  announced with `aria-current` (#350).
+- The Resources panes stack into one column below the md breakpoint (#346).
+- The tab bar wraps at every viewport width (#337).
+- The cache-hit pane commit is guarded by the live selection (#351).
+- OAuth token acquisition on WebFlux runs on boundedElastic instead of the
+  Netty event loop (#187).
+
+### Internal, docs and build
+
+- Browser E2E for the Resources pane race with a delayed resource (#357),
+  the SEP-2322 input-required round trip (#318) and whitespace-only prompt
+  validation stories with a PromptsTab blur hint test (#368).
+- Two flaky test causes fixed on `develop/2.x`: the SSE helper buffer race
+  and the `/config` URL clobber (#376); test hardening (#322, #331, #348,
+  #363) and unit-test pins (#280, #287).
+- Dead proxy code dropped: the unreachable session-header branch in the
+  tasks intercept (#319) and the dead budget-timeout fallback in
+  SseProxyController (#360).
+- npm dependency security bump across the vendored client (#314).
+- Docs: why the `1.x` line is no longer supported (#312); vendored
+  tasks-tab notice wording (#340).
+
 ## 2.2.0
 
 Released 2026-11-02, together with `1.2.0`, the final release of the `1.x`
