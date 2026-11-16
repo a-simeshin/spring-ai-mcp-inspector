@@ -283,6 +283,45 @@ describe("TimelineTab", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  // [spring-ai-mcp-inspector PATCH] Error recovery (#316): auto-refresh keeps
+  // polling after a failed poll, so the next successful poll must clear the
+  // banner again; otherwise a recovered timeline stays stuck on the error
+  // state and never shows events again until reload.
+  it("clears the error banner and restores the events once a poll succeeds", async () => {
+    jest.useFakeTimers();
+    try {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValueOnce({ ok: false, status: 401, json: async () => [] })
+        .mockResolvedValue({
+          ok: true,
+          status: 200,
+          json: async () => [APP_LOG_EVENT],
+        });
+      (global as unknown as { fetch: jest.Mock }).fetch = fetchMock;
+      renderTab();
+
+      // The mount poll fails (401: stand restart or token rotation) and the
+      // banner surfaces instead of an empty log.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Timeline request failed: HTTP 401",
+      );
+
+      // The next auto-refresh tick (3s) succeeds: the banner is cleared and
+      // the fetched events render again.
+      await act(async () => {
+        jest.advanceTimersByTime(3000);
+      });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.getByText("tool executed")).toBeInTheDocument();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it("renders APP_LOG events from the real wire schema without crashing", async () => {
     mockFetch([APP_LOG_EVENT]);
     const { container } = renderTab();

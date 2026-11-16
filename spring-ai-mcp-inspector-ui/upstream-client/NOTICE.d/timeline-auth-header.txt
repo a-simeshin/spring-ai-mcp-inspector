@@ -14,4 +14,6 @@ additionally renders an explicit error banner for a failed poll (HTTP
 status or network error) instead of swallowing non-OK responses; a
 successful 200 with an empty list still renders the regular "No
 timeline events yet" state. New jest coverage pins the header
-contract, the error state, and the empty-not-error distinction.
+contract, the error state, the empty-not-error distinction, and the
+recovery path (a successful poll after a failed one clears the banner
+again).
