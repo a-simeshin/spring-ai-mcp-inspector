@@ -93,7 +93,7 @@ public final class McpProxy {
 	 * costs far more than a longer wait on an upstream that answered initialize one round
 	 * trip earlier.
 	 */
-	private static final Duration WARMUP_CONNECTIONS_CAP = Duration.ofSeconds(10);
+	static final Duration WARMUP_CONNECTIONS_CAP = Duration.ofSeconds(10);
 
 	/**
 	 * Window warm-up ping ids stay registered after the pool settles, so a late response
@@ -389,6 +389,16 @@ public final class McpProxy {
 	}
 
 	/**
+	 * Returns the number of spare upstream connections this proxy warms at session open.
+	 * Exposed for the starters' wiring tests, which pin the pass-through of
+	 * {@code spring.ai.mcp.inspector.proxy.upstream-warm-connections}.
+	 * @return the configured warm-up connection count
+	 */
+	public int getUpstreamWarmConnections() {
+		return this.upstreamWarmConnections;
+	}
+
+	/**
 	 * Warms spare upstream keep-alive connections with concurrent JSON-RPC pings and
 	 * opens the handshake gate once the pool has settled (or the cap elapses).
 	 *
@@ -414,10 +424,11 @@ public final class McpProxy {
 			return;
 		}
 		LOG.debug("proxy[{}] warming up to {} spare upstream connections", session.sessionId(), warm);
-		// Prime the shared executor so every ping dispatches on a live thread within
-		// microseconds of the others. Without priming, a ping that completes before a
-		// later one dispatches hands its connection back to the JDK client's pool and
-		// the later ping reuses it instead of opening a new one: the warm-up then
+		// Prime the shared executor: the pool keeps about one idle worker alive across
+		// this loop, and that live worker is what the warm-up needs. From a cold pool,
+		// the first ping pays a thread spawn before it dispatches; that delay lets an
+		// earlier ping complete and hand its connection back to the JDK client's pool,
+		// and a later ping reuses it instead of opening a new one: the warm-up then
 		// finishes with a mostly-cold pool and the burst races the upstream acceptor
 		// again (measured: an un-primed warm-up intermittently warmed only a fraction
 		// of the requested connections and the wall went back to the serial ladder).
@@ -457,18 +468,17 @@ public final class McpProxy {
 		}, () -> warmIds.forEach(session::removeProbeId));
 	}
 
-	/**
-	 * Sends one warm-up ping. The response, if any, is filtered from the browser stream
-	 * by the probe-id check in the inbound handler; a failed ping only means one fewer
-	 * pooled connection, so it never fails the session here.
-	 * @param session the proxy session to warm (never {@code null})
-	 * @param probeId the pre-registered probe id for the ping
-	 * @return a Mono completing when the ping send settles
-	 */
 	private Mono<Void> warmConnection(final ProxySession session, final String probeId) {
 		final JSONRPCMessage ping = new McpSchema.JSONRPCRequest(McpSchema.JSONRPC_VERSION, "ping", probeId, null);
+		// Dispatch like a relayed frame (see sendWithOneRetry): a legacy SSE transport
+		// blocks the subscribing thread for the whole round trip, so subscribing the
+		// pings directly would serialize the whole warm-up on the
+		// initialize-completion worker: about one connection warmed instead of the
+		// configured count, and a boundedElastic worker held for the sum of the
+		// round trips.
 		return session.targetTransport()
 			.sendMessage(ping)
+			.subscribeOn(Schedulers.boundedElastic())
 			.takeUntilOther(session.closeSignal())
 			.onErrorResume((err) -> {
 				LOG.debug("proxy[{}] warm-up ping {} failed: {}", session.sessionId(), probeId, err.toString());
