@@ -90,3 +90,14 @@ mirroring the form-derived key App.tsx captures at connect time). The UI
 layer compares it against the frozen session key so the disconnect-time
 history carry-over only targets an entry that still points at the
 connect-time endpoint (see NOTICE.d/persistent-history.txt).
+
+ADDENDUM (t_de006530): persist per-server connection timeout.
+- `SavedConnection` gains optional `connectionTimeout?: string` field
+  (seconds). `undefined` / absent = proxy default (30s). Old entries
+  without the field load without migration errors.
+- `handleSaveConnection` captures the current form value;
+  `handleSelectConnection` restores it (empty string = default).
+- Form value wins over saved value during the session: clearing the
+  field before connect uses proxy default, but the saved entry keeps
+  its value until the user explicitly re-saves.
+- Tests: round-trip serialization, legacy-entry compat, UI restore.

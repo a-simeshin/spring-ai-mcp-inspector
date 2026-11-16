@@ -779,6 +779,7 @@ const App = () => {
         args: transportType === "stdio" ? args : undefined,
         env: transportType === "stdio" ? env : undefined,
         customHeaders,
+        connectionTimeout: connectionTimeout || undefined,
       });
       // [spring-ai-mcp-inspector PATCH] Determine target id by comparing
       // name against the currently active connection, not by blindly
@@ -843,6 +844,7 @@ const App = () => {
       args,
       env,
       customHeaders,
+      connectionTimeout,
       activeConnectionId,
       activeHistoryConnectionId,
       historyKeyForConnection,
@@ -907,6 +909,9 @@ const App = () => {
       if (connection.customHeaders) {
         setCustomHeaders(connection.customHeaders);
       }
+      // [spring-ai-mcp-inspector PATCH] Restore saved connectionTimeout
+      // (absent = empty = proxy default).
+      setConnectionTimeout(connection.connectionTimeout ?? "");
       setActiveConnectionId(connection.id);
       touchSavedConnection(connection.id);
       // [spring-ai-mcp-inspector PATCH] Refresh the list state after
@@ -922,6 +927,7 @@ const App = () => {
       setArgs,
       setEnv,
       setCustomHeaders,
+      setConnectionTimeout,
     ],
   );
 

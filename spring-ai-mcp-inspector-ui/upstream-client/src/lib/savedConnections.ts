@@ -94,6 +94,9 @@ export function isValidConnection(c: unknown): c is SavedConnection {
   if (obj.url !== undefined && typeof obj.url !== "string") return false;
   if (obj.command !== undefined && typeof obj.command !== "string") return false;
   if (obj.args !== undefined && typeof obj.args !== "string") return false;
+  // connectionTimeout: optional string. Accepts any string (validated at form level),
+  // or undefined/absent for old entries without the field.
+  if (obj.connectionTimeout !== undefined && typeof obj.connectionTimeout !== "string") return false;
   return true;
 }
 
