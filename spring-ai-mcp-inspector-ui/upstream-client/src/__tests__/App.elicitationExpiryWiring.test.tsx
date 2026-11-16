@@ -1,7 +1,9 @@
 // [spring-ai-mcp-inspector PATCH] Issue #298: wiring coverage. An elicitation
 // card that arrives while a tools/call is in flight is correlated with that
 // call, is expired when the call settles, refuses a late resolve, and never
-// blocks the normal timely resolve.
+// blocks the normal timely resolve. The resumed input_required round is a
+// tools/call too: the elicitation it produces stays alive while the resumed
+// call waits and expires when that call settles.
 import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { describe, it, jest, beforeEach } from "@jest/globals";
@@ -463,6 +465,114 @@ describe("App - elicitation expiry wiring (Issue #298)", () => {
       screen.getByRole("button", { name: /mock resolve card 0/i }),
     );
     expect(screen.getByTestId("elicitation-card-0")).toBeInTheDocument();
+    expect(resolveSpy).not.toHaveBeenCalled();
+    expect(declineSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps a resumed input_required elicitation alive until the resumed call settles", async () => {
+    // Regression guard: the resume path (input_required panel Submit) sends
+    // its tools/call through the controller, which must reach the same
+    // correlation writer callTool uses. Without that, the card produced by
+    // the resumed call maps to the already settled round-1 call id and is
+    // born expired while the resumed call is still waiting for the answer.
+    const firstCall = createDeferred();
+    const resumedCall = createDeferred();
+    let callCount = 0;
+    const makeRequest = jest.fn(async (request: { method: string }) => {
+      if (request.method === "tools/call") {
+        callCount += 1;
+        return callCount === 1 ? firstCall.promise : resumedCall.promise;
+      }
+      throw new Error(`Unexpected method: ${request.method}`);
+    });
+    const captured: Record<string, unknown> = {};
+    mockConnection(makeRequest, captured);
+
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /mock call tool/i }));
+
+    await waitFor(() => {
+      expect(makeRequest).toHaveBeenCalled();
+    });
+
+    // Round 1 answers input_required: the chain opens on the input-required
+    // tab and the round-1 call settles (its correlation id is recorded).
+    await act(async () => {
+      firstCall.resolve({
+        content: [{ type: "text", text: "need more input" }],
+        isError: false,
+        resultType: "input_required",
+        inputRequests: {
+          "elicit-1": {
+            method: "elicitation/create",
+            params: {
+              message: "What is your favorite color?",
+              requestedSchema: {
+                type: "object",
+                properties: { color: { type: "string" } },
+                required: ["color"],
+              },
+            },
+          },
+        },
+        requestState: "state-opaque",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("input-required-chain")).toBeInTheDocument();
+    });
+
+    // The user answers and submits: the ORIGINAL tools/call is re-issued
+    // through the controller. This is the resume under test.
+    fireEvent.change(
+      screen.getByTestId("input-request-elicit-1-field-color")
+        .querySelector("input") as HTMLInputElement,
+      { target: { value: "blue" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => {
+      expect(makeRequest).toHaveBeenCalledTimes(2);
+    });
+
+    // An elicitation arrives while the RESUMED call is still waiting: the
+    // card is live and correlated with the resumed call id (1), not with the
+    // settled round-1 id (0).
+    const resolveSpy = jest.fn();
+    const declineSpy = jest.fn();
+    await act(async () => {
+      (captured.onElicitationRequest as (
+        request: ElicitationRequestPayload,
+        resolve: (response: unknown) => void,
+        decline: (error: Error) => void,
+      ) => void)(elicitationRequest, resolveSpy, declineSpy);
+    });
+    expect(screen.getByTestId("elicitation-card-0")).toHaveAttribute(
+      "data-expired",
+      "false",
+    );
+    expect(screen.getByTestId("elicitation-card-0")).toHaveAttribute(
+      "data-tool-call-id",
+      "1",
+    );
+
+    // The resumed call settles with the server-side timeout error: the card
+    // flips to expired, stays mounted, and a late resolve is refused.
+    await act(async () => {
+      resumedCall.reject(
+        new Error(
+          "askUser: elicitation request failed: TimeoutException: Did not observe any item or terminal signal within 20000ms",
+        ),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("elicitation-card-0")).toHaveAttribute(
+        "data-expired",
+        "true",
+      );
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /mock resolve card 0/i }),
+    );
     expect(resolveSpy).not.toHaveBeenCalled();
     expect(declineSpy).not.toHaveBeenCalled();
   });

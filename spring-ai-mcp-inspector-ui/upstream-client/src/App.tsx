@@ -1540,12 +1540,29 @@ const App = () => {
   const inputRequiredRef = useRef<InputRequiredController | null>(null);
   if (!inputRequiredRef.current) {
     inputRequiredRef.current = new InputRequiredController(
-      async (params) =>
-        await sendToolCallRef.current(
-          { method: "tools/call" as const, params },
-          CompatibilityCallToolResultSchema,
-          "tools",
-        ),
+      async (params) => {
+        // [spring-ai-mcp-inspector PATCH] Issue #298: a resumed input_required
+        // round is a tools/call like any other. Stamping the correlation refs
+        // here, exactly the way callTool does, keeps elicitation cards
+        // produced by the resumed call alive while it waits and expires them
+        // when it settles. Without this the card maps to the settled round-1
+        // id and is born expired. expireElicitationsForToolCall is captured
+        // from the render that creates the controller: it only closes over
+        // the stable pending-requests setter, so the stale copy behaves
+        // identically.
+        const toolCallId = nextToolCallIdRef.current++;
+        activeToolCallIdRef.current = toolCallId;
+        try {
+          return await sendToolCallRef.current(
+            { method: "tools/call" as const, params },
+            CompatibilityCallToolResultSchema,
+            "tools",
+          );
+        } finally {
+          settledToolCallIdsRef.current.add(toolCallId);
+          expireElicitationsForToolCall(toolCallId);
+        }
+      },
     );
   }
 

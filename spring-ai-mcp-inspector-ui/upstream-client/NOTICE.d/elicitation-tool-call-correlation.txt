@@ -19,3 +19,11 @@ mid-flight elicitation, settles the call with the timeout error, and
 asserts the expired flag, the refused late resolve, a timely resolve
 delivering as before, the resolve/settlement race, and a card arriving
 after the settle being created already expired.
+The resumed input_required round goes through the same wiring: the
+InputRequiredController sender re-issues the original tools/call and
+stamps the correlation refs exactly the way callTool does, so a card
+produced by the resumed call stays alive while that call waits and
+expires when it settles instead of being born expired against the
+settled round-1 id. The wiring test drives the resume through the
+input_required panel Submit and asserts the live card, the resumed
+call id, and the expiry on the resumed call settlement.
