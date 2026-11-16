@@ -310,9 +310,9 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 	public McpProxy mcpInspectorMcpProxy(final JsonMapper objectMapper, final AuthProfileStore authProfileStore,
 			final OAuth2ClientCredentialsTokenManager tokenManager,
 			final OAuth2AuthCodeTokenExchanger authCodeExchanger,
-			final ObjectProvider<McpTrafficRecorder> trafficRecorder) {
+			final ObjectProvider<McpTrafficRecorder> trafficRecorder, final McpInspectorProperties properties) {
 		return new McpProxy(objectMapper, authProfileStore, tokenManager, authCodeExchanger,
-				trafficRecorder.getIfAvailable());
+				trafficRecorder.getIfAvailable(), properties.getProxy().getUpstreamWarmConnections());
 	}
 
 	@Bean

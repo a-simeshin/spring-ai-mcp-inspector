@@ -25,7 +25,7 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -90,11 +90,20 @@ public class ProxyTransportFactory {
 	 * lingering client cannot hold up JVM exit, and the pool is cached so it shrinks back
 	 * on its own once the sessions are gone.
 	 */
-	private static final Executor SHARED_HTTP_EXECUTOR = Executors.newCachedThreadPool((runnable) -> {
+	private static final ExecutorService SHARED_HTTP_EXECUTOR = Executors.newCachedThreadPool((runnable) -> {
 		final Thread thread = new Thread(runnable, "mcp-inspector-proxy-http-" + THREAD_SEQ.incrementAndGet());
 		thread.setDaemon(true);
 		return thread;
 	});
+
+	/**
+	 * The executor every transport's HTTP client dispatches on, exposed so the session
+	 * warm-up can prime it before fanning out its pings.
+	 * @return the shared HTTP executor
+	 */
+	static ExecutorService sharedHttpExecutor() {
+		return SHARED_HTTP_EXECUTOR;
+	}
 
 	/** Fallback per-request SSE timeout when no explicit value is supplied. */
 	private static final Duration DEFAULT_SSE_REQUEST_TIMEOUT = Duration.ofSeconds(10);

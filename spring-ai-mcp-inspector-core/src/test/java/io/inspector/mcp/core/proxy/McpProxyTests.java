@@ -446,6 +446,93 @@ class McpProxyTests {
 	}
 
 	@Nested
+	@DisplayName("start() - upstream warm-up")
+	class WarmUp {
+
+		@Test
+		@Story("Handshake ordering")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("with the warm-up enabled, initialize first fires the configured number of "
+				+ "warm-up pings and only then releases the gated tools/list send, so the burst rides "
+				+ "loop-spread pooled connections instead of racing the upstream acceptor")
+		void initialize_warmsUpstreamConnections_beforeReleasingNonHandshakeFrames() throws InterruptedException {
+			// given - a proxy warming two spare upstream connections; sendMessage
+			// records the frame when the returned Mono is subscribed (the actual send)
+			final McpProxy warmProxy = new McpProxy(McpProxyTests.this.mapper, null, null, null, null, 2);
+			final List<JSONRPCMessage> sent = new java.util.concurrent.CopyOnWriteArrayList<>();
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any()))
+				.willAnswer((inv) -> Mono.<Void>fromRunnable(() -> sent.add(inv.getArgument(0))));
+			warmProxy.start(McpProxyTests.this.session);
+
+			// when: initialize, then a regular frame
+			final JsonNode initFrame = McpProxyTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.put("method", "initialize");
+			McpProxyTests.this.browserToTarget.tryEmitNext(initFrame);
+			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
+
+			// then: initialize, two pings, tools/list - in that order
+			final long deadline = System.currentTimeMillis() + 1000;
+			while (sent.size() < 4 && System.currentTimeMillis() < deadline) {
+				Thread.sleep(10);
+			}
+			assertThat(sent).hasSize(4);
+			assertThat(sent.get(0)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+					(req) -> assertThat(req.method()).isEqualTo("initialize"));
+			assertThat(sent.get(1)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class, (req) -> {
+				assertThat(req.method()).isEqualTo("ping");
+				assertThat(McpProxyTests.this.session.isProbeId((String) req.id())).isTrue();
+			});
+			assertThat(sent.get(2)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class, (req) -> {
+				assertThat(req.method()).isEqualTo("ping");
+				assertThat(McpProxyTests.this.session.isProbeId((String) req.id())).isTrue();
+			});
+			assertThat(sent.get(3)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+					(req) -> assertThat(req.method()).isEqualTo("tools/list"));
+		}
+
+		@Test
+		@Story("Handshake ordering")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("with the warm-up disabled (bare wiring default), initialize opens the gate "
+				+ "directly and no ping frames are relayed to the transport")
+		void initialize_skipsWarmUp_whenDisabled() throws InterruptedException {
+			// given - the bare-wiring proxy warms nothing
+			final List<JSONRPCMessage> sent = new java.util.concurrent.CopyOnWriteArrayList<>();
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any()))
+				.willAnswer((inv) -> Mono.<Void>fromRunnable(() -> sent.add(inv.getArgument(0))));
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+
+			// when: initialize, then a regular frame
+			final JsonNode initFrame = McpProxyTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.put("method", "initialize");
+			McpProxyTests.this.browserToTarget.tryEmitNext(initFrame);
+			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
+
+			// then: exactly initialize and tools/list are relayed, no pings
+			final long deadline = System.currentTimeMillis() + 1000;
+			while (sent.size() < 2 && System.currentTimeMillis() < deadline) {
+				Thread.sleep(10);
+			}
+			assertThat(sent).hasSize(2);
+			assertThat(sent.get(0)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+					(req) -> assertThat(req.method()).isEqualTo("initialize"));
+			assertThat(sent.get(1)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+					(req) -> assertThat(req.method()).isEqualTo("tools/list"));
+		}
+
+		private static JsonNode toolsListFrame() {
+			return new JsonMapper().createObjectNode().put("jsonrpc", "2.0").put("id", 2).put("method", "tools/list");
+		}
+
+	}
+
+	@Nested
 	@DisplayName("start() — target → browser")
 	class TargetToBrowser {
 

@@ -94,6 +94,11 @@ public class McpInspectorProperties {
 	private Timeline timeline = new Timeline();
 
 	/**
+	 * Proxy relay behaviour. Bound under {@code spring.ai.mcp.inspector.proxy}.
+	 */
+	private Proxy proxy = new Proxy();
+
+	/**
 	 * Whether upstream liveness probing is enabled for proxied sessions (any transport).
 	 * Defaults to {@code true}.
 	 */
@@ -201,6 +206,14 @@ public class McpInspectorProperties {
 		this.timeline = (timeline != null) ? timeline : new Timeline();
 	}
 
+	public Proxy getProxy() {
+		return this.proxy;
+	}
+
+	public void setProxy(final Proxy proxy) {
+		this.proxy = (proxy != null) ? proxy : new Proxy();
+	}
+
 	public boolean isUpstreamLivenessProbeEnabled() {
 		return this.upstreamLivenessProbeEnabled;
 	}
@@ -238,6 +251,41 @@ public class McpInspectorProperties {
 
 		public void setCloseMcpServerTransports(final boolean closeMcpServerTransports) {
 			this.closeMcpServerTransports = closeMcpServerTransports;
+		}
+
+	}
+
+	/**
+	 * Proxy relay tuning. Bound under {@code spring.ai.mcp.inspector.proxy}.
+	 */
+	public static class Proxy {
+
+		/**
+		 * How many spare keep-alive connections the proxy opens to the upstream at
+		 * session open, using concurrent JSON-RPC pings, before the handshake gate
+		 * releases the browser's frames. {@code 0} disables the warm-up.
+		 *
+		 * <p>
+		 * Defaults to {@code 10}. Measured on issue #325: on a WebFlux MCP server a
+		 * synchronous tool blocks its event loop for the tool's whole duration, and the
+		 * server's TCP acceptor shares those loops, so upstream POST connects arriving
+		 * after the first tool started are accepted only as loops free up, one accept
+		 * wave per tool duration. Frames trickled that way then ride one keep-alive
+		 * connection, pinning the burst to a single event loop (the strictly serial
+		 * ladder the concurrent-call IT caught). Ten 2-second calls measured 8.2s locally
+		 * and 14-20s on a two-core runner; warming connections ahead of the burst lets
+		 * every call reuse a loop-spread pooled connection with no new accepts and drops
+		 * the same burst to about 6s. The count should cover the typical parallel tool
+		 * fan-out of one browser session.
+		 */
+		private int upstreamWarmConnections = 10;
+
+		public int getUpstreamWarmConnections() {
+			return this.upstreamWarmConnections;
+		}
+
+		public void setUpstreamWarmConnections(final int upstreamWarmConnections) {
+			this.upstreamWarmConnections = upstreamWarmConnections;
 		}
 
 	}
