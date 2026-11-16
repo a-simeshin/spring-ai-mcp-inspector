@@ -5,3 +5,8 @@ bump. postcss bumped as direct devDependency. Vite pinned to ^7.3.5 to close
 GHSA-fx2h-pf6j-xcff and GHSA-v6wh-96g9-6wx3 while staying on the 7.x line
 (8.x jumps the bundler to Rolldown and broke an E2E: vite 8 proposal
 declined in PR #168).
+marked 18.2.0 and dompurify 3.4.18: new direct dependencies with exact
+version pins, added for the rendered markdown resource preview (issue #170).
+Exact pins keep the supply-chain footprint of the new parser and sanitizer
+fixed; neither package declares transitive runtime dependencies (marked 0,
+dompurify 0), so no overrides entries are needed.

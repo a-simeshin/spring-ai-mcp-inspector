@@ -1,6 +1,7 @@
 // [spring-ai-mcp-inspector PATCH] Tests for the MediaContentView local patch
-// (#108, #59 follow-up); plain-text decoding coverage added for issue #170.
-import { render, screen } from "@testing-library/react";
+// (#108, #59 follow-up); plain-text decoding and markdown dispatch coverage
+// added for issue #170.
+import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import MediaContentView from "../MediaContentView";
 
@@ -182,7 +183,7 @@ describe("MediaContentView", () => {
       const payload = "# Title\n\nFirst line\nSecond line";
       render(
         <MediaContentView
-          mimeType="text/markdown"
+          mimeType="text/plain"
           text={payload}
         />,
       );
@@ -292,6 +293,52 @@ describe("MediaContentView", () => {
   });
 
   // ---- MIME type badge ----
+  describe("markdown preview dispatch", () => {
+    it("renders text/markdown as a rendered markdown preview with a View source toggle", () => {
+      render(<MediaContentView mimeType="text/markdown" text={"# Title"} />);
+      expect(screen.getByTestId("markdown-rendered-view")).toBeInTheDocument();
+      expect(screen.getByTestId("markdown-view-toggle")).toHaveTextContent(
+        "View source",
+      );
+      expect(screen.getByText("text/markdown")).toBeInTheDocument();
+      expect(screen.queryByTestId("plain-text-view")).not.toBeInTheDocument();
+    });
+
+    it("decodes a text/markdown payload verbatim in the source view", () => {
+      const payload = "# Title\n\nFirst line\nSecond line";
+      render(<MediaContentView mimeType="text/markdown" text={payload} />);
+      fireEvent.click(screen.getByTestId("markdown-view-toggle"));
+      const source = screen.getByTestId("markdown-source-view");
+      expect(source.textContent).toBe(payload);
+      expect(source.textContent).toContain("\n");
+      expect(source.textContent).not.toContain("\\n");
+    });
+
+    it("matches TEXT/MARKDOWN case-insensitively", () => {
+      render(<MediaContentView mimeType="TEXT/MARKDOWN" text={"# Title"} />);
+      expect(screen.getByTestId("markdown-rendered-view")).toBeInTheDocument();
+    });
+
+    it("falls back to the plain text view for text/plain (no markdown toggle)", () => {
+      render(<MediaContentView mimeType="text/plain" text={"# not markdown"} />);
+      expect(screen.getByTestId("plain-text-view")).toBeInTheDocument();
+      expect(screen.queryByTestId("markdown-rendered-view")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("markdown-view-toggle")).not.toBeInTheDocument();
+    });
+
+    it("falls back to the plain text view for text/html (no HTML rendering)", () => {
+      render(<MediaContentView mimeType="text/html" text={"<b>raw</b>"} />);
+      expect(screen.getByTestId("plain-text-view")).toBeInTheDocument();
+      expect(screen.queryByTestId("markdown-rendered-view")).not.toBeInTheDocument();
+    });
+
+    it("falls back to the plain text view when mimeType is missing", () => {
+      render(<MediaContentView text={"# Title"} />);
+      expect(screen.getByTestId("plain-text-view")).toBeInTheDocument();
+      expect(screen.queryByTestId("markdown-rendered-view")).not.toBeInTheDocument();
+    });
+  });
+
   it("renders the MIME type badge", () => {
     render(
       <MediaContentView
