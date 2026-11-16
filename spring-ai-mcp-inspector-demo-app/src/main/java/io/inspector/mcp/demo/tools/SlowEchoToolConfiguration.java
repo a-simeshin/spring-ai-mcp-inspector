@@ -17,6 +17,8 @@ package io.inspector.mcp.demo.tools;
 
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.JsonNode;
@@ -55,6 +57,12 @@ public class SlowEchoToolConfiguration {
 			}
 			""";
 
+	/** Currently executing {@code slowEcho} calls (server-side overlap witness). */
+	private static final AtomicInteger IN_FLIGHT = new AtomicInteger();
+
+	/** Peak of {@link #IN_FLIGHT} since the last {@link #resetInFlightWitness()} call. */
+	private static final AtomicInteger MAX_IN_FLIGHT = new AtomicInteger();
+
 	private final ObjectMapper objectMapper = new ObjectMapper();
 
 	@Bean
@@ -72,28 +80,59 @@ public class SlowEchoToolConfiguration {
 
 			@Override
 			public String call(String toolInput) {
+				IN_FLIGHT.incrementAndGet();
+				MAX_IN_FLIGHT.accumulateAndGet(IN_FLIGHT.get(), Math::max);
 				try {
-					Thread.sleep(2000L);
+					try {
+						Thread.sleep(2000L);
+					}
+					catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+						throw new RuntimeException("slowEcho interrupted", e);
+					}
+					try {
+						JsonNode node = SlowEchoToolConfiguration.this.objectMapper.readTree(toolInput);
+						// Mirrors the historical annotation-based behavior: the text
+						// parameter cannot be bound without the -parameters compile flag,
+						// so concurrent/stress ITs invoke slowEcho with empty arguments
+						// and
+						// rely on the server-side sleep only. Missing text is not an
+						// error:
+						// return null exactly like the unbound @McpTool method used to.
+						return node.has("text") ? node.get("text").asText() : null;
+					}
+					catch (tools.jackson.core.JacksonException e) {
+						// Unparseable input still must not break the sleep-based
+						// contract.
+						return null;
+					}
 				}
-				catch (InterruptedException e) {
-					Thread.currentThread().interrupt();
-					throw new RuntimeException("slowEcho interrupted", e);
-				}
-				try {
-					JsonNode node = SlowEchoToolConfiguration.this.objectMapper.readTree(toolInput);
-					// Mirrors the historical annotation-based behavior: the text
-					// parameter cannot be bound without the -parameters compile flag,
-					// so concurrent/stress ITs invoke slowEcho with empty arguments and
-					// rely on the server-side sleep only. Missing text is not an error:
-					// return null exactly like the unbound @McpTool method used to.
-					return node.has("text") ? node.get("text").asText() : null;
-				}
-				catch (tools.jackson.core.JacksonException e) {
-					// Unparseable input still must not break the sleep-based contract.
-					return null;
+				finally {
+					IN_FLIGHT.decrementAndGet();
 				}
 			}
 		};
+
+	}
+
+	/**
+	 * Resets the in-flight witness before a measured burst (concurrent-call IT, issue
+	 * #325).
+	 */
+	public static void resetInFlightWitness() {
+		IN_FLIGHT.set(0);
+		MAX_IN_FLIGHT.set(0);
+	}
+
+	/**
+	 * Returns the peak number of {@code slowEcho} executions observed at once since the
+	 * last {@link #resetInFlightWitness()} call. A session that serializes tool calls
+	 * never exceeds {@code 1}; wall time on a small CI runner cannot make that
+	 * distinction, this server-side counter can (issue #325).
+	 * @return the observed peak in-flight count
+	 */
+	public static int maxInFlightWitness() {
+		return MAX_IN_FLIGHT.get();
 	}
 
 }

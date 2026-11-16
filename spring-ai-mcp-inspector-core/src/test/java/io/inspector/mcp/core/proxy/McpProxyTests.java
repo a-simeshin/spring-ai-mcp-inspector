@@ -26,6 +26,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -441,6 +443,187 @@ class McpProxyTests {
 
 		private static JsonNode toolsListFrame() {
 			return new JsonMapper().createObjectNode().put("jsonrpc", "2.0").put("id", 2).put("method", "tools/list");
+		}
+
+	}
+
+	@Nested
+	@DisplayName("start() - upstream warm-up")
+	class WarmUp {
+
+		@Test
+		@Story("Handshake ordering")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("with the warm-up enabled, initialize first fires the configured number of "
+				+ "warm-up pings and only then releases the gated tools/list send, so the burst rides "
+				+ "loop-spread pooled connections instead of racing the upstream acceptor")
+		void initialize_warmsUpstreamConnections_beforeReleasingNonHandshakeFrames() throws InterruptedException {
+			// given - a proxy warming two spare upstream connections; sendMessage
+			// records the frame when the returned Mono is subscribed (the actual send)
+			final McpProxy warmProxy = new McpProxy(McpProxyTests.this.mapper, null, null, null, null, 2);
+			final List<JSONRPCMessage> sent = new java.util.concurrent.CopyOnWriteArrayList<>();
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any()))
+				.willAnswer((inv) -> Mono.<Void>fromRunnable(() -> sent.add(inv.getArgument(0))));
+			warmProxy.start(McpProxyTests.this.session);
+
+			// when: initialize, then a regular frame
+			final JsonNode initFrame = McpProxyTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.put("method", "initialize");
+			McpProxyTests.this.browserToTarget.tryEmitNext(initFrame);
+			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
+
+			// then: initialize, two pings, tools/list - in that order
+			final long deadline = System.currentTimeMillis() + 1000;
+			while (sent.size() < 4 && System.currentTimeMillis() < deadline) {
+				Thread.sleep(10);
+			}
+			assertThat(sent).hasSize(4);
+			assertThat(sent.get(0)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+					(req) -> assertThat(req.method()).isEqualTo("initialize"));
+			assertThat(sent.get(1)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class, (req) -> {
+				assertThat(req.method()).isEqualTo("ping");
+				assertThat(McpProxyTests.this.session.isProbeId((String) req.id())).isTrue();
+			});
+			assertThat(sent.get(2)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class, (req) -> {
+				assertThat(req.method()).isEqualTo("ping");
+				assertThat(McpProxyTests.this.session.isProbeId((String) req.id())).isTrue();
+			});
+			assertThat(sent.get(3)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+					(req) -> assertThat(req.method()).isEqualTo("tools/list"));
+		}
+
+		@Test
+		@Story("Handshake ordering")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("with the warm-up disabled (bare wiring default), initialize opens the gate "
+				+ "directly and no ping frames are relayed to the transport")
+		void initialize_skipsWarmUp_whenDisabled() throws InterruptedException {
+			// given - the bare-wiring proxy warms nothing
+			final List<JSONRPCMessage> sent = new java.util.concurrent.CopyOnWriteArrayList<>();
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any()))
+				.willAnswer((inv) -> Mono.<Void>fromRunnable(() -> sent.add(inv.getArgument(0))));
+			McpProxyTests.this.proxy.start(McpProxyTests.this.session);
+
+			// when: initialize, then a regular frame
+			final JsonNode initFrame = McpProxyTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.put("method", "initialize");
+			McpProxyTests.this.browserToTarget.tryEmitNext(initFrame);
+			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
+
+			// then: exactly initialize and tools/list are relayed, no pings
+			final long deadline = System.currentTimeMillis() + 1000;
+			while (sent.size() < 2 && System.currentTimeMillis() < deadline) {
+				Thread.sleep(10);
+			}
+			assertThat(sent).hasSize(2);
+			assertThat(sent.get(0)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+					(req) -> assertThat(req.method()).isEqualTo("initialize"));
+			assertThat(sent.get(1)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+					(req) -> assertThat(req.method()).isEqualTo("tools/list"));
+		}
+
+		@Test
+		@Story("Handshake ordering")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("when the warm-up pings never settle (an upstream that accepts and never answers), "
+				+ "the cap opens the handshake gate and the held frame is dispatched anyway")
+		void initialize_gateOpensAfterCap_whenWarmUpPingsNeverSettle() throws InterruptedException {
+			// given - pings record the send and then hang forever
+			final McpProxy warmProxy = new McpProxy(McpProxyTests.this.mapper, null, null, null, null, 2);
+			final List<JSONRPCMessage> sent = new java.util.concurrent.CopyOnWriteArrayList<>();
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any())).willAnswer((inv) -> {
+				final JSONRPCMessage frame = inv.getArgument(0);
+				if (frame instanceof McpSchema.JSONRPCRequest req && "ping".equals(req.method())) {
+					return Mono.<Void>fromRunnable(() -> sent.add(frame)).then(Mono.never());
+				}
+				return Mono.<Void>fromRunnable(() -> sent.add(frame));
+			});
+			warmProxy.start(McpProxyTests.this.session);
+
+			// when: initialize, then a regular frame held by the handshake gate
+			final JsonNode initFrame = McpProxyTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.put("method", "initialize");
+			McpProxyTests.this.browserToTarget.tryEmitNext(initFrame);
+			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
+
+			// then: the cap opens the gate and the held tools/list is dispatched
+			final long deadline = System.currentTimeMillis() + McpProxy.WARMUP_CONNECTIONS_CAP.toMillis() + 3000;
+			while (!sent.isEmpty() && !isToolsList(sent.get(sent.size() - 1))
+					&& System.currentTimeMillis() < deadline) {
+				Thread.sleep(50);
+			}
+			assertThat(sent).isNotEmpty();
+			assertThat(sent.get(sent.size() - 1)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
+					(req) -> assertThat(req.method()).isEqualTo("tools/list"));
+		}
+
+		@Test
+		@Story("Handshake ordering")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("warm pings are dispatched like relayed frames: on a transport that blocks the "
+				+ "subscribing thread, all configured pings subscribe concurrently instead of running "
+				+ "back to back on the initialize-completion worker")
+		void warmUpPings_dispatchConcurrently_onSubscriptionBlockingTransport() throws InterruptedException {
+			// given - every ping send blocks at subscription until all pings subscribed
+			final int warm = 3;
+			final McpProxy warmProxy = new McpProxy(McpProxyTests.this.mapper, null, null, null, null, warm);
+			final List<JSONRPCMessage> sent = new java.util.concurrent.CopyOnWriteArrayList<>();
+			final CountDownLatch allPingsSubscribed = new CountDownLatch(warm);
+			final AtomicInteger concurrentPings = new AtomicInteger();
+			final AtomicInteger maxConcurrentPings = new AtomicInteger();
+			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
+			given(McpProxyTests.this.transport.sendMessage(any())).willAnswer((inv) -> {
+				final JSONRPCMessage frame = inv.getArgument(0);
+				return Mono.<Void>fromRunnable(() -> {
+					sent.add(frame);
+					if (!(frame instanceof McpSchema.JSONRPCRequest req) || !"ping".equals(req.method())) {
+						return;
+					}
+					final int concurrent = concurrentPings.incrementAndGet();
+					maxConcurrentPings.accumulateAndGet(concurrent, Math::max);
+					allPingsSubscribed.countDown();
+					try {
+						// hold the send open until every ping has subscribed: with
+						// serialized dispatch this await times out and the ping
+						// completes alone
+						assertThat(allPingsSubscribed.await(5, TimeUnit.SECONDS)).isTrue();
+					}
+					catch (final InterruptedException ex) {
+						Thread.currentThread().interrupt();
+						throw new IllegalStateException("interrupted while waiting for concurrent pings", ex);
+					}
+					concurrentPings.decrementAndGet();
+				});
+			});
+			warmProxy.start(McpProxyTests.this.session);
+
+			// when: the session opens with initialize
+			final JsonNode initFrame = McpProxyTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 1)
+				.put("method", "initialize");
+			McpProxyTests.this.browserToTarget.tryEmitNext(initFrame);
+
+			// then: all pings subscribed concurrently before any of them completed
+			assertThat(allPingsSubscribed.await(5, TimeUnit.SECONDS)).isTrue();
+			assertThat(maxConcurrentPings.get()).isEqualTo(warm);
+		}
+
+		private static JsonNode toolsListFrame() {
+			return new JsonMapper().createObjectNode().put("jsonrpc", "2.0").put("id", 2).put("method", "tools/list");
+		}
+
+		private static boolean isToolsList(final JSONRPCMessage message) {
+			return message instanceof McpSchema.JSONRPCRequest req && "tools/list".equals(req.method());
 		}
 
 	}

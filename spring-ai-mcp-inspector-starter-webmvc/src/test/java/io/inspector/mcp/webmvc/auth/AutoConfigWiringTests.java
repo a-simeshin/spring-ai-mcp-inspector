@@ -29,10 +29,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 
 import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.webmvc.McpInspectorWebMvcAutoConfiguration;
 
@@ -95,6 +98,38 @@ class AutoConfigWiringTests {
 			registry.reap();
 
 			verify(store).removeExpired(any(Instant.class));
+		}
+
+	}
+
+	@Nested
+	@DisplayName("McpProxy warm-up wiring")
+	class McpProxyWiring {
+
+		private final WebApplicationContextRunner runner = new WebApplicationContextRunner()
+			.withConfiguration(AutoConfigurations.of(McpInspectorWebMvcAutoConfiguration.class));
+
+		@Test
+		@Story("auto-config passes the warm-up property through to the proxy")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("spring.ai.mcp.inspector.proxy.upstream-warm-connections reaches the McpProxy bean")
+		void autoConfigWiring_warmConnections_propertyReachesProxy() {
+			this.runner.withPropertyValues("spring.ai.mcp.inspector.proxy.upstream-warm-connections=7")
+				.run((context) -> {
+					assertThat(context).hasSingleBean(McpProxy.class);
+					assertThat(context.getBean(McpProxy.class).getUpstreamWarmConnections()).isEqualTo(7);
+				});
+		}
+
+		@Test
+		@Story("auto-config passes the warm-up property through to the proxy")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("without the property the McpProxy bean carries the documented default of 10")
+		void autoConfigWiring_warmConnections_defaultReachesProxy() {
+			this.runner.run((context) -> {
+				assertThat(context).hasSingleBean(McpProxy.class);
+				assertThat(context.getBean(McpProxy.class).getUpstreamWarmConnections()).isEqualTo(10);
+			});
 		}
 
 	}

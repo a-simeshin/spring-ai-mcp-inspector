@@ -17,7 +17,12 @@
 package io.inspector.mcp.core.proxy;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
 
 import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
@@ -26,6 +31,7 @@ import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
@@ -78,6 +84,23 @@ public final class McpProxy {
 
 	private static final Logger LOG = LoggerFactory.getLogger(McpProxy.class);
 
+	/**
+	 * Hard cap on the warm-up wait before the handshake gate opens anyway: a slow
+	 * upstream that has not answered the pings must not hold the browser's first call
+	 * hostage indefinitely. Measured settle is well under a second on loopback, but the
+	 * gate must not open mid-warm-up on a contended runner: a half-warm pool sends the
+	 * burst back into the acceptor-freeze ladder this warm-up exists to prevent, which
+	 * costs far more than a longer wait on an upstream that answered initialize one round
+	 * trip earlier.
+	 */
+	static final Duration WARMUP_CONNECTIONS_CAP = Duration.ofSeconds(10);
+
+	/**
+	 * Window warm-up ping ids stay registered after the pool settles, so a late response
+	 * can never leak to the browser before the probe filter drops it.
+	 */
+	private static final Duration WARMUP_ID_WINDOW = Duration.ofSeconds(10);
+
 	private final JsonMapper objectMapper;
 
 	private final JacksonMcpJsonMapper mcpJsonMapper;
@@ -93,6 +116,13 @@ public final class McpProxy {
 
 	/** Traffic recorder; {@code null} to skip recording. */
 	private final McpTrafficRecorder trafficRecorder;
+
+	/**
+	 * Spare upstream keep-alive connections to warm at session open; {@code 0} disables
+	 * the warm-up (bare wiring default; Spring wiring passes
+	 * {@code spring.ai.mcp.inspector.proxy.upstream-warm-connections}).
+	 */
+	private final int upstreamWarmConnections;
 
 	public McpProxy(final JsonMapper objectMapper) {
 		this(objectMapper, null, null, null, null);
@@ -131,12 +161,31 @@ public final class McpProxy {
 	public McpProxy(final JsonMapper objectMapper, final AuthProfileStore authProfileStore,
 			final OAuth2ClientCredentialsTokenManager ccTokenManager,
 			final OAuth2AuthCodeTokenExchanger authCodeExchanger, final McpTrafficRecorder trafficRecorder) {
+		this(objectMapper, authProfileStore, ccTokenManager, authCodeExchanger, trafficRecorder, 0);
+	}
+
+	/**
+	 * Creates a proxy with the OAuth2 wiring, optional traffic recording and an upstream
+	 * connection warm-up.
+	 * @param objectMapper the JSON mapper backing the relay
+	 * @param authProfileStore the owner-scoped profile store (may be {@code null})
+	 * @param ccTokenManager the client-credentials token manager (may be {@code null})
+	 * @param authCodeExchanger the auth-code exchanger (may be {@code null})
+	 * @param trafficRecorder the traffic recorder, or {@code null} to skip recording
+	 * @param upstreamWarmConnections spare upstream connections to warm at session open;
+	 * {@code 0} disables the warm-up
+	 */
+	public McpProxy(final JsonMapper objectMapper, final AuthProfileStore authProfileStore,
+			final OAuth2ClientCredentialsTokenManager ccTokenManager,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger, final McpTrafficRecorder trafficRecorder,
+			final int upstreamWarmConnections) {
 		this.objectMapper = (objectMapper != null) ? objectMapper : new JsonMapper();
 		this.mcpJsonMapper = new JacksonMcpJsonMapper(this.objectMapper);
 		this.authProfileStore = authProfileStore;
 		this.ccTokenManager = ccTokenManager;
 		this.authCodeExchanger = authCodeExchanger;
 		this.trafficRecorder = trafficRecorder;
+		this.upstreamWarmConnections = upstreamWarmConnections;
 	}
 
 	/**
@@ -181,8 +230,8 @@ public final class McpProxy {
 				initializeSeen.set(true);
 				LOG.debug("proxy[{}] forwarding initialize (opens handshake gate): {}", session.sessionId(), typed);
 				return sendWithOneRetry(session, typed).timeout(Duration.ofMinutes(1)).doOnSuccess((v) -> {
-					LOG.debug("proxy[{}] initialize completed, opening gate: {}", session.sessionId(), typed);
-					handshakeGate.tryEmitEmpty();
+					LOG.debug("proxy[{}] initialize completed: {}", session.sessionId(), typed);
+					warmUpUpstreamConnections(session, handshakeGate);
 				}).onErrorResume((err) -> {
 					handshakeGate.tryEmitError(err);
 					session.failUpstream(err);
@@ -337,6 +386,111 @@ public final class McpProxy {
 			})
 			.doOnError((err) -> session.failUpstream(err));
 		return connectWithOneRetry(session, inboundHandler, 0);
+	}
+
+	/**
+	 * Returns the number of spare upstream connections this proxy warms at session open.
+	 * Exposed for the starters' wiring tests, which pin the pass-through of
+	 * {@code spring.ai.mcp.inspector.proxy.upstream-warm-connections}.
+	 * @return the configured warm-up connection count
+	 */
+	public int getUpstreamWarmConnections() {
+		return this.upstreamWarmConnections;
+	}
+
+	/**
+	 * Warms spare upstream keep-alive connections with concurrent JSON-RPC pings and
+	 * opens the handshake gate once the pool has settled (or the cap elapses).
+	 *
+	 * <p>
+	 * Why this exists (issue #325): on a WebFlux MCP server a synchronous tool blocks its
+	 * event loop for the tool's whole duration, and the server's TCP acceptor runs on one
+	 * of those loops. A tools/call burst forwarded by the pump necessarily trails the
+	 * first tool's start by a few milliseconds; upstream POST connects arriving after the
+	 * acceptor froze wait out one tool duration per accept wave, and the trickled frames
+	 * then ride one keep-alive connection, pinning the whole burst to a single event
+	 * loop: the strictly serial ladder the concurrent-call IT caught. Pings sent before
+	 * the first tool starts place idle, loop-spread connections in the client's pool, so
+	 * the burst reuses them without needing a single new accept. The gate stays shut
+	 * until the pool is ready (or {@link #WARMUP_CONNECTIONS_CAP} elapses on a slow
+	 * upstream), keeping the extra first-call latency bounded.
+	 * @param session the proxy session to warm (never {@code null})
+	 * @param handshakeGate the gate to open once the pool is ready
+	 */
+	private void warmUpUpstreamConnections(final ProxySession session, final Sinks.One<Void> handshakeGate) {
+		final int warm = this.upstreamWarmConnections;
+		if (warm <= 0) {
+			handshakeGate.tryEmitEmpty();
+			return;
+		}
+		LOG.debug("proxy[{}] warming up to {} spare upstream connections", session.sessionId(), warm);
+		// Prime the shared executor: the pool keeps about one idle worker alive across
+		// this loop, and that live worker is what the warm-up needs. From a cold pool,
+		// the first ping pays a thread spawn before it dispatches; that delay lets an
+		// earlier ping complete and hand its connection back to the JDK client's pool,
+		// and a later ping reuses it instead of opening a new one: the warm-up then
+		// finishes with a mostly-cold pool and the burst races the upstream acceptor
+		// again (measured: an un-primed warm-up intermittently warmed only a fraction
+		// of the requested connections and the wall went back to the serial ladder).
+		for (int i = 0; i < warm; i++) {
+			try {
+				ProxyTransportFactory.sharedHttpExecutor().submit(() -> null).get(1, TimeUnit.SECONDS);
+			}
+			catch (final InterruptedException ex) {
+				Thread.currentThread().interrupt();
+				break;
+			}
+			catch (final ExecutionException | TimeoutException ex) {
+				LOG.debug("proxy[{}] warm-up executor priming cut short at {}/{}", session.sessionId(), i, warm);
+				break;
+			}
+		}
+		// Registered up front on one thread so a ping that fails fast still has its
+		// id in the filter set when the answer races the sendMessage completion.
+		final List<String> warmIds = new ArrayList<>(warm);
+		for (int i = 0; i < warm; i++) {
+			warmIds.add(session.nextProbeId());
+		}
+		final long warmupStart = System.nanoTime();
+		final Mono<Void> warmup = Flux.fromIterable(warmIds)
+			.flatMap((probeId) -> warmConnection(session, probeId))
+			.then();
+		// The gate opens on whichever comes first: the pool settling, the cap on a
+		// slow upstream, or the session closing (takeUntilOther completes on close
+		// too; tryEmitEmpty is a no-op on a settled gate, and pending frames also
+		// hold .or(closeSignal), so nothing can wedge).
+		Mono.delay(WARMUP_CONNECTIONS_CAP).takeUntilOther(session.closeSignal()).subscribe((v) -> {
+		}, (err) -> handshakeGate.tryEmitEmpty(), () -> handshakeGate.tryEmitEmpty());
+		warmup.takeUntilOther(session.closeSignal()).subscribe((v) -> {
+		}, (err) -> handshakeGate.tryEmitEmpty(), () -> logWarmUpSettled(session, warm, warmupStart, handshakeGate));
+		Mono.delay(WARMUP_ID_WINDOW).takeUntilOther(session.closeSignal()).subscribe((v) -> {
+		}, (err) -> {
+		}, () -> warmIds.forEach(session::removeProbeId));
+	}
+
+	private Mono<Void> warmConnection(final ProxySession session, final String probeId) {
+		final JSONRPCMessage ping = new McpSchema.JSONRPCRequest(McpSchema.JSONRPC_VERSION, "ping", probeId, null);
+		// Dispatch like a relayed frame (see sendWithOneRetry): a legacy SSE transport
+		// blocks the subscribing thread for the whole round trip, so subscribing the
+		// pings directly would serialize the whole warm-up on the
+		// initialize-completion worker: about one connection warmed instead of the
+		// configured count, and a boundedElastic worker held for the sum of the
+		// round trips.
+		return session.targetTransport()
+			.sendMessage(ping)
+			.subscribeOn(Schedulers.boundedElastic())
+			.takeUntilOther(session.closeSignal())
+			.onErrorResume((err) -> {
+				LOG.debug("proxy[{}] warm-up ping {} failed: {}", session.sessionId(), probeId, err.toString());
+				return Mono.empty();
+			});
+	}
+
+	private void logWarmUpSettled(final ProxySession session, final int warm, final long warmupStart,
+			final Sinks.One<Void> handshakeGate) {
+		LOG.debug("proxy[{}] warm-up pool of {} settled in {} ms", session.sessionId(), warm,
+				(System.nanoTime() - warmupStart) / 1_000_000);
+		handshakeGate.tryEmitEmpty();
 	}
 
 	/**

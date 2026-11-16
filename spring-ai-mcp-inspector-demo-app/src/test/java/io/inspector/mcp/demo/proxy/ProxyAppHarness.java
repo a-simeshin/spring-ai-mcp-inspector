@@ -102,6 +102,22 @@ public final class ProxyAppHarness {
 		if (authToken != null) {
 			args.add("--spring.ai.mcp.inspector.auth-token=" + authToken);
 		}
+		// The upstream warm-up (issue #325) sends JSON-RPC pings that the upstream sees
+		// as ordinary POSTs. Most ITs here pin exact upstream request sequences (auth
+		// token lifecycles, owner scoping, per-POST Authorization pins), so the harness
+		// boots the proxy with the warm-up off. A test that passes its own value via
+		// extraArgs wins: Boot folds duplicate command-line keys into one comma-joined
+		// value, which fails the int binding (observed as "0,10").
+		boolean warmupOverridden = false;
+		for (final String extra : extraArgs) {
+			if (extra.startsWith("--spring.ai.mcp.inspector.proxy.upstream-warm-connections=")) {
+				warmupOverridden = true;
+				break;
+			}
+		}
+		if (!warmupOverridden) {
+			args.add("--spring.ai.mcp.inspector.proxy.upstream-warm-connections=0");
+		}
 		// The liveness probe keeps its production default (enabled) here: the
 		// probe never fails a live upstream, and tests may override it via
 		// extraArgs like any other property.
