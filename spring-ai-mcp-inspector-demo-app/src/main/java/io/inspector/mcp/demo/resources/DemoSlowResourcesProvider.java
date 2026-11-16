@@ -16,12 +16,18 @@ import org.springframework.stereotype.Component;
  * Slow and fast greeting resources backing the Resources-pane race E2E (issue #344).
  *
  * <p>
- * {@code demo://slow-greeting} delays its {@code resources/read} response by about two
- * seconds server-side, mirroring the {@code slowEcho} tool contract; the read runs on the
- * SDK's boundedElastic scheduler, so the delay never blocks the transport and a later
- * read can overtake it. {@code demo://fast-greeting} answers immediately. Reading both in
- * quick succession from the browser reproduces the stale-preview race: the fast reply
- * must win the pane, and the late slow reply must not overwrite it.
+ * {@code demo://slow-greeting} delays its {@code resources/read} response by about six
+ * seconds server-side; the read runs on the SDK's boundedElastic scheduler, so the delay
+ * never blocks the transport and a later read can overtake it.
+ * {@code demo://fast-greeting} answers immediately. Reading both in quick succession from
+ * the browser reproduces the stale-preview race: the fast reply must win the pane, and
+ * the late slow reply must not overwrite it.
+ *
+ * <p>
+ * The window is six seconds on purpose: on a loaded two-core machine the browser can take
+ * over two seconds to put the second read on the wire, so a two-second window makes the
+ * interleaving inconclusive regardless of the stack. Six seconds clears the observed
+ * emission latency with a wide margin (see {@code ResourceRacePaneUiIT}).
  */
 @Component
 public class DemoSlowResourcesProvider {
@@ -57,10 +63,12 @@ public class DemoSlowResourcesProvider {
 	public static final String FAST_CONTENT = "Fast greeting from MCP demo (immediate resources/read)";
 
 	/**
-	 * Server-side delay of {@link #slowGreeting()}, mirroring the slowEcho tool's
-	 * two-second contract.
+	 * Server-side delay of {@link #slowGreeting()}. Six seconds keeps the race window
+	 * wider than the browser emission latency of the second read under CPU contention
+	 * (over two seconds on a loaded two-core runner), so the interleaving the E2E asserts
+	 * stays observable there.
 	 */
-	static final long DELAY_MILLIS = 2000L;
+	static final long DELAY_MILLIS = 6000L;
 
 	/**
 	 * Delayed greeting resource available under {@code demo://slow-greeting}.
@@ -71,7 +79,7 @@ public class DemoSlowResourcesProvider {
 	 * the transport thread and concurrent reads stay concurrent.
 	 */
 	@McpResource(uri = SLOW_URI, name = SLOW_NAME,
-			description = "Greeting served after a ~2 second delay, for resources/read race demos")
+			description = "Greeting served after a ~6 second delay, for resources/read race demos")
 	public String slowGreeting() {
 		try {
 			Thread.sleep(DELAY_MILLIS);

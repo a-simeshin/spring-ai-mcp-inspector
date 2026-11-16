@@ -57,7 +57,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Failsafe's {@code dependenciesToScan}).
  *
  * <p>
- * The demo server exposes a delayed resource ({@code demo://slow-greeting}, about two
+ * The demo server exposes a delayed resource ({@code demo://slow-greeting}, about six
  * seconds of server-side delay) and an immediate one ({@code demo://fast-greeting}).
  * Selecting the slow row and then the fast row means the slow reply can only land after
  * the fast one is already rendered, which is exactly the interleaving that used to
@@ -287,7 +287,7 @@ class ResourceRacePaneUiIT {
 		activePanel().$(byText("List Resources")).shouldBe(visible, Duration.ofSeconds(10)).click();
 
 		// when: select the slow resource, then immediately the fast one; the slow
-		// read is still in flight (server sleeps ~2s) when the fast reply renders.
+		// read is still in flight (server sleeps ~6s) when the fast reply renders.
 		// Whether the two reads interleave on the wire is a scheduler property of the
 		// stack under test: an attempt where the slow reply lands first cannot race,
 		// so the guard is not exercised and the attempt is inconclusive. Reset the
