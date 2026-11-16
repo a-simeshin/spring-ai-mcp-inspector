@@ -459,6 +459,7 @@ function ChainGroup({
 // [spring-ai-mcp-inspector PATCH] Keep-alive pings rendered as KEEP_ALIVE events (#235).
 const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const keepAlive = useKeepAlive(sessionId ?? null);
@@ -497,6 +498,11 @@ const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
     }
   }, [events, scrollToEvent]);
 
+  // [spring-ai-mcp-inspector PATCH] Timeline auth header (#316): a non-OK
+  // timeline poll must not silently render an empty log; it surfaces an
+  // explicit error banner, while a 200 with no events keeps the regular
+  // empty state. The raw X-MCP-Inspector-Auth header itself is sourced
+  // from the bootstrap payload below (as on the current base).
   const fetchTimeline = useCallback(async () => {
     // The API is mounted under the configured spring.ai.mcp.inspector.path; the
     // server advertises the deployed prefix through the bootstrap payload.
@@ -519,9 +525,12 @@ const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
       if (res.ok) {
         const data = (await res.json()) as TimelineEvent[];
         setEvents(data);
+        setFetchError(null);
+      } else {
+        setFetchError(`Timeline request failed: HTTP ${res.status}`);
       }
     } catch {
-      // Silently ignore fetch errors
+      setFetchError("Timeline request failed: network error");
     }
   }, []);
 
@@ -634,7 +643,16 @@ const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
           hasIsErrorWarning={hasIsErrorWarning}
         />
         <div className="flex-1 overflow-y-auto">
-          {events.length === 0 ? (
+          {fetchError ? (
+            // [spring-ai-mcp-inspector PATCH] Timeline error state (#316): a
+            // failed poll must surface instead of rendering as an empty log.
+            <div
+              role="alert"
+              className="border-l-4 border-red-500 bg-red-950/30 text-red-400 px-3 py-2 mt-4"
+            >
+              {fetchError}
+            </div>
+          ) : events.length === 0 ? (
             <div className="opacity-50 text-center mt-8">No timeline events yet</div>
           ) : (
             renderItems.map((item) =>

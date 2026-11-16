@@ -1,0 +1,19 @@
+src/lib/leakAnnotations.ts, src/lib/__tests__/leakAnnotations.test.ts,
+src/components/TimelineTab.tsx, src/components/__tests__/TimelineTab.test.tsx
+- make the timeline API fetches readable by the inspector guard (#316).
+The leak-annotation lookup wrapped the boot token (seeded by the
+bootstrap into the MCP_PROXY_AUTH_TOKEN entry of the ephemeral
+sessionStorage config) in an `Authorization: Bearer` header, but the
+guard on ${path}/api/* (InspectorAuthFilter / InspectorAuthWebFilter)
+only reads a raw X-MCP-Inspector-Auth value or the ?auth= query
+parameter, so every leak-annotation fetch answered 401 on auth-enabled
+stands. It now sends X-MCP-Inspector-Auth with the same raw token value
+(matching src/lib/auth-profiles.ts); the timeline poll itself already
+reads the raw bootstrap token on the current base. TimelineTab
+additionally renders an explicit error banner for a failed poll (HTTP
+status or network error) instead of swallowing non-OK responses; a
+successful 200 with an empty list still renders the regular "No
+timeline events yet" state. New jest coverage pins the header
+contract, the error state, the empty-not-error distinction, and the
+recovery path (a successful poll after a failed one clears the banner
+again).

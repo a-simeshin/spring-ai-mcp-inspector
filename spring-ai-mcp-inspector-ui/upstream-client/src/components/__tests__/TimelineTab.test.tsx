@@ -196,9 +196,12 @@ const NO_ISERROR_RESPONSE_EVENT: WireEvent = {
   },
 };
 
-function mockFetch(events: WireEvent[]) {
+// [spring-ai-mcp-inspector PATCH] Timeline auth header tests (#316): ok/status
+// options let tests exercise non-OK timeline responses.
+function mockFetch(events: WireEvent[], options?: { ok?: boolean; status?: number }) {
   const fetchMock = jest.fn().mockResolvedValue({
-    ok: true,
+    ok: options?.ok ?? true,
+    status: options?.status ?? 200,
     json: async () => events,
   });
   (global as unknown as { fetch: jest.Mock }).fetch = fetchMock;
@@ -224,6 +227,100 @@ describe("TimelineTab", () => {
         <TimelineTab />
       </Tabs>,
     );
+
+  // [spring-ai-mcp-inspector PATCH] Timeline auth header tests (#316): the
+  // inspector guard on ${path}/api/* reads a raw X-MCP-Inspector-Auth value
+  // (InspectorAuthFilter / InspectorAuthWebFilter), never Authorization: Bearer.
+  it("sends the boot token as a raw X-MCP-Inspector-Auth header", async () => {
+    (window as unknown as Record<string, unknown>)[
+      "__MCP_INSPECTOR_BOOTSTRAP"
+    ] = { inspectorPath: "/mcp-inspector", authToken: "tok-316-secret" };
+    const fetchMock = mockFetch([]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("No timeline events yet")).toBeInTheDocument(),
+    );
+    const init = fetchMock.mock.calls[0][1] as {
+      headers: Record<string, string>;
+    };
+    expect(init.headers["X-MCP-Inspector-Auth"]).toBe("tok-316-secret");
+    expect(init.headers["Authorization"]).toBeUndefined();
+  });
+
+  it("sends no auth header when no token is stored", async () => {
+    const fetchMock = mockFetch([]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("No timeline events yet")).toBeInTheDocument(),
+    );
+    const init = fetchMock.mock.calls[0][1] as {
+      headers: Record<string, string>;
+    };
+    expect(init.headers).toEqual({});
+  });
+
+  it("renders an explicit error state on a non-OK timeline response", async () => {
+    mockFetch([], { ok: false, status: 401 });
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Timeline request failed: HTTP 401",
+      ),
+    );
+    expect(screen.queryByText("No timeline events yet")).not.toBeInTheDocument();
+  });
+
+  it("keeps the regular empty state on a 200 with no events", async () => {
+    mockFetch([]);
+    renderTab();
+
+    await waitFor(() =>
+      expect(screen.getByText("No timeline events yet")).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Error recovery (#316): auto-refresh keeps
+  // polling after a failed poll, so the next successful poll must clear the
+  // banner again; otherwise a recovered timeline stays stuck on the error
+  // state and never shows events again until reload.
+  it("clears the error banner and restores the events once a poll succeeds", async () => {
+    jest.useFakeTimers();
+    try {
+      const fetchMock = jest
+        .fn()
+        .mockResolvedValueOnce({ ok: false, status: 401, json: async () => [] })
+        .mockResolvedValue({
+          ok: true,
+          status: 200,
+          json: async () => [APP_LOG_EVENT],
+        });
+      (global as unknown as { fetch: jest.Mock }).fetch = fetchMock;
+      renderTab();
+
+      // The mount poll fails (401: stand restart or token rotation) and the
+      // banner surfaces instead of an empty log.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Timeline request failed: HTTP 401",
+      );
+
+      // The next auto-refresh tick (3s) succeeds: the banner is cleared and
+      // the fetched events render again.
+      await act(async () => {
+        jest.advanceTimersByTime(3000);
+      });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.getByText("tool executed")).toBeInTheDocument();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 
   it("renders APP_LOG events from the real wire schema without crashing", async () => {
     mockFetch([APP_LOG_EVENT]);

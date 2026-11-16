@@ -198,7 +198,11 @@ export async function fetchTimelineEvents(): Promise<TimelineLeakEvent[]> {
         MCP_PROXY_AUTH_TOKEN?: { value?: string };
       };
       if (parsed.MCP_PROXY_AUTH_TOKEN?.value) {
-        headers["Authorization"] = "Bearer " + parsed.MCP_PROXY_AUTH_TOKEN.value;
+        // [spring-ai-mcp-inspector PATCH] Timeline auth header (#316): the
+        // inspector guard on ${path}/api/* reads a raw X-MCP-Inspector-Auth
+        // value (InspectorAuthFilter / InspectorAuthWebFilter), never an
+        // Authorization: Bearer pair.
+        headers["X-MCP-Inspector-Auth"] = parsed.MCP_PROXY_AUTH_TOKEN.value;
       }
     } catch {
       // A malformed token blob must not break the lookup; proceed unauthenticated.

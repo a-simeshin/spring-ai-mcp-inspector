@@ -92,6 +92,43 @@ class InspectorAuthFilterTests {
 
 		@Test
 		@Story("Allow")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("issue #316: passes the timeline route with a valid auth header")
+		void passesValidTokenOnTimelineRoute() throws Exception {
+			// given
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector/api/timeline");
+			request.addHeader(InspectorAuthFilter.AUTH_HEADER, InspectorAuthFilterTests.this.token);
+			final MockHttpServletResponse response = new MockHttpServletResponse();
+			final MockFilterChain chain = new MockFilterChain();
+
+			// when
+			InspectorAuthFilterTests.this.filter.doFilter(request, response, chain);
+
+			// then
+			assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_OK);
+			assertThat(chain.getRequest()).isNotNull();
+		}
+
+		@Test
+		@Story("Deny")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("issue #316: rejects the timeline route with 401 when no token is presented")
+		void rejectsMissingTokenOnTimelineRoute() throws Exception {
+			// given
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector/api/timeline");
+			final MockHttpServletResponse response = new MockHttpServletResponse();
+			final MockFilterChain chain = new MockFilterChain();
+
+			// when
+			InspectorAuthFilterTests.this.filter.doFilter(request, response, chain);
+
+			// then
+			assertThat(response.getStatus()).isEqualTo(HttpServletResponse.SC_UNAUTHORIZED);
+			assertThat(chain.getRequest()).isNull();
+		}
+
+		@Test
+		@Story("Allow")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("accepts the token via the query-param fallback")
 		void passesValidTokenInQueryParam() throws Exception {

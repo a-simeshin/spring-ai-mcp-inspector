@@ -98,6 +98,44 @@ class InspectorAuthWebFilterTests {
 
 		@Test
 		@Story("Allow branches")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("filter() passes the timeline route with a valid auth header")
+		void filter_withValidTimelineHeaderToken_passesThrough() {
+			// given
+			final MockServerHttpRequest request = MockServerHttpRequest.get("/mcp-inspector/api/timeline")
+				.header(InspectorAuthWebFilter.HEADER, InspectorAuthWebFilterTests.this.token)
+				.build();
+			final MockServerWebExchange exchange = MockServerWebExchange.from(request);
+			final ChainSpy chain = new ChainSpy();
+
+			// when
+			StepVerifier.create(InspectorAuthWebFilterTests.this.filter.filter(exchange, chain)).verifyComplete();
+
+			// then
+			assertThat(chain.invoked).isTrue();
+			assertThat(exchange.getResponse().getStatusCode()).isNull();
+		}
+
+		@Test
+		@Story("Short-circuit branches")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("filter() rejects the timeline route with 401 when no token is presented")
+		void filter_withMissingTimelineToken_returns401AndShortCircuits() {
+			// given
+			final MockServerHttpRequest request = MockServerHttpRequest.get("/mcp-inspector/api/timeline").build();
+			final MockServerWebExchange exchange = MockServerWebExchange.from(request);
+			final ChainSpy chain = new ChainSpy();
+
+			// when
+			StepVerifier.create(InspectorAuthWebFilterTests.this.filter.filter(exchange, chain)).verifyComplete();
+
+			// then
+			assertThat(chain.invoked).isFalse();
+			assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+		}
+
+		@Test
+		@Story("Allow branches")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("filter() accepts the valid token supplied as the auth query parameter")
 		void filter_withValidQueryParamToken_passesThrough() {
