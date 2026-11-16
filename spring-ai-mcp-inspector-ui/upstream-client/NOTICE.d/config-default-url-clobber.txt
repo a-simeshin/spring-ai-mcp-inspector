@@ -1,0 +1,11 @@
+src/App.tsx - the /config defaults effect no longer overwrites a
+user-typed server URL. The upstream effect unconditionally applies
+`defaultServerUrl` from the `/config` response to the sseUrl state;
+when that response lands after the user has already edited the
+Connect field, the typed absolute URL is silently replaced by the
+relative default ("/sse") and the connection targets the wrong
+endpoint. Local fix: an `sseUrlTouchedRef` flag set by the Sidebar
+`setSseUrl` callback (user edits) and checked before applying
+`defaultServerUrl`, so server defaults only populate the field while
+the user has not typed. Covered by
+src/__tests__/App.configSseUrlClobber.test.tsx.

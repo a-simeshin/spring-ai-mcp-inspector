@@ -149,12 +149,63 @@ class SseProxyControllerTests {
 		}
 	}
 
+	/**
+	 * Deterministic repro for issue #374: bufferedFrames() iterates the emitter's
+	 * earlySendAttempts buffer (a LinkedHashSet) without holding the emitter's writeLock
+	 * while a concurrent send() appends chunks. On the unguarded read this throws
+	 * ConcurrentModificationException under load; the guarded read stays race-free by
+	 * mutual exclusion.
+	 */
+	@Test
+	void bufferedFrames_readUnderConcurrentEarlySendAttempts_doesNotCorruptIteration() throws Exception {
+		final SseEmitter emitter = new SseEmitter(60_000L);
+		// Pre-fill the buffer single-threaded so one bufferedFrames() iteration
+		// spans enough wall-clock time for a concurrent put to land inside it.
+		for (int i = 0; i < 200_000; i++) {
+			emitter.send("w" + i);
+		}
+		final java.util.concurrent.atomic.AtomicBoolean writing = new java.util.concurrent.atomic.AtomicBoolean(true);
+		final Thread writer = new Thread(() -> {
+			int sent = 0;
+			while (writing.get()) {
+				try {
+					emitter.send("c" + sent++);
+				}
+				catch (java.io.IOException | IllegalStateException ex) {
+					break;
+				}
+			}
+		});
+		writer.start();
+		try {
+			for (int round = 0; round < 50; round++) {
+				bufferedFrames(emitter);
+			}
+		}
+		finally {
+			writing.set(false);
+			writer.join(5_000L);
+		}
+	}
+
 	private static String bufferedFrames(final SseEmitter emitter) throws Exception {
 		final java.lang.reflect.Field field = ResponseBodyEmitter.class.getDeclaredField("earlySendAttempts");
 		field.setAccessible(true);
+		// The buffer is mutated by send() under the emitter's writeLock; the
+		// read must hold the same lock, otherwise iteration throws
+		// ConcurrentModificationException under concurrent sends (issue #374).
+		final java.lang.reflect.Field lockField = ResponseBodyEmitter.class.getDeclaredField("writeLock");
+		lockField.setAccessible(true);
+		final java.util.concurrent.locks.Lock writeLock = (java.util.concurrent.locks.Lock) lockField.get(emitter);
 		final StringBuilder out = new StringBuilder();
-		for (final Object chunk : (java.util.Collection<?>) field.get(emitter)) {
-			out.append(chunk.getClass().getMethod("getData").invoke(chunk));
+		writeLock.lock();
+		try {
+			for (final Object chunk : (java.util.Collection<?>) field.get(emitter)) {
+				out.append(chunk.getClass().getMethod("getData").invoke(chunk));
+			}
+		}
+		finally {
+			writeLock.unlock();
 		}
 		return out.toString();
 	}

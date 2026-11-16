@@ -323,6 +323,10 @@ const App = () => {
   const [args, setArgs] = useState<string>(getInitialArgs);
 
   const [sseUrl, setSseUrl] = useState<string>(getInitialSseUrl);
+  // [spring-ai-mcp-inspector PATCH] Set once the user edits the server URL
+  // field; the /config default must not overwrite a user-typed URL afterwards
+  // (issue #374 E2E flake).
+  const sseUrlTouchedRef = useRef(false);
   const [transportType, setTransportType] = useState<
     "stdio" | "sse" | "streamable-http"
   >(getInitialTransportType);
@@ -1185,7 +1189,10 @@ const App = () => {
             data.defaultTransport as "stdio" | "sse" | "streamable-http",
           );
         }
-        if (data.defaultServerUrl) {
+        // [spring-ai-mcp-inspector PATCH] Skip the default when the user has
+        // already edited the URL field; the late fetch response used to clobber
+        // the typed value (issue #374 E2E flake).
+        if (data.defaultServerUrl && !sseUrlTouchedRef.current) {
           setSseUrl(data.defaultServerUrl);
         }
       })
@@ -2034,7 +2041,12 @@ const App = () => {
           args={args}
           setArgs={setArgs}
           sseUrl={sseUrl}
-          setSseUrl={setSseUrl}
+          setSseUrl={(value: string) => {
+            // [spring-ai-mcp-inspector PATCH] User edits win over the
+            // /config default (issue #374 E2E flake).
+            sseUrlTouchedRef.current = true;
+            setSseUrl(value);
+          }}
           env={env}
           setEnv={setEnv}
           config={config}
