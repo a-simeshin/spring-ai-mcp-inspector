@@ -159,17 +159,19 @@ describe("Sidebar Keep-Alive Indicator", () => {
       keepAliveLastPingAt: fiveSecondsAgo,
     });
 
-    // Initial render should show some seconds
+    // Exact age, not an interval-agnostic regex: 5000ms before now must
+    // read "5s ago" on first paint.
     const indicator = screen.getByTestId("keep-alive-indicator");
-    expect(indicator).toHaveTextContent(/Last keep-alive: \d+s ago/);
+    expect(indicator).toHaveTextContent("Last keep-alive: 5s ago");
 
-    // Advance time by 1 second
+    // Advance time by 1 second: the 1s interval tick must repaint the
+    // counter to "6s ago". A slower or missing tick (e.g. a 60s interval)
+    // leaves the stale "5s ago" text and fails this assertion.
     act(() => {
       jest.advanceTimersByTime(1000);
     });
 
-    // Counter should have updated
-    expect(indicator).toHaveTextContent(/Last keep-alive: \d+s ago/);
+    expect(indicator).toHaveTextContent("Last keep-alive: 6s ago");
   });
 
   it("does not show stale banner when not connected", () => {

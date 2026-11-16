@@ -1,6 +1,6 @@
 // [spring-ai-mcp-inspector PATCH] TimelineTab test: schema alignment, APP_LOG rendering, empty state (#130).
 // [spring-ai-mcp-inspector PATCH] Protocol negotiation badge test: _protocolNegotiation enrichment (#129, #130).
-import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import TimelineTab from "../TimelineTab";
 import { Tabs } from "@/components/ui/tabs";
@@ -742,10 +742,10 @@ describe("TimelineTab SEP-2322 input_required chain", () => {
     ] = originalBootstrap;
   });
 
-  const renderTab = () =>
+  const renderTab = (props: { sessionId?: string | null } = {}) =>
     render(
       <Tabs defaultValue="timeline">
-        <TimelineTab />
+        <TimelineTab {...props} />
       </Tabs>,
     );
 
@@ -910,5 +910,138 @@ describe("TimelineTab SEP-2322 input_required chain", () => {
     );
     // The label should show the method from payload
     expect(screen.getByText("ping")).toBeInTheDocument();
+  });
+
+  // [spring-ai-mcp-inspector PATCH] The client-side merge is the only source
+  // of KEEP_ALIVE rows: /api/timeline never returns them (#235), so the
+  // fixtures above pin row styling only. These tests render TimelineTab with
+  // a real useKeepAlive fed by the snapshot endpoint and a stubbed
+  // EventSource, pinning the merge into fetched events and its timestamp
+  // dedup (round-36 review blocker F1).
+
+  class KeepAliveEventSourceStub {
+    url: string;
+    private listeners: Map<string, ((event: MessageEvent) => void)[]> = new Map();
+    static instances: KeepAliveEventSourceStub[] = [];
+    constructor(url: string) {
+      this.url = url;
+      KeepAliveEventSourceStub.instances.push(this);
+    }
+    addEventListener(type: string, listener: (event: MessageEvent) => void) {
+      const listeners = this.listeners.get(type) ?? [];
+      listeners.push(listener);
+      this.listeners.set(type, listeners);
+    }
+    close() {}
+    simulateEvent(type: string, data: string) {
+      const event = { data } as MessageEvent;
+      for (const listener of this.listeners.get(type) ?? []) {
+        listener(event);
+      }
+    }
+    static reset() {
+      KeepAliveEventSourceStub.instances = [];
+    }
+  }
+
+  const PING_T1 = "2026-08-30T12:00:03.000Z";
+  const PING_T2 = "2026-08-30T12:00:05.000Z";
+  const PING_T3 = "2026-08-30T12:00:07.000Z";
+
+  const keepaliveSnapshot = (recentPings: string[]) => ({
+    observed: true,
+    lastPingAt: recentPings[recentPings.length - 1] ?? null,
+    recentPings,
+    estimatedIntervalMillis: 10000,
+    isStale: false,
+  });
+
+  function mockFetchByPath(timeline: WireEvent[], keepalive: unknown) {
+    const fetchMock = jest.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/keepalive")) {
+        return { ok: true, json: async () => keepalive };
+      }
+      if (url.includes("/api/timeline")) {
+        return { ok: true, json: async () => timeline };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    (global as unknown as { fetch: jest.Mock }).fetch = fetchMock;
+    return fetchMock;
+  }
+
+  const keepAliveRowIndexes = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll("div.border-l-2"))
+      .map((row, index) => ({
+        index,
+        isKeepAlive: row.textContent?.includes("KEEP ALIVE") ?? false,
+      }))
+      .filter((row) => row.isKeepAlive)
+      .map((row) => row.index);
+
+  function stubEventSource() {
+    KeepAliveEventSourceStub.reset();
+    (global as unknown as { EventSource: typeof KeepAliveEventSourceStub })
+      .EventSource = KeepAliveEventSourceStub;
+  }
+
+  it("merges hook pings into fetched events as KEEP_ALIVE rows", async () => {
+    stubEventSource();
+    mockFetchByPath(
+      [APP_LOG_EVENT, REQUEST_EVENT],
+      keepaliveSnapshot([PING_T1, PING_T2]),
+    );
+    const { container } = renderTab({ sessionId: "s-1" });
+
+    // 2 fetched events + 2 merged pings.
+    await waitFor(() =>
+      expect(screen.getByText("4 events")).toBeInTheDocument(),
+    );
+
+    // Merged rows sit in chronological position between the fetched events
+    // (APP_LOG 12:00:00, request 12:00:01, pings 12:00:03 and 12:00:05):
+    // the first two rows are the fetched ones, the last two are the pings.
+    const rows = Array.from(container.querySelectorAll("div.border-l-2"));
+    expect(rows).toHaveLength(4);
+    expect(rows[0].textContent).toContain("APP LOG");
+    expect(rows[1].textContent).toContain("tools/list");
+    expect(keepAliveRowIndexes(container)).toEqual([2, 3]);
+    expect(screen.getAllByText("KEEP ALIVE")).toHaveLength(2);
+  });
+
+  it("deduplicates repeated ping timestamps across snapshot and live SSE", async () => {
+    stubEventSource();
+    mockFetchByPath([REQUEST_EVENT], keepaliveSnapshot([PING_T1, PING_T2]));
+    const { container } = renderTab({ sessionId: "s-1" });
+
+    await waitFor(() =>
+      expect(screen.getByText("3 events")).toBeInTheDocument(),
+    );
+
+    await waitFor(() =>
+      expect(KeepAliveEventSourceStub.instances).toHaveLength(1),
+    );
+
+    // A replay of an already-merged ping (snapshot refresh, SSE reconnect
+    // backfill) must not duplicate the row.
+    await act(async () => {
+      KeepAliveEventSourceStub.instances[0].simulateEvent(
+        "mcp:keepalive-ping",
+        JSON.stringify({ at: PING_T1 }),
+      );
+    });
+    expect(screen.getByText("3 events")).toBeInTheDocument();
+    expect(keepAliveRowIndexes(container)).toEqual([1, 2]);
+
+    // A genuinely new ping still merges.
+    await act(async () => {
+      KeepAliveEventSourceStub.instances[0].simulateEvent(
+        "mcp:keepalive-ping",
+        JSON.stringify({ at: PING_T3 }),
+      );
+    });
+    expect(screen.getByText("4 events")).toBeInTheDocument();
+    expect(screen.getAllByText("KEEP ALIVE")).toHaveLength(3);
   });
 });

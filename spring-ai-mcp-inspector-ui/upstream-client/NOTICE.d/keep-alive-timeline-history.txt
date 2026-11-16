@@ -25,6 +25,12 @@ Covered by useKeepAlive.test.ts (11 tests: null session, snapshot fetch,
 SSE subscription, live ping merge, ping cap, cleanup, auth forms,
 unified JSON payload parse, legacy bare-string tolerance, never-NaN-ago,
 custom path),
-TimelineTab.test.tsx (KEEP_ALIVE rendering, styling, label) and the
-keyboard-accessibility test in HistoryAndNotifications.test.tsx (Enter
-expands, Space collapses, no pointer involved).
+TimelineTab.test.tsx (KEEP_ALIVE rendering, styling, label; the
+client-side merge of hook pings into fetched events and its timestamp
+dedup are pinned with a real useKeepAlive against the snapshot endpoint
+and a stubbed EventSource, since /api/timeline never returns KEEP_ALIVE
+rows: round-36 review blocker F1),
+Sidebar.keepAlive.test.tsx (exact "5s ago" before and "6s ago" after one
+timer tick pin the 1s refresh interval: round-36 review blocker F2) and
+the keyboard-accessibility test in HistoryAndNotifications.test.tsx
+(Enter expands, Space collapses, no pointer involved).
