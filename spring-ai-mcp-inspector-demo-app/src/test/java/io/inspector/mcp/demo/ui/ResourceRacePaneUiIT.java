@@ -36,7 +36,6 @@ import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -64,13 +63,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the fast one is already rendered, which is exactly the interleaving that used to
  * overwrite the preview with the stale payload.
  *
- * Stack scope: the race is asserted on the servlet stack only. The reactive proxy relays
- * browser frames serially, because the upstream send path occupies the Netty event loop
- * of the incoming POST (the legacy SSE transport's blocking sendMessage runs on the
- * subscribing thread), so the second resources/read is forwarded only after the first one
- * completes and the interleaving is unobservable on that wire. The Assumptions gate in
- * the test records this capability check; the core proxy fix and the re-enabled webflux
- * leg are tracked as a follow-up.
+ * Stack scope: the race is asserted on both stacks. The reactive proxy used to relay
+ * browser frames serially, because the upstream send was subscribed on the thread that
+ * emitted the browser frame, the Netty event loop of the incoming POST, and the blocking
+ * upstream send serialized the frames of one session, so the interleaving was
+ * unobservable on that wire (issue #356). The upstream send moved off the emitting thread
+ * (issue #358), the interleaving is observable on webflux too, and the test runs ungated
+ * on both legs; an attempt whose stack happens to serialize the two reads is inconclusive
+ * and retried, bounded by RACE_ATTEMPTS.
  *
  * The test:
  * <ul>
@@ -273,15 +273,9 @@ class ResourceRacePaneUiIT {
 			+ "stack serialized the two reads cannot race and is retried until the inversion "
 			+ "shows up on the wire.")
 	void slowReplyMustNotOvertakeFastSelection() throws Exception {
-		// The race needs two resources/read requests in flight on one session. The
-		// reactive proxy cannot produce that interleaving yet (its upstream send path
-		// blocks the Netty event loop of the POST thread, so frames relay serially),
-		// so this test is a webmvc-only capability until the core fix lands.
-		Assumptions.assumeTrue("webmvc".equals(ProxyAppHarness.stack()),
-				"resources/read interleaving is unobservable on the webflux stack: the "
-						+ "reactive proxy relays browser frames serially because the upstream "
-						+ "send path occupies the Netty event loop of the POST thread; this "
-						+ "race test runs on webmvc until the core proxy fix lands");
+		// The race needs two resources/read requests in flight on one session; both
+		// proxy stacks relay such interleaved frames since the upstream send moved off
+		// the emitting thread (issue #358), so no leg is gated.
 		// given: boot, connect, open the Resources pane, list the demo resources
 		app = ProxyAppHarness.start("SSE", false, null);
 		Configuration.baseUrl = "http://localhost:" + ProxyAppHarness.port(app);
