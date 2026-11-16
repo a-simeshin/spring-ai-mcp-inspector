@@ -21,6 +21,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -63,6 +65,15 @@ public class SlowEchoToolConfiguration {
 	/** Peak of {@link #IN_FLIGHT} since the last {@link #resetInFlightWitness()} call. */
 	private static final AtomicInteger MAX_IN_FLIGHT = new AtomicInteger();
 
+	/**
+	 * {@code slowEcho} executions observed on a non-blocking thread ({@code
+	 * Schedulers#isInNonBlockingThread()}, i.e. a Netty event loop). On the reactive
+	 * stack a tool body running there blocks the loop the request came in on, which is
+	 * the issue #377 defect: {@code immediateExecution} must stay servlet-only so the SDK
+	 * keeps offloading sync tool bodies to boundedElastic.
+	 */
+	private static final AtomicInteger LOOP_THREAD_EXECUTIONS = new AtomicInteger();
+
 	private final ObjectMapper objectMapper = new ObjectMapper();
 
 	@Bean
@@ -82,6 +93,9 @@ public class SlowEchoToolConfiguration {
 			public String call(String toolInput) {
 				IN_FLIGHT.incrementAndGet();
 				MAX_IN_FLIGHT.accumulateAndGet(IN_FLIGHT.get(), Math::max);
+				if (Schedulers.isInNonBlockingThread()) {
+					LOOP_THREAD_EXECUTIONS.incrementAndGet();
+				}
 				try {
 					try {
 						Thread.sleep(2000L);
@@ -122,6 +136,19 @@ public class SlowEchoToolConfiguration {
 	public static void resetInFlightWitness() {
 		IN_FLIGHT.set(0);
 		MAX_IN_FLIGHT.set(0);
+		LOOP_THREAD_EXECUTIONS.set(0);
+	}
+
+	/**
+	 * Returns how many {@code slowEcho} executions since the last
+	 * {@link #resetInFlightWitness()} call ran on a non-blocking thread (a Netty event
+	 * loop, per {@code Schedulers#isInNonBlockingThread()}). The concurrent-call IT
+	 * asserts this stays zero on every stack: tool bodies belong on worker threads, not
+	 * on the loop that also drives the transport (issue #377).
+	 * @return the number of event-loop-thread executions observed
+	 */
+	public static int loopThreadExecutionsWitness() {
+		return LOOP_THREAD_EXECUTIONS.get();
 	}
 
 	/**
