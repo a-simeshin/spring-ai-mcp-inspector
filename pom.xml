@@ -45,10 +45,12 @@
 
         <spring-boot.version>4.1.0</spring-boot.version>
         <spring-ai.version>2.0.1</spring-ai.version>
-        <!-- MCP Java SDK is BOM-managed by spring-ai-bom 2.0.1 (mcp-core 2.0.1). Do NOT pin it
-             here: an explicit override would drag the SDK two majors behind the BOM and
+        <!-- MCP Java SDK is NOT BOM-managed by spring-ai-bom (it carries no
+             io.modelcontextprotocol entries): mcp-core 2.0.1 is versioned by this
+             POM's own mcp-bom import via ${spring-ai.version}. Do NOT pin it here:
+             an explicit override would drag the SDK two majors behind the BOM and
              silently reintroduce 0.18 APIs. -->
-        <!-- mcp-sdk.version intentionally removed; managed by spring-ai-bom -->
+        <!-- mcp-sdk.version intentionally removed; managed by the mcp-bom import -->
 
 
         <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
@@ -131,7 +133,7 @@
             <!-- MCP Java SDK BOM. spring-ai-bom does NOT manage the raw SDK
                  (io.modelcontextprotocol.sdk:mcp-core / mcp-json-*), only the Spring
                  transports, so we import the SDK BOM to version mcp-core + the Jackson2
-                 binding directly. The SDK version tracks Spring AI's train (2.0.0). -->
+                 binding directly. The SDK version tracks Spring AI's train (2.0.1). -->
             <dependency>
                 <groupId>io.modelcontextprotocol.sdk</groupId>
                 <artifactId>mcp-bom</artifactId>
