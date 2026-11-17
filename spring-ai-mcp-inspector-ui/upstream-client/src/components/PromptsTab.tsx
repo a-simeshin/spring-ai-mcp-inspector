@@ -187,7 +187,8 @@ const PromptsTab = ({
                 <IconDisplay icons={prompt.icons} size="sm" />
               </div>
               <div className="flex flex-col flex-1 min-w-0">
-                <span className="truncate">{prompt.name}</span>
+                <span data-testid="row-name" className="truncate">{prompt.name}</span>
+                {/* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): row-name anchor, was .cursor-pointer .truncate. */}
                 <span className="text-sm text-gray-500 text-left line-clamp-2">
                   {prompt.description}
                 </span>

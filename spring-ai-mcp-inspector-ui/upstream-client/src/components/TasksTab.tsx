@@ -502,6 +502,8 @@ const TasksTab = ({
                             variant="ghost"
                             size="sm"
                             className="h-6 w-6 p-0 shrink-0"
+                            /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): task-cancel-button anchor, was button[aria-label^="Cancel task "]. */
+                            data-testid="task-cancel-button"
                             aria-label={`Cancel task ${task.taskId}`}
                             onClick={(e) => {
                               e.stopPropagation();
@@ -569,6 +571,8 @@ const TasksTab = ({
                     variant="destructive"
                     size="sm"
                     className="shrink-0 ml-4"
+                    /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): task-cancel-button anchor, was button[aria-label^="Cancel task "]. */
+                    data-testid="task-cancel-button"
                     aria-label={`Cancel task ${displayedTask.taskId}`}
                     onClick={() => handleCancel(displayedTask.taskId)}
                     disabled={isCancelling === displayedTask.taskId}

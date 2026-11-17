@@ -35,7 +35,8 @@ const JsonEditor = ({
   const displayError = internalError || externalError;
 
   return (
-    <div className="relative">
+    // [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): json-editor anchor; the suite selects the code textarea as [data-testid=json-editor] textarea.
+    <div data-testid="json-editor" className="relative">
       <div
         className={`border rounded-md ${
           displayError
