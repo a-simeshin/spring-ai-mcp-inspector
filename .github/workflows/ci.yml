@@ -168,3 +168,23 @@ jobs:
 
       - name: Self-test the gate script
         run: .github/scripts/test-check-notice-registry.sh
+
+  selector-gate:
+    name: E2E selector gate
+    # Cheap text gate, like notice registry: fails the PR when a Tailwind
+    # class selector, a Radix-internal selector, a class-attribute matcher or
+    # a non-allowlisted cssClass() assertion re-enters the demo E2E suite
+    # (issue #378). The self-test step feeds deliberate violations to the
+    # scanner so the gate cannot silently stop matching.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check the demo E2E selectors
+        run: python3 .github/scripts/check_e2e_selectors.py
+
+      - name: Self-test the gate script
+        run: python3 .github/scripts/check_e2e_selectors.py --self-test
