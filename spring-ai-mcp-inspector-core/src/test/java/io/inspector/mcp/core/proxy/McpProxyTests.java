@@ -393,7 +393,7 @@ class McpProxyTests {
 		@Severity(SeverityLevel.CRITICAL)
 		@Description("when initialize sendMessage errors, the handshake gate is released with the error, "
 				+ "and subsequent frames waiting on the gate fail fast instead of hanging forever")
-		void start_whenInitializeErrors_releasesGateWaiters() {
+		void start_whenInitializeErrors_releasesGateWaiters() throws InterruptedException {
 			// given - initialize send fails
 			given(McpProxyTests.this.transport.connect(any())).willReturn(Mono.empty());
 			given(McpProxyTests.this.transport.sendMessage(any()))
@@ -405,9 +405,17 @@ class McpProxyTests {
 			McpProxyTests.this.browserToTarget.tryEmitNext(toolsListFrame());
 
 			// then: initialize was sent, the gate was released with the error,
-			// and the session is terminated. The tools/list frame waiting on the
-			// gate completed (via error) instead of hanging forever.
+			// and the session is terminated. The termination surfaces from the
+			// boundedElastic worker the send is subscribed on, so poll instead of
+			// asserting synchronously after the send's invocation. The tools/list
+			// frame waiting on the gate completed (via error) instead of hanging
+			// forever.
 			verify(McpProxyTests.this.transport, timeout(1000).atLeast(1)).sendMessage(any());
+			final long terminationDeadline = System.currentTimeMillis() + 1000;
+			while (!McpProxyTests.this.session.isUpstreamTerminated()
+					&& System.currentTimeMillis() < terminationDeadline) {
+				Thread.sleep(10);
+			}
 			assertThat(McpProxyTests.this.session.isUpstreamTerminated()).isTrue();
 			StepVerifier.create(McpProxyTests.this.targetToBrowser.asFlux())
 				.expectError()
