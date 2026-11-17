@@ -157,8 +157,8 @@ class UiBigDataIT {
 	}
 
 	private static SelenideElement activePanel() {
-		// All TabsContent panes are force-mounted (hidden, not unmounted), so select
-		// the visible tab-content pane (issue #378).
+		// Radix mounts only the active TabsContent, so the tab-content anchor
+		// resolves to exactly one pane while a tab is open (issue #378).
 		return $("[data-testid^=tab-content-]:not([hidden])");
 	}
 

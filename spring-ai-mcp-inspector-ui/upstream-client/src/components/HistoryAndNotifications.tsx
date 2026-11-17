@@ -103,7 +103,8 @@ const HistoryAndNotifications = ({
               .map((request, index) => (
                 <li
                   key={index}
-                  data-testid="history-item"
+                  /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): failed entries anchor as history-item-error, was attributeMatching("class", ".*border-red-500.*"). */
+                  data-testid={request.isError ? "history-item-error" : "history-item"}
                   className={`text-sm text-foreground bg-secondary py-2 px-3 rounded border-l-4 ${request.isError ? "border-red-500" : "border-transparent"}`}
                 >
                   <button

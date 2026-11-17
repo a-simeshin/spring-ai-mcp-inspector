@@ -4,7 +4,8 @@ so the suite no longer selects by Tailwind classes or Radix internals
 tab-content-<value> (ui/tabs), select-option-<value> (ui/select SelectItem),
 combobox-trigger-<id> / combobox-input-<id> / combobox-option-<option>
 (ui/combobox), history-pane / notifications-pane / history-clear /
-notifications-clear / history-item / notification-item / history-entry-toggle /
+notifications-clear / history-item / history-item-error /
+notification-item / history-entry-toggle /
 notification-entry-toggle / history-entry-request / history-entry-response
 (HistoryAndNotifications), tool-hint-badges (ToolsTab), tool-result-heading
 (ToolResults), json-editor (JsonEditor wrapper), resource-image /

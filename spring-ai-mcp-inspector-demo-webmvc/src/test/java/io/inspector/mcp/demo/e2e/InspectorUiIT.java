@@ -410,8 +410,9 @@ class InspectorUiIT {
 	}
 
 	/**
-	 * Active tab panel: all TabsContent panes are force-mounted (hidden, not unmounted),
-	 * so select the visible tab-content pane (issue #378).
+	 * Active tab panel (issue #378). Radix mounts only the active TabsContent, so exactly
+	 * one {@code tab-content-<value>} anchor exists while a tab is open; the
+	 * {@code :not([hidden])} filter is kept as an explicit visibility guard.
 	 */
 	private static SelenideElement activePanel() {
 		return $("[data-testid^=tab-content-]:not([hidden])");
@@ -1140,12 +1141,11 @@ class InspectorUiIT {
 					Duration.ofSeconds(15));
 
 			// Wire-level check: expand the FAILED tools/call History entry (failed
-			// entries carry the red left border) and count the message inside its
-			// Response payload. Asserting mere presence stays green while the SDK ships
-			// the text twice in content[0].text, so count the occurrences.
-			SelenideElement errorCall = historyColumn().$$("[data-testid=history-item]")
-				.findBy(Condition.and("failed tools/call entry", text("tools/call"),
-						attributeMatching("class", ".*border-red-500.*")))
+			// entries carry the history-item-error anchor) and count the message inside
+			// its Response payload. Asserting mere presence stays green while the SDK
+			// ships the text twice in content[0].text, so count the occurrences.
+			SelenideElement errorCall = historyColumn().$$("[data-testid=history-item-error]")
+				.findBy(text("tools/call"))
 				.shouldBe(visible, Duration.ofSeconds(15));
 			errorCall.$("[data-testid=history-entry-toggle]").click();
 			SelenideElement responseBlock = errorCall.$("[data-testid=history-entry-response]").shouldBe(visible);
