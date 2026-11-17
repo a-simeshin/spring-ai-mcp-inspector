@@ -12,6 +12,8 @@ Banned selector shapes (string literals at Selenide/driver call-sites):
   - Radix internals (`[role=...]`, `[data-state=...]`, `[data-radix...]`,
     `[data-orientation...]`, `[cmdk...]`)
   - XPath (`$x(`, `By.xpath(`)
+  - querySelector/querySelectorAll arguments inside executeJavaScript
+    strings, single-quoted or escaped double-quoted
 
 Banned Condition shapes (class-based matching on located elements, review of
 PR #389 finding 1):
@@ -19,6 +21,11 @@ PR #389 finding 1):
     attribute re-couples the test to styling even when the locator itself is
     a testid, so any class-attribute matcher fails the gate. Matchers on
     content attributes such as `attributeMatching("title", ...)` stay legal.
+
+A call-site wrapped across lines is matched like its one-line form: when a
+line ends with an `attributeMatching(`/`cssClass(` opener, the gate joins it
+with the next line before applying the Condition rules, so the split form
+cannot pass where the one-line form fails.
 
 Explicit allowlist for state assertions (issue #378 gate policy):
   - `cssClass("<value>")` asserts a class on an element already located
@@ -62,8 +69,12 @@ CALL_SITE = re.compile(
     r'(?:\$\$?\(|By\.cssSelector\(|\.find\(|\.closest\()')
 OPEN_AT_EOL = re.compile(
     r'(?:\$\$?\(|By\.cssSelector\(|\.find\(|\.closest\()\s*$')
-# JS querySelector arguments (single-quoted) inside executeJavaScript strings
-JS_SELECTOR = re.compile(r"querySelector(?:All)?\(\s*'((?:[^'\\]|\\.)*)'")
+# JS querySelector arguments inside executeJavaScript strings: single-quoted,
+# or double-quoted, which appears escaped as \" inside Java string literals
+# (the double-quoted capture stops at the closing escaped quote)
+JS_SELECTOR = re.compile(
+    r"querySelector(?:All)?\(\s*(?:'((?:[^'\\]|\\.)*)'"
+    r'|\\?"([^"\\]*)\\?")')
 XPATH_CODE_RE = re.compile(r'\$x\(|By\.xpath\(')
 RADIX_RE = re.compile(r'\[role=|\[data-state|\[data-radix|\[data-orientation|\[cmdk')
 # a class token anywhere in the selector: tag.class, .class, a.b.c, [..] .class
@@ -78,6 +89,11 @@ CLASS_ATTRIBUTE_MATCHER_RE = re.compile(r'attributeMatching\(\s*["\']class["\']'
 # cssClass("<value>") / Condition.cssClass("<value>"): state assertion on an
 # already-located element. Allowed only for the whitelisted values above.
 CSS_CLASS_ASSERT_RE = re.compile(r'cssClass\(\s*["\']([A-Za-z0-9_-]+)["\']')
+
+# A Condition call-site whose quoted argument wraps to the next line; the
+# gate joins the pair before applying the two rules above (the same
+# continuation shape selector literals get at OPEN_AT_EOL).
+CONDITION_OPEN_AT_EOL = re.compile(r'(?:attributeMatching|cssClass)\(\s*$')
 
 ALLOWED_CSS_CLASS_ASSERTS = {
     "bg-muted",
@@ -105,14 +121,21 @@ def scan(path: Path, rel: str, violations: list) -> None:
         stripped = line.strip()
         if stripped.startswith(("//", "*", "/*")):
             continue
+        # A Condition call-site may wrap: opener at end of line, the quoted
+        # argument on the next line. Match the banned shapes on the joined
+        # pair too, so the split form cannot pass where the one-line form
+        # fails.
+        joined = line
+        if i > 0 and CONDITION_OPEN_AT_EOL.search(lines[i - 1]):
+            joined = lines[i - 1].rstrip() + " " + stripped
         if XPATH_CODE_RE.search(line):
             violations.append(f"{rel}:{i + 1}: xpath selector: {stripped[:120]}")
             continue
-        if CLASS_ATTRIBUTE_MATCHER_RE.search(line):
+        if CLASS_ATTRIBUTE_MATCHER_RE.search(joined):
             violations.append(
                 f"{rel}:{i + 1}: class-attribute matcher: {stripped[:120]}")
             continue
-        for m in CSS_CLASS_ASSERT_RE.finditer(line):
+        for m in CSS_CLASS_ASSERT_RE.finditer(joined):
             cls = m.group(1)
             if cls not in ALLOWED_CSS_CLASS_ASSERTS:
                 violations.append(
@@ -127,9 +150,11 @@ def scan(path: Path, rel: str, violations: list) -> None:
                 sm = SELECTOR_STRING.match(tail)
                 if sm:
                     candidates.append(sm.group(1))
-        # JS selectors inside executeJavaScript strings (single-quoted)
+        # JS selectors inside executeJavaScript strings (single- or
+        # double-quoted); group 2 carries the double-quoted capture
         for m in JS_SELECTOR.finditer(line):
-            candidates.append(m.group(1))
+            candidates.append(
+                m.group(1) if m.group(1) is not None else m.group(2))
         # literal as continuation: line is a bare quoted argument of the previous
         # line, whose call-site opener is the last token
         if not candidates and i > 0 \
@@ -144,28 +169,50 @@ def scan(path: Path, rel: str, violations: list) -> None:
                 violations.append(f"{rel}:{i + 1}: {kind} selector: {sel[:120]}")
 
 
-# Each entry: one source line, and the violation prefix the scanner must
-# produce for it, or None when the line must pass the gate. The banned shapes
-# cover every message the gate can emit; the allowed lines include the two
-# whitelisted state assertions and testid-driven calls.
-SELF_TEST_LINES = [
+# Each entry: one source snippet (a single physical line, or several joined
+# with newlines for a wrapped call-site), and either None when every line of
+# the snippet must pass the gate, or a (line_offset, prefix) pair: the
+# 1-based physical line inside the snippet the scanner must flag, and the
+# violation prefix it must produce there. The banned shapes cover every
+# message the gate can emit; the allowed snippets include the whitelisted
+# state assertions (one-line and split forms) and testid-driven calls.
+SELF_TEST_CASES: list[tuple[str, tuple[int, str] | None]] = [
     ('el.shouldHave(attributeMatching("class", ".*border-red-500.*"));',
-     "class-attribute matcher"),
+     (1, "class-attribute matcher")),
     ('el.shouldHave(Condition.attributeMatching("class", ".*border-red-500.*"));',
-     "class-attribute matcher"),
+     (1, "class-attribute matcher")),
+    # wrapped call-site: opener at end of line, argument on the next line
+    ('el.shouldHave(attributeMatching(\n        "class", ".*border-red-500.*"));',
+     (2, "class-attribute matcher")),
+    ('el.shouldHave(cssClass(\n        "text-sm"));',
+     (2, 'css class state assertion not in the allowlist: cssClass("text-sm")')),
     ('el.shouldHave(cssClass("text-sm"));',
-     'css class state assertion not in the allowlist: cssClass("text-sm")'),
+     (1, 'css class state assertion not in the allowlist: cssClass("text-sm")')),
     ('el.shouldNotHave(Condition.cssClass("p-4"));',
-     'css class state assertion not in the allowlist: cssClass("p-4")'),
-    ('$(".cursor-pointer").click();', "css-class selector"),
-    ('$$("ol.fixed li").shouldHave(size(3));', "css-class selector"),
-    ('el.$("[data-state=checked]").click();', "radix selector"),
-    ('By.xpath("//div[@id=\'x\']");', "xpath selector"),
-    ('el.shouldHave(attributeMatching("title", ".*Spec default.*"));', None),
-    ('el.shouldHave(cssClass("bg-muted"));', None),
-    ('el.shouldNotHave(cssClass("dark"));', None),
-    ('el.$("[data-testid=history-item]").click();', None),
-    ('By.cssSelector("[data-testid=tools-row]");', None),
+     (1, 'css class state assertion not in the allowlist: cssClass("p-4")')),
+    ('$(".cursor-pointer").click();',
+     (1, "css-class selector")),
+    ('$$("ol.fixed li").shouldHave(size(3));',
+     (1, "css-class selector")),
+    ('el.$("[data-state=checked]").click();',
+     (1, "radix selector")),
+    ('By.xpath("//div[@id=\'x\']");',
+     (1, "xpath selector")),
+    # double-quoted querySelector reaches the gate as \" inside the Java string
+    ('js.executeScript("document.querySelector(\\".probe-y\\").click();");',
+     (1, "css-class selector")),
+    ('el.shouldHave(attributeMatching("title", ".*Spec default.*"));',
+     None),
+    ('el.shouldHave(cssClass(\n        "bg-muted"));',
+     None),
+    ('el.shouldHave(cssClass("bg-muted"));',
+     None),
+    ('el.shouldNotHave(cssClass("dark"));',
+     None),
+    ('el.$("[data-testid=history-item]").click();',
+     None),
+    ('By.cssSelector("[data-testid=tools-row]");',
+     None),
 ]
 
 
@@ -174,7 +221,15 @@ def self_test() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="e2e-selector-selftest-"))
     try:
         fake = tmp / "FakeUiIT.java"
-        fake.write_text("\n".join(line for line, _ in SELF_TEST_LINES) + "\n")
+        spans = []
+        chunks = []
+        cursor = 0
+        for text, _ in SELF_TEST_CASES:
+            physical = text.split("\n")
+            spans.append((cursor, len(physical)))
+            chunks.extend(physical)
+            cursor += len(physical)
+        fake.write_text("\n".join(chunks) + "\n")
         violations: list[str] = []
         scan(fake, "FakeUiIT.java", violations)
         flagged: dict[int, str] = {}
@@ -182,21 +237,29 @@ def self_test() -> int:
             flagged[int(v.split(":")[1]) - 1] = v
         ok = True
         expected_violations = 0
-        for idx, (line, expected) in enumerate(SELF_TEST_LINES):
-            got = flagged.get(idx)
+        for idx, ((start, nlines), (text, expected)) in enumerate(
+                zip(spans, SELF_TEST_CASES)):
             if expected is None:
-                if got is not None:
-                    print(f"self-test FAIL: allowed line {idx + 1} flagged: {got}")
-                    ok = False
-            else:
-                expected_violations += 1
-                if got is None:
-                    print(f"self-test FAIL: violation missed on line {idx + 1}: {line[:80]}")
-                    ok = False
-                elif not got.startswith(f"FakeUiIT.java:{idx + 1}: {expected}"):
-                    print(f"self-test FAIL: wrong verdict on line {idx + 1}: "
-                          f"expected [{expected}], got [{got}]")
-                    ok = False
+                for off in range(nlines):
+                    if start + off in flagged:
+                        print(f"self-test FAIL: allowed case {idx + 1} "
+                              f"flagged on line {start + off + 1}: "
+                              f"{flagged[start + off]}")
+                        ok = False
+                continue
+            line_off, prefix = expected
+            expected_violations += 1
+            got = flagged.get(start + line_off - 1)
+            if got is None:
+                print(f"self-test FAIL: violation missed in case {idx + 1}: "
+                      f"{text[:80]}")
+                ok = False
+            elif not got.startswith(
+                    f"FakeUiIT.java:{start + line_off}: {prefix}"):
+                print(f"self-test FAIL: wrong verdict in case {idx + 1}: "
+                      f"expected [{prefix}] on line {start + line_off}, "
+                      f"got [{got}]")
+                ok = False
         if ok and len(violations) != expected_violations:
             print(f"self-test FAIL: {len(violations)} violations reported, "
                   f"expected {expected_violations}: {violations}")
