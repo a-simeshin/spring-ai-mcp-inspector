@@ -55,6 +55,24 @@ The table below records the exact stack a given inspector release was verified w
 | `2.0.0`                   | `4.1.0`     | `2.0.0`   | `2.0.0`      | `0.22.0`                 |
 | `2.1.0`                   | `4.1.0`     | `2.0.0`   | `2.0.0`      | `0.22.0`                 |
 | `2.2.0`                   | `4.1.0`     | `2.0.1`   | `2.0.1`      | `0.22.0`                 |
+| `2.3.0`                   | `4.1.0`     | `2.0.1`   | `2.0.1`      | `0.22.0`                 |
+
+### Upgrading from `2.2.0`
+
+No code change is required. Three runtime behaviours are new:
+
+- Concurrent `tools/call` frames on one session now overlap instead of
+  serializing: the proxy opens spare keep-alive connections to the upstream
+  at session open
+  (`spring.ai.mcp.inspector.proxy.upstream-warm-connections`, default `10`)
+  and pings them concurrently before the handshake gate releases the
+  browser's frames. Set the property to `0` to keep the old behavior.
+- Custom header names the JDK HTTP client refuses (restricted names such as
+  `host` or `connection`, or names containing a colon) now fail the connect
+  immediately with one non-retryable `invalid_request` error that lists
+  every offender and never echoes the header value (#188).
+- A non-numeric `tasks/list` cursor returns a JSON-RPC `-32602` invalid
+  params error instead of a silent empty page (#320).
 
 ### Upgrading from `2.1.0`
 
@@ -91,7 +109,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webmvc</artifactId>
-    <version>2.2.0</version>
+    <version>2.3.0</version>
 </dependency>
 ```
 
@@ -101,7 +119,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webflux</artifactId>
-    <version>2.2.0</version>
+    <version>2.3.0</version>
 </dependency>
 ```
 
