@@ -271,7 +271,7 @@ class ConnectFailureIT {
 
 	/** Sidebar wrapper - the {@code bg-card border-r border-border} flex column. */
 	private static SelenideElement sidebar() {
-		return $(".bg-card.border-r");
+		return $("[data-testid=sidebar]");
 	}
 
 	/** Sidebar Connect button (first-time; has no testid - match by visible text). */
@@ -330,7 +330,7 @@ class ConnectFailureIT {
 		// Streamable HTTP is the proxy branch whose fetch wrapper parses the structured
 		// MCP_CONNECT_FAILED contract (PR #70) - SSE/STDIO surface failures differently.
 		$("#transport-type-select").shouldBe(visible).click();
-		$$("[role=option]").findBy(text("Streamable HTTP")).shouldBe(visible).click();
+		$("[data-testid=select-option-streamable-http]").shouldBe(visible).click();
 		$("#sse-url-input").shouldBe(visible);
 
 		String deadUrl = "http://127.0.0.1:" + deadPort + "/mcp";
@@ -350,7 +350,7 @@ class ConnectFailureIT {
 		connectButton().shouldBe(visible, Duration.ofSeconds(15));
 
 		$("#transport-type-select").shouldBe(visible).click();
-		$$("[role=option]").findBy(text("Streamable HTTP")).shouldBe(visible).click();
+		$("[data-testid=select-option-streamable-http]").shouldBe(visible).click();
 		$("#sse-url-input").shouldBe(visible);
 
 		// RFC 2606 reserves .invalid - the name is guaranteed to never resolve.

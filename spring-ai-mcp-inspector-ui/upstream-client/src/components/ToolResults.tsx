@@ -197,7 +197,8 @@ const ToolResults = ({
           </div>
         )}
         <div className="flex items-center justify-between mb-2">
-          <h4 className="font-semibold">
+          {/* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): tool-result-heading anchor, was $$("h4").findBy(text("Tool Result:")). */}
+          <h4 data-testid="tool-result-heading" className="font-semibold">
             Tool Result:{" "}
             {isError ? (
               <span className="text-red-600 font-semibold">Error</span>

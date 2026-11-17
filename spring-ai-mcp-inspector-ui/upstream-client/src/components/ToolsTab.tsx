@@ -168,7 +168,8 @@ const AnnotationBadges = ({
   ];
 
   return (
-    <div className="flex flex-wrap gap-1 mt-2">
+    // [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): tool-hint-badges anchor, was .gap-1.mt-2.
+    <div data-testid="tool-hint-badges" className="flex flex-wrap gap-1 mt-2">
       {badges.map(
         ({ label, value, implied, description, showDefaultMarker }) => (
           <span
@@ -455,7 +456,8 @@ const ToolsTab = ({
                 />
               )}
               <div className="flex flex-col flex-1 min-w-0">
-                <span className="truncate">{tool.title || tool.name}</span>
+                <span data-testid="row-name" className="truncate">{tool.title || tool.name}</span>
+                {/* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): row-name anchor for the ListPane row name, was .cursor-pointer .truncate. */}
                 <span className="text-sm text-gray-500 text-left line-clamp-2">
                   {tool.description}
                 </span>

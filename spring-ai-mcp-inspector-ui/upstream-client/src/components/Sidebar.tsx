@@ -456,7 +456,8 @@ const Sidebar = ({
   }, [generateMCPServerFile, toast, reportError]);
 
   return (
-    <div className="bg-card border-r border-border flex flex-col h-full">
+    // [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): stable sidebar anchor, was selected by Tailwind classes .bg-card.border-r.
+    <div data-testid="sidebar" className="bg-card border-r border-border flex flex-col h-full">
       <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-border">
         <div className="flex items-center">
           <h1 className="ml-2 text-lg font-semibold">

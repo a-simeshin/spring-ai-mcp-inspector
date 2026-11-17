@@ -399,9 +399,9 @@ class InspectorUiIT {
 	// UPSTREAM_DOM_MAP.md. Keep these tiny; complex assertions live in tests.
 	// ---------------------------------------------------------------------
 
-	/** Sidebar wrapper — the {@code bg-card border-r border-border} flex column. */
+	/** Sidebar wrapper — carries the {@code data-testid=sidebar} anchor (issue #378). */
 	private static SelenideElement sidebar() {
-		return $(".bg-card.border-r");
+		return $("[data-testid=sidebar]");
 	}
 
 	/** Sidebar Connect button (first-time; has no testid — match by visible text). */
@@ -409,34 +409,37 @@ class InspectorUiIT {
 		return sidebar().$(byText("Connect"));
 	}
 
-	/** Active Radix tab panel ({@code [role=tabpanel][data-state=active]}). */
+	/**
+	 * Active tab panel: all TabsContent panes are force-mounted (hidden, not unmounted),
+	 * so select the visible tab-content pane (issue #378).
+	 */
 	private static SelenideElement activePanel() {
-		return $("[role=tabpanel][data-state=active]");
+		return $("[data-testid^=tab-content-]:not([hidden])");
 	}
 
 	/**
 	 * Selects a row from the active ListPane by its exact visible name. The name lives in
-	 * a {@code <span class="truncate">} inside the clickable row (see ListPane row
+	 * a {@code <span data-testid="row-name">} inside the clickable row (see ListPane row
 	 * markup), and {@code findBy(text(...))} matches substrings — so asking for "echo"
 	 * resolved to the "slowEcho" row whenever it rendered first. Match the name span with
 	 * {@code exactText} instead; the click bubbles up to the row.
 	 */
 	private static void selectRow(String name) {
-		activePanel().$$(".cursor-pointer .truncate")
+		activePanel().$$("[data-testid=row-name]")
 			.findBy(exactText(name))
 			.shouldBe(visible, Duration.ofSeconds(10))
 			.click();
 	}
 
 	/**
-	 * Clears every {@code <input name="search">} inside the active tab panel by
-	 * selecting-all and pressing Backspace. Selenide's plain {@code clear()} and
-	 * {@code setValue("")} routes don't always synthesise the {@code input} event React's
-	 * controlled-input wiring requires, leaving the list-pane filter "stuck" between
-	 * methods of the same {@code @Nested} group.
+	 * Clears every ListPane search input ({@code data-testid=search-input}) inside the
+	 * active tab panel by selecting-all and pressing Backspace. Selenide's plain
+	 * {@code clear()} and {@code setValue("")} routes don't always synthesise the
+	 * {@code input} event React's controlled-input wiring requires, leaving the list-pane
+	 * filter "stuck" between methods of the same {@code @Nested} group.
 	 */
 	private static void clearAllSearchInputs() {
-		for (SelenideElement search : activePanel().$$("input[name=search]")) {
+		for (SelenideElement search : activePanel().$$("[data-testid=search-input]")) {
 			if (!search.exists() || search.getValue() == null || search.getValue().isEmpty()) {
 				continue;
 			}
@@ -457,15 +460,11 @@ class InspectorUiIT {
 	}
 
 	/**
-	 * History column inside the bottom {@code HistoryAndNotifications} panel. The
-	 * upstream component renders the left column as
-	 * {@code <div class="flex-1 overflow-y-auto p-4 border-b md:border-r md:border-b-0">}
-	 * -- the {@code border-b} with {@code md:border-r} distinguishes it from the right
-	 * (Server Notifications) side which has neither. Use
-	 * {@code .flex-1.border-b.md\:border-r} as a stable anchor.
+	 * History column inside the bottom {@code HistoryAndNotifications} panel, anchored by
+	 * its {@code data-testid=history-pane} (issue #378).
 	 */
 	private static SelenideElement historyColumn() {
-		return $(".flex-1.overflow-y-auto.p-4.border-b.md\\:border-r");
+		return $("[data-testid=history-pane]");
 	}
 
 	/**
@@ -489,20 +488,16 @@ class InspectorUiIT {
 	 * a successful connect.
 	 *
 	 * <p>
-	 * Radix's {@code TabsTrigger} does NOT reflect its {@code value} prop as a DOM
-	 * attribute — only as the suffix of the rendered {@code id} (e.g.
-	 * {@code radix-:rg:-trigger-tools}). We therefore match on
-	 * {@code [id$="-trigger-${value}"]}.
+	 * Triggers carry {@code data-testid=tab-trigger-<value>} and the content pane
+	 * {@code data-testid=tab-content-<value>} (issue #378). Radix mounts only the active
+	 * TabsContent, so the content anchor is visible exactly when the tab opened.
 	 */
 	private static void clickTab(String value) {
-		$("[role=tablist]").shouldBe(visible, Duration.ofSeconds(15));
-		$("[role=tab][id$='-trigger-" + value + "']").shouldBe(visible, Duration.ofSeconds(10)).click();
-		// Confirm the trigger is now the active one (Radix sets data-state=active on
-		// click).
-		$("[role=tab][data-state=active][id$='-trigger-" + value + "']").shouldBe(visible, Duration.ofSeconds(5));
-		// Confirm the corresponding content pane is active. Radix TabsContent
-		// renders [role=tabpanel] with data-state=active and id suffix -content-{value}.
-		$("[role=tabpanel][data-state=active][id$='-content-" + value + "']").shouldBe(visible, Duration.ofSeconds(5));
+		$("[data-testid=tab-list]").shouldBe(visible, Duration.ofSeconds(15));
+		$("[data-testid=tab-trigger-" + value + "]").shouldBe(visible, Duration.ofSeconds(10)).click();
+		// Confirm the tab actually opened: the content pane is mounted only while
+		// its tab is the active one.
+		$("[data-testid=tab-content-" + value + "]").shouldBe(visible, Duration.ofSeconds(5));
 	}
 
 	/**
@@ -631,7 +626,7 @@ class InspectorUiIT {
 			// (it pre-fills `lastTransportType`), but exercise the combobox switch
 			// anyway.
 			$("#transport-type-select").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("SSE")).click();
+			$("[data-testid=select-option-sse]").click();
 
 			// then
 			// URL field is the SSE/HTTP branch.
@@ -654,7 +649,7 @@ class InspectorUiIT {
 
 			// when
 			$("#transport-type-select").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("STDIO")).click();
+			$("[data-testid=select-option-stdio]").click();
 
 			// then
 			$("#command-input").shouldBe(visible);
@@ -857,7 +852,7 @@ class InspectorUiIT {
 				listTools.click();
 			}
 			// Wait for at least one tool row to render.
-			activePanel().$$(".cursor-pointer").shouldHave(CollectionCondition.sizeGreaterThan(0));
+			activePanel().$$("[data-testid^=tool-row-]").shouldHave(CollectionCondition.sizeGreaterThan(0));
 		}
 
 		@Test
@@ -887,7 +882,8 @@ class InspectorUiIT {
 
 			// --- echo: server-declared annotations render as plain chips -------------
 			selectRow("echo");
-			SelenideElement badges = activePanel().$(".gap-1.mt-2").shouldBe(visible, Duration.ofSeconds(10));
+			SelenideElement badges = activePanel().$("[data-testid=tool-hint-badges]")
+				.shouldBe(visible, Duration.ofSeconds(10));
 			// Read-only chip is active (✓) with no (default) marker — annotations are
 			// explicit.
 			badges.$(byText("Read-only")).shouldHave(text("✓ Read-only"));
@@ -909,7 +905,8 @@ class InspectorUiIT {
 			// facts; the test self-upgrades once the framework stops inventing
 			// declarations.
 			selectRow("slowEcho");
-			SelenideElement defaultBadges = activePanel().$(".gap-1.mt-2").shouldBe(visible, Duration.ofSeconds(10));
+			SelenideElement defaultBadges = activePanel().$("[data-testid=tool-hint-badges]")
+				.shouldBe(visible, Duration.ofSeconds(10));
 			// Read-only: spec-default false renders as ✗ either way; when the chip
 			// carries the '(default)' marker its tooltip must disclose that the value
 			// comes from the spec, not the server (title embeds newlines → DOTALL).
@@ -924,7 +921,8 @@ class InspectorUiIT {
 			// --- sweep: every destructive=true claim is disclosed or accounted for ---
 			for (String name : ALL_DEMO_TOOLS) {
 				selectRow(name);
-				SelenideElement rowBadges = activePanel().$(".gap-1.mt-2").shouldBe(visible, Duration.ofSeconds(10));
+				SelenideElement rowBadges = activePanel().$("[data-testid=tool-hint-badges]")
+					.shouldBe(visible, Duration.ofSeconds(10));
 				SelenideElement destructive = rowBadges.$(byText("Destructive")).shouldBe(visible);
 				String chipText = destructive.getText();
 				if (chipText.contains("(default)")) {
@@ -960,8 +958,8 @@ class InspectorUiIT {
 		@DisplayName("toolsSearchFiltersList — typing in the search input narrows the visible rows")
 		void toolsSearch_withQuery_filtersList() {
 			// given
-			activePanel().$("[aria-label=Search]").click();
-			SelenideElement searchInput = activePanel().$("input[name=search]");
+			activePanel().$("[data-testid=search-button]").click();
+			SelenideElement searchInput = activePanel().$("[data-testid=search-input]");
 
 			// when
 			// React's controlled input filters on every change event; Selenide's
@@ -975,10 +973,10 @@ class InspectorUiIT {
 			// showing whatever tool a previous test left selected, so a panel-wide
 			// byText("echo") would match its <h3> header even when the list is
 			// correctly filtered.
-			activePanel().$$(".cursor-pointer .truncate")
+			activePanel().$$("[data-testid=row-name]")
 				.findBy(exactText("sum"))
 				.shouldBe(visible, Duration.ofSeconds(10));
-			activePanel().$$(".cursor-pointer .truncate")
+			activePanel().$$("[data-testid=row-name]")
 				.findBy(exactText("echo"))
 				.shouldNotBe(visible, Duration.ofSeconds(10));
 
@@ -986,7 +984,7 @@ class InspectorUiIT {
 			// input state updates and the filter is cleared (plain setValue("") doesn't).
 			clearAllSearchInputs();
 			// After clearing, echo is back in the list.
-			activePanel().$$(".cursor-pointer .truncate")
+			activePanel().$$("[data-testid=row-name]")
 				.findBy(exactText("echo"))
 				.shouldBe(visible, Duration.ofSeconds(5));
 		}
@@ -1085,7 +1083,7 @@ class InspectorUiIT {
 			// when
 			// chooseColor(Color color) → Radix Select with SelectTrigger id=color.
 			$("#color").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("GREEN")).click();
+			$("[data-testid=select-option-GREEN]").click();
 			activePanel().$(byText("Run Tool")).click();
 
 			// then
@@ -1145,12 +1143,12 @@ class InspectorUiIT {
 			// entries carry the red left border) and count the message inside its
 			// Response payload. Asserting mere presence stays green while the SDK ships
 			// the text twice in content[0].text, so count the occurrences.
-			SelenideElement errorCall = historyColumn().$$("li")
+			SelenideElement errorCall = historyColumn().$$("[data-testid=history-item]")
 				.findBy(Condition.and("failed tools/call entry", text("tools/call"),
 						attributeMatching("class", ".*border-red-500.*")))
 				.shouldBe(visible, Duration.ofSeconds(15));
-			errorCall.$("button.cursor-pointer").click();
-			SelenideElement responseBlock = errorCall.$(byText("Response:")).closest(".mt-2").shouldBe(visible);
+			errorCall.$("[data-testid=history-entry-toggle]").click();
+			SelenideElement responseBlock = errorCall.$("[data-testid=history-entry-response]").shouldBe(visible);
 			responseBlock.shouldHave(text("intentional demo failure"), Duration.ofSeconds(10));
 			int wireOccurrences = countOccurrences(responseBlock.innerText(), "intentional demo failure");
 			Assertions.assertEquals(1, wireOccurrences,
@@ -1421,10 +1419,11 @@ class InspectorUiIT {
 			// After the MediaContentView fix, image/* resources should render as <img>.
 			// This will FAIL against current behavior (JsonView shows base64 text) and
 			// PASS after the implementation.
-			activePanel().$("img[src^='data:image/png;base64,']").shouldBe(visible, Duration.ofSeconds(15));
+			activePanel().$("[data-testid=resource-image]").shouldBe(visible, Duration.ofSeconds(15));
 			// The image should have a non-zero natural width (proving it rendered).
 			Long naturalWidth = Selenide.executeJavaScript("return document.querySelector("
-					+ "'[role=tabpanel][data-state=active] img[src^=\"data:image/png\"]')" + "?.naturalWidth || 0;");
+					+ "'[data-testid^=tab-content-]:not([hidden]) [data-testid=resource-image]')"
+					+ "?.naturalWidth || 0;");
 			Assertions.assertTrue(naturalWidth != null && naturalWidth > 0,
 					"Image should have non-zero natural width, got: " + naturalWidth);
 		}
@@ -1441,11 +1440,11 @@ class InspectorUiIT {
 			// then
 			// Wait for the resource content to render (the <img> proves the
 			// ReadResourceResult was parsed and MediaContentView rendered it).
-			activePanel().$("img[src^='data:image/png;base64,']").shouldBe(visible, Duration.ofSeconds(15));
+			activePanel().$("[data-testid=resource-image]").shouldBe(visible, Duration.ofSeconds(15));
 			// The download link must have the correct href (data:image/png;base64,...)
 			// and download attribute matching the resource filename from the URI.
 			// The expected filename is "logo.png" (from "demo://logo.png").
-			SelenideElement downloadLink = activePanel().$("a[download='logo.png']");
+			SelenideElement downloadLink = activePanel().$("[data-testid=resource-download]");
 			downloadLink.shouldBe(visible, Duration.ofSeconds(5));
 			String href = downloadLink.getAttribute("href");
 			Assertions.assertNotNull(href, "Download link must have an href");
@@ -1466,7 +1465,7 @@ class InspectorUiIT {
 			// then
 			// First wait for the resource content to render (the <img> proves the
 			// ReadResourceResult was parsed and MediaContentView rendered it).
-			activePanel().$("img[src^='data:image/png;base64,']").shouldBe(visible, Duration.ofSeconds(15));
+			activePanel().$("[data-testid=resource-image]").shouldBe(visible, Duration.ofSeconds(15));
 			// The base64 blob content should NOT be visible as raw text in the panel.
 			// The TINY_PNG_BASE64 from DemoAdvancedResourcesProvider starts with this
 			// known prefix. This will FAIL against current behavior (base64 is visible
@@ -1519,8 +1518,9 @@ class InspectorUiIT {
 			// Template variable input is a `Combobox` — a Radix Popover whose trigger is
 			// <button role="combobox" aria-controls="${key}">. Clicking opens a popover
 			// with a CommandInput where we type the value.
-			activePanel().$("button[role=combobox][aria-controls=id]").shouldBe(visible).click();
-			SelenideElement commandInput = $("input[placeholder='Enter id']").shouldBe(visible, Duration.ofSeconds(5));
+			activePanel().$("button[data-testid=combobox-trigger-id]").shouldBe(visible).click();
+			SelenideElement commandInput = $("input[data-testid=combobox-input-id]").shouldBe(visible,
+					Duration.ofSeconds(5));
 			commandInput.setValue("7");
 			// Close the popover with Escape so the floating CommandInput doesn't
 			// intercept
@@ -1544,16 +1544,16 @@ class InspectorUiIT {
 			// panel).
 			// ListPane exposes a search icon button (aria-label=Search) that expands to
 			// an input.
-			SelenideElement searchBtn = activePanel().$("[aria-label=Search]");
+			SelenideElement searchBtn = activePanel().$("[data-testid=search-button]");
 
 			// when
 			searchBtn.shouldBe(visible).click();
-			activePanel().$("input[name=search]").shouldBe(visible).setValue("config");
+			activePanel().$("[data-testid=search-input]").shouldBe(visible).setValue("config");
 
 			// then
 			activePanel().shouldHave(text("demo-config"));
 			// demo-greeting should be filtered out of the resources pane.
-			activePanel().$("[aria-label=Search]").shouldNotHave(text("demo-greeting"));
+			activePanel().$("[data-testid=search-button]").shouldNotHave(text("demo-greeting"));
 		}
 
 	}
@@ -1612,17 +1612,32 @@ class InspectorUiIT {
 		@DisplayName("selectedPrompt marker follows the clicked prompt row")
 		void selectedPrompt_markerFollowsClick() {
 			// given & when: click the greeting row, then the multiTurn row
-			SelenideElement greetingRow = $x("//*[normalize-space(text())='greeting']"
-					+ "/ancestor::*[starts-with(@data-testid, 'tool-row-')][1]");
+			SelenideElement greetingRow = rowByName("greeting");
 			greetingRow.click();
 			greetingRow.shouldHave(cssClass("bg-muted"), Duration.ofSeconds(10));
 
 			// then: the marker sits on the newly clicked row only
-			SelenideElement multiTurnRow = $x("//*[normalize-space(text())='multiTurn']"
-					+ "/ancestor::*[starts-with(@data-testid, 'tool-row-')][1]");
+			SelenideElement multiTurnRow = rowByName("multiTurn");
 			multiTurnRow.click();
 			multiTurnRow.shouldHave(cssClass("bg-muted"), Duration.ofSeconds(10));
 			greetingRow.shouldNotHave(cssClass("bg-muted"));
+		}
+
+		/**
+		 * The {@code tool-row-<index>} row whose {@code row-name} span has the exact
+		 * given text. Uses the browser {@code closest()}, which supports the {@code ^=}
+		 * prefix match that Selenide's xpath-compiling {@code closest} cannot translate
+		 * (issue #378).
+		 */
+		private static SelenideElement rowByName(String name) {
+			org.openqa.selenium.WebElement row = Selenide.executeJavaScript(
+					"const names = document.querySelectorAll("
+							+ "'[data-testid^=tab-content-]:not([hidden]) [data-testid=row-name]');"
+							+ "for (const el of names) {" + "  if (el.textContent.trim() === arguments[0]) {"
+							+ "    return el.closest('[data-testid^=tool-row-]');" + "  }" + "}" + "return null;",
+					name);
+			Assertions.assertNotNull(row, "no row with name " + name + " in the active panel");
+			return $(row);
 		}
 
 		/**
@@ -1635,25 +1650,26 @@ class InspectorUiIT {
 		 *
 		 * <p>
 		 * Returns {@code true} when at least one Combobox trigger
-		 * ({@code button[role=combobox]}) is present in the active panel after selecting
-		 * the prompt — i.e., the upstream renderer received a non-empty
+		 * ({@code button[data-testid^=combobox-trigger-]}) is present in the active panel
+		 * after selecting the prompt — i.e., the upstream renderer received a non-empty
 		 * {@code prompt.arguments} array.
 		 */
 		private boolean promptArgsRendered() {
-			return activePanel().$$("button[role=combobox]").size() > 0;
+			return activePanel().$$("button[data-testid^=combobox-trigger-]").size() > 0;
 		}
 
 		/**
-		 * Type into the prompt argument Combobox identified by its {@code aria-controls}.
-		 * The {@code @McpArg(name=...)} value drives the combobox's {@code id} (=
-		 * aria-controls).
+		 * Type into the prompt argument Combobox identified by the argument name: the
+		 * {@code @McpArg(name=...)} value drives the {@code data-testid=combobox-*}
+		 * anchors (issue #378).
 		 */
 		private static void fillPromptArg(String argName, String value) {
-			activePanel().$("button[role=combobox][aria-controls='" + argName + "']").shouldBe(visible).click();
-			$("input[placeholder='Enter " + argName + "']").shouldBe(visible, Duration.ofSeconds(5)).setValue(value);
+			activePanel().$("button[data-testid=combobox-trigger-" + argName + "]").shouldBe(visible).click();
+			$("input[data-testid=combobox-input-" + argName + "]").shouldBe(visible, Duration.ofSeconds(5))
+				.setValue(value);
 			// Close the popover by pressing Escape — otherwise the next interaction may
 			// accidentally click an option in the floating list.
-			$("input[placeholder='Enter " + argName + "']").pressEscape();
+			$("input[data-testid=combobox-input-" + argName + "]").pressEscape();
 		}
 
 		@Test
@@ -1870,14 +1886,15 @@ class InspectorUiIT {
 			// given
 			clickTab("ping");
 			// History count baseline — `initialize` is always logged on connect.
-			int before = historyColumn().$$("li").size();
+			int before = historyColumn().$$("[data-testid=history-item]").size();
 
 			// when
 			activePanel().$(byText("Ping Server")).shouldBe(visible).click();
 
 			// then
 			// After a successful ping, the history pane gains one entry.
-			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThan(before), Duration.ofSeconds(15));
+			historyColumn().$$("[data-testid=history-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThan(before), Duration.ofSeconds(15));
 		}
 
 		@Test
@@ -1890,7 +1907,7 @@ class InspectorUiIT {
 			clickTab("ping");
 
 			// Reset history baseline.
-			SelenideElement historyClear = $$("h2").findBy(text("History")).closest("div").$(byText("Clear"));
+			SelenideElement historyClear = historyColumn().$("[data-testid=history-clear]");
 			if (historyClear.exists() && historyClear.isEnabled()) {
 				historyClear.click();
 			}
@@ -1899,7 +1916,7 @@ class InspectorUiIT {
 			for (int i = 0; i < 3; i++) {
 				activePanel().$(byText("Ping Server")).click();
 				// Give the request a moment to round-trip before firing the next one.
-				historyColumn().$$("li")
+				historyColumn().$$("[data-testid=history-item]")
 					.shouldHave(CollectionCondition.sizeGreaterThanOrEqual(i + 1), Duration.ofSeconds(10));
 			}
 		}
@@ -1981,7 +1998,8 @@ class InspectorUiIT {
 			}
 
 			// then
-			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThanOrEqual(1), Duration.ofSeconds(15));
+			historyColumn().$$("[data-testid=history-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThanOrEqual(1), Duration.ofSeconds(15));
 		}
 
 		@Test
@@ -1993,7 +2011,8 @@ class InspectorUiIT {
 			// given
 			clickTab("ping");
 			activePanel().$(byText("Ping Server")).click();
-			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(10));
+			historyColumn().$$("[data-testid=history-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(10));
 
 			// when
 			historyColumn().$(byText("Clear")).click();
@@ -2042,14 +2061,15 @@ class InspectorUiIT {
 			if (listTools.exists() && listTools.isEnabled()) {
 				listTools.click();
 			}
-			activePanel().$$(".cursor-pointer").shouldHave(CollectionCondition.sizeGreaterThan(0));
+			activePanel().$$("[data-testid^=tool-row-]").shouldHave(CollectionCondition.sizeGreaterThan(0));
 			selectRow("echo");
 			$("#text").shouldBe(visible).setValue("hello world");
 			activePanel().$(byText("Run Tool")).click();
 			activePanel().shouldHave(text("hello world"), Duration.ofSeconds(15));
 
 			// assert: history entry appears in panel AND in localStorage
-			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
+			historyColumn().$$("[data-testid=history-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
 			// Pre-reload, assert THIS session's own bucket holds the entries (not
 			// just the whole store): the store was cleared right after open(), so
 			// every bucket in it belongs to this session; the bucket containing
@@ -2079,8 +2099,11 @@ class InspectorUiIT {
 			// count
 			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
 			historyColumn().shouldNotHave(text("No history yet"), Duration.ofSeconds(10));
-			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
-			historyColumn().$$("li").find(Condition.text("tools/call")).shouldBe(visible, Duration.ofSeconds(5));
+			historyColumn().$$("[data-testid=history-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
+			historyColumn().$$("[data-testid=history-item]")
+				.find(Condition.text("tools/call"))
+				.shouldBe(visible, Duration.ofSeconds(5));
 		}
 
 		@Test
@@ -2096,12 +2119,13 @@ class InspectorUiIT {
 			if (listTools.exists() && listTools.isEnabled()) {
 				listTools.click();
 			}
-			activePanel().$$(".cursor-pointer").shouldHave(CollectionCondition.sizeGreaterThan(0));
+			activePanel().$$("[data-testid^=tool-row-]").shouldHave(CollectionCondition.sizeGreaterThan(0));
 			selectRow("echo");
 			$("#text").shouldBe(visible).setValue("hello world");
 			activePanel().$(byText("Run Tool")).click();
 			activePanel().shouldHave(text("hello world"), Duration.ofSeconds(15));
-			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
+			historyColumn().$$("[data-testid=history-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
 
 			// when: disconnect and change URL (no reconnect: history must clear on
 			// connectionId change)
@@ -2212,13 +2236,13 @@ class InspectorUiIT {
 		void themeSwitcher_pickDark_addsDarkClassToHtml() {
 			// given & when
 			$("#theme-select").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("Dark")).click();
+			$("[data-testid=select-option-dark]").click();
 
 			// then
 			$("html").shouldHave(Condition.cssClass("dark"));
 
 			$("#theme-select").click();
-			$$("[role=option]").findBy(text("Light")).click();
+			$("[data-testid=select-option-light]").click();
 			$("html").shouldNotHave(Condition.cssClass("dark"));
 		}
 
@@ -2262,7 +2286,7 @@ class InspectorUiIT {
 			// prop as a DOM attribute — match on the trigger's id suffix.
 			for (String value : new String[] { "resources", "prompts", "tools", "apps", "ping", "sampling",
 					"elicitations", "roots", "auth", "metadata" }) {
-				$("[role=tab][id$='-trigger-" + value + "']").shouldBe(visible);
+				$("[data-testid=tab-trigger-" + value + "]").shouldBe(visible);
 			}
 		}
 
@@ -2307,7 +2331,7 @@ class InspectorUiIT {
 			// Set the transport-type Select to "Streamable HTTP" — UPSTREAM_DOM_MAP.md
 			// §2.1.
 			$("#transport-type-select").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("Streamable HTTP")).click();
+			$("[data-testid=select-option-streamable-http]").click();
 
 			// URL is auto-populated by index.html bootstrap (lastSseUrl localStorage key)
 			// to
@@ -2362,16 +2386,16 @@ class InspectorUiIT {
 
 			// when
 			$("#transport-type-select").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("Streamable HTTP")).click();
+			$("[data-testid=select-option-streamable-http]").click();
 
 			// then
 			// Connection Type select trigger is visible (UPSTREAM_DOM_MAP.md §2.1).
 			$("#connection-type-select").shouldBe(visible).click();
 			// Two and only two options: Via Proxy / Direct (per UPSTREAM_DOM_MAP.md).
-			$$("[role=option]").findBy(text("Via Proxy")).shouldBe(visible);
-			$$("[role=option]").findBy(text("Direct")).shouldBe(visible);
+			$("[data-testid=select-option-proxy]").shouldBe(visible);
+			$("[data-testid=select-option-direct]").shouldBe(visible);
 			// No "Stateless" or "Streamable" connection-type option exists.
-			$$("[role=option]").findBy(text("Stateless")).shouldNotBe(visible);
+			$("[data-testid=select-option-stateless]").shouldNotBe(visible);
 		}
 
 	}
@@ -2522,7 +2546,7 @@ class InspectorUiIT {
 			// when
 			// Switch transport to STDIO — UPSTREAM_DOM_MAP.md §2.1.
 			$("#transport-type-select").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("STDIO")).click();
+			$("[data-testid=select-option-stdio]").click();
 
 			// Fill Command (the JRE binary) and Arguments (the jar plus stdio config).
 			$("#command-input").shouldBe(visible).setValue(System.getProperty("java.home") + "/bin/java");
@@ -2629,7 +2653,7 @@ class InspectorUiIT {
 		}
 
 		private boolean tasksCapabilityAdvertised() {
-			SelenideElement trigger = $("[role=tab][id$='-trigger-tasks']");
+			SelenideElement trigger = $("[data-testid=tab-trigger-tasks]");
 			if (!trigger.exists()) {
 				return false;
 			}
@@ -2669,12 +2693,12 @@ class InspectorUiIT {
 			// Hop to Tasks tab and assert at least one row materialises (status icon next
 			// to the taskId).
 			clickTab("tasks");
-			activePanel().$$(".cursor-pointer")
+			activePanel().$$("[data-testid^=task-row-]")
 				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(20));
 			// Eventually the task transitions to completed (CheckCircle2 icon) — assert
 			// by
 			// selecting the row and waiting for the status text.
-			activePanel().$$(".cursor-pointer").first().click();
+			activePanel().$$("[data-testid^=task-row-]").first().click();
 			activePanel().shouldHave(Condition.or("completion signal", text("completed"), text("Completed")),
 					Duration.ofSeconds(30));
 		}
@@ -2702,7 +2726,7 @@ class InspectorUiIT {
 
 			clickTab("tasks");
 			// Pick the first task row (the one we just spawned).
-			activePanel().$$(".cursor-pointer")
+			activePanel().$$("[data-testid^=task-row-]")
 				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15))
 				.first()
 				.click();
@@ -2710,7 +2734,7 @@ class InspectorUiIT {
 			// Cancel button is a destructive Button with aria-label="Cancel task
 			// ${taskId}" —
 			// we match by the aria-label prefix.
-			SelenideElement cancelBtn = $("button[aria-label^='Cancel task ']").shouldBe(visible,
+			SelenideElement cancelBtn = $("button[data-testid=task-cancel-button]").shouldBe(visible,
 					Duration.ofSeconds(10));
 			cancelBtn.click();
 
@@ -2748,7 +2772,7 @@ class InspectorUiIT {
 		/** Right-hand "Server Notifications" pane — sibling of historyColumn(). */
 		private static SelenideElement notificationsColumn() {
 			// History pane has border-r; notifications pane is the other flex-1 column.
-			return $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications"));
+			return $("[data-testid=notifications-pane]");
 		}
 
 		@Test
@@ -2765,7 +2789,7 @@ class InspectorUiIT {
 			SelenideElement loggingLevel = $("#logging-level-select");
 			if (loggingLevel.isDisplayed()) {
 				loggingLevel.click();
-				$$("[role=option]").findBy(text("info")).click();
+				$("[data-testid=select-option-info]").click();
 			}
 
 			// when
@@ -2795,7 +2819,7 @@ class InspectorUiIT {
 			// DEMO_CAPABILITIES.md).
 			SelenideElement column = notificationsColumn();
 			if (column.exists() && !column.text().contains("No notifications yet")) {
-				column.$$("li").shouldHave(CollectionCondition.sizeGreaterThan(0));
+				column.$$("[data-testid=notification-item]").shouldHave(CollectionCondition.sizeGreaterThan(0));
 			}
 		}
 
@@ -2831,13 +2855,14 @@ class InspectorUiIT {
 			// Fire a ping so we have a non-initialize entry to expand.
 			clickTab("ping");
 			activePanel().$(byText("Ping Server")).click();
-			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(10));
+			historyColumn().$$("[data-testid=history-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(10));
 
 			// when
 			// The expand toggle is a plain <span>▶</span> inside the row's header div;
 			// clicking the header (cursor-pointer) toggles. Click the most recent row.
-			SelenideElement firstRow = historyColumn().$$("li").first();
-			firstRow.$(".cursor-pointer").click();
+			SelenideElement firstRow = historyColumn().$$("[data-testid=history-item]").first();
+			firstRow.$("[data-testid=history-entry-toggle]").click();
 
 			// then
 			// Expanded panel contains "Request:" and (eventually) "Response:" headings.
@@ -2854,9 +2879,9 @@ class InspectorUiIT {
 			// given
 			// Server Notifications pane: the other .flex-1.overflow-y-auto.p-4 sibling
 			// (no border-r). UPSTREAM_DOM_MAP.md §18.
-			SelenideElement notifications = $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications"));
+			SelenideElement notifications = $("[data-testid=notifications-pane]");
 
-			int before = notifications.$$("li").size();
+			int before = notifications.$$("[data-testid=notification-item]").size();
 
 			// when
 			clickTab("tools");
@@ -2878,7 +2903,7 @@ class InspectorUiIT {
 			// entry. Otherwise the demo server didn't subscribe the client (logging
 			// capability
 			// gap) — flag as informational rather than fail.
-			int after = notifications.$$("li").size();
+			int after = notifications.$$("[data-testid=notification-item]").size();
 			// BUG-CANDIDATE: when after == before the demo server has not negotiated the
 			// logging subscription with the upstream client — log it but don't hard-fail.
 			if (after == before) {
@@ -3288,7 +3313,7 @@ class InspectorUiIT {
 
 			// Replace the URI with our test value. The Input renders inside the row;
 			// it's the first plain <input> inside the active panel after the alert.
-			SelenideElement rootUri = activePanel().$$("input[placeholder='file:// URI']").first().shouldBe(visible);
+			SelenideElement rootUri = activePanel().$$("[data-testid=root-uri-input]").first().shouldBe(visible);
 			rootUri.click();
 			rootUri.sendKeys(org.openqa.selenium.Keys.END);
 			int len = rootUri.getValue() == null ? 0 : rootUri.getValue().length();
@@ -3350,10 +3375,8 @@ class InspectorUiIT {
 			// Add Root creates an entry pre-filled with "file://". A root saved by a
 			// sibling story may already exist, so the new row is the last one.
 			activePanel().$(byText("Add Root")).shouldBe(visible, Duration.ofSeconds(10)).click();
-			int target = activePanel().$$("input[placeholder='file:// URI']").size() - 1;
-			SelenideElement rootUri = activePanel().$$("input[placeholder='file:// URI']")
-				.get(target)
-				.shouldBe(visible);
+			int target = activePanel().$$("[data-testid=root-uri-input]").size() - 1;
+			SelenideElement rootUri = activePanel().$$("[data-testid=root-uri-input]").get(target).shouldBe(visible);
 			rootUri.click();
 			rootUri.sendKeys(org.openqa.selenium.Keys.END);
 			int len = rootUri.getValue() == null ? 0 : rootUri.getValue().length();
@@ -3483,9 +3506,10 @@ class InspectorUiIT {
 			// then
 			// Server Notifications pane gains at least one entry within the
 			// DemoSubscribableResource tick interval (~5s default + initial 2s delay).
-			SelenideElement notifications = $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications"));
+			SelenideElement notifications = $("[data-testid=notifications-pane]");
 			// Wait up to 10s for the first scheduled tick to reach the panel.
-			notifications.$$("li").shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(12));
+			notifications.$$("[data-testid=notification-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(12));
 		}
 
 	}
@@ -3539,7 +3563,7 @@ class InspectorUiIT {
 		}
 
 		private int historyResourcesReadCount() {
-			return historyColumn().$$("li").filterBy(text("resources/read")).size();
+			return historyColumn().$$("[data-testid=history-item]").filterBy(text("resources/read")).size();
 		}
 
 		@Test
@@ -3562,7 +3586,7 @@ class InspectorUiIT {
 			// The re-read must land in History and the pane must advance:
 			// demo://clock returns Instant.now() with sub-second precision, so
 			// any later read renders a different string.
-			historyColumn().$$("li")
+			historyColumn().$$("[data-testid=history-item]")
 				.filterBy(text("resources/read"))
 				.shouldHave(CollectionCondition.sizeGreaterThan(readsBeforeRefresh), Duration.ofSeconds(15));
 			final long deadline = System.currentTimeMillis() + Duration.ofSeconds(15).toMillis();
@@ -3741,13 +3765,13 @@ class InspectorUiIT {
 			// when
 			// The topic Combobox trigger is a <button role=combobox aria-controls=topic>.
 			// Click it to open the Popover containing the CommandInput.
-			SelenideElement trigger = activePanel().$("button[role=combobox][aria-controls=topic]");
+			SelenideElement trigger = activePanel().$("button[data-testid=combobox-trigger-topic]");
 			Assertions.assertTrue(trigger.exists(),
 					"prompts/list returned no argument schemas for multiTurn — completion popover unavailable");
 			trigger.shouldBe(visible).click();
 
 			// CommandInput placeholder is "Enter topic" (matches PromptsTab + Combobox).
-			SelenideElement commandInput = $("input[placeholder='Enter topic']").shouldBe(visible,
+			SelenideElement commandInput = $("input[data-testid=combobox-input-topic]").shouldBe(visible,
 					Duration.ofSeconds(5));
 			commandInput.setValue("s");
 
@@ -3756,13 +3780,13 @@ class InspectorUiIT {
 			// strict prefix filter — see DemoAdvancedPromptsProvider). The Combobox
 			// renders results as Command items inside the Popover; locate the
 			// "sports" entry and click it.
-			SelenideElement sportsOption = $$("[role=option], [cmdk-item]").findBy(text("sports"))
-				.shouldBe(visible, Duration.ofSeconds(10));
+			SelenideElement sportsOption = $("[data-testid=combobox-option-sports]").shouldBe(visible,
+					Duration.ofSeconds(10));
 			sportsOption.click();
 
 			// then
 			// After selection, the Combobox closes and the trigger reflects the value.
-			activePanel().$("button[role=combobox][aria-controls=topic]")
+			activePanel().$("button[data-testid=combobox-trigger-topic]")
 				.shouldHave(text("sports"), Duration.ofSeconds(5));
 		}
 
@@ -3832,15 +3856,15 @@ class InspectorUiIT {
 		 * every width (#275); "nowrap" anywhere is a regression.
 		 */
 		private static String tabsListFlexWrap() {
-			return (String) Selenide
-				.executeJavaScript("return getComputedStyle(document.querySelector('[role=tablist]')).flexWrap;");
+			return (String) Selenide.executeJavaScript(
+					"return getComputedStyle(document.querySelector('[data-testid=tab-list]')).flexWrap;");
 		}
 
 		/** Right edge of the widest tab trigger, in CSS px, relative to the viewport. */
 		private static double widestTriggerRightEdge() {
-			return ((Number) Selenide
-				.executeJavaScript("return Math.max(...Array.from(document.querySelectorAll('[role=tab]'))"
-						+ ".map(t => t.getBoundingClientRect().right));"))
+			return ((Number) Selenide.executeJavaScript(
+					"return Math.max(...Array.from(document.querySelectorAll('[data-testid^=tab-trigger-]'))"
+							+ ".map(t => t.getBoundingClientRect().right));"))
 				.doubleValue();
 		}
 
@@ -3856,7 +3880,7 @@ class InspectorUiIT {
 			// then
 			Assertions.assertEquals("wrap", tabsListFlexWrap(), "TabsList must wrap below the sm breakpoint");
 			for (String value : ALL_TAB_VALUES) {
-				Assertions.assertTrue($("[role=tab][id$='-trigger-" + value + "']").exists(),
+				Assertions.assertTrue($("[data-testid=tab-trigger-" + value + "]").exists(),
 						"tab trigger '" + value + "' must be present in the DOM at 375px");
 			}
 			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
@@ -3881,7 +3905,7 @@ class InspectorUiIT {
 				clickTab(value); // real WebDriver click input; asserts the trigger
 									// becomes active
 			}
-			Assertions.assertTrue($("[role=tab][id$='-trigger-tasks']").exists(),
+			Assertions.assertTrue($("[data-testid=tab-trigger-tasks]").exists(),
 					"disabled tasks trigger must be present at the sm boundary (#63)");
 			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
 					"document.documentElement must not overflow horizontally at 639px");
@@ -3905,7 +3929,7 @@ class InspectorUiIT {
 					clickTab(value); // real WebDriver click input; asserts the trigger
 										// becomes active
 				}
-				Assertions.assertTrue($("[role=tab][id$='-trigger-tasks']").exists(),
+				Assertions.assertTrue($("[data-testid=tab-trigger-tasks]").exists(),
 						"disabled tasks trigger must be present at " + width + "px (#63)");
 				Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
 						"document.documentElement must not overflow horizontally at " + width + "px");
@@ -4095,7 +4119,7 @@ class InspectorUiIT {
 		 * overlap probe from the stable anchor.
 		 */
 		private static String panesOverlapJs() {
-			return "const panel = document.querySelector('[role=tabpanel][data-state=active]').getBoundingClientRect();"
+			return "const panel = document.querySelector('[data-testid^=tab-content-]:not([hidden])').getBoundingClientRect();"
 					+ "const history = document.querySelector(arguments[0]);"
 					+ "if (!history) { return 'history-not-found'; }" + "const h = history.getBoundingClientRect();"
 					+ "return !(h.left < panel.right && h.right > panel.left && h.top < panel.bottom"
@@ -4139,7 +4163,7 @@ class InspectorUiIT {
 		 * {@code border-r}; the notifications side is anchored by its header text.
 		 */
 		private static SelenideElement notificationsColumn() {
-			return $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications"));
+			return $("[data-testid=notifications-pane]");
 		}
 
 		@Test
@@ -4250,7 +4274,7 @@ class InspectorUiIT {
 			Assertions.assertEquals("wrap", ResponsiveTabBar.tabsListFlexWrap(),
 					"TabsList must still wrap below the sm breakpoint");
 			for (String value : ResponsiveTabBar.ALL_TAB_VALUES) {
-				Assertions.assertTrue($("[role=tab][id$='-trigger-" + value + "']").exists(),
+				Assertions.assertTrue($("[data-testid=tab-trigger-" + value + "]").exists(),
 						"tab trigger '" + value + "' must be present in the DOM at 375px");
 			}
 
@@ -4380,14 +4404,14 @@ class InspectorUiIT {
 			// Force SSE — the proxy branch whose SSE error event drives the D3
 			// banner (the demo config already defaults to SSE, but be explicit).
 			$("#transport-type-select").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("SSE")).shouldBe(visible).click();
+			$("[data-testid=select-option-sse]").shouldBe(visible).click();
 
 			// Create the CLIENT_CREDENTIALS profile (registration performs the
 			// initial token exchange server-side; the profile auto-selects on save).
 			$("[data-testid=auth-profile-type]").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("OAuth2")).shouldBe(visible).click();
+			$("[data-testid=select-option-OAUTH2]").shouldBe(visible).click();
 			$("[data-testid=auth-profile-grant-mode]").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("Client credentials")).shouldBe(visible).click();
+			$("[data-testid=select-option-CLIENT_CREDENTIALS]").shouldBe(visible).click();
 			setReactInputValue("[data-testid=auth-profile-name]", "e2e-cc");
 			setReactInputValue("[data-testid=auth-profile-token-url]", tokenServer.tokenUrl());
 			setReactInputValue("[data-testid=auth-profile-client-id]", "e2e-cid");
@@ -4513,7 +4537,7 @@ class InspectorUiIT {
 			if (listTools.exists() && listTools.isEnabled()) {
 				listTools.click();
 			}
-			activePanel().$$(".cursor-pointer")
+			activePanel().$$("[data-testid^=tool-row-]")
 				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
 			selectRow("sum");
 			$("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofSeconds(10));
@@ -4737,7 +4761,7 @@ class InspectorUiIT {
 			Assertions.assertTrue(elementAtCenter(listTools),
 					"elementFromPoint at the List Tools centre must return the button itself at 375x667");
 			listTools.click();
-			activePanel().$$(".cursor-pointer")
+			activePanel().$$("[data-testid^=tool-row-]")
 				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
 
 			// ...and a real click on the first row selects it.
@@ -4769,7 +4793,7 @@ class InspectorUiIT {
 			if (listTools.exists() && listTools.isEnabled()) {
 				listTools.click();
 			}
-			activePanel().$$(".cursor-pointer")
+			activePanel().$$("[data-testid^=tool-row-]")
 				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
 
 			// then: the search button is not intercepted at 375px...
@@ -4806,7 +4830,7 @@ class InspectorUiIT {
 			if (listTools.exists() && listTools.isEnabled()) {
 				listTools.click();
 			}
-			activePanel().$$(".cursor-pointer")
+			activePanel().$$("[data-testid^=tool-row-]")
 				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
 			selectRow("sum");
 			$("[data-testid=tools-detail-pane]").shouldBe(visible, Duration.ofSeconds(10));
@@ -4827,7 +4851,7 @@ class InspectorUiIT {
 			// result block reports a successful execution — an error or failed
 			// invocation must not satisfy the acceptance contract.
 			activePanel().shouldHave(text("15"), Duration.ofSeconds(15));
-			activePanel().$$("h4").findBy(text("Tool Result:")).shouldHave(text("Success"), Duration.ofSeconds(15));
+			activePanel().$("[data-testid=tool-result-heading]").shouldHave(text("Success"), Duration.ofSeconds(15));
 		}
 
 	}
@@ -4874,7 +4898,7 @@ class InspectorUiIT {
 			if (listTools.exists() && listTools.isEnabled()) {
 				listTools.click();
 			}
-			activePanel().$$(".cursor-pointer").shouldHave(CollectionCondition.sizeGreaterThan(0));
+			activePanel().$$("[data-testid^=tool-row-]").shouldHave(CollectionCondition.sizeGreaterThan(0));
 		}
 
 		@Test
@@ -4977,15 +5001,13 @@ class InspectorUiIT {
 		 * (md breakpoint) stacked layout.
 		 */
 		private static boolean historyAboveNotifications() {
-			Object result = Selenide
-				.executeJavaScript("const all = Array.from(document.querySelectorAll('.flex-1.overflow-y-auto.p-4'));"
-						+ "const h = all.find(el => el.textContent.includes('History'));"
-						+ "const n = all.find(el => el.textContent.includes('Server Notifications'));"
-						+ "if (!h || !n) { return 'pane-not-found: ' + all.length + ' panes, h=' + !!h + ', n=' + !!n; }"
-						+ "const hr = h.getBoundingClientRect();" + "const nr = n.getBoundingClientRect();"
-						+ "if (nr.top < hr.bottom) { return 'not-stacked: history=' + Math.round(hr.top) + '..' + Math.round(hr.bottom)"
-						+ "+ ', notifications=' + Math.round(nr.top) + '..' + Math.round(nr.bottom)"
-						+ "+ ', scrollY=' + window.scrollY + ', panes=' + all.length; }" + "return true;");
+			Object result = Selenide.executeJavaScript("const h = document.querySelector('[data-testid=history-pane]');"
+					+ "const n = document.querySelector('[data-testid=notifications-pane]');"
+					+ "if (!h || !n) { return 'pane-not-found: h=' + !!h + ', n=' + !!n; }"
+					+ "const hr = h.getBoundingClientRect();" + "const nr = n.getBoundingClientRect();"
+					+ "if (nr.top < hr.bottom) { return 'not-stacked: history=' + Math.round(hr.top) + '..' + Math.round(hr.bottom)"
+					+ "+ ', notifications=' + Math.round(nr.top) + '..' + Math.round(nr.bottom)"
+					+ "+ ', scrollY=' + window.scrollY + ', panes=' + all.length; }" + "return true;");
 			if (result instanceof String) {
 				Assertions.fail((String) result);
 			}
@@ -5123,7 +5145,7 @@ class InspectorUiIT {
 
 		private static int toastCount() {
 			Object count = Selenide.executeJavaScript(
-					"const stack = document.querySelector('ol.fixed'); return stack ? stack.children.length : 0;");
+					"const stack = document.querySelector('[data-testid=toast-stack]'); return stack ? stack.children.length : 0;");
 			return count instanceof Number number ? number.intValue() : 0;
 		}
 
@@ -5276,9 +5298,9 @@ class InspectorUiIT {
 
 			// 2) History and Server Notifications stack vertically
 			// (both panes are rendered after connect)
-			SelenideElement historyCol = $$(".flex-1.overflow-y-auto.p-4").first();
+			SelenideElement historyCol = $("[data-testid=history-pane]");
 			historyCol.shouldBe(visible);
-			SelenideElement notificationsCol = $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications"));
+			SelenideElement notificationsCol = $("[data-testid=notifications-pane]");
 			notificationsCol.shouldBe(visible);
 			Assertions.assertTrue(historyAboveNotifications(),
 					"History section must be above Server Notifications at 375px (stacked, not side-by-side)");
@@ -5515,7 +5537,7 @@ class InspectorUiIT {
 
 			// and: the View in Timeline link switches the app to the Timeline tab.
 			$("[data-testid=tool-result-leak-jump]").shouldBe(visible).click();
-			$("[role=tab][data-state=active][id$='-trigger-timeline']").shouldBe(visible, Duration.ofSeconds(15));
+			$("[data-testid=tab-content-timeline]").shouldBe(visible, Duration.ofSeconds(15));
 
 			// and: the failing tools/call response row carries the leak badge (exact
 			// tier); its tooltip discloses the match kind and the correlated log line.
@@ -5528,10 +5550,9 @@ class InspectorUiIT {
 			// and: a click on the row itself expands the detail (the badge click is a
 			// jump, see TimelineTab). The leak message block carries the engine-capped
 			// first log line only, never the stack trace; the leaked E11000 text sits in
-			// the neighboring tool error block. Selenide closest("div.border-l-2")
-			// compiles to a broken xpath, so walk the ancestor axis explicitly.
-			SelenideElement annotatedRow = badge
-				.find(org.openqa.selenium.By.xpath("ancestor::div[contains(@class, 'border-l-2')][1]"));
+			// the neighboring tool error block. The row carries
+			// data-testid=timeline-row (issue #378).
+			SelenideElement annotatedRow = badge.closest("[data-testid=timeline-row]");
 			annotatedRow.click();
 			$("[data-testid=timeline-leak-log-message]").shouldBe(visible, Duration.ofSeconds(15))
 				.shouldHave(text("leakyInsert failed for tenant acme"));
@@ -5549,18 +5570,11 @@ class InspectorUiIT {
 			org.openqa.selenium.JavascriptExecutor js = (org.openqa.selenium.JavascriptExecutor) WebDriverRunner
 				.getWebDriver();
 			Boolean logRowInView = (Boolean) js.executeScript("""
-					var rows = document.querySelectorAll('div.border-l-2');
+					var rows = document.querySelectorAll('[data-testid=timeline-row]');
 					for (var i = 0; i < rows.length; i++) {
 						var row = rows[i];
-						var isAppLog = false;
-						var spans = row.querySelectorAll('span.font-semibold');
-						for (var j = 0; j < spans.length; j++) {
-							if (spans[j].textContent.trim() === 'APP LOG') {
-								isAppLog = true;
-								break;
-							}
-						}
-						if (isAppLog && row.textContent.indexOf('leakyInsert failed for tenant acme') >= 0) {
+						if (row.textContent.indexOf('APP LOG') >= 0
+								&& row.textContent.indexOf('leakyInsert failed for tenant acme') >= 0) {
 							var rect = row.getBoundingClientRect();
 							return rect.top >= 0 && rect.bottom <= window.innerHeight;
 						}

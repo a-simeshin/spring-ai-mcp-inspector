@@ -98,10 +98,14 @@ const MediaContentView = ({
         <img
           src={dataUri}
           alt={alt || "Resource image"}
+          /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): resource-image anchor, was img[src^="data:image/png;base64,"]. */
+          data-testid="resource-image"
           className="max-w-full h-auto"
         />
         <div className="mt-2">
           <a
+            /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): resource-download anchor, was a[download=<filename>]. */
+            data-testid="resource-download"
             download={downloadName}
             href={dataUri}
             className="inline-flex items-center gap-2 px-4 py-2 rounded text-sm font-medium
@@ -133,6 +137,8 @@ const MediaContentView = ({
         </audio>
         <div className="mt-2">
           <a
+            /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): resource-download anchor, was a[download=<filename>]. */
+            data-testid="resource-download"
             download={downloadName}
             href={dataUri}
             className="inline-flex items-center gap-2 px-4 py-2 rounded text-sm font-medium
@@ -158,6 +164,8 @@ const MediaContentView = ({
           <span className="w-fit">{mimeTypeBadge}</span>
         )}
         <a
+          /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): resource-download anchor, was a[download=<filename>]. */
+          data-testid="resource-download"
           download={downloadName}
           href={href}
           className="inline-flex items-center gap-2 px-4 py-2 rounded text-sm font-medium

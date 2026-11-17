@@ -149,7 +149,7 @@ class UiBigDataIT {
 	// ------------------------------------------------------------------
 
 	private static SelenideElement sidebar() {
-		return $(".bg-card.border-r");
+		return $("[data-testid=sidebar]");
 	}
 
 	private static SelenideElement connectButton() {
@@ -157,13 +157,17 @@ class UiBigDataIT {
 	}
 
 	private static SelenideElement activePanel() {
-		return $("[role=tabpanel][data-state=active]");
+		// All TabsContent panes are force-mounted (hidden, not unmounted), so select
+		// the visible tab-content pane (issue #378).
+		return $("[data-testid^=tab-content-]:not([hidden])");
 	}
 
 	private static void clickTab(String value) {
-		$("[role=tablist]").shouldBe(visible, Duration.ofSeconds(15));
-		$("[role=tab][id$='-trigger-" + value + "']").shouldBe(visible, Duration.ofSeconds(10)).click();
-		$("[role=tab][data-state=active][id$='-trigger-" + value + "']").shouldBe(visible, Duration.ofSeconds(5));
+		$("[data-testid=tab-list]").shouldBe(visible, Duration.ofSeconds(15));
+		$("[data-testid=tab-trigger-" + value + "]").shouldBe(visible, Duration.ofSeconds(10)).click();
+		// Radix mounts only the active TabsContent: its testid is visible exactly
+		// when the tab opened.
+		$("[data-testid=tab-content-" + value + "]").shouldBe(visible, Duration.ofSeconds(5));
 	}
 
 	private static void openAndConnect() {
@@ -196,7 +200,7 @@ class UiBigDataIT {
 
 		// Pick largeOutput by visible name. The row is a div.cursor-pointer inside the
 		// active tab panel — ListPane row shape (UPSTREAM_DOM_MAP.md §16).
-		activePanel().$$(".cursor-pointer")
+		activePanel().$$("[data-testid=row-name]")
 			.findBy(text("largeOutput"))
 			.shouldBe(visible, Duration.ofSeconds(15))
 			.click();
@@ -250,7 +254,7 @@ class UiBigDataIT {
 		// Templates section shows the templated item URI by name.
 		activePanel().shouldHave(text("demo-item"), Duration.ofSeconds(15));
 		// At least 5 rows visible in the resources pane.
-		activePanel().$$(".cursor-pointer")
+		activePanel().$$("[data-testid^=tool-row-]")
 			.shouldHave(CollectionCondition.sizeGreaterThanOrEqual(5), Duration.ofSeconds(15));
 	}
 

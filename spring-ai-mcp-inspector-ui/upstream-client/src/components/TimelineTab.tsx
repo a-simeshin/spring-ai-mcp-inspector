@@ -330,6 +330,8 @@ function TimelineEventRow({
   return (
     <div
       ref={rowRef}
+      /* {M} demo E2E contract (#378): timeline-row anchor, was ancestor::div[contains(@class,'border-l-2')]. */
+      data-testid="timeline-row"
       className={`border-l-2 pl-3 py-1.5 mb-1 rounded-r cursor-pointer hover:opacity-80 ${bgClass} ${colorClass}`}
       onClick={() => setExpanded(!expanded)}
     >

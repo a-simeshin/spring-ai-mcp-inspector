@@ -76,6 +76,8 @@ const RootsTab = ({
             <div key={index}>
               <div className="flex gap-2 items-center">
                 <Input
+                  /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): root-uri-input anchor, was input[placeholder="file:// URI"]. */
+                  data-testid="root-uri-input"
                   placeholder="file:// URI"
                   value={root.uri}
                   onChange={(e) => updateRoot(index, "uri", e.target.value)}

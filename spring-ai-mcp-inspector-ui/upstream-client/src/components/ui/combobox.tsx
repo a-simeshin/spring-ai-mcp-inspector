@@ -81,6 +81,8 @@ export function Combobox({
           aria-invalid={ariaInvalid}
           aria-describedby={ariaDescribedby}
           aria-controls={id}
+          /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): combobox-trigger-<id> anchor, was button[role=combobox][aria-controls=<id>]. */
+          data-testid={id ? `combobox-trigger-${id}` : "combobox-trigger"}
           className="w-full justify-between"
           onBlur={onBlur}
         >
@@ -91,6 +93,8 @@ export function Combobox({
       <PopoverContent className="w-full p-0" align="start">
         <Command shouldFilter={false} id={id}>
           <CommandInput
+            /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): combobox-input-<id> anchor, was input[placeholder="Enter <id>"]. */
+            data-testid={id ? `combobox-input-${id}` : "combobox-input"}
             placeholder={placeholder}
             value={value}
             onValueChange={handleInputChange}
@@ -101,6 +105,8 @@ export function Combobox({
             {options.map((option) => (
               <CommandItem
                 key={option}
+                /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): combobox-option-<option> anchor, was [role=option], [cmdk-item]. */
+                data-testid={`combobox-option-${option}`}
                 value={option}
                 onSelect={() => handleSelect(option)}
               >

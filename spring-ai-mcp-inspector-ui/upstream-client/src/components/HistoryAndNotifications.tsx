@@ -40,12 +40,14 @@ const HistoryAndNotifications = ({
       {/* [spring-ai-mcp-inspector PATCH] History/Notifications split stacks
           vertically below the md breakpoint instead of sharing one narrow row
           on a mobile viewport; registered in NOTICE.d/history-notifications-mobile-stack.txt */}
-      <div className="flex-1 overflow-y-auto p-4 border-b md:border-r md:border-b-0">
+      {/* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): history-pane anchor, was .flex-1.overflow-y-auto.p-4.border-b.md\:border-r. */}
+      <div data-testid="history-pane" className="flex-1 overflow-y-auto p-4 border-b md:border-r md:border-b-0">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">History</h2>
           <Button
             variant="outline"
             size="sm"
+            data-testid="history-clear"
             onClick={onClearHistory}
             disabled={requestHistory.length === 0}
           >
@@ -101,10 +103,13 @@ const HistoryAndNotifications = ({
               .map((request, index) => (
                 <li
                   key={index}
+                  data-testid="history-item"
                   className={`text-sm text-foreground bg-secondary py-2 px-3 rounded border-l-4 ${request.isError ? "border-red-500" : "border-transparent"}`}
                 >
                   <button
                     type="button"
+                    /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): entry toggle anchor, was button.cursor-pointer. */
+                    data-testid="history-entry-toggle"
                     className="flex justify-between items-center w-full cursor-pointer"
                     onClick={() =>
                       toggleRequestExpansion(requestHistory.length - 1 - index)
@@ -123,7 +128,8 @@ const HistoryAndNotifications = ({
                   </button>
                   {expandedRequests[requestHistory.length - 1 - index] && (
                     <>
-                      <div className="mt-2">
+                      {/* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): entry request block anchor, was byText("Request:").closest(".mt-2"). */}
+                      <div data-testid="history-entry-request" className="mt-2">
                         <div className="flex justify-between items-center mb-1">
                           <span className="font-semibold text-blue-600">
                             Request:
@@ -136,7 +142,8 @@ const HistoryAndNotifications = ({
                         />
                       </div>
                       {request.response && (
-                        <div className="mt-2">
+                        /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): entry response block anchor, was byText("Response:").closest(".mt-2"). */
+                        <div data-testid="history-entry-response" className="mt-2">
                           <div className="flex justify-between items-center mb-1">
                             <span className="font-semibold text-green-600">
                               Response:
@@ -155,12 +162,14 @@ const HistoryAndNotifications = ({
           </ul>
         )}
       </div>
-      <div className="flex-1 overflow-y-auto p-4">
+      {/* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): notifications-pane anchor, was $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications")). */}
+      <div data-testid="notifications-pane" className="flex-1 overflow-y-auto p-4">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">Server Notifications</h2>
           <Button
             variant="outline"
             size="sm"
+            data-testid="notifications-clear"
             onClick={onClearNotifications}
             disabled={serverNotifications.length === 0}
           >
@@ -179,10 +188,13 @@ const HistoryAndNotifications = ({
               .map((notification, index) => (
                 <li
                   key={index}
+                  data-testid="notification-item"
                   className="text-sm text-foreground bg-secondary py-2 px-3 rounded"
                 >
                   <button
                     type="button"
+                    /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): entry toggle anchor, was button.cursor-pointer. */
+                    data-testid="notification-entry-toggle"
                     className="flex justify-between items-center w-full cursor-pointer"
                     onClick={() =>
                       toggleNotificationExpansion(
