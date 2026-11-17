@@ -69,19 +69,26 @@ import static org.assertj.core.api.Assertions.assertThat;
  * upstream send serialized the frames of one session, so the interleaving was
  * unobservable on that wire (issue #356). The upstream send moved off the emitting thread
  * (issue #358), the interleaving is observable on webflux too, and the test runs ungated
- * on both legs; an attempt whose stack happens to serialize the two reads is inconclusive
- * and retried, bounded by RACE_ATTEMPTS.
+ * on both legs.
  *
- * The test:
+ * The test arms the delayed read first ({@link DemoSlowResourcesProvider#armSlowGate()}):
+ * the slow reply stays off the wire until the fast reply of the same attempt is confirmed
+ * on the timeline and the gate is released, so the slow reply lands strictly after the
+ * fast one by construction, independent of scheduler and runner contention (issue #385: a
+ * retry budget over a scheduler-dependent wire order burned out on loaded runners without
+ * ever observing the interleaving). A stack that serializes the two reads cannot produce
+ * the reply pair at all and fails loudly on the fast-reply wait instead. Under the same
+ * contention a browser-bound SSE frame is rarely lost outright (the proxy timeline
+ * records the fast reply while the browser promise never resolves, so the pane never
+ * renders it), which the launch loop below absorbs; the reply-order and stale-preview
+ * assertions themselves are never retried. The test:
  * <ul>
  * <li>asserts the preview shows the fast reply after the selection switch;</li>
- * <li>waits on the proxy timeline until the slow {@code resources/read} reply has
- * actually landed (so the negative assertion is deterministic, not timed);</li>
- * <li>asserts the preview still shows the fast reply and never the slow one;</li>
- * <li>asserts on the timeline that the slow reply did overtake the fast one, proving the
- * race really happened rather than the slow read never returning; an attempt whose stack
- * serialized the two reads cannot race at all and is retried with a fresh selection pair
- * until the inversion shows up on the wire.</li>
+ * <li>waits on the proxy timeline until both replies have actually landed (so the
+ * negative assertion is deterministic, not timed);</li>
+ * <li>asserts on the timeline that the slow reply overtook the fast one, proving the race
+ * really happened rather than the slow read never returning;</li>
+ * <li>asserts the preview still shows the fast reply and never the slow one.</li>
  * </ul>
  *
  * <p>
@@ -100,20 +107,14 @@ class ResourceRacePaneUiIT {
 	private static final Duration BUDGET = Duration.ofSeconds(30);
 
 	/**
-	 * Bounded retry budget for the wire-level interleaving: whether the slow and the fast
-	 * read actually interleave is a scheduler property of the stack under test (a stack
-	 * that serializes per-session requests answers the slow one first, so no race can
-	 * occur). An attempt without the inversion is inconclusive, not a pass or a guard
-	 * failure: the selection pair is retried until the wire proves it.
+	 * Bounded number of application launches for the fast-confirmation phase: under
+	 * runner contention a browser-bound SSE frame is rarely lost (the proxy timeline
+	 * records the fast reply while the browser promise never resolves, so the pane never
+	 * renders it), and only a fresh application reliably retires the dead browser stream.
+	 * The relaunch covers delivery loss only: the reply-order and stale-preview
+	 * assertions below run once and are never retried (issue #385).
 	 */
-	private static final int RACE_ATTEMPTS = 4;
-
-	/**
-	 * Visible name of the neutral {@code demo://greeting} row (DemoResourcesProvider):
-	 * selecting it resets the selection between attempts, because re-clicking an already
-	 * selected row does not issue a fresh resources/read.
-	 */
-	private static final String NEUTRAL_ROW_NAME = "demo-greeting";
+	private static final int MAX_LAUNCHES = 3;
 
 	private ConfigurableApplicationContext app;
 
@@ -268,57 +269,70 @@ class ResourceRacePaneUiIT {
 	@Description("Selects the delayed demo://slow-greeting resource, immediately selects the "
 			+ "immediate demo://fast-greeting one, and asserts the preview shows the fast reply, "
 			+ "keeps showing it after the delayed reply lands, and never shows the slow payload. "
-			+ "The proxy timeline proves the slow reply really arrived after the fast one, so the "
-			+ "negative assertion is deterministic (issue #344 regression). An attempt whose "
-			+ "stack serialized the two reads cannot race and is retried until the inversion "
-			+ "shows up on the wire.")
+			+ "The delayed read is armed to hold its reply until the fast reply is confirmed on "
+			+ "the proxy timeline, so the slow reply really arrives after the fast one by "
+			+ "construction and the negative assertion is deterministic (issues #344, #385 "
+			+ "regressions). A stack that serializes the two reads cannot produce the reply "
+			+ "pair and fails on the fast-reply wait. A browser-side loss of the fast SSE "
+			+ "frame under runner contention is absorbed by relaunching the demo "
+			+ "application; the reply-order and stale-preview assertions are never retried.")
 	void slowReplyMustNotOvertakeFastSelection() throws Exception {
 		// The race needs two resources/read requests in flight on one session; both
 		// proxy stacks relay such interleaved frames since the upstream send moved off
 		// the emitting thread (issue #358), so no leg is gated.
-		// given: boot, connect, open the Resources pane, list the demo resources
-		app = ProxyAppHarness.start("SSE", false, null);
-		Configuration.baseUrl = "http://localhost:" + ProxyAppHarness.port(app);
-		openAndConnect();
-
-		clickTab("resources");
-		// resources/list is not automatic after connect; List Resources is idempotent
-		// once the list is non-empty (InspectorUiIT, same recipe).
-		activePanel().$(byText("List Resources")).shouldBe(visible, Duration.ofSeconds(10)).click();
-
-		// when: select the slow resource, then immediately the fast one; the slow
-		// read is still in flight (server sleeps ~6s) when the fast reply renders.
-		// Whether the two reads interleave on the wire is a scheduler property of the
-		// stack under test: an attempt where the slow reply lands first cannot race,
-		// so the guard is not exercised and the attempt is inconclusive. Reset the
-		// selection with the neutral row and retry until the wire proves the
-		// inversion (bounded by RACE_ATTEMPTS).
-		Instant slowReplyAt = null;
-		for (int attempt = 1; attempt <= RACE_ATTEMPTS && slowReplyAt == null; attempt++) {
-			if (attempt > 1) {
-				selectRow(NEUTRAL_ROW_NAME);
+		// given: boot, connect, open the Resources pane, list the demo resources, and
+		// confirm the fast pane update. The launch loop absorbs the rare browser-side
+		// SSE frame loss under runner contention (issue #385): a lost frame leaves the
+		// pane empty with the fast reply already on the proxy timeline, and only a
+		// fresh application retires the dead browser stream.
+		Instant attemptStart = null;
+		for (int launch = 1; launch <= MAX_LAUNCHES; launch++) {
+			if (launch > 1) {
+				stopApp();
 			}
-			Instant attemptStart = Instant.now();
+			app = ProxyAppHarness.start("SSE", false, null);
+			Configuration.baseUrl = "http://localhost:" + ProxyAppHarness.port(app);
+			openAndConnect();
+
+			clickTab("resources");
+			// resources/list is not automatic after connect; List Resources is
+			// idempotent once the list is non-empty (InspectorUiIT, same recipe).
+			activePanel().$(byText("List Resources")).shouldBe(visible, Duration.ofSeconds(10)).click();
+
+			// when: select the slow resource, then immediately the fast one. The
+			// delayed read is armed to hold its reply until this attempt's fast reply is
+			// confirmed, so the reply order on the wire is a property of the harness, not
+			// of the scheduler (issue #385: under runner contention the fast reply used
+			// to
+			// land after the slow one and the old retry budget over that wire order
+			// burned out). A stack that serializes the two reads cannot produce the reply
+			// pair and fails loudly on the fast-reply wait.
+			DemoSlowResourcesProvider.armSlowGate();
+			attemptStart = Instant.now();
 			selectRow(DemoSlowResourcesProvider.SLOW_NAME);
 			selectRow(DemoSlowResourcesProvider.FAST_NAME);
-			activePanel().shouldHave(text(DemoSlowResourcesProvider.FAST_CONTENT), Duration.ofSeconds(10));
-			// both replies of this attempt must have landed before judging the order:
-			// the since filter keeps earlier attempts' replies out of the comparison
-			Instant attemptSlowAt = awaitReplySince(DemoSlowResourcesProvider.SLOW_URI,
-					DemoSlowResourcesProvider.SLOW_CONTENT, attemptStart);
-			Instant attemptFastAt = awaitReplySince(DemoSlowResourcesProvider.FAST_URI,
-					DemoSlowResourcesProvider.FAST_CONTENT, attemptStart);
-			if (attemptSlowAt.isAfter(attemptFastAt)) {
-				slowReplyAt = attemptSlowAt;
+			try {
+				activePanel().shouldHave(text(DemoSlowResourcesProvider.FAST_CONTENT), Duration.ofSeconds(10));
+				break;
+			}
+			catch (AssertionError lostFrame) {
+				if (launch == MAX_LAUNCHES) {
+					throw lostFrame;
+				}
+				System.out.println("[ResourceRacePaneUiIT] fast reply not rendered for launch " + launch
+						+ " (likely a lost browser SSE frame); relaunching the demo application");
 			}
 		}
 
+		Instant fastReplyAt = awaitReplySince(DemoSlowResourcesProvider.FAST_URI,
+				DemoSlowResourcesProvider.FAST_CONTENT, attemptStart);
+		DemoSlowResourcesProvider.releaseSlowGate();
+		Instant slowReplyAt = awaitReplySince(DemoSlowResourcesProvider.SLOW_URI,
+				DemoSlowResourcesProvider.SLOW_CONTENT, attemptStart);
+
 		// then: the race really happened, the slow reply overtook the fast one on the
 		// wire (this is the interleaving the guard must be immune to)
-		assertThat(slowReplyAt)
-			.as("interleaved attempt with the slow reply strictly after " + "the fast one, within " + RACE_ATTEMPTS
-					+ " attempts")
-			.isNotNull();
+		assertThat(slowReplyAt).as("the slow reply strictly after the fast one on the wire").isAfter(fastReplyAt);
 
 		// then: the preview still shows the current selection and never the stale
 		// slow payload (regression guard for issue #344)
@@ -386,9 +400,9 @@ class ResourceRacePaneUiIT {
 	/**
 	 * Polls the proxy timeline until the latest {@code resources/read} reply carrying the
 	 * given resource's payload has landed, and returns its timestamp. Only replies at or
-	 * after {@code since} count, so a retry attempt is judged by its own reply pair.
-	 * Fails if the reply never arrives: the assertions after this wait are only
-	 * meaningful once the superseded reply really returned.
+	 * after {@code since} count, so earlier replies stay out of the comparison. Fails if
+	 * the reply never arrives: the assertions after this wait are only meaningful once
+	 * the superseded reply really returned.
 	 */
 	private Instant awaitReplySince(String uri, String expectedContent, Instant since) throws Exception {
 		Instant deadline = Instant.now().plus(BUDGET);
@@ -407,8 +421,8 @@ class ResourceRacePaneUiIT {
 	 * Reads the proxy timeline and returns the timestamp of the latest
 	 * {@code resources/read} reply whose result carries the given resource URI and
 	 * payload text and whose timestamp is not before {@code since}, or {@code null} if
-	 * there is none: the latest match wins, so a retry attempt is judged by its own reply
-	 * pair, not by earlier attempts'.
+	 * there is none: the latest match wins, so a fresh attempt is judged by its own reply
+	 * pair, not by an earlier attempt's.
 	 */
 	private Instant timelineReplyTimestamp(String uri, String expectedContent, Instant since) throws Exception {
 		HttpRequest request = HttpRequest.newBuilder()

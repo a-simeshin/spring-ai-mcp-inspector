@@ -9,6 +9,9 @@
  */
 package io.inspector.mcp.demo.resources;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
 import org.springframework.ai.mcp.annotation.McpResource;
 import org.springframework.stereotype.Component;
 
@@ -71,18 +74,64 @@ public class DemoSlowResourcesProvider {
 	static final long DELAY_MILLIS = 6000L;
 
 	/**
+	 * Gate holding the delayed {@code slowGreeting()} reply while its race IT confirms
+	 * the counterparty reply on the timeline: {@code ResourceRacePaneUiIT} arms a fresh
+	 * closed gate before sending the delayed read and releases it once the fast reply is
+	 * confirmed, so the reply order on the wire is a property of the harness, not of the
+	 * scheduler (issue #385: under runner contention the fast reply used to land after
+	 * the slow one and the retry budget burned without ever observing the interleaving).
+	 */
+	private static volatile CountDownLatch slowGateRelease = new CountDownLatch(1);
+
+	/**
+	 * Whether the gate above is armed. While armed, the delayed read waits up to
+	 * {@link #ARMED_GATE_TIMEOUT_MILLIS} for the release; the generous cap only bounds a
+	 * test crash that leaves the handler parked, it must be wider than any scheduler
+	 * delay the IT itself can observe and absorb (its reply budget is {@code 30s}).
+	 */
+	private static volatile boolean slowGateArmed = false;
+
+	/**
+	 * Release cap of an armed gate, see {@link #slowGateArmed}.
+	 */
+	static final long ARMED_GATE_TIMEOUT_MILLIS = 30_000L;
+
+	/**
+	 * Arms a fresh closed gate for {@code slowGreeting()}, to be released once the
+	 * counterparty reply is confirmed.
+	 */
+	public static void armSlowGate() {
+		slowGateRelease = new CountDownLatch(1);
+		slowGateArmed = true;
+	}
+
+	/**
+	 * Releases the gate armed by {@link #armSlowGate()} so the delayed reply lands.
+	 */
+	public static void releaseSlowGate() {
+		slowGateRelease.countDown();
+		slowGateArmed = false;
+	}
+
+	/**
 	 * Delayed greeting resource available under {@code demo://slow-greeting}.
 	 *
 	 * <p>
-	 * The delay is a plain blocking sleep: the annotation layer wraps sync handlers in
+	 * The delay blocks inside the handler: the annotation layer wraps sync handlers in
 	 * {@code Mono.fromCallable(...).subscribeOn(boundedElastic())}, so this never parks
-	 * the transport thread and concurrent reads stay concurrent.
+	 * the transport thread and concurrent reads stay concurrent. Without an armed gate
+	 * the delay is the demo's default {@link #DELAY_MILLIS}.
 	 */
 	@McpResource(uri = SLOW_URI, name = SLOW_NAME,
 			description = "Greeting served after a ~6 second delay, for resources/read race demos")
 	public String slowGreeting() {
 		try {
-			Thread.sleep(DELAY_MILLIS);
+			if (slowGateArmed) {
+				slowGateRelease.await(ARMED_GATE_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+			}
+			else {
+				Thread.sleep(DELAY_MILLIS);
+			}
 		}
 		catch (InterruptedException ex) {
 			Thread.currentThread().interrupt();
