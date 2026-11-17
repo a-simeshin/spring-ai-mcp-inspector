@@ -557,11 +557,13 @@ class McpProxyTests {
 
 			// then: the cap opens the gate and the held tools/list is dispatched
 			final long deadline = System.currentTimeMillis() + McpProxy.WARMUP_CONNECTIONS_CAP.toMillis() + 3000;
-			while (!sent.isEmpty() && !isToolsList(sent.get(sent.size() - 1))
+			// wait from the empty initial state too: frames are dispatched
+			// asynchronously, so the list may still be empty on entry
+			while ((sent.isEmpty() || !isToolsList(sent.get(sent.size() - 1)))
 					&& System.currentTimeMillis() < deadline) {
 				Thread.sleep(50);
 			}
-			assertThat(sent).isNotEmpty();
+			assertThat(sent).as("handshake gate never opened: no frame dispatched within the deadline").isNotEmpty();
 			assertThat(sent.get(sent.size() - 1)).isInstanceOfSatisfying(McpSchema.JSONRPCRequest.class,
 					(req) -> assertThat(req.method()).isEqualTo("tools/list"));
 		}
