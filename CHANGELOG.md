@@ -51,8 +51,7 @@ MCP Inspector UI `0.22.0`, Java 17+.
   echoing the header value (#188).
 - A non-numeric `tasks/list` cursor returns a `-32602` invalid params
   error instead of a silent empty page (#320).
-- The reactive proxy shifts the upstream send off the emitting thread, so
-  a slow frame no longer serializes the session (#358).
+- The reactive proxy shifts the upstream send off the emitting thread (#358).
 - The timeline API auth sends the raw inspector token header (#365).
 - Elicitation cards expire when their `tools/call` settles (#361).
 - The Resources pane is guarded by the selected uri (#345) and re-issued on
