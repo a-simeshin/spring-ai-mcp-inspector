@@ -1,15 +1,16 @@
 Add data-testid anchors to elements the demo browser E2E suite drives,
 so the suite no longer selects by Tailwind classes or Radix internals
 (issue #378). Anchors: sidebar (Sidebar root), tab-list / tab-trigger-<value> /
-tab-content-<value> (ui/tabs), select-option-<value> (ui/select SelectItem),
+tab-content-<value> (src/components/ui/tabs.tsx), select-option-<value>
+(src/components/ui/select.tsx SelectItem),
 combobox-trigger-<id> / combobox-input-<id> / combobox-option-<option>
 (ui/combobox), history-pane / notifications-pane / history-clear /
 notifications-clear / history-item / history-item-error /
 notification-item / history-entry-toggle /
 notification-entry-toggle / history-entry-request / history-entry-response
 (HistoryAndNotifications), tool-hint-badges (ToolsTab), tool-result-heading
-(ToolResults), json-editor (JsonEditor wrapper), resource-image /
+(ToolResults), json-editor (src/components/JsonEditor.tsx wrapper), resource-image /
 resource-download (MediaContentView), root-uri-input (RootsTab),
 task-cancel-button (TasksTab), row-name (list renderers in ToolsTab,
-ResourcesTab, PromptsTab), toast-stack (ui/toast ToastViewport), timeline-row
+ResourcesTab, PromptsTab), toast-stack (src/components/ui/toast.tsx ToastViewport), timeline-row
 (TimelineTab log row).

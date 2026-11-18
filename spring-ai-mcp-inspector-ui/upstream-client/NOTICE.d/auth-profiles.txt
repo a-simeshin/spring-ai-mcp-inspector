@@ -30,7 +30,10 @@ Placement labels (native selects retained for testability; shadcn Select uses
 portals that complicate testing).
 Disconnect clears the D3 structured error banner alongside the connect-failure
 banner (setAuthError(null) in disconnect(), issue #54).
-Covered by jest unit tests (AuthProfiles.test.tsx, auth-profiles.test.ts,
-connectionAuthErrors.test.ts, the profileId-override D9B cases in
+Covered by jest unit tests (src/components/__tests__/AuthProfiles.test.tsx,
+src/lib/__tests__/auth-profiles.test.ts,
+connectionAuthErrors.test.ts,
+src/__tests__/App.oauthCallback.test.tsx,
+src/components/__tests__/OAuthCallback.test.tsx, the profileId-override D9B cases in
 useConnection.test.tsx, and the disconnect regression in
 useConnection.test.tsx) in spring-ai-mcp-inspector-ui/upstream-client.

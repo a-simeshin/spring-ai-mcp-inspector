@@ -21,7 +21,7 @@ unconditional set/clear, while the uri-agnostic resources operations
 (list, templates, subscribe, unsubscribe) keep their tabKey behavior.
 The per-uri `resourceContentMap` cache stays unconditional because a
 response is always correct for its own uri. Covered by
-App.resourceRace.test.tsx (pane race, error half, and the
+src/__tests__/App.resourceRace.test.tsx (pane race, error half, and the
 stale-while-revalidate cache pin). Upstream has the same race:
 https://github.com/modelcontextprotocol/inspector/issues/1266 and
 #1274 acknowledge it; upstream fix PRs #1267 and #1275 were closed

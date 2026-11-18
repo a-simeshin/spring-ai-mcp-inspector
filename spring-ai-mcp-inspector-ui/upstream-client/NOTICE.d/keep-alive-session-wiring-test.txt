@@ -1,0 +1,9 @@
+src/__tests__/App.keepAliveWiring.test.tsx - keep-alive session id wiring
+regression (#239 review BLOCK 1). The inspector's /api/keepalive and
+/api/events endpoints know the proxy-side session id; the upstream
+mcpSessionId is not (404 in both proxy and direct mode). The suite pins
+the App-level wiring: useKeepAlive must subscribe with the proxy session
+id and the TimelineTab / HistoryAndNotifications sessionId props must
+carry the same id; reverting either back to the upstream mcpSessionId
+fails these tests. Related entries: NOTICE.d/keep-alive-timeline-history.txt,
+NOTICE.d/keep-alive-connection-pane.txt.

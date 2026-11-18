@@ -626,6 +626,9 @@ const App = () => {
     // [spring-ai-mcp-inspector PATCH] proxy-side session id: the id the
     // inspector's keep-alive endpoints actually resolve (#235)
     proxySessionId,
+    // [spring-ai-mcp-inspector PATCH] Observed initialize handshake for the
+    // VersionBadge in the connect zone (see NOTICE.d/version-badge.txt).
+    initializeSnapshot,
     requestHistory,
     clearRequestHistory,
     makeRequest,
@@ -2257,6 +2260,8 @@ const App = () => {
           connectionTimeout={connectionTimeout}
           setConnectionTimeout={setConnectionTimeout}
           serverImplementation={serverImplementation}
+          // [spring-ai-mcp-inspector PATCH] VersionBadge handshake snapshot.
+          initializeSnapshot={initializeSnapshot}
           // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
           savedConnections={savedConnections}
           activeConnectionId={activeConnectionId}
