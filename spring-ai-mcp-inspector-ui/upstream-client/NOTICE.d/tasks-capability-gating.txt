@@ -1,0 +1,77 @@
+src/App.tsx, src/lib/hooks/useConnection.ts, src/components/TasksTab.tsx --
+gate all tasks/* RPC calls on the advertised server capabilities
+(issue #212, issue #182; ported from the closed PR #214 branch onto the
+current develop line).
+
+Changes:
+1. App.tsx: added serverCapabilitiesRef (useRef synced with serverCapabilities
+   state) so the notification callback installed before connect completes reads
+   the current capabilities, not the stale null closure. The notification
+   handler now checks serverCapabilitiesRef.current?.tasks?.list before calling
+   listTasks() on notifications/tasks/list_changed.
+2. App.tsx: the tools/call run-as-task polling loop checks
+   serverCapabilitiesRef.current?.tasks before each iteration (and again
+   before tasks/result) and aborts gracefully with a visible
+   "Task polling stopped: server no longer advertises the tasks capability."
+   message when the server no longer advertises tasks (disconnect/reconnect).
+3. App.tsx: the listTasks callback is gated on
+   serverCapabilitiesRef.current?.tasks?.list (operation-level sub-capability
+   per the MCP spec) and tolerates the undefined return of the gated
+   useConnection.listTasks.
+4. App.tsx: the cancelTask callback is gated on
+   serverCapabilitiesRef.current?.tasks?.cancel the same way.
+5. App.tsx: the activeTab effect for tasks/list is gated on
+   serverCapabilities?.tasks?.list, so opening the Tasks tab (or Apps) on a
+   taskless server sends no tasks/list request and raises no error toast.
+6. App.tsx: the Tasks tab trigger is always rendered and enabled. The
+   capability-gap tooltip wrapper span (native title/aria-label and the
+   SEP-1686 docs link on a Tooltip wrapper) was removed entirely: the panel
+   itself explains the gap inline. The MCP_TASKS_DISABLED_HINT and
+   MCP_TASKS_DOCS_URL constants no longer exist in App.tsx.
+7. App.tsx: "tasks" is always a valid tab id (buildValidTabs includes it
+   unconditionally). getDefaultTab falls back to "tasks" instead of "ping",
+   and the null-capabilities routing effect (#t_fdeb9f56) forces "tasks" for
+   the same reason: the capability-gap body is a real panel.
+8. useConnection.ts: added serverCapabilitiesRef (same pattern as App.tsx).
+   listTasks and cancelTask early-return when the respective operation
+   sub-capability is absent, preventing stale -32601 errors after
+   disconnect/reconnect to a capability-less server.
+9. useConnection.ts: disconnect() synchronously invalidates
+   serverCapabilitiesRef and calls setServerCapabilities(null) and
+   setMcpClient(null) BEFORE any awaited close (terminateSession/mcpClient
+   close), so no tasks/list or tasks/get request is emitted from stale work
+   during the disconnect window.
+10. TasksTab.tsx: new tasksSupported prop (default true). When tasks.list is
+    absent the panel renders a reachable capability-gap body with
+    data-testid="tasks-capability-gap" and the exact issue #212 message:
+    "Server does not advertise the tasks capability; long-running task
+    tracking is unavailable." The list poll and the per-task tasks/get
+    pollers are gated on tasksSupported in every cycle, so no tasks/list or
+    tasks/get timer runs while the capability is absent.
+11. TasksTab.tsx: new cancelSupported prop. When tasks.cancel is absent,
+    both Cancel affordances (the per-row icon button and the detail-panel
+    button) are disabled with a native tooltip title and an extended
+    aria-label naming the missing sub-capability (not a silent no-op).
+
+Covered by:
+- src/__tests__/App.tasksCapabilityGating.test.tsx (App-level integration:
+  both capability branches, no wire call pins, stale polling, first-connect
+  notification, cancel gating, gap body testid and message)
+- src/__tests__/App.routing.test.tsx (default-tab routing with
+  tasks-always-valid)
+- src/__tests__/App.tabRouterFallback.test.tsx (null/empty capabilities force
+  the Tasks gap body, adapted from the #t_fdeb9f56 ping-forcing tests)
+- src/__tests__/App.tasksTabTrigger.test.tsx (renamed from
+  App.tasksTabTooltip.test.tsx: the trigger is a plain enabled tablist child
+  in both branches, no tooltip wrapper; TasksTab always mounts; the
+  updateTask prop wiring pin)
+- src/components/__tests__/TasksTab.test.tsx (unchanged: tasksSupported
+  defaults to true for pre-existing direct renders)
+- src/lib/hooks/__tests__/useConnection.test.tsx (hook-level unit tests)
+  including the delayed-close regression (a disconnect window without
+  synchronous invalidation leaks tasks/list)
+- spring-ai-mcp-inspector-demo-webmvc/src/test/java/io/inspector/mcp/demo/
+  e2e/InspectorUiIT.java (TasksCapabilityGap: a direct taskless connection
+  shows the gap body by click and by deep link with no error toast;
+  tasksCapabilityAdvertised() probes the gap testid's absence instead of the
+  removed disabled attribute)
