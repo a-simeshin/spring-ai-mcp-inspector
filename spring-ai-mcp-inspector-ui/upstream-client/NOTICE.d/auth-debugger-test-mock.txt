@@ -1,0 +1,8 @@
+src/components/__tests__/AuthDebugger.test.tsx - the jest.mock factory for
+../../lib/auth keeps the real module (jest.requireActual) and overrides only
+what the suite drives (provider methods and the metadata fetch). The upstream
+file stubs every export to undefined, and that loses the real helpers the
+oauth-state-machine imports from the same module: an undefined
+toAbsoluteServerUrl throws before OAuth discovery ever runs, so the suite
+cannot exercise the real flows. Fails if the mock regresses to a full stub
+or the auth helpers lose the helpers the flow depends on.
