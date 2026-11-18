@@ -504,10 +504,14 @@ const AppRenderer = ({
         </Alert>
       )}
 
+      {/* [spring-ai-mcp-inspector PATCH] Issue #409 E2E anchor: the sandboxed
+          frame box carries a stable test id so the demo IT can pin the
+          minimum app iframe width at a 1280px viewport. */}
       <div
         ref={containerRef}
         className="flex-1 border rounded overflow-hidden"
         style={{ minHeight: "400px" }}
+        data-testid="app-frame-box"
       >
         <McpUiAppRenderer
           client={mcpClient}

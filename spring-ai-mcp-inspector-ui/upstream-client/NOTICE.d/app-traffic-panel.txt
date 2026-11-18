@@ -11,3 +11,16 @@ App traffic side panel, lifecycle indicator, and logs view (t_4abaf1bb):
   and sits to the right of the app renderer when an app is open. Traffic and
   lifecycle state are cleared when the app is closed or deselected.
   PATCH marker [spring-ai-mcp-inspector PATCH] applied to AppsTab.tsx.
+
+Apps tab layout: keep the app iframe usable at a 1280px viewport (issue #409):
+- src/components/AppsTab.tsx: while an app is open the tool list collapses
+  (the grid drops to a single column, the same contract as the maximize
+  button), so the app card takes the full tab width and the 280px traffic
+  panel no longer squeezes the app iframe to ~140px at a 1280px viewport
+  (sidebar 320px + two-column grid + 280px panel left ~142px before).
+  Closing the app or returning to the input form restores the list pane.
+  PATCH marker [spring-ai-mcp-inspector PATCH] extended on AppsTab.tsx.
+- src/components/AppRenderer.tsx: the sandboxed frame box carries
+  data-testid=app-frame-box so the demo E2E can pin the minimum app
+  iframe width with real input (InspectorUiIT, 1280x800 viewport).
+  PATCH marker [spring-ai-mcp-inspector PATCH] applied to AppRenderer.tsx.

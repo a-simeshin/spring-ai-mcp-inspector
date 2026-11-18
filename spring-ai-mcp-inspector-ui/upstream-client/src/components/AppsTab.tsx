@@ -1,4 +1,4 @@
-/* [spring-ai-mcp-inspector PATCH] AppsTab: wired onAppTraffic / onLifecycleChange callbacks to AppRenderer and added side panel (AppTrafficPanel). */
+/* [spring-ai-mcp-inspector PATCH] AppsTab: wired onAppTraffic / onLifecycleChange callbacks to AppRenderer and added side panel (AppTrafficPanel). Issue #409: while an app is open the tool list collapses (single-column grid, same contract as maximize), so the 280px traffic panel no longer squeezes the app iframe to ~140px at a 1280px viewport. */
 import { useEffect, useState, useCallback, useRef } from "react";
 import { TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -414,12 +414,12 @@ const AppsTab = ({
     <TabsContent value="apps" className="space-y-4">
       <div
         className={
-          isMaximized
+          isMaximized || isAppOpen
             ? "grid grid-cols-1 gap-4"
             : "grid grid-cols-1 md:grid-cols-2 gap-4"
         }
       >
-        {!isMaximized && (
+        {!isMaximized && !isAppOpen && (
           <ListPane
             items={appTools}
             listItems={handleRefresh}
