@@ -17,11 +17,14 @@
 package io.inspector.mcp.core.timeline;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
+import io.modelcontextprotocol.spec.McpSchema;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCNotification;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCRequest;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCResponse;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -42,6 +45,15 @@ import tools.jackson.databind.node.ObjectNode;
  * {@code sampling/createMessage} request and the client's outbound
  * {@code JSONRPCResponse} answer share one correlation id (stored under a
  * {@code srv:}-prefixed key so client and server ids cannot collide).
+ *
+ * <p>
+ * When a {@link ClientHandlerScanner} is present, server-initiated exchanges are enriched
+ * with {@code consumedBy}: the {@code beanName#method} identities of the {@code @Mcp*}
+ * handler beans bound to the client. The field is attached to both events of a
+ * request&rarr;response pair (sampling, elicitation) and to the single event of a
+ * notification (logging, progress). The target in every payload is re-sanitized through
+ * {@link TargetSanitizer}, and {@code consumedBy} is absent when no scanner is wired or
+ * no binding matches.
  *
  * @author Artem Simeshin
  */
@@ -69,15 +81,28 @@ public final class McpClientTrafficRecorder {
 
 	private final PendingCorrelationStore<String> requestCorrelations;
 
+	private final ClientHandlerScanner handlerScanner;
+
 	/**
-	 * Creates a new client traffic recorder.
+	 * Creates a new client traffic recorder without handler correlation.
 	 * @param timelineService the backing store (must not be {@code null})
 	 */
 	public McpClientTrafficRecorder(final TimelineService timelineService) {
+		this(timelineService, null);
+	}
+
+	/**
+	 * Creates a new client traffic recorder with handler correlation.
+	 * @param timelineService the backing store (must not be {@code null})
+	 * @param handlerScanner the scanner providing the {@code @Mcp*} handler bindings, may
+	 * be {@code null} to disable {@code consumedBy} enrichment
+	 */
+	public McpClientTrafficRecorder(final TimelineService timelineService, final ClientHandlerScanner handlerScanner) {
 		if (timelineService == null) {
 			throw new IllegalArgumentException("timelineService must not be null");
 		}
 		this.timelineService = timelineService;
+		this.handlerScanner = handlerScanner;
 		this.requestCorrelations = new PendingCorrelationStore<>(MAX_PENDING_CORRELATIONS);
 	}
 
@@ -179,11 +204,13 @@ public final class McpClientTrafficRecorder {
 		}
 		final Object id = request.id();
 		final String correlationId = UUID.randomUUID().toString();
+		final List<String> consumedBy = consumedByFor(endpoint.clientName(), request.method());
 		if (id != null) {
 			this.requestCorrelations.store(correlationId(endpoint.clientName(), "srv:" + id),
-					new PendingCorrelationStore.PendingCorrelation(correlationId, Instant.now()));
+					new PendingCorrelationStore.PendingCorrelation(correlationId, Instant.now(), consumedBy));
 		}
 		final ObjectNode payload = buildPayload(endpoint, DIRECTION_IN, request.method(), id, null);
+		putConsumedBy(payload, consumedBy);
 		append(new TimelineEvent(UUID.randomUUID().toString(), correlationId, null,
 				TimelineEventType.MCP_JSONRPC_REQUEST, Instant.now(), payload));
 	}
@@ -200,6 +227,7 @@ public final class McpClientTrafficRecorder {
 		}
 		final String correlationId = UUID.randomUUID().toString();
 		final ObjectNode payload = buildPayload(endpoint, DIRECTION_IN, notification.method(), null, null);
+		putConsumedBy(payload, consumedByFor(endpoint.clientName(), notification.method()));
 		append(new TimelineEvent(UUID.randomUUID().toString(), correlationId, null,
 				TimelineEventType.MCP_JSONRPC_NOTIFICATION, Instant.now(), payload));
 	}
@@ -217,6 +245,7 @@ public final class McpClientTrafficRecorder {
 			final Object id, final PendingCorrelationStore.PendingCorrelation pending) {
 		final ObjectNode payload = buildPayload(endpoint, direction, null, id, errorMessage(response));
 		payload.put("latencyMs", pending.elapsed());
+		putConsumedBy(payload, pending.consumedBy());
 		append(new TimelineEvent(UUID.randomUUID().toString(), pending.correlationId(), null,
 				TimelineEventType.MCP_JSONRPC_RESPONSE, Instant.now(), payload));
 	}
@@ -240,6 +269,40 @@ public final class McpClientTrafficRecorder {
 		return CORRELATION_PREFIX + clientName + ":" + requestId;
 	}
 
+	private List<String> consumedByFor(final String clientName, final String method) {
+		if (this.handlerScanner == null || method == null) {
+			return List.of();
+		}
+		final String handlerKind = handlerKindForMethod(method);
+		return (handlerKind != null) ? this.handlerScanner.consumedBy(clientName, handlerKind) : List.of();
+	}
+
+	private static String handlerKindForMethod(final String method) {
+		if (McpSchema.METHOD_SAMPLING_CREATE_MESSAGE.equals(method)) {
+			return "sampling";
+		}
+		if (McpSchema.METHOD_ELICITATION_CREATE.equals(method)) {
+			return "elicitation";
+		}
+		if (McpSchema.METHOD_NOTIFICATION_MESSAGE.equals(method)) {
+			return "logging";
+		}
+		if (McpSchema.METHOD_NOTIFICATION_PROGRESS.equals(method)) {
+			return "progress";
+		}
+		return null;
+	}
+
+	private static void putConsumedBy(final ObjectNode payload, final List<String> consumedBy) {
+		if (consumedBy == null || consumedBy.isEmpty()) {
+			return;
+		}
+		final ArrayNode array = payload.putArray("consumedBy");
+		for (final String source : consumedBy) {
+			array.add(source);
+		}
+	}
+
 	private static ObjectNode buildPayload(final ClientEndpoint endpoint, final String direction, final String method,
 			final Object id, final String error) {
 		final ObjectNode payload = JsonNodeFactory.instance.objectNode();
@@ -248,7 +311,7 @@ public final class McpClientTrafficRecorder {
 		payload.put("direction", direction);
 		payload.put("transportType", endpoint.transportType());
 		if (endpoint.target() != null) {
-			payload.put("target", endpoint.target());
+			payload.put("target", TargetSanitizer.sanitizeTarget(endpoint.target()));
 		}
 		if (method != null) {
 			payload.put("method", method);

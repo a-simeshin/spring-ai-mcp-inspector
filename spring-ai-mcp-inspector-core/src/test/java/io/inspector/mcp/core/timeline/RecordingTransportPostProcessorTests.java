@@ -195,17 +195,38 @@ class RecordingTransportPostProcessorTests {
 	}
 
 	@Test
-	@DisplayName("sanitizeTarget strips userinfo and drops the query")
-	void sanitizeTargetStripsCredentialsAndQuery() {
-		assertThat(RecordingTransportPostProcessor.sanitizeTarget("https://user:pass@host/path?token=x"))
-			.isEqualTo("https://***@host/path");
-		assertThat(RecordingTransportPostProcessor.sanitizeTarget("https://api.example/sse?session=1"))
-			.isEqualTo("https://api.example/sse");
-		assertThat(RecordingTransportPostProcessor.sanitizeTarget("npx -y mcp-server")).isEqualTo("npx -y mcp-server");
-		assertThat(RecordingTransportPostProcessor.sanitizeTarget("https://user@host/path"))
-			.isEqualTo("https://***@host/path");
-		assertThat(RecordingTransportPostProcessor.sanitizeTarget(null)).isNull();
-		assertThat(RecordingTransportPostProcessor.sanitizeTarget("")).isEmpty();
+	@DisplayName("wrapping records the discovered client in the registry")
+	void wrapRecordsDiscoveredClient() {
+		final NamedClientMcpTransport bean = new NamedClientMcpTransport("weather",
+				new SseUriTargetTransport("https://api.example/sse"));
+		this.processor.postProcessAfterInitialization(bean, "sseTransports");
+		assertThat(this.registry.discoveredClients()).containsOnlyKeys("weather").containsEntry("weather", "sse");
+	}
+
+	@Test
+	@DisplayName("the registry receives the sanitized target when the wrapped transport connects")
+	void registryReceivesSanitizedTarget() {
+		final NamedClientMcpTransport bean = new NamedClientMcpTransport("weather",
+				new SseUriTargetTransport("https://user:pass@host/path?token=x"));
+		final NamedClientMcpTransport wrapped = (NamedClientMcpTransport) this.processor
+			.postProcessAfterInitialization(bean, "sseTransports");
+		wrapped.transport().connect((inbound) -> inbound);
+		assertThat(this.registry.snapshot()).hasSize(1);
+		final ClientConnectionRegistry.ClientConnectionSnapshot snapshot = this.registry.snapshot().get(0);
+		assertThat(snapshot.target()).isEqualTo("https://***@host/path");
+		assertThat(snapshot.transportType()).isEqualTo("sse");
+	}
+
+	@Test
+	@DisplayName("stdio target keeps argv[0] and flag names without values")
+	void stdioTargetKeepsFlagsOnly() {
+		final NamedClientMcpTransport bean = new NamedClientMcpTransport("local", new StdioParamsTransport(
+				ServerParameters.builder("npx").args(java.util.List.of("-y", "--api-key=SECRET", "pkg")).build()));
+		final NamedClientMcpTransport wrapped = (NamedClientMcpTransport) this.processor
+			.postProcessAfterInitialization(bean, "stdioTransports");
+		final RecordingMcpClientTransport decorated = (RecordingMcpClientTransport) wrapped.transport();
+		assertThat(decorated.endpoint().target()).isEqualTo("npx -y --api-key");
+		assertThat(this.registry.discoveredClients()).containsEntry("local", "stdio");
 	}
 
 	/**

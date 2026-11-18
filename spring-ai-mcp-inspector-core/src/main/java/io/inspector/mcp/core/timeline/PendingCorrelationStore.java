@@ -19,6 +19,7 @@ package io.inspector.mcp.core.timeline;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -93,8 +94,14 @@ final class PendingCorrelationStore<K> {
 	 *
 	 * @param correlationId the generated correlation id
 	 * @param timestamp the instant when the request was recorded
+	 * @param consumedBy the {@code beanName#method} sources consuming the exchange, empty
+	 * when no handler binding matches
 	 */
-	record PendingCorrelation(String correlationId, Instant timestamp) {
+	record PendingCorrelation(String correlationId, Instant timestamp, List<String> consumedBy) {
+
+		PendingCorrelation(final String correlationId, final Instant timestamp) {
+			this(correlationId, timestamp, List.of());
+		}
 
 		/**
 		 * Returns the elapsed time in milliseconds since this pending entry was created.

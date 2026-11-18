@@ -117,14 +117,52 @@ public class TimelineAutoConfiguration {
 	 * {@link RecordingTransportPostProcessor} wraps every {@code NamedClientMcpTransport}
 	 * bean with a {@link RecordingMcpClientTransport} decorator.
 	 * @param timelineService the timeline service to append events to
+	 * @param handlerScanner the scanner providing the {@code @Mcp*} handler bindings for
+	 * {@code consumedBy} enrichment
 	 * @return a new {@link McpClientTrafficRecorder}
 	 */
 	@Bean
 	@ConditionalOnMissingBean
 	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline", name = "client-capture-enabled",
 			havingValue = "true")
-	public McpClientTrafficRecorder mcpInspectorMcpClientTrafficRecorder(final TimelineService timelineService) {
-		return new McpClientTrafficRecorder(timelineService);
+	public McpClientTrafficRecorder mcpInspectorMcpClientTrafficRecorder(final TimelineService timelineService,
+			final ClientHandlerScanner handlerScanner) {
+		return new McpClientTrafficRecorder(timelineService, handlerScanner);
+	}
+
+	/**
+	 * Scans the context for {@code @McpSampling}, {@code @McpElicitation},
+	 * {@code @McpLogging} and {@code @McpProgress} handler beans, providing the
+	 * {@code (clientName, kind) &rarr; beanName#method} mapping used for
+	 * {@code consumedBy} enrichment and desync diagnostics. Absent when client capture is
+	 * switched off (default).
+	 * @return a new {@link ClientHandlerScanner}
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline", name = "client-capture-enabled",
+			havingValue = "true")
+	public ClientHandlerScanner mcpInspectorClientHandlerScanner() {
+		return new ClientHandlerScanner();
+	}
+
+	/**
+	 * Runs the handler-client desync diagnostics once after all singletons are
+	 * instantiated: WARN logs plus timeline events with
+	 * {@code endpoint=client-diagnostics}. Absent when client capture is switched off
+	 * (default).
+	 * @param handlerScanner the handler binding scanner
+	 * @param connectionRegistry the registry carrying the configured clients
+	 * @param timelineService the timeline to append diagnostics events to
+	 * @return a new {@link ClientDesyncDetector}
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline", name = "client-capture-enabled",
+			havingValue = "true")
+	public ClientDesyncDetector mcpInspectorClientDesyncDetector(final ClientHandlerScanner handlerScanner,
+			final ClientConnectionRegistry connectionRegistry, final TimelineService timelineService) {
+		return new ClientDesyncDetector(handlerScanner, connectionRegistry, timelineService);
 	}
 
 	/**

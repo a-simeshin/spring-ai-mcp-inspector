@@ -25,7 +25,15 @@ import io.modelcontextprotocol.spec.McpSchema.JSONRPCRequest;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCResponse;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCResponse.JSONRPCError;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.mcp.annotation.McpElicitation;
+import org.springframework.ai.mcp.annotation.McpLogging;
+import org.springframework.ai.mcp.annotation.McpProgress;
+import org.springframework.ai.mcp.annotation.McpSampling;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.JsonNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -192,12 +200,201 @@ class McpClientTrafficRecorderTests {
 	}
 
 	@Test
+	@DisplayName("a raw target with credentials is sanitized in the serialized payload")
+	void rawTargetSanitizedInPayload() {
+		final McpClientTrafficRecorder.ClientEndpoint raw = new McpClientTrafficRecorder.ClientEndpoint("weather",
+				"streamable-http", "https://user:pass@host/path?token=x");
+		this.recorder.recordClientRequest(raw, new JSONRPCRequest("2.0", "tools/list", 1, null));
+		final TimelineEvent event = this.timeline.events.get(0);
+		assertThat(event.payload().get("target").asString()).isEqualTo("https://***@host/path");
+		final String serialized = event.payload().toString();
+		assertThat(serialized).doesNotContain("user:pass").doesNotContain("token=x");
+	}
+
+	@Test
 	@DisplayName("pending correlations are evicted beyond the shared budget")
 	void pendingEvictedBeyondBudget() {
 		for (int i = 0; i <= McpClientTrafficRecorder.MAX_PENDING_CORRELATIONS; i++) {
 			this.recorder.recordClientRequest(ENDPOINT, new JSONRPCRequest("2.0", "tools/call", i, null));
 		}
 		assertThat(this.recorder.pendingCorrelations()).isEqualTo(McpClientTrafficRecorder.MAX_PENDING_CORRELATIONS);
+	}
+
+	/**
+	 * Handler correlation: {@code consumedBy} enrichment of server-initiated exchanges
+	 * through {@link ClientHandlerScanner}.
+	 */
+	@Nested
+	@DisplayName("consumedBy enrichment")
+	class HandlerEnrichment {
+
+		private ClientHandlerScanner scanner() {
+			final AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(
+					SamplingHandlerConfig.class);
+			final ClientHandlerScanner scanner = new ClientHandlerScanner();
+			scanner.setApplicationContext(context);
+			return scanner;
+		}
+
+		@Test
+		@DisplayName("sampling pair carries consumedBy on request and outbound response")
+		void samplingPairCarriesConsumedBy() {
+			final McpClientTrafficRecorder enriched = new McpClientTrafficRecorder(
+					McpClientTrafficRecorderTests.this.timeline, scanner());
+			enriched.recordServerRequest(ENDPOINT, new JSONRPCRequest("2.0", "sampling/createMessage", 42, null));
+			final TimelineEvent request = McpClientTrafficRecorderTests.this.timeline.events.get(0);
+			assertThat(request.payload().get("consumedBy").size()).isEqualTo(1);
+			assertThat(request.payload().get("consumedBy").get(0).asString()).isEqualTo("sampleHandler#sample");
+			enriched.recordOutboundResponse(ENDPOINT, new JSONRPCResponse("2.0", 42, Map.of("ok", true), null));
+			final TimelineEvent response = McpClientTrafficRecorderTests.this.timeline.events.get(1);
+			assertThat(response.correlationId()).isEqualTo(request.correlationId());
+			assertThat(response.payload().get("consumedBy").size()).isEqualTo(1);
+			assertThat(response.payload().get("consumedBy").get(0).asString()).isEqualTo("sampleHandler#sample");
+		}
+
+		@Test
+		@DisplayName("elicitation pair carries consumedBy on request and outbound response")
+		void elicitationPairCarriesConsumedBy() {
+			final McpClientTrafficRecorder enriched = new McpClientTrafficRecorder(
+					McpClientTrafficRecorderTests.this.timeline, scanner());
+			enriched.recordServerRequest(ENDPOINT, new JSONRPCRequest("2.0", "elicitation/create", 7, null));
+			enriched.recordOutboundResponse(ENDPOINT, new JSONRPCResponse("2.0", 7, Map.of("ok", true), null));
+			assertThat(McpClientTrafficRecorderTests.this.timeline.events.get(0).payload().get("consumedBy").size())
+				.isEqualTo(1);
+			assertThat(McpClientTrafficRecorderTests.this.timeline.events.get(0)
+				.payload()
+				.get("consumedBy")
+				.get(0)
+				.asString()).isEqualTo("elicitHandler#elicit");
+			assertThat(McpClientTrafficRecorderTests.this.timeline.events.get(1).payload().get("consumedBy").size())
+				.isEqualTo(1);
+		}
+
+		@Test
+		@DisplayName("logging notification carries consumedBy on the single event")
+		void loggingNotificationCarriesConsumedBy() {
+			final McpClientTrafficRecorder enriched = new McpClientTrafficRecorder(
+					McpClientTrafficRecorderTests.this.timeline, scanner());
+			enriched.recordServerNotification(ENDPOINT, new JSONRPCNotification("2.0", "notifications/message", null));
+			assertThat(McpClientTrafficRecorderTests.this.timeline.events).hasSize(1);
+			assertThat(McpClientTrafficRecorderTests.this.timeline.events.get(0)
+				.payload()
+				.get("consumedBy")
+				.get(0)
+				.asString()).isEqualTo("logHandler#log");
+			assertThat(McpClientTrafficRecorderTests.this.recorder.pendingCorrelations()).isZero();
+		}
+
+		@Test
+		@DisplayName("progress notification carries consumedBy on the single event")
+		void progressNotificationCarriesConsumedBy() {
+			final McpClientTrafficRecorder enriched = new McpClientTrafficRecorder(
+					McpClientTrafficRecorderTests.this.timeline, scanner());
+			enriched.recordServerNotification(ENDPOINT, new JSONRPCNotification("2.0", "notifications/progress", null));
+			assertThat(McpClientTrafficRecorderTests.this.timeline.events).hasSize(1);
+			assertThat(McpClientTrafficRecorderTests.this.timeline.events.get(0)
+				.payload()
+				.get("consumedBy")
+				.get(0)
+				.asString()).isEqualTo("progressHandler#progress");
+		}
+
+		@Test
+		@DisplayName("unrelated server-initiated methods carry no consumedBy")
+		void unrelatedMethodsCarryNothing() {
+			final McpClientTrafficRecorder enriched = new McpClientTrafficRecorder(
+					McpClientTrafficRecorderTests.this.timeline, scanner());
+			enriched.recordServerRequest(ENDPOINT, new JSONRPCRequest("2.0", "roots/list", 1, null));
+			assertThat(McpClientTrafficRecorderTests.this.timeline.events.get(0).payload().get("consumedBy")).isNull();
+		}
+
+		@Test
+		@DisplayName("a client without a matching binding carries no consumedBy")
+		void noBindingNoConsumedBy() {
+			final McpClientTrafficRecorder enriched = new McpClientTrafficRecorder(
+					McpClientTrafficRecorderTests.this.timeline, scanner());
+			final McpClientTrafficRecorder.ClientEndpoint otherClient = new McpClientTrafficRecorder.ClientEndpoint(
+					"other", "streamable-http", "https://other.example/mcp");
+			enriched.recordServerRequest(otherClient, new JSONRPCRequest("2.0", "sampling/createMessage", 1, null));
+			assertThat(McpClientTrafficRecorderTests.this.timeline.events.get(0).payload().get("consumedBy")).isNull();
+		}
+
+		@Test
+		@DisplayName("a recorder without a scanner never emits consumedBy")
+		void noScannerNoConsumedBy() {
+			final McpClientTrafficRecorder plain = McpClientTrafficRecorderTests.this.recorder;
+			plain.recordServerRequest(ENDPOINT, new JSONRPCRequest("2.0", "sampling/createMessage", 1, null));
+			assertThat(McpClientTrafficRecorderTests.this.timeline.events.get(0).payload().get("consumedBy")).isNull();
+		}
+
+		@Test
+		@DisplayName("an unknown notification method carries no consumedBy")
+		void unknownNotificationMethodCarriesNothing() {
+			final McpClientTrafficRecorder enriched = new McpClientTrafficRecorder(
+					McpClientTrafficRecorderTests.this.timeline, scanner());
+			enriched.recordServerNotification(ENDPOINT, new JSONRPCNotification("2.0", "custom/notification", null));
+			assertThat(McpClientTrafficRecorderTests.this.timeline.events.get(0).payload().get("consumedBy")).isNull();
+		}
+
+	}
+
+	@Configuration
+	static class SamplingHandlerConfig {
+
+		@Bean
+		SampleHandler sampleHandler() {
+			return new SampleHandler();
+		}
+
+		@Bean
+		ElicitHandler elicitHandler() {
+			return new ElicitHandler();
+		}
+
+		@Bean
+		LogHandler logHandler() {
+			return new LogHandler();
+		}
+
+		@Bean
+		ProgressHandler progressHandler() {
+			return new ProgressHandler();
+		}
+
+	}
+
+	static class SampleHandler {
+
+		@McpSampling(clients = "weather")
+		String sample(final String request) {
+			return request;
+		}
+
+	}
+
+	static class ElicitHandler {
+
+		@McpElicitation(clients = "weather")
+		String elicit(final String request) {
+			return request;
+		}
+
+	}
+
+	static class LogHandler {
+
+		@McpLogging(clients = "weather")
+		void log(final String notification) {
+		}
+
+	}
+
+	static class ProgressHandler {
+
+		@McpProgress(clients = "weather")
+		void progress(final String notification) {
+		}
+
 	}
 
 	/**

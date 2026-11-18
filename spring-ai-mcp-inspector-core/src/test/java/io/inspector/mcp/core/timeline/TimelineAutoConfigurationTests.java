@@ -96,6 +96,8 @@ class TimelineAutoConfigurationTests {
 					assertThat(context).hasSingleBean(McpClientTrafficRecorder.class);
 					assertThat(context).hasSingleBean(ClientConnectionRegistry.class);
 					assertThat(context).hasSingleBean(RecordingTransportPostProcessor.class);
+					assertThat(context).hasSingleBean(ClientHandlerScanner.class);
+					assertThat(context).hasSingleBean(ClientDesyncDetector.class);
 				});
 		}
 
@@ -107,7 +109,9 @@ class TimelineAutoConfigurationTests {
 						"spring.ai.mcp.inspector.timeline.logs-enabled=false")
 				.run((context) -> assertThat(context).doesNotHaveBean(McpClientTrafficRecorder.class)
 					.doesNotHaveBean(ClientConnectionRegistry.class)
-					.doesNotHaveBean(RecordingTransportPostProcessor.class));
+					.doesNotHaveBean(RecordingTransportPostProcessor.class)
+					.doesNotHaveBean(ClientHandlerScanner.class)
+					.doesNotHaveBean(ClientDesyncDetector.class));
 		}
 
 		@Test
