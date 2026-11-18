@@ -529,4 +529,42 @@ describe("AppRenderer sandbox csp from the UI resource meta (PR #199 round 2 BLO
       expect(mockSandboxProps.at(-1)?.csp).toBeUndefined();
     });
   });
+
+  // Pin for the Apps flow hang (PR #398 rework): @mcp-ui/client's AppFrame
+  // re-runs its mount effect whenever the sandbox.url object identity
+  // changes, and the re-run is a no-op guard while the cleanup drops the
+  // in-flight connect chain: a fresh sandbox object per render permanently
+  // loses the ui/initialize handshake. The sandbox prop must therefore be
+  // reference-stable across re-renders.
+  it("keeps the sandbox prop reference-stable across re-renders", async () => {
+    const { rerender } = renderSpecApp();
+
+    await waitFor(() => {
+      expect(client.readResource).toHaveBeenCalled();
+    });
+    // Flush the readResourceCsp chain so a possible csp transition has
+    // landed before we observe identity across renders.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    rerender(
+      <AppRenderer
+        sandboxPath="/sandbox"
+        tool={specTool}
+        tools={[specTool] as Tool[]}
+        mcpClient={client}
+        toolResult={null}
+      />,
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(mockSandboxProps.length).toBeGreaterThanOrEqual(2);
+    const prev = mockSandboxProps.at(-2);
+    const last = mockSandboxProps.at(-1);
+    expect(prev?.url).toBe(last?.url);
+    expect(last).toBe(prev);
+  });
 });

@@ -289,6 +289,7 @@ const AppRenderer = ({
       const wrappedPostMessage = (
         message: unknown,
         targetOrigin?: string,
+        transfer?: Transferable[],
       ) => {
         if (
           !disposed &&
@@ -306,7 +307,10 @@ const AppRenderer = ({
             setLifecycleState("initializing");
           }
         }
-        return origPostMessage(message, targetOrigin ?? "*");
+        // [spring-ai-mcp-inspector PATCH] Forward the full postMessage
+        // signature: dropping the third `transfer` argument changed the API
+        // shape the wrap claims to forward.
+        return origPostMessage(message, targetOrigin ?? "*", transfer);
       };
 
       // Override contentWindow.postMessage. This is safe because the library
@@ -377,6 +381,26 @@ const AppRenderer = ({
         : "light",
     }),
     [],
+  );
+
+  // [spring-ai-mcp-inspector PATCH] The sandbox prop must be reference-stable
+  // across re-renders: @mcp-ui/client's AppFrame re-runs its mount effect
+  // whenever the sandbox.url object identity changes, and that effect's
+  // cleanup drops its in-flight connect chain while the re-run is a no-op
+  // guard (the iframe is already mounted). An inline object here recreated
+  // the URL on every render, so any re-render in the window between the
+  // proxy iframe mounting and its sandbox-proxy-ready notification (e.g. the
+  // lifecycle "sandbox-waiting" state update) permanently lost the
+  // ui/initialize handshake and the app never rendered. Memoize on the two
+  // values that actually define the sandbox URL: path and resource CSP.
+  const sandbox = useMemo(
+    () => ({
+      url: new URL(sandboxPath, window.location.origin),
+      // From the UI resource meta (readResourceCsp), never from the tool
+      // meta: McpUiToolMeta.csp is `never` in ext-apps 1.7.2.
+      csp: resourceCsp,
+    }),
+    [sandboxPath, resourceCsp],
   );
 
   const handleOpenLink = async ({ url }: { url: string }) => {
@@ -484,12 +508,7 @@ const AppRenderer = ({
           hostContext={hostContext}
           toolInput={toolInput}
           toolResult={normalizedToolResult}
-          sandbox={{
-            url: new URL(sandboxPath, window.location.origin),
-            // From the UI resource meta (readResourceCsp), never from the tool
-            // meta: McpUiToolMeta.csp is `never` in ext-apps 1.7.2.
-            csp: resourceCsp,
-          }}
+          sandbox={sandbox}
           onError={(err) => {
             setError(err.message);
             setLifecycleState("error");

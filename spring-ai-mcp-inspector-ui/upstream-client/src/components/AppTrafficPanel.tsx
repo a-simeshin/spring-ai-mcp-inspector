@@ -18,8 +18,12 @@ interface AppTrafficPanelProps {
 }
 
 /**
- * Side panel for the Apps tab showing lifecycle status, JSON-RPC traffic log,
- * and guest console/error output forwarded through the bridge.
+ * Side panel for the Apps tab showing lifecycle status and the JSON-RPC
+ * traffic log between host and App.
+ *
+ * [spring-ai-mcp-inspector PATCH] The "Guest Logs" section was removed:
+ * guest console output is not forwarded through the bridge, so the section
+ * was a permanent placeholder promising logs that never arrive.
  */
 const AppTrafficPanel = ({
   entries,
@@ -27,7 +31,6 @@ const AppTrafficPanel = ({
   onClear,
 }: AppTrafficPanelProps) => {
   const [filter, setFilter] = useState("");
-  const [isLogsExpanded, setIsLogsExpanded] = useState(true);
 
   const { copied, setCopied } = useCopy();
 
@@ -141,29 +144,6 @@ const AppTrafficPanel = ({
           filtered.map((entry) => (
             <TrafficEntryRow key={entry.seq} entry={entry} />
           ))
-        )}
-      </div>
-
-      {/* Console / logs section */}
-      <div className="border-t border-border">
-        <button
-          type="button"
-          className="flex items-center gap-1 w-full p-2 text-xs font-medium text-left hover:bg-muted/50"
-          onClick={() => setIsLogsExpanded(!isLogsExpanded)}
-        >
-          {isLogsExpanded ? (
-            <ChevronDown className="size-3" />
-          ) : (
-            <ChevronRight className="size-3" />
-          )}
-          Guest Logs
-        </button>
-        {isLogsExpanded && (
-          <div className="max-h-28 overflow-y-auto p-2 bg-gray-900 text-gray-100 font-mono text-[10px] leading-relaxed">
-            <span className="opacity-50">
-              Console output forwarded through the bridge will appear here.
-            </span>
-          </div>
         )}
       </div>
     </div>

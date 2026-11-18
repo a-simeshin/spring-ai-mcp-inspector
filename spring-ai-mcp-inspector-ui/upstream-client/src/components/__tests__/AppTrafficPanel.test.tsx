@@ -146,16 +146,18 @@ describe("AppTrafficPanel", () => {
     expect(screen.getByText("params")).toBeInTheDocument();
   });
 
-  it("should collapse and show Guest Logs section", () => {
+  it("does not render a Guest Logs placeholder section", () => {
+    // [spring-ai-mcp-inspector PATCH] Guest console output is not forwarded
+    // through the bridge, so the permanent "Guest Logs" placeholder was
+    // removed instead of promising logs that never arrive.
     render(<AppTrafficPanel {...defaultProps} />);
 
-    expect(screen.getByText("Guest Logs")).toBeInTheDocument();
-
-    // Click to collapse
-    fireEvent.click(screen.getByText("Guest Logs"));
-
-    // Should still show the title but not the content
-    expect(screen.getByText("Guest Logs")).toBeInTheDocument();
+    expect(screen.queryByText("Guest Logs")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Console output forwarded through the bridge will appear here.",
+      ),
+    ).not.toBeInTheDocument();
   });
 
   it("should copy all entries as JSON when copy button is clicked", () => {

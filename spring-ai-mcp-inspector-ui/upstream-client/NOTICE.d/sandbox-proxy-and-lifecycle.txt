@@ -141,3 +141,34 @@ Bound vendored files (full paths, notice registry rule 4):
   collapse/truncation tests.
 - src/components/__tests__/AppsTab.ingress.test.tsx: bounded ingress queue
   tests (max 500 pending entries, dropped-N singleton marker).
+- src/components/__tests__/AppRenderer.test.tsx: upstream component tests
+  plus the sandbox-prop reference-stability pin.
+- src/components/__tests__/AppRendererTapWiring.test.tsx: real-iframe
+  pinning tests for the DOM traffic tap (lifecycle transitions,
+  chronological bidirectional log, source filtering).
+
+Apps flow hang fix after sandbox-proxy-ready (PR #398 rework, issue #183):
+- src/components/AppRenderer.tsx: the sandbox prop passed to
+  @mcp-ui/client's AppRenderer is now memoized on sandboxPath and the
+  resource CSP. The previous inline object recreated the URL on every
+  render, and AppFrame's mount effect cleanup dropped its in-flight connect
+  chain on each identity change while the re-run passed its idempotency
+  guard: any re-render between the proxy iframe mounting and the
+  sandbox-proxy-ready notification permanently lost the ui/initialize
+  handshake (no sandbox-resource-ready, no inner view iframe, pill stuck on
+  initializing). Also forwards the postMessage transfer argument through
+  the traffic tap wrap instead of dropping it.
+- src/components/AppTrafficPanel.tsx: removed the permanent "Guest Logs"
+  placeholder section; guest console output is not forwarded through the
+  bridge, so the panel no longer promises logs that never arrive.
+- src/components/__tests__/AppRenderer.test.tsx: added the sandbox-prop
+  reference-stability pin (fails if the sandbox object is recreated per
+  render).
+- src/components/__tests__/AppRendererTapWiring.test.tsx: new real-iframe
+  suite driving the production DOM tap (lifecycle transitions,
+  host<->guest chronological traffic log, foreign-source filtering).
+- src/components/__tests__/AppsTab.ingress.test.tsx: added burst-collapse
+  pins (consecutive tool-input-partial chunks keep the latest partial;
+  a non-partial entry ends the burst).
+- src/components/__tests__/AppTrafficPanel.test.tsx: the Guest Logs test
+  became a negative pin (the placeholder must not render).
