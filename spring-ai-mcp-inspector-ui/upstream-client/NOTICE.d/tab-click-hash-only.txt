@@ -8,7 +8,7 @@ patterns) found no divergence between the active tab trigger and
 the active panel, so no race is claimed. The change is a simplification: the hashchange
 listener becomes the single source of truth for tab state and the
 redundant synchronous setState is removed. Covered by the three
-regression tests in App.tabClickRegression.test.tsx (t_c0dcfe9a,
+regression tests in src/__tests__/App.tabClickRegression.test.tsx (t_c0dcfe9a,
 t_f91ff901): pane switching on click, pane switching through the
 hashchange path with deterministic dispatch order, and a
 click-through of every remaining tab.

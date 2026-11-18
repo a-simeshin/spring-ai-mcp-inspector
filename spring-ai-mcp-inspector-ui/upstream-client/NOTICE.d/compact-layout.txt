@@ -37,5 +37,5 @@ independently under real overflow; the tab panel and the History
 pane have disjoint boxes and the document has no horizontal overflow
 (scrollWidth <= document.documentElement.clientWidth) at 768x800 and
 1023x768; drag handles present at 1024px; 375px regression of patch
-8 with all 10 enabled tabs clickable) and by the useIsCompactLayout
-jest unit tests.
+8 with all 10 enabled tabs clickable) and by the useIsCompactLayout jest unit tests
+(src/lib/hooks/__tests__/useIsCompactLayout.test.tsx).

@@ -1,5 +1,7 @@
 src/lib/auth.ts + src/lib/oauth-state-machine.ts +
-src/lib/hooks/useConnection.ts + src/components/OAuthFlowProgress.tsx
+src/lib/hooks/useConnection.ts + src/components/OAuthFlowProgress.tsx +
+src/lib/__tests__/auth.test.ts + src/lib/__tests__/oauth-state-machine.test.ts +
+src/components/__tests__/OAuthFlowProgress.test.tsx
 — resolve a relative same-origin server URL against the current origin
 before handing it to `new URL(...)` as a base (`toAbsoluteServerUrl`).
 Patch 5 makes the default target the relative `/mcp`, and

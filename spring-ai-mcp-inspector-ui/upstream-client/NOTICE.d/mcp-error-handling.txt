@@ -6,3 +6,4 @@ destructive alert in PromptsTab) before rethrowing, but the PromptsTab
 props are typed `() => void` and drop the returned promise, so the rethrow
 surfaced as an unhandledrejection in the browser console on every
 server-side MCP error (issue #276).
+Covered by src/utils/__tests__/mcpErrorHandling.test.ts.
