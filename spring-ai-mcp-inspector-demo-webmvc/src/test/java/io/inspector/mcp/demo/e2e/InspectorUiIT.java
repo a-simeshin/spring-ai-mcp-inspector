@@ -2702,12 +2702,16 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// N. TasksTab — the demo server does NOT advertise the `tasks` capability
-	// (see TabsAvailability and the omission from `spring-ai-mcp-inspector-demo`
-	// server config), so the tasks tab trigger is rendered as disabled. We
-	// document the contract here and skip the active/cancelled scenarios via
-	// Assumptions when the capability is missing — flipping these tests on
-	// requires server-side `serverCapabilities.tasks` plumbing first.
+	// N. TasksTab. The SSE proxy connection used here does NOT inject
+	// `capabilities.tasks`: only StreamableHttpProxyController and the
+	// webflux ProxyHandler implement the injection (tasksInterceptionEnabled
+	// in core ProxySession). After the capability gating (issue #212) the
+	// Tasks trigger stays disabled on this connection, so both scenarios
+	// below SKIP in the webmvc job (pre-existing: the base skips them too);
+	// the Assumptions guard trips when tasksCapabilityAdvertised() no longer
+	// holds. The taskless branch has its own IT: TasksCapabilityGap below
+	// connects in Direct mode to the demo MCP server, which does not
+	// advertise tasks and has no proxy at all.
 	// =====================================================================
 
 	@Nested
@@ -2731,12 +2735,13 @@ class InspectorUiIT {
 			if (!trigger.exists()) {
 				return false;
 			}
-			// App.tsx sets `disabled={!serverCapabilities?.tasks}` on the TabsTrigger —
-			// Radix reflects disabled state on data-disabled / aria-disabled and the
-			// underlying <button disabled> attribute.
-			String disabled = trigger.getAttribute("disabled");
-			String ariaDisabled = trigger.getAttribute("aria-disabled");
-			return !(disabled != null || "true".equals(ariaDisabled));
+			// After the capability gating (issue #212) the trigger is always
+			// enabled, so there is no disabled attribute to probe. The
+			// capability-gap body renders only when tasks is absent: after
+			// opening the Tasks tab, its absence means the capability is
+			// advertised (proxy-injected in this file, native otherwise).
+			clickTab("tasks");
+			return !$("[data-testid=tasks-capability-gap]").exists();
 		}
 
 		@Test
@@ -2747,8 +2752,8 @@ class InspectorUiIT {
 		void tasksTab_runSlowEchoAsTask_showsActiveAndCompleted() {
 			// given
 			Assumptions.assumeTrue(tasksCapabilityAdvertised(),
-					"demo server does not advertise the `tasks` capability — TasksTab trigger is "
-							+ "disabled (UPSTREAM_DOM_MAP.md §3). Skip until server-side capability is wired.");
+					"demo server does not advertise the `tasks` capability: the Tasks tab shows "
+							+ "the capability-gap body. Skip until server-side capability is wired.");
 
 			// when
 			// Run slowEcho as a task from the Tools tab (the "Run as task" checkbox is
@@ -2815,6 +2820,107 @@ class InspectorUiIT {
 			// then
 			activePanel().shouldHave(Condition.or("cancellation signal", text("cancelled"), text("Cancelled")),
 					Duration.ofSeconds(15));
+		}
+
+	}
+
+	// =====================================================================
+	// N2. Tasks capability gap (issue #212, taskless branch). A DIRECT
+	// streamable-http connection to the demo's own MCP endpoint: the browser
+	// talks to the spring-ai MCP server, which does NOT advertise tasks and
+	// there is no proxy to inject them. The Tasks tab must stay reachable,
+	// show the capability-gap body with the exact issue #212 message, and no
+	// tasks/* request may surface as an error toast.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Tasks capability gap (direct, taskless)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class TasksCapabilityGap {
+
+		@BeforeAll
+		void bootAndConnectDirect() {
+			startApp(new Combo("streamable"));
+			open("/mcp-inspector/index.html");
+			// Sidebar must finish first render before we touch the selects.
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+			// Streamable HTTP transport + Direct connection type: the browser
+			// connects straight to the URL, bypassing the inspector proxy
+			// (otherwise the proxy would inject capabilities.tasks and defeat
+			// the taskless premise of this class).
+			$("#transport-type-select").shouldBe(visible).click();
+			$("[data-testid=select-option-streamable-http]").click();
+			$("#connection-type-select").shouldBe(visible).click();
+			$("[data-testid=select-option-direct]").shouldBe(visible).click();
+			// Absolute same-origin URL of the demo MCP server (startApp picked
+			// a random port; the MCP endpoint is /mcp on the same app).
+			setReactInputValue("#sse-url-input", Configuration.baseUrl + "/mcp");
+			connectButton().click();
+			// Restart/Reconnect is only mounted when connectionStatus === "connected".
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+		}
+
+		@AfterAll
+		void shutdown() {
+			// Drop the direct-mode localStorage leftovers (lastTransportType,
+			// lastConnectionType, lastSseUrl) so later @Nested classes keep
+			// their default connect flow. Must run while the page is loaded.
+			Selenide.executeJavaScript("localStorage.clear();");
+			stopApp();
+		}
+
+		@Test
+		@Story("Tasks tab")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("On a taskless server (direct connection) clicking the Tasks tab shows the capability-gap body with the exact issue #212 message and raises no error toast.")
+		@DisplayName("tasksGapClickShowsCapabilityGapBodyWithoutErrorToast")
+		void tasksGap_directConnect_click_showsGapBody_noErrorToast() {
+			clickTab("tasks");
+			$("[data-testid=tasks-capability-gap]").shouldBe(visible, Duration.ofSeconds(10))
+				.shouldHave(text(
+						"Server does not advertise the tasks capability; long-running task tracking is unavailable."));
+			// Give any leaked tasks/* round trip time to come back as a toast
+			// before asserting the AC's "no error toast".
+			Selenide.sleep(1500);
+			$("[data-testid=toast-stack]").shouldNotHave(text("Error"));
+			// The supported layout (List Tasks controls) must not render.
+			activePanel().shouldNotHave(text("List Tasks"));
+		}
+
+		@Test
+		@Story("Tasks tab")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("On a taskless server the #tasks deep link resolves to the Tasks tab with the capability-gap body, and opening the Apps tab raises no error toast either.")
+		@DisplayName("tasksGapDeepLinkResolvesAndAppsRaisesNoToast")
+		void tasksGap_directConnect_deepLink_showsGapBody_appsNoToast() {
+			// True deep link: a full page load with #tasks. localStorage
+			// restores lastTransportType, lastConnectionType and lastSseUrl
+			// from the direct connect in bootAndConnectDirect, and the app
+			// auto-restores the direct session on load. Wait for either
+			// outcome: the auto-restored connection (the Tasks tab content
+			// renders) or the first-time Connect button (click it), then the
+			// routing effect resolves the hash to the always-valid Tasks tab.
+			open("/mcp-inspector/index.html#tasks");
+			long deadline = System.currentTimeMillis() + 20000;
+			while (System.currentTimeMillis() < deadline) {
+				if ($("[data-testid=tab-content-tasks]").exists() || connectButton().exists()) {
+					break;
+				}
+				Selenide.sleep(300);
+			}
+			if (!$("[data-testid=tab-content-tasks]").exists()) {
+				connectButton().shouldBe(visible, Duration.ofSeconds(5)).click();
+				$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			}
+			$("[data-testid=tab-content-tasks]").shouldBe(visible, Duration.ofSeconds(15));
+			$("[data-testid=tasks-capability-gap]").shouldBe(visible, Duration.ofSeconds(10))
+				.shouldHave(text(
+						"Server does not advertise the tasks capability; long-running task tracking is unavailable."));
+			Selenide.sleep(1500);
+			$("[data-testid=toast-stack]").shouldNotHave(text("Error"));
+			// The AC names Apps too: opening it must not leak a tasks/* error.
+			clickTab("apps");
+			$("[data-testid=toast-stack]").shouldNotHave(text("Error"));
 		}
 
 	}
@@ -3897,12 +4003,13 @@ class InspectorUiIT {
 				"ping", "sampling", "elicitations", "roots", "auth", "metadata", "input-required", "timeline");
 
 		/**
-		 * The 10 always-enabled triggers. {@code tasks} is rendered disabled by design —
-		 * the demo does not advertise the tasks capability (see #63) — so it is only
-		 * presence-checked, never clicked.
+		 * The 11 always-enabled triggers. Since the issue #212 capability gating
+		 * {@code tasks} is always rendered and enabled too (without the capability the
+		 * panel shows the capability-gap body), so it is clicked like the rest; this
+		 * class connects through the proxy, which advertises capabilities.tasks.
 		 */
-		private static final List<String> ENABLED_TAB_VALUES = List.of("resources", "prompts", "tools", "apps", "ping",
-				"sampling", "elicitations", "roots", "auth", "metadata");
+		private static final List<String> ENABLED_TAB_VALUES = List.of("resources", "prompts", "tools", "tasks", "apps",
+				"ping", "sampling", "elicitations", "roots", "auth", "metadata");
 
 		@BeforeAll
 		void bootAndConnect() {
@@ -3964,7 +4071,7 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tab bar")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("At the widest wrapping viewport (639px, just below the inclusive Tailwind sm breakpoint) the TabsList still wraps, all 13 triggers fit inside the viewport (right edge <= viewport width) and the 10 enabled ones are clickable by real input; the disabled tasks trigger is only presence-checked.")
+		@Description("At the widest wrapping viewport (639px, just below the inclusive Tailwind sm breakpoint) the TabsList still wraps, all 13 triggers fit inside the viewport (right edge <= viewport width) and the 11 enabled ones (tasks included) are clickable by real input.")
 		@DisplayName("tabsAt639pxWrapAllReachableClickableNoHScroll — sm boundary, wrap side")
 		void tabs_at639px_wrapAllTriggersReachableClickableNoHorizontalOverflow() {
 			// given
@@ -3979,8 +4086,6 @@ class InspectorUiIT {
 				clickTab(value); // real WebDriver click input; asserts the trigger
 									// becomes active
 			}
-			Assertions.assertTrue($("[data-testid=tab-trigger-tasks]").exists(),
-					"disabled tasks trigger must be present at the sm boundary (#63)");
 			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
 					"document.documentElement must not overflow horizontally at 639px");
 		}
@@ -3988,7 +4093,7 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tab bar")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("Control scenario: the wrap contract holds at the former desktop-control widths too. At 640px (Tailwind sm, min-width:640px, inclusive) and at 1024px the TabsList still wraps (#275: the single upstream row overflowed desktop columns once the bar grew to 13 triggers), every trigger fits inside the viewport, the 10 enabled ones are clickable by real input and the document does not overflow horizontally.")
+		@Description("Control scenario: the wrap contract holds at the former desktop-control widths too. At 640px (Tailwind sm, min-width:640px, inclusive) and at 1024px the TabsList still wraps (#275: the single upstream row overflowed desktop columns once the bar grew to 13 triggers), every trigger fits inside the viewport, the 11 enabled ones (tasks included) are clickable by real input and the document does not overflow horizontally.")
 		@DisplayName("tabsAt640And1024ControlWrapAllReachableNoHScroll: former desktop-control widths under the all-width wrap contract")
 		void tabs_at640And1024px_controlWrapAllTriggersReachableNoHorizontalOverflow() {
 			// when & then: the exact former sm flip point (640) plus a wider desktop
@@ -4003,8 +4108,6 @@ class InspectorUiIT {
 					clickTab(value); // real WebDriver click input; asserts the trigger
 										// becomes active
 				}
-				Assertions.assertTrue($("[data-testid=tab-trigger-tasks]").exists(),
-						"disabled tasks trigger must be present at " + width + "px (#63)");
 				Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
 						"document.documentElement must not overflow horizontally at " + width + "px");
 			}
@@ -4338,7 +4441,7 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive history layout")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("375px regression of the <640px tab-bar wrap fix (PR #69): the TabsList still wraps, all 11 triggers are present, every one of the 10 enabled tabs is clicked by real input, and the document does not overflow horizontally after the compact history-layout patch.")
+		@Description("375px regression of the <640px tab-bar wrap fix (PR #69): the TabsList still wraps, all 11 triggers are present, every one of the 11 enabled tabs (tasks included) is clicked by real input, and the document does not overflow horizontally after the compact history-layout patch.")
 		@DisplayName("tabBarRegressionAt375: mobile wrap intact, all tabs clickable")
 		void tabBar_at375_wrapIntactAfterCompactPatch() {
 			// given
@@ -4352,8 +4455,8 @@ class InspectorUiIT {
 						"tab trigger '" + value + "' must be present in the DOM at 375px");
 			}
 
-			// and: every enabled tab is actually clickable by real input at this
-			// viewport (the disabled tasks trigger is only presence-checked, see #63).
+			// and: every enabled tab (tasks included since the issue #212 gating)
+			// is actually clickable by real input at this viewport.
 			for (String value : ResponsiveTabBar.ENABLED_TAB_VALUES) {
 				clickTab(value);
 			}

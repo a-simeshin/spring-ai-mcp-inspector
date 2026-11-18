@@ -393,7 +393,11 @@ describe("App - tab router hash fallback (#226)", () => {
     });
   });
 
-  describe("null/empty capabilities always route to PingTab (#t_fdeb9f56)", () => {
+  // [spring-ai-mcp-inspector PATCH] Adapted for issue #212 (PR #214): the
+  // forced tab for null/empty capabilities moved from "ping" to "tasks",
+  // whose capability-gap body explains what is missing instead of a bare
+  // Ping panel.
+  describe("null/empty capabilities always route to the Tasks capability-gap body (#t_fdeb9f56, issue #212)", () => {
     const setHash = async (hash: string) => {
       await act(async () => {
         window.location.hash = hash;
@@ -403,85 +407,87 @@ describe("App - tab router hash fallback (#226)", () => {
       });
     };
 
-    it("connected with null capabilities and #apps resolves to Ping", async () => {
+    it("connected with null capabilities and #apps resolves to Tasks", async () => {
       mockUseConnection.mockReturnValue(connectionState(null));
       window.location.hash = "#apps";
       render(<App />);
 
       await waitFor(() => {
-        expectSingleSelectedTab("ping");
+        expectSingleSelectedTab("tasks");
       });
       await waitFor(() => {
-        expect(window.location.hash).toBe("#ping");
+        expect(window.location.hash).toBe("#tasks");
       });
     });
 
-    it("connected with null capabilities and #bogus resolves to Ping", async () => {
+    it("connected with null capabilities and #bogus resolves to Tasks", async () => {
       mockUseConnection.mockReturnValue(connectionState(null));
       window.location.hash = "#bogus";
       render(<App />);
 
       await waitFor(() => {
-        expectSingleSelectedTab("ping");
+        expectSingleSelectedTab("tasks");
       });
       await waitFor(() => {
-        expect(window.location.hash).toBe("#ping");
+        expect(window.location.hash).toBe("#tasks");
       });
     });
 
-    it("hashchange to #apps with null capabilities stays on Ping", async () => {
+    it("hashchange to #apps with null capabilities stays on Tasks", async () => {
       mockUseConnection.mockReturnValue(connectionState(null));
       window.location.hash = "#ping";
       render(<App />);
       await waitFor(() => {
-        expectSingleSelectedTab("ping");
+        expectSingleSelectedTab("tasks");
       });
 
       await setHash("#apps");
 
       await waitFor(() => {
-        expectSingleSelectedTab("ping");
+        expectSingleSelectedTab("tasks");
       });
-      expect(window.location.hash).toBe("#ping");
+      expect(window.location.hash).toBe("#tasks");
     });
 
-    it("empty capabilities object {} also routes to Ping", async () => {
+    it("empty capabilities object {} also routes to Tasks", async () => {
       mockUseConnection.mockReturnValue(connectionState({}));
       window.location.hash = "#apps";
       render(<App />);
 
       await waitFor(() => {
-        expectSingleSelectedTab("ping");
+        expectSingleSelectedTab("tasks");
       });
       await waitFor(() => {
-        expect(window.location.hash).toBe("#ping");
+        expect(window.location.hash).toBe("#tasks");
       });
     });
 
-    it("hashchange to #apps with empty capabilities {} stays on Ping", async () => {
+    it("hashchange to #apps with empty capabilities {} stays on Tasks", async () => {
       mockUseConnection.mockReturnValue(connectionState({}));
       window.location.hash = "#ping";
       render(<App />);
 
       await waitFor(() => {
-        expectSingleSelectedTab("ping");
+        expectSingleSelectedTab("tasks");
       });
 
       await setHash("#apps");
 
       await waitFor(() => {
-        expectSingleSelectedTab("ping");
+        expectSingleSelectedTab("tasks");
       });
-      expect(window.location.hash).toBe("#ping");
+      expect(window.location.hash).toBe("#tasks");
     });
 
-    it("cold load with null capabilities lands on Ping with no hashchange to rescue (effect guard)", async () => {
+    it("cold load with null capabilities lands on the Tasks capability-gap body with no hashchange to rescue (effect guard)", async () => {
       mockUseConnection.mockReturnValue(connectionState(null));
       // A real browser opening the page with #apps already in the URL fires
       // no hashchange event, so only the capability-gated effect guard can
-      // force Ping. jsdom queues an async hashchange when location.hash is
+      // force Tasks. jsdom queues an async hashchange when location.hash is
       // assigned: drain it BEFORE mounting so the hashchange guard cannot
-      // rescue a disabled effect guard (owner review of #228).
+      // rescue a disabled effect guard (owner review of #228). With issue
+      // #212 "tasks" is always a valid tab: an invalid #apps deep link now
+      // falls back to the Tasks capability-gap body, not Ping.
       window.location.hash = "#apps";
       await act(async () => {
         await new Promise((resolve) => {
@@ -491,10 +497,10 @@ describe("App - tab router hash fallback (#226)", () => {
       render(<App />);
 
       await waitFor(() => {
-        expectSingleSelectedTab("ping");
+        expectSingleSelectedTab("tasks");
       });
       await waitFor(() => {
-        expect(window.location.hash).toBe("#ping");
+        expect(window.location.hash).toBe("#tasks");
       });
     });
   });
