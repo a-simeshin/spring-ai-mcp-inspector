@@ -1,4 +1,5 @@
-src/lib/inputRequired.ts, src/lib/__tests__/inputRequired.test.ts, src/App.tsx:
+src/lib/inputRequired.ts, src/lib/__tests__/inputRequired.test.ts, src/App.tsx,
+src/__tests__/App.inputRequiredWiring.test.tsx:
 SEP-2322 (MCP spec revision 2026-07-28) input round-trip support for
 tools/call, client layer (#253).  Upstream 0.22.0 only implements the legacy
 2025-06-18 SSE elicitation flow: when a server answers tools/call with

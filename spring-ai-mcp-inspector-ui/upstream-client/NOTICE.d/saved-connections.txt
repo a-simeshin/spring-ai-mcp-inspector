@@ -20,7 +20,8 @@ src/lib/types/savedConnection.ts + src/lib/savedConnections.ts +
  Covered by `src/lib/__tests__/savedConnections.test.ts` (57 unit
  tests: CRUD, eviction, duplicate name, findConnectionByName,
  isValidConnection, filterValidConnections, corrupt-data migration,
- edge cases).
+ edge cases). UI-level interactions:
+ src/components/__tests__/Sidebar.savedConnections.test.tsx.
 
 REVIEW FIXES (PR #149 review findings):
 - `saveConnection` no longer silently overwrites duplicate-name
@@ -68,7 +69,8 @@ REVIEW FIXES (PR #149 review findings):
   objects accepted).
 - Duplicate-name check in `handleSaveConnection` now also triggers
   when `activeConnectionId` is set (not only when unset).
-- Added App-level integration tests covering the full save flow:
+- Added App-level integration tests
+  (src/__tests__/App.savedConnections.test.tsx) covering the full save flow:
   save with localStorage verification, duplicate-name confirm/cancel
   with both entries preserved, and select-to-populate form fields.
   Regression tests verify that arbitrary header values (X-Token,

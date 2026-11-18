@@ -31,7 +31,7 @@ hash to "ping". The same guard in the capability-gated effect uses the
 render-identical condition (!serverCapabilities?.resources &&
 !serverCapabilities?.prompts && !serverCapabilities?.tools) to
 short-circuit to "ping" instead of calling resolveTab. Covered by
-App.tabRouterFallback.test.tsx (null/empty capabilities describe block,
+src/__tests__/App.tabRouterFallback.test.tsx (null/empty capabilities describe block,
 6 tests, including a cold-load case that drains the jsdom-queued
 hashchange before mount so the effect guard alone forces Ping). Refs #227,
 Rework card: t_fdeb9f56.

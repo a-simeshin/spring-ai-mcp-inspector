@@ -19,6 +19,6 @@ message, and it disappears automatically when pings resume.
 App.tsx subscribes to the useKeepAlive hook and passes the state down to
 Sidebar as props (keepAliveLastPingAt, keepAliveIsStale, keepAliveObserved).
 
-Covered by Sidebar.keepAlive.test.tsx (9 tests: no keep-alive state,
+Covered by src/components/__tests__/Sidebar.keepAlive.test.tsx (9 tests: no keep-alive state,
 ticking counter, stale banner shown/hidden (including the never-pinged
 90s fallback branch), banner dismissed on resume).

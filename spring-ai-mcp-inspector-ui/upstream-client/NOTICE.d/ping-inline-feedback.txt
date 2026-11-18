@@ -1,4 +1,4 @@
-PingTab.tsx, App.tsx, src/components/__tests__/PingTab.test.tsx - Ping inline
+src/components/PingTab.tsx, src/App.tsx, src/components/__tests__/PingTab.test.tsx - Ping inline
 feedback (#232): PingTab gains a local state machine
 (idle/pending/success/error) that renders the ping outcome inline in the Ping
 pane instead of only in History. Success shows "Pong! Round-trip: Nms" with a
