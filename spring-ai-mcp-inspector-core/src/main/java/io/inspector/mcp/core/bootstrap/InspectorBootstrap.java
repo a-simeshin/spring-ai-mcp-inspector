@@ -55,6 +55,14 @@ public class InspectorBootstrap {
 
 	private String defaultTransport;
 
+	/**
+	 * Whether client-side MCP traffic capture is enabled. Mirrors
+	 * {@code spring.ai.mcp.inspector.timeline.client-capture-enabled} so the SPA can keep
+	 * its Clients tab inert (no API probing) when the client connections API does not
+	 * exist.
+	 */
+	private boolean clientCaptureEnabled;
+
 	private List<CustomHeader> defaultHeaders = new ArrayList<>();
 
 	private List<ServerEntry> serverEntries = new ArrayList<>();
@@ -115,6 +123,14 @@ public class InspectorBootstrap {
 
 	public void setDefaultTransport(final String defaultTransport) {
 		this.defaultTransport = defaultTransport;
+	}
+
+	public boolean isClientCaptureEnabled() {
+		return this.clientCaptureEnabled;
+	}
+
+	public void setClientCaptureEnabled(final boolean clientCaptureEnabled) {
+		this.clientCaptureEnabled = clientCaptureEnabled;
 	}
 
 	public List<CustomHeader> getDefaultHeaders() {

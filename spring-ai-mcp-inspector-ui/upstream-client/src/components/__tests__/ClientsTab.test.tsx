@@ -74,6 +74,12 @@ describe("ClientsTab", () => {
       originalBootstrap;
   });
 
+  beforeEach(() => {
+    (window as unknown as Record<string, unknown>)["__MCP_INSPECTOR_BOOTSTRAP"] = {
+      clientCaptureEnabled: true,
+    };
+  });
+
   const renderTab = () =>
     render(
       <Tabs defaultValue="clients">
@@ -123,7 +129,7 @@ describe("ClientsTab", () => {
   });
 
   it("renders the disabled state on a 404 when client capture is off", async () => {
-    mockFetch([], { ok: false, status: 404 });
+    const fetchMock = mockFetch([], { ok: false, status: 404 });
     renderTab();
 
     await waitFor(() =>
@@ -132,6 +138,24 @@ describe("ClientsTab", () => {
       ),
     );
     expect(screen.queryByTestId("client-connection-card")).not.toBeInTheDocument();
+    // The endpoint will not appear later: the tab must stop polling instead of
+    // writing a console 404 every three seconds.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays inert without any network call when the bootstrap omits client capture", async () => {
+    const fetchMock = mockFetch([]);
+    (window as unknown as Record<string, unknown>)["__MCP_INSPECTOR_BOOTSTRAP"] = {
+      inspectorPath: "/mcp-inspector",
+    };
+    renderTab();
+
+    expect(await screen.findByTestId("client-connection-state")).toHaveTextContent(
+      "Client capture is disabled",
+    );
+    expect(screen.queryByTestId("client-connection-card")).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it(
@@ -139,7 +163,11 @@ describe("ClientsTab", () => {
     async () => {
       (window as unknown as Record<string, unknown>)[
         "__MCP_INSPECTOR_BOOTSTRAP"
-      ] = { inspectorPath: "/mcp-inspector", authToken: "tok-120-secret" };
+      ] = {
+        inspectorPath: "/mcp-inspector",
+        authToken: "tok-120-secret",
+        clientCaptureEnabled: true,
+      };
       const fetchMock = mockFetch([]);
       renderTab();
 

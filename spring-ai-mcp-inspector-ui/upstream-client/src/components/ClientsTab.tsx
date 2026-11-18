@@ -29,8 +29,22 @@ const STATE_BADGE: Record<ClientConnectionSnapshot["state"], { text: string; col
 };
 
 const ClientConnectionsTab = () => {
+  // The API exists only while client capture is enabled (the controller bean is
+  // conditional on the same flag the registry uses). Read the flag from the
+  // bootstrap payload the page already carries, so a disabled Clients tab never
+  // probes a missing endpoint and never writes a console 404.
+  const captureEnabled =
+    (
+      window as unknown as {
+        __MCP_INSPECTOR_BOOTSTRAP?: {
+          inspectorPath?: string;
+          authToken?: string;
+          clientCaptureEnabled?: boolean;
+        };
+      }
+    ).__MCP_INSPECTOR_BOOTSTRAP?.clientCaptureEnabled === true;
   const [connections, setConnections] = useState<ClientConnectionSnapshot[]>([]);
-  const [disabled, setDisabled] = useState(false);
+  const [disabled, setDisabled] = useState(!captureEnabled);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -57,8 +71,13 @@ const ClientConnectionsTab = () => {
         setDisabled(false);
         setFetchError(null);
       } else if (res.status === 404) {
-        // No controller bean: client capture is disabled. Same empty-state
-        // anchor as "no clients", with an explicit reason.
+        // No controller bean: client capture is off (or was turned off under a
+        // stale bootstrap). The endpoint will not appear later, so stop
+        // polling entirely; same empty-state anchor with an explicit reason.
+        if (pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
         setConnections([]);
         setDisabled(true);
         setFetchError(null);
@@ -71,12 +90,15 @@ const ClientConnectionsTab = () => {
   }, []);
 
   useEffect(() => {
+    if (!captureEnabled) {
+      return;
+    }
     void fetchConnections();
     pollingRef.current = setInterval(() => void fetchConnections(), 3000);
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
-  }, [fetchConnections]);
+  }, [captureEnabled, fetchConnections]);
 
   return (
     <TabsContent value="clients" className="h-96">
