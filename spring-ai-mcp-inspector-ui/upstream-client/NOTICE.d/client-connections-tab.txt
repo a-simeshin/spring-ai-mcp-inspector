@@ -10,3 +10,7 @@ other non-OK responses. App.tsx registers the "clients" TabsTrigger (icon Users,
 lucide-react) and mounts ClientsTab next to TimelineTab. Data-testid anchors:
 client-connection-card, client-connection-state. No upstream equivalent exists;
 this is a Spring AI MCP Inspector extension.
+App.tsx also registers the "clients" tab id in ALL_TABS and buildValidTabs:
+clicking the trigger writes the hash and the hash router resolves it, so
+without the registration the router rewrote #clients back to the default
+tab and the trigger could never open its panel.

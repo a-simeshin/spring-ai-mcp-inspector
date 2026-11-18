@@ -216,6 +216,7 @@ const ALL_TABS: string[] = [
   "auth",
   "metadata",
   "timeline",
+  "clients",
 ];
 
 const getDefaultTab = (caps: ServerCapabilities | null | undefined): string => {
@@ -246,6 +247,7 @@ const buildValidTabs = (
   "auth",
   "metadata",
   "timeline",
+  "clients",
 ];
 
 // Near-miss normalization: case-insensitive match and simple singular/plural
