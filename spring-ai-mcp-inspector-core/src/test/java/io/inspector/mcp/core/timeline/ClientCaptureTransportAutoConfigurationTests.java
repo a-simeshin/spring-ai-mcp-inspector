@@ -25,6 +25,7 @@ import org.springframework.ai.mcp.client.common.autoconfigure.StdioTransportAuto
 import org.springframework.ai.mcp.client.httpclient.autoconfigure.SseHttpClientTransportAutoConfiguration;
 import org.springframework.ai.mcp.client.httpclient.autoconfigure.StreamableHttpHttpClientTransportAutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -32,7 +33,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * ApplicationContextRunner coverage with the real Spring AI 2.0 client transport
  * auto-configurations: all three {@code List<NamedClientMcpTransport>} beans must come
- * out wrapped when client capture is on, and untouched when it is off.
+ * out wrapped when client capture is on, and untouched when it is off. The capture wiring
+ * also degrades gracefully when {@code NamedClientMcpTransport} is absent from the
+ * classpath: the context starts, the capture beans exist and nothing is wrapped.
  *
  * @author Artem Simeshin
  */
@@ -84,6 +87,26 @@ class ClientCaptureTransportAutoConfigurationTests {
 				assertNoneWrapped(context.getBean("stdioTransports", List.class));
 				assertNoneWrapped(context.getBean("sseHttpClientTransports", List.class));
 				assertNoneWrapped(context.getBean("streamableHttpHttpClientTransports", List.class));
+			});
+	}
+
+	@Test
+	@DisplayName("capture beans start and nothing is wrapped when NamedClientMcpTransport is missing")
+	void captureBeansStartWhenNamedClientMcpTransportClassMissing() {
+		final ApplicationContextRunner missingClassRunner = new ApplicationContextRunner()
+			.withConfiguration(AutoConfigurations.of(TimelineAutoConfiguration.class))
+			.withClassLoader(new FilteredClassLoader(RecordingTransportPostProcessor.NAMED_CLIENT_TRANSPORT_FQCN));
+		missingClassRunner
+			.withPropertyValues("spring.ai.mcp.inspector.timeline.enabled=true",
+					"spring.ai.mcp.inspector.timeline.client-capture-enabled=true",
+					"spring.ai.mcp.inspector.timeline.logs-enabled=false",
+					"spring.ai.mcp.inspector.timeline.stdio-capture-enabled=false")
+			.run((context) -> {
+				assertThat(context).hasNotFailed();
+				assertThat(context).hasSingleBean(RecordingTransportPostProcessor.class);
+				assertThat(context).hasSingleBean(McpClientTrafficRecorder.class);
+				assertThat(context).hasSingleBean(ClientConnectionRegistry.class);
+				assertThat(context.getBeansOfType(RecordingMcpClientTransport.class)).isEmpty();
 			});
 	}
 

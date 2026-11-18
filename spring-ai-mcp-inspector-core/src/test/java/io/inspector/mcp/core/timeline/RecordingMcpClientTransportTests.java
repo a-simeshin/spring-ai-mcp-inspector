@@ -86,6 +86,18 @@ class RecordingMcpClientTransportTests {
 	}
 
 	@Test
+	@DisplayName("outbound request is recorded before the delegate even when the send fails")
+	void outboundRequestRecordedWhenDelegateSendFails() {
+		this.delegate.sendMessageError = new IllegalStateException("send failed");
+		final JSONRPCRequest request = new JSONRPCRequest("2.0", "tools/call", 9, null);
+		assertThatThrownBy(() -> this.transport.sendMessage(request).block()).isInstanceOf(IllegalStateException.class);
+		assertThat(this.timeline.events).hasSize(1);
+		assertThat(this.timeline.events.get(0).type()).isEqualTo(TimelineEventType.MCP_JSONRPC_REQUEST);
+		assertThat(this.timeline.events.get(0).payload().get("direction").asString()).isEqualTo("out");
+		assertThat(this.registry.snapshot().get(0).outCount()).isEqualTo(1L);
+	}
+
+	@Test
 	@DisplayName("outbound notification is recorded and forwarded")
 	void outboundNotificationRecorded() {
 		final JSONRPCNotification notification = new JSONRPCNotification("2.0", "notifications/initialized", null);
@@ -216,6 +228,8 @@ class RecordingMcpClientTransportTests {
 
 		final List<JSONRPCMessage> sent = new ArrayList<>();
 
+		RuntimeException sendMessageError;
+
 		Mono<Void> connectResult = Mono.empty();
 
 		Consumer<Throwable> exceptionHandler;
@@ -229,6 +243,9 @@ class RecordingMcpClientTransportTests {
 		@Override
 		public Mono<Void> sendMessage(final JSONRPCMessage message) {
 			this.sent.add(message);
+			if (this.sendMessageError != null) {
+				return Mono.error(this.sendMessageError);
+			}
 			return Mono.empty();
 		}
 
