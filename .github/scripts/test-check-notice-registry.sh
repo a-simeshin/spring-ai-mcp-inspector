@@ -243,6 +243,59 @@ EOF
   fi
 }
 
+# ----- Scenario: FAIL - PATCH marker without its own NOTICE.d entry ----------
+test_marker_without_entry() {
+  cd "$TMPDIR"
+  git checkout -q -b test-marker-without-entry "$base_rev"
+
+  # New src file WITH the PATCH marker; the same PR touches an unrelated
+  # NOTICE.d entry, so rule 2 ("some NOTICE.d activity") is satisfied and the
+  # per-file binding (rule 4) must be what fails here.
+  cat > spring-ai-mcp-inspector-ui/upstream-client/src/components/MarkerOnly.tsx <<'EOF'
+// [spring-ai-mcp-inspector PATCH] marker present, entry missing
+export const MarkerOnly = () => <div>marker</div>;
+EOF
+  cat > spring-ai-mcp-inspector-ui/upstream-client/NOTICE.d/app-patch-2.txt <<'EOF'
+File: src/components/App.tsx
+What: Second patch, unrelated to MarkerOnly.tsx
+EOF
+  git add -A
+  git commit -q -m "add src file with marker but without its own NOTICE.d entry"
+
+  if output=$("$GATE" "origin/HEAD" 2>&1); then
+    fail "marker without its own entry: expected non-zero exit"
+    echo "    $output"
+  else
+    pass "marker without its own entry: exit non-zero"
+  fi
+}
+
+# ----- Scenario: OK - entry path written with the upstream-client prefix -----
+test_prefixed_path_entry() {
+  cd "$TMPDIR"
+  git checkout -q -b test-prefixed-path-entry "$base_rev"
+
+  # New src file WITH marker; the entry references it with the
+  # upstream-client/ prefix. The substring match must still find it.
+  cat > spring-ai-mcp-inspector-ui/upstream-client/src/components/Prefixed.tsx <<'EOF'
+// [spring-ai-mcp-inspector PATCH] prefixed path entry
+export const Prefixed = () => <div>prefixed</div>;
+EOF
+  cat > spring-ai-mcp-inspector-ui/upstream-client/NOTICE.d/prefixed.txt <<'EOF'
+File: upstream-client/src/components/Prefixed.tsx
+What: entry written with the upstream-client/ prefix
+EOF
+  git add -A
+  git commit -q -m "add src file with marker and prefixed-path NOTICE.d entry"
+
+  if output=$("$GATE" "origin/HEAD" 2>&1); then
+    pass "prefixed path entry: exit 0"
+  else
+    fail "prefixed path entry: expected exit 0, got $?"
+    echo "    $output"
+  fi
+}
+
 echo "=== check-notice-registry.sh self-test ==="
 base_rev="$(setup_repo)"
 echo "Base commit: ${base_rev:0:7}"
@@ -259,6 +312,8 @@ test_src_with_marker_and_notice
 test_notice_d_only
 test_deleted_vendored_file
 test_revendoring_exemption
+test_marker_without_entry
+test_prefixed_path_entry
 
 echo "---"
 if [[ $failures -eq 0 ]]; then
