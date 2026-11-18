@@ -1142,3 +1142,98 @@ describe("TimelineTab SEP-2322 input_required chain", () => {
     expect(screen.getAllByText("KEEP ALIVE")).toHaveLength(3);
   });
 });
+
+// [spring-ai-mcp-inspector PATCH] Client-traffic badge and side filter (#120):
+// frames captured from the configured MCP clients carry side=client and must
+// be visually distinct in the log and filterable client-side.
+const CLIENT_REQUEST_EVENT: WireEvent = {
+  id: "evt-c1",
+  correlationId: "client-corr-1",
+  sessionId: null,
+  type: "MCP_JSONRPC_REQUEST",
+  timestamp: "2026-08-30T12:00:06.000Z",
+  payload: {
+    side: "client",
+    clientName: "demo",
+    direction: "out",
+    transportType: "streamable-http",
+    target: "https://***@mcp.example.com/mcp",
+    jsonrpc: "2.0",
+    id: 10,
+    method: "tools/list",
+    params: {},
+  },
+};
+
+describe("TimelineTab client traffic", () => {
+  const originalFetch = global.fetch;
+  const originalBootstrap = (window as unknown as Record<string, unknown>)[
+    "__MCP_INSPECTOR_BOOTSTRAP"
+  ];
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    (window as unknown as Record<string, unknown>)["__MCP_INSPECTOR_BOOTSTRAP"] =
+      originalBootstrap;
+  });
+
+  const renderTab = () =>
+    render(
+      <Tabs defaultValue="timeline">
+        <TimelineTab />
+      </Tabs>,
+    );
+
+  it(
+    "badges side=client rows with the client name and leaves server rows unbadged",
+    async () => {
+      mockFetch([REQUEST_EVENT, CLIENT_REQUEST_EVENT]);
+      renderTab();
+
+      await waitFor(() =>
+        expect(screen.getByText("2 events")).toBeInTheDocument(),
+      );
+
+      // Only the side=client row carries the provenance badge; the proxied
+      // server row stays unbadged.
+      const badges = screen.getAllByTestId("timeline-side-badge");
+      expect(badges).toHaveLength(1);
+      expect(badges[0]).toHaveTextContent("client: demo");
+      expect(badges[0]).toHaveTextContent("→");
+    },
+  );
+
+  it(
+    "side filter chips come from the unfiltered event set and both sides stay selectable",
+    async () => {
+      mockFetch([REQUEST_EVENT, CLIENT_REQUEST_EVENT]);
+      renderTab();
+
+      await waitFor(() =>
+        expect(screen.getByText("2 events")).toBeInTheDocument(),
+      );
+
+      // "all" is the default: both rows visible, both side chips present.
+      expect(screen.getByTestId("timeline-side-filter-all")).toBeInTheDocument();
+      expect(screen.getByTestId("timeline-side-filter-client")).toBeInTheDocument();
+      expect(screen.getByTestId("timeline-side-filter-server")).toBeInTheDocument();
+      expect(screen.getAllByText("tools/list")).toHaveLength(2);
+
+      // client: the server row leaves the log, the badged client row stays.
+      fireEvent.click(screen.getByTestId("timeline-side-filter-client"));
+      expect(screen.getAllByTestId("timeline-side-badge")).toHaveLength(1);
+      expect(screen.getAllByText("tools/list")).toHaveLength(1);
+
+      // The server chip must still be present after selecting client:
+      // options derive from the UNFILTERED event set (#142 lesson 4).
+      fireEvent.click(screen.getByTestId("timeline-side-filter-server"));
+      expect(screen.queryByTestId("timeline-side-badge")).not.toBeInTheDocument();
+      expect(screen.getAllByText("tools/list")).toHaveLength(1);
+
+      // back to all: both rows return.
+      fireEvent.click(screen.getByTestId("timeline-side-filter-all"));
+      expect(screen.getAllByText("tools/list")).toHaveLength(2);
+      expect(screen.getAllByTestId("timeline-side-badge")).toHaveLength(1);
+    },
+  );
+});

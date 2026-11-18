@@ -95,6 +95,21 @@ class InspectorRouterConfigTests {
 		return provider;
 	}
 
+	@SuppressWarnings("unchecked")
+	private static ObjectProvider<ClientConnectionsHandler> emptyClientConnectionsProvider() {
+		final ObjectProvider<ClientConnectionsHandler> provider = mock(ObjectProvider.class);
+		given(provider.getIfAvailable()).willReturn(null);
+		return provider;
+	}
+
+	@SuppressWarnings("unchecked")
+	private static ObjectProvider<ClientConnectionsHandler> clientConnectionsProvider(
+			final ClientConnectionsHandler handler) {
+		final ObjectProvider<ClientConnectionsHandler> provider = mock(ObjectProvider.class);
+		given(provider.getIfAvailable()).willReturn(handler);
+		return provider;
+	}
+
 	private static ServerRequest request(final HttpMethod method, final String uri) {
 		final MockServerHttpRequest mock = MockServerHttpRequest.method(method, uri).build();
 		final MockServerWebExchange exchange = MockServerWebExchange.from(mock);
@@ -123,7 +138,8 @@ class InspectorRouterConfigTests {
 		void configRoute_matchesConfiguredPath() {
 			// given
 			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
-					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/mcp-inspector"));
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), emptyClientConnectionsProvider(),
+					properties("/mcp-inspector"));
 
 			// when
 			final boolean matched = matches(router, request(HttpMethod.GET, "/mcp-inspector/api/config"));
@@ -139,7 +155,8 @@ class InspectorRouterConfigTests {
 		void introspectionRoute_matchesConfiguredPath() {
 			// given
 			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
-					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/mcp-inspector"));
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), emptyClientConnectionsProvider(),
+					properties("/mcp-inspector"));
 
 			// when
 			final boolean matched = matches(router, request(HttpMethod.GET, "/mcp-inspector/api/introspection"));
@@ -155,7 +172,8 @@ class InspectorRouterConfigTests {
 		void apiRoutes_matchUnderCustomPrefix() {
 			// given
 			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
-					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/custom"));
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), emptyClientConnectionsProvider(),
+					properties("/custom"));
 
 			// when & then
 			assertThat(matches(router, request(HttpMethod.GET, "/custom/api/config"))).isTrue();
@@ -171,7 +189,8 @@ class InspectorRouterConfigTests {
 		void defaultPrefix_doesNotMatchAfterRemount() {
 			// given
 			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
-					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/custom"));
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), emptyClientConnectionsProvider(),
+					properties("/custom"));
 
 			// when
 			final boolean matched = matches(router, request(HttpMethod.GET, "/mcp-inspector/api/config"));
@@ -187,7 +206,8 @@ class InspectorRouterConfigTests {
 		void oauthCallbackRoutes_matchAtTopLevel() {
 			// given
 			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
-					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/custom"));
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), emptyClientConnectionsProvider(),
+					properties("/custom"));
 
 			// when & then
 			assertThat(matches(router, request(HttpMethod.GET, "/oauth/callback"))).isTrue();
@@ -201,7 +221,8 @@ class InspectorRouterConfigTests {
 		void rootRedirect_underBasePath_prefixesLocation() {
 			// given
 			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
-					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/mcp-inspector"));
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), emptyClientConnectionsProvider(),
+					properties("/mcp-inspector"));
 			final ServerRequest request = requestWithContextPath(HttpMethod.GET, "/app/mcp-inspector", "/app");
 
 			// when
@@ -219,7 +240,8 @@ class InspectorRouterConfigTests {
 		void rootRedirect_withoutBasePath_keepsPlainLocation() {
 			// given
 			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
-					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/mcp-inspector"));
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), emptyClientConnectionsProvider(),
+					properties("/mcp-inspector"));
 			final ServerRequest request = request(HttpMethod.GET, "/mcp-inspector/");
 
 			// when
@@ -237,7 +259,8 @@ class InspectorRouterConfigTests {
 		void unregisteredPath_doesNotMatch() {
 			// given
 			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
-					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), properties("/mcp-inspector"));
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), emptyClientConnectionsProvider(),
+					properties("/mcp-inspector"));
 
 			// when
 			final boolean matched = matches(router, request(HttpMethod.POST, "/mcp-inspector/api/config"));
@@ -255,7 +278,8 @@ class InspectorRouterConfigTests {
 			final TimelineHandler timeline = mock(TimelineHandler.class);
 			given(timeline.query(any())).willReturn(ServerResponse.ok().build());
 			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
-					InspectorRouterConfigTests.this.handler, timelineProvider(timeline), properties("/mcp-inspector"));
+					InspectorRouterConfigTests.this.handler, timelineProvider(timeline),
+					emptyClientConnectionsProvider(), properties("/mcp-inspector"));
 
 			// when
 			final ServerRequest request = request(HttpMethod.GET, "/mcp-inspector/api/timeline");
@@ -277,12 +301,52 @@ class InspectorRouterConfigTests {
 			final TimelineHandler timeline = mock(TimelineHandler.class);
 			given(timeline.query(any())).willReturn(ServerResponse.ok().build());
 			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
-					InspectorRouterConfigTests.this.handler, timelineProvider(timeline), properties("/custom"));
+					InspectorRouterConfigTests.this.handler, timelineProvider(timeline),
+					emptyClientConnectionsProvider(), properties("/custom"));
 
 			// when & then
 			final ServerRequest request = request(HttpMethod.GET, "/custom/api/timeline");
 			final boolean handled = router.route(request).blockOptional().isPresent();
 			assertThat(handled).isTrue();
+		}
+
+		@Test
+		@Story("Client connections routing")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("inspectorRouter serves GET ${path}/api/client-connections through the client connections handler when client capture is enabled")
+		void clientConnectionsRoute_isServedByClientConnectionsHandler() {
+			// given
+			final ClientConnectionsHandler clientConnections = mock(ClientConnectionsHandler.class);
+			given(clientConnections.snapshot(any())).willReturn(ServerResponse.ok().build());
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(),
+					clientConnectionsProvider(clientConnections), properties("/mcp-inspector"));
+
+			// when
+			final ServerRequest request = request(HttpMethod.GET, "/mcp-inspector/api/client-connections");
+			final ServerResponse response = router.route(request)
+				.flatMap((handlerFunction) -> handlerFunction.handle(request))
+				.block();
+
+			// then - the client connections handler answered, not the resource catch-all
+			assertThat(response).isNotNull();
+			then(clientConnections).should().snapshot(request);
+		}
+
+		@Test
+		@Story("Client connections routing")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("inspectorRouter does not register the client-connections route when client capture is disabled")
+		void clientConnectionsRoute_absentWhenCaptureDisabled() {
+			// given
+			final RouterFunction<ServerResponse> router = InspectorRouterConfigTests.this.config.inspectorRouter(
+					InspectorRouterConfigTests.this.handler, emptyTimelineProvider(), emptyClientConnectionsProvider(),
+					properties("/mcp-inspector"));
+
+			// when & then
+			final ServerRequest request = request(HttpMethod.GET, "/mcp-inspector/api/client-connections");
+			final boolean handled = router.route(request).blockOptional().isPresent();
+			assertThat(handled).isFalse();
 		}
 
 	}

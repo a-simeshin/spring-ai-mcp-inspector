@@ -56,6 +56,7 @@ import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.proxy.ProxyUpstreamProber;
 import io.inspector.mcp.core.shutdown.McpServerTransportDrain;
 import io.inspector.mcp.core.task.TaskService;
+import io.inspector.mcp.core.timeline.ClientConnectionRegistry;
 import io.inspector.mcp.core.timeline.ExceptionLeakDetector;
 import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 import io.inspector.mcp.core.timeline.TimelineService;
@@ -66,6 +67,7 @@ import io.inspector.mcp.webflux.filter.InspectorAuthWebFilter;
 import io.inspector.mcp.webflux.proxy.ProxyAuthWebFilter;
 import io.inspector.mcp.webflux.proxy.ProxyHandler;
 import io.inspector.mcp.webflux.proxy.SandboxProxyHandler;
+import io.inspector.mcp.webflux.router.ClientConnectionsHandler;
 import io.inspector.mcp.webflux.router.InspectorHandler;
 import io.inspector.mcp.webflux.router.InspectorRouterConfig;
 import io.inspector.mcp.webflux.router.KeepAliveEventRegistry;
@@ -355,6 +357,22 @@ public class McpInspectorWebFluxAutoConfiguration {
 	public TimelineHandler mcpInspectorTimelineHandler(final TimelineService timelineService,
 			final ObjectProvider<ExceptionLeakDetector> leakDetector) {
 		return new TimelineHandler(timelineService, leakDetector.getIfAvailable());
+	}
+
+	/**
+	 * Reactive handler for {@code GET ${path}/api/client-connections}, mirroring the
+	 * WebMVC {@code ClientConnectionsController}: active only when client capture is
+	 * enabled (the same {@code spring.ai.mcp.inspector.timeline.client-capture-enabled}
+	 * flag gates the {@link ClientConnectionRegistry} bean in the core
+	 * auto-configuration).
+	 * @param connectionRegistry the client connection registry
+	 * @return the client connections handler
+	 */
+	@Bean
+	@ConditionalOnBean(ClientConnectionRegistry.class)
+	public ClientConnectionsHandler mcpInspectorClientConnectionsHandler(
+			final ClientConnectionRegistry connectionRegistry) {
+		return new ClientConnectionsHandler(connectionRegistry);
 	}
 
 	@Bean

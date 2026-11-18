@@ -74,11 +74,14 @@ public class InspectorRouterConfig {
 
 	@Bean
 	public RouterFunction<ServerResponse> inspectorRouter(final InspectorHandler handler,
-			final ObjectProvider<TimelineHandler> timelineHandler, final McpInspectorProperties properties) {
+			final ObjectProvider<TimelineHandler> timelineHandler,
+			final ObjectProvider<ClientConnectionsHandler> clientConnectionsHandler,
+			final McpInspectorProperties properties) {
 		final String basePath = properties.getPath();
 		final String apiPath = basePath + "/api";
 		final String indexPath = basePath + "/index.html";
 		final TimelineHandler timeline = timelineHandler.getIfAvailable();
+		final ClientConnectionsHandler clientConnections = clientConnectionsHandler.getIfAvailable();
 		RouterFunction<ServerResponse> router = route(GET(basePath),
 				(req) -> ServerResponse.temporaryRedirect(indexRedirect(req, indexPath)).build())
 			.andRoute(GET(basePath + "/"),
@@ -110,6 +113,12 @@ public class InspectorRouterConfig {
 			// Same path and query contract as the WebMVC TimelineController; the
 			// route must be claimed before the /** resource catch-all below.
 			router = router.andRoute(GET(apiPath + "/timeline"), timeline::query);
+		}
+		if (clientConnections != null) {
+			// Same path and payload contract as the WebMVC
+			// ClientConnectionsController; the route must be claimed before the
+			// /** resource catch-all below.
+			router = router.andRoute(GET(apiPath + "/client-connections"), clientConnections::snapshot);
 		}
 		return router.and(RouterFunctions.resources(basePath + "/**", UI_ROOT,
 				(resource, headers) -> headers.setCacheControl(ASSET_CACHE_CONTROL)));
