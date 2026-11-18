@@ -26,12 +26,20 @@ jest.mock("@/lib/hooks/useToast", () => ({
 // finds it in the container (it polls container.querySelector("iframe")).
 jest.mock("@mcp-ui/client", () => {
   const React = jest.requireActual("react") as typeof import("react");
+  const deferFlag = () =>
+    (window as unknown as { __deferSandboxIframe?: boolean })
+      .__deferSandboxIframe === true;
   return {
+    // When window.__deferSandboxIframe is set, render nothing first, so the
+    // tap effect runs before the iframe exists: only the MutationObserver
+    // can install the postMessage wrap when the iframe shows up afterwards.
     AppRenderer: () =>
-      React.createElement("iframe", {
-        "data-testid": "sandbox-frame",
-        title: "sandbox proxy",
-      }),
+      deferFlag()
+        ? null
+        : React.createElement("iframe", {
+            "data-testid": "sandbox-frame",
+            title: "sandbox proxy",
+          }),
   };
 });
 
@@ -218,6 +226,41 @@ describe("AppRenderer DOM tap wiring (real iframe)", () => {
     for (let i = 1; i < traffic.length; i++) {
       expect(traffic[i].seq).toBeGreaterThan(traffic[i - 1].seq);
     }
+  });
+
+  it("installs the wrap via MutationObserver when the iframe mounts after the tap effect", async () => {
+    // The real flow mounts the sandbox iframe asynchronously (after the
+    // resource read resolves), so the wrap must be installed by the
+    // MutationObserver on mount, not only when the effect itself finds an
+    // iframe that is already in the container.
+    const win = window as unknown as { __deferSandboxIframe?: boolean };
+    // Stable callbacks (the production ones are): a new callback identity
+    // would re-run the tap effect itself and re-install the wrap at effect
+    // time, masking a broken MutationObserver path.
+    const onLifecycle = (state: AppLifecycleState) => lifecycle.push(state);
+    const onTraffic = (entry: AppTrafficEntry) => traffic.push(entry);
+    win.__deferSandboxIframe = true;
+    const view = render(
+      <AppRenderer
+        {...defaultProps}
+        onLifecycleChange={onLifecycle}
+        onAppTraffic={onTraffic}
+      />,
+    );
+    expect(screen.queryByTestId("sandbox-frame")).toBeNull();
+
+    win.__deferSandboxIframe = false;
+    view.rerender(
+      <AppRenderer
+        {...defaultProps}
+        onLifecycleChange={onLifecycle}
+        onAppTraffic={onTraffic}
+      />,
+    );
+    const iframe = screen.getByTestId("sandbox-frame") as HTMLIFrameElement;
+    await waitForTapInstalled(iframe, traffic);
+    expect(traffic.some((e) => e.direction === "host->guest")).toBe(true);
+    expect(lifecycle).toContain("sandbox-waiting");
   });
 
   it("ignores frames whose source is not the sandbox iframe", async () => {

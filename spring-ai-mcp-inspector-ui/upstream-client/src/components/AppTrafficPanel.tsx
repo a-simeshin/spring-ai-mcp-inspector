@@ -84,7 +84,7 @@ const AppTrafficPanel = ({
   }, [filtered, setCopied]);
 
   return (
-    <div className="flex flex-col h-full border-l border-border bg-card text-sm">
+    <div className="flex flex-col h-full border-l border-border bg-card text-sm" data-testid="app-panel">
       {/* Header */}
       <div className="p-3 border-b border-border space-y-2">
         <div className="flex items-center justify-between">
@@ -106,7 +106,7 @@ const AppTrafficPanel = ({
           <span
             className={`inline-block w-2 h-2 rounded-full ${lifecycleColor}`}
           />
-          <span className="font-medium capitalize">{lifecycleState}</span>
+          <span data-testid="app-lifecycle-pill" className="font-medium capitalize">{lifecycleState}</span>
         </div>
 
         {/* Copy all / Filter */}

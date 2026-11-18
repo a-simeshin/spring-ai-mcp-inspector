@@ -2588,10 +2588,10 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// M. AppsTab — assert empty state (no app tools registered by demo).
-	// Per the demo's capability matrix none of the demo tools carry
-	// _meta.ui.resourceUri, so the AppsTab empty-state copy is the expected
-	// outcome (UPSTREAM_DOM_MAP.md §9.2).
+	// M. AppsTab — fixture app list plus the open-app lifecycle flow:
+	// DemoUiAppsProvider registers three tools carrying _meta.ui.resourceUri,
+	// so the tab lists them, and "Open as App" -> "Open App" drives the real
+	// SEP-1865 sandbox handshake to the ready pill (issue #183).
 	// =====================================================================
 
 	@Nested
@@ -2632,6 +2632,59 @@ class InspectorUiIT {
 			activePanel().shouldHave(text("malformedAppTool"));
 			// Right pane shows the placeholder until an app is selected.
 			activePanel().shouldHave(text("Select an app from the list to get started"));
+		}
+
+	}
+
+	@Nested
+	@DisplayName("App lifecycle")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class AppLifecycle {
+
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			openAndConnect();
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@Test
+		@Story("Apps tab")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("The rework closure path for issue #183: select formApp, Open as App, "
+				+ "Open App. The sandboxed app mounts, the guest answers the host handshake, "
+				+ "the lifecycle pill reaches ready, and the App Panel logs frames in both "
+				+ "directions (proxy-ready and initialized notifications up from the guest, "
+				+ "the ui/initialize request down to it).")
+		@DisplayName("appsTabOpenAppReachesReady - Open as App -> Open App renders app to ready")
+		void appsTab_openApp_reachesReadyWithBidirectionalTraffic() {
+			// given: the app is preselected from the Tools tab ("Open as App").
+			clickTab("tools");
+			activePanel().$(byText("List Tools")).shouldBe(visible, Duration.ofSeconds(10)).click();
+			selectRow("formApp");
+			activePanel().$("[data-testid=open-as-app-button]").shouldBe(visible, Duration.ofSeconds(10)).click();
+
+			// when: the input form is reviewed and the app is opened for real.
+			clickTab("apps");
+			activePanel().$(byText("Open App")).shouldBe(visible, Duration.ofSeconds(10)).click();
+
+			// then: the guest bridge completes the handshake, so the pill reaches ready
+			// instead of stalling on initializing after sandbox-proxy-ready.
+			activePanel().$("[data-testid=app-lifecycle-pill]").shouldHave(text("ready"), Duration.ofSeconds(20));
+			// Both directions are logged: guest->host frames (proxy-ready, the
+			// ui/initialize request and the initialized notification) and at least
+			// one host->guest frame (the initialize result / resource-ready), so
+			// the tap captures the chronological host<->guest conversation.
+			activePanel().shouldHave(text("ui/notifications/sandbox-proxy-ready"), Duration.ofSeconds(5));
+			activePanel().shouldHave(text("ui/initialize"));
+			activePanel().shouldHave(text("ui/notifications/initialized"));
+			// An arrow pin is enough for the host->guest direction: any host frame
+			// (initialize result or resource-ready) carries it.
+			activePanel().$("[data-testid=app-panel]").shouldHave(text("\u2192"));
 		}
 
 	}

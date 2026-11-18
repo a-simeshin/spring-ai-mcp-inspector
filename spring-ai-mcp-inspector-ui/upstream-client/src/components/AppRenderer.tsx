@@ -185,6 +185,15 @@ const AppRenderer = ({
     };
   }, [mcpClient, toolResourceUri]);
 
+  // [spring-ai-mcp-inspector PATCH] The traffic callback lives in a ref so
+  // emitTraffic stays referentially stable: the tap effect below must install
+  // exactly once and never re-run (each re-run tears the listener down for an
+  // instant and drops whatever arrives in that window).
+  const onAppTrafficRef = useRef(onAppTraffic);
+  useEffect(() => {
+    onAppTrafficRef.current = onAppTraffic;
+  }, [onAppTraffic]);
+
   const emitTraffic = useCallback(
     (
       direction: AppTrafficEntry["direction"],
@@ -210,81 +219,80 @@ const AppRenderer = ({
         error: data.error as { code: number; message: string } | undefined,
         phase: derivePhase(method),
       };
-      onAppTraffic?.(entry);
+      onAppTrafficRef.current?.(entry);
     },
-    [onAppTraffic],
+    [],
   );
 
   // [spring-ai-mcp-inspector PATCH] Set up the DOM-level tap on the outer
-  // sandbox iframe. The tap is installed after the iframe is mounted by the
-  // @mcp-ui/client AppFrame (it creates the iframe inside a React effect).
-  // We wait for the iframe element to appear in the container div, then:
-  // 1. Add a window message listener for guest->host frames
-  // 2. Wrap the outer iframe's contentWindow.postMessage to capture host->guest
+  // sandbox iframe. On a localhost demo the whole proxy handshake (proxy-ready,
+  // resource-ready, ui/initialize, initialized) can complete in well under the
+  // old 100 ms poll interval, so the message listener is installed at effect
+  // time (its source filter resolves the iframe lazily) and the postMessage
+  // wrap is installed by a MutationObserver the moment the library mounts the
+  // iframe: there is no polling gap left to lose frames in.
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !mcpClient) return;
 
     let disposed = false;
+    const getIframe = () =>
+      container.querySelector("iframe") as HTMLIFrameElement | null;
+
     const timeoutId = setTimeout(() => {
       if (disposed) return;
       // The @mcp-ui/client AppFrame has a 10s timeout internally; if we haven't
       // found the iframe by now, it's an error state.
-      if (!container.querySelector("iframe")) {
+      if (!getIframe()) {
         setError("Sandbox proxy iframe did not mount within timeout");
         setLifecycleState("error");
       }
     }, 10_000);
 
-    // Poll for the iframe to appear (the library mounts it in its own effect)
-    const pollInterval = setInterval(() => {
-      if (disposed) {
-        clearInterval(pollInterval);
-        return;
+    // --- guest->host direction ---
+    // The sandbox proxy page relays guest messages to window.parent with
+    // targetOrigin "*", so at host level the message arrives from the outer
+    // iframe. The listener is live from effect time; the source filter checks
+    // the iframe that is in the DOM right now, so frames that arrive earlier
+    // than any poll tick would are still captured.
+    const onMessage = (event: MessageEvent) => {
+      if (disposed) return;
+      const iframe = getIframe();
+      // Only accept messages from our outer sandbox iframe.
+      // This is the "wrong origins are rejected" acceptance criterion.
+      if (!iframe || event.source !== iframe.contentWindow) return;
+      if (!event.data || typeof event.data !== "object") return;
+      if (event.data.jsonrpc !== "2.0") return;
+
+      emitTraffic("guest->host", event.data);
+
+      // Lifecycle transitions from guest->host frames
+      const method = event.data.method as string | undefined;
+      if (method === "ui/notifications/sandbox-proxy-ready") {
+        setLifecycleState("initializing");
       }
-      const iframe = container.querySelector("iframe");
-      if (!iframe) return;
-      clearInterval(pollInterval);
-      clearTimeout(timeoutId);
+      if (method === "ui/notifications/initialized") {
+        setLifecycleState("ready");
+      }
+      if (method === "ui/resource-teardown") {
+        setLifecycleState("torn-down");
+      }
+    };
+    window.addEventListener("message", onMessage);
 
-      const outerIframe = iframe as HTMLIFrameElement;
-      const contentWindow = outerIframe.contentWindow;
-      if (!contentWindow) return;
-
+    // --- host->guest direction ---
+    // Wrap the outer iframe's contentWindow.postMessage as soon as the node
+    // appears. MutationObserver callbacks run as microtasks right after the
+    // DOM change, so the wrap is in place before the first postMessage the
+    // library sends through the new window.
+    let wrappedWindow: Window | null = null;
+    const installWrap = () => {
+      if (disposed) return;
+      const iframe = getIframe();
+      if (!iframe || !iframe.contentWindow) return;
+      if (wrappedWindow === iframe.contentWindow) return;
+      const contentWindow = iframe.contentWindow;
       setLifecycleState("sandbox-waiting");
-
-      // --- guest->host direction ---
-      // The sandbox proxy page relays guest messages to window.parent with
-      // targetOrigin "*", so at host level the message arrives from the outer
-      // iframe. Filter by source === outerIframe.contentWindow.
-      const onMessage = (event: MessageEvent) => {
-        if (disposed) return;
-        // Only accept messages from our outer sandbox iframe.
-        // This is the "wrong origins are rejected" acceptance criterion.
-        if (event.source !== contentWindow) return;
-        if (!event.data || typeof event.data !== "object") return;
-        if (event.data.jsonrpc !== "2.0") return;
-
-        emitTraffic("guest->host", event.data);
-
-        // Lifecycle transitions from guest->host frames
-        const method = event.data.method as string | undefined;
-        if (method === "ui/notifications/sandbox-proxy-ready") {
-          setLifecycleState("initializing");
-        }
-        if (method === "ui/notifications/initialized") {
-          setLifecycleState("ready");
-        }
-        if (method === "ui/resource-teardown") {
-          setLifecycleState("torn-down");
-        }
-      };
-      window.addEventListener("message", onMessage);
-
-      // --- host->guest direction ---
-      // Wrap the outer iframe's contentWindow.postMessage to capture outbound
-      // messages. The library calls contentWindow.postMessage on the iframe.
-      // Using bind() to capture the original, then replacing.
       const origPostMessage = contentWindow.postMessage.bind(contentWindow);
       const wrappedPostMessage = (
         message: unknown,
@@ -312,7 +320,6 @@ const AppRenderer = ({
         // shape the wrap claims to forward.
         return origPostMessage(message, targetOrigin ?? "*", transfer);
       };
-
       // Override contentWindow.postMessage. This is safe because the library
       // holds a reference to the contentWindow object, and we're replacing
       // the method on that object.
@@ -322,6 +329,18 @@ const AppRenderer = ({
           writable: true,
           configurable: true,
         });
+        wrappedWindow = contentWindow;
+        tapCleanupRef.current = () => {
+          try {
+            Object.defineProperty(contentWindow, "postMessage", {
+              value: origPostMessage,
+              writable: true,
+              configurable: true,
+            });
+          } catch {
+            // Ignore restore errors
+          }
+        };
       } catch {
         // If we can't override postMessage (cross-origin restrictions),
         // we fall back to observing only guest->host traffic. This is a
@@ -330,27 +349,19 @@ const AppRenderer = ({
           "Could not wrap iframe.postMessage; host->guest traffic tap degraded",
         );
       }
-
-      tapCleanupRef.current = () => {
-        window.removeEventListener("message", onMessage);
-        try {
-          Object.defineProperty(contentWindow, "postMessage", {
-            value: origPostMessage,
-            writable: true,
-            configurable: true,
-          });
-        } catch {
-          // Ignore restore errors
-        }
-      };
-    }, 100);
+    };
+    const observer = new MutationObserver(() => installWrap());
+    observer.observe(container, { childList: true, subtree: true });
+    // If the iframe is already in the DOM, wrap it right away.
+    installWrap();
 
     return () => {
       disposed = true;
-      clearInterval(pollInterval);
+      observer.disconnect();
       clearTimeout(timeoutId);
       tapCleanupRef.current?.();
       tapCleanupRef.current = null;
+      window.removeEventListener("message", onMessage);
     };
   }, [mcpClient, emitTraffic, setLifecycleState]);
 

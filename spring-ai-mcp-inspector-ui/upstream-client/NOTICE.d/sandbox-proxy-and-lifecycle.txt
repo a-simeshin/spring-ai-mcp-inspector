@@ -172,3 +172,15 @@ Apps flow hang fix after sandbox-proxy-ready (PR #398 rework, issue #183):
   a non-partial entry ends the burst).
 - src/components/__tests__/AppTrafficPanel.test.tsx: the Guest Logs test
   became a negative pin (the placeholder must not render).
+- src/components/AppTrafficPanel.tsx: added data-testid anchors for demo
+  E2E (app-panel root, app-lifecycle-pill status dot label) so the
+  InspectorUiIT open-app flow can assert the pill without class-based
+  selectors (E2E selector gate).
+- src/components/AppRenderer.tsx: the DOM tap now installs the window
+  message listener at effect time with a lazy source filter (frames
+  that arrive earlier than any poll tick would are kept) and wraps
+  the outer iframe postMessage via MutationObserver instead of a
+  100 ms poll, so the wrap lands before the library's first
+  postMessage; the traffic callback moved into a ref so the tap
+  effect installs once per AppRenderer instance and never drops
+  frames while AppsTab re-renders.
