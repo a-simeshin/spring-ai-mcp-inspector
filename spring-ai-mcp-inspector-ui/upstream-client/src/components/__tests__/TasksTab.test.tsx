@@ -862,6 +862,65 @@ describe("TasksTab behavior tests", () => {
     });
   });
 
+  describe("row createdAt and keepAlive passthrough", () => {
+    it("shows createdAt in the task row", () => {
+      const task = makeTask({ taskId: "t1" });
+
+      render(<TasksTab {...defaultProps} tasks={[task]} />);
+
+      expect(screen.getByTestId("task-row-t1")).toHaveTextContent(
+        new Date(task.createdAt).toLocaleTimeString(),
+      );
+      expect(screen.getByTitle(task.createdAt)).toBeInTheDocument();
+    });
+
+    it("renders an unparsable createdAt verbatim in the task row", () => {
+      const task = makeTask({ taskId: "t2", createdAt: "not-a-timestamp" });
+
+      render(<TasksTab {...defaultProps} tasks={[task]} />);
+
+      expect(screen.getByTestId("task-row-t2")).toHaveTextContent(
+        "not-a-timestamp",
+      );
+    });
+
+    it("renders a keepAlive URI from the proxy verbatim in the detail", () => {
+      const task = makeTask({ taskId: "t1" }) as Task & {
+        keepAlive?: number | string;
+      };
+      task.keepAlive = "demo://task/status";
+
+      render(
+        <TasksTab {...defaultProps} tasks={[task]} selectedTask={task} />,
+      );
+
+      expect(screen.getByText("demo://task/status")).toBeInTheDocument();
+    });
+
+    it("renders a numeric keepAlive as milliseconds", () => {
+      const task = makeTask({ taskId: "t1" }) as Task & {
+        keepAlive?: number | string;
+      };
+      task.keepAlive = 5000;
+
+      render(
+        <TasksTab {...defaultProps} tasks={[task]} selectedTask={task} />,
+      );
+
+      expect(screen.getByText("5000ms")).toBeInTheDocument();
+    });
+
+    it("keeps N/A when the proxy does not carry keepAlive", () => {
+      const task = makeTask({ taskId: "t1" });
+
+      render(
+        <TasksTab {...defaultProps} tasks={[task]} selectedTask={task} />,
+      );
+
+      expect(screen.getByText("N/A")).toBeInTheDocument();
+    });
+  });
+
   describe("cancel", () => {
     it("calls cancelTask when cancel button is clicked", () => {
       const cancelTask = jest.fn().mockResolvedValue(undefined);

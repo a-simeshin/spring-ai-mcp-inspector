@@ -243,7 +243,8 @@ public class TaskRegistry implements TaskService {
 	private static TaskHandle toHandle(final Entry entry) {
 		final Instant lastRef = entry.lastUpdatedAt.get();
 		return new TaskHandle(entry.taskId, entry.status.get(), null, ISO_FORMATTER.format(entry.createdAt),
-				ISO_FORMATTER.format(lastRef), entry.ttl.toMillis(), entry.pollIntervalSeconds * 1000L);
+				ISO_FORMATTER.format(lastRef), entry.ttl.toMillis(), entry.pollIntervalSeconds * 1000L,
+				entry.keepAliveUrl);
 	}
 
 	private static boolean isTerminal(final String status) {

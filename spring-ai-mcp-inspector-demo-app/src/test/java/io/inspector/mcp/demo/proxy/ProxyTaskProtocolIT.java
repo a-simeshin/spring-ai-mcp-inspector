@@ -128,6 +128,10 @@ class ProxyTaskProtocolIT {
 			.isEqualTo(Duration.ofMinutes(2).toMillis());
 		assertThat(getResult.get("result").get("pollInterval").asLong()).as("pollInterval in get response, ms")
 			.isEqualTo(2000L);
+		// the provider's keepAlive URI must survive the proxy passthrough
+		// so the UI task detail can render it
+		assertThat(getResult.get("result").get("keepAlive").asText()).as("keepAlive in get response")
+			.isEqualTo("demo://task/status");
 
 		// when: tasks/cancel
 		JsonNode cancelBody = buildJsonRpcRequest("tasks/cancel", 11, taskId);

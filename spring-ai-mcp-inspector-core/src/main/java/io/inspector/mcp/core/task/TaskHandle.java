@@ -27,9 +27,11 @@ package io.inspector.mcp.core.task;
  * @param lastUpdatedAt ISO-8601 timestamp when the task status was last updated
  * @param ttl time in milliseconds from creation before the task may be deleted
  * @param pollInterval suggested time in milliseconds between status checks
+ * @param keepAlive opaque URI the client can use to refresh the task lease, or
+ * {@code null} when the server does not provide a keep-alive refresh
  * @author Artem Simeshin
  */
 public record TaskHandle(String taskId, String status, String statusMessage, String createdAt, String lastUpdatedAt,
-		long ttl, long pollInterval) {
+		long ttl, long pollInterval, String keepAlive) {
 
 }

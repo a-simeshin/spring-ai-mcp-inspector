@@ -86,6 +86,26 @@ const formatTtl = (
   return `${Math.floor(remaining / 60000)}m ${Math.floor((remaining % 60000) / 1000)}s`;
 };
 
+// [spring-ai-mcp-inspector PATCH] #182 AC3: the task row carries createdAt.
+// Compact time-of-day only; the full ISO value stays in the title tooltip
+// and in the detail panel. An unparsable timestamp renders verbatim
+// instead of "Invalid Date".
+const formatRowTimestamp = (timestamp: string): string => {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return timestamp;
+  return date.toLocaleTimeString();
+};
+
+// [spring-ai-mcp-inspector PATCH] #182 AC5: keepAlive reaches the UI through
+// the proxy (TaskHandle passthrough). The value is either a millisecond
+// duration (numbers) or an opaque refresh URI from the provider (strings,
+// e.g. "demo://task/status"), rendered verbatim; absent keeps "N/A".
+const formatKeepAlive = (task: Task): string => {
+  const value = (task as Task & { keepAlive?: number | string }).keepAlive;
+  if (value === undefined) return "N/A";
+  return typeof value === "number" ? `${value}ms` : value;
+};
+
 type TaskRowState = {
   previousStatus: Task["status"];
   transitioning: boolean;
@@ -481,6 +501,12 @@ const TasksTab = ({
                             >
                               {task.status.replace("_", " ")}
                             </span>
+                            <span
+                              className="text-[10px] text-muted-foreground"
+                              title={task.createdAt}
+                            >
+                              {formatRowTimestamp(task.createdAt)}
+                            </span>
                             {task.ttl !== null && isActive && (
                               <span className="text-[10px] text-muted-foreground">
                                 TTL: {ttlCountdowns[task.taskId] ?? ""}
@@ -658,10 +684,7 @@ const TasksTab = ({
                   <div>
                     <p className="text-xs text-muted-foreground">keepAlive</p>
                     <p className="text-sm font-medium">
-                      {(displayedTask as Task & { keepAlive?: number })
-                        .keepAlive !== undefined
-                        ? `${(displayedTask as Task & { keepAlive?: number }).keepAlive}ms`
-                        : "N/A"}
+                      {formatKeepAlive(displayedTask)}
                     </p>
                   </div>
                   <div>

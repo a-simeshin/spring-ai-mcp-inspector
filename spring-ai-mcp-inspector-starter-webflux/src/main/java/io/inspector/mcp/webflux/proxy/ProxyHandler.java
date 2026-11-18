@@ -1623,6 +1623,9 @@ public class ProxyHandler {
 		node.put("lastUpdatedAt", handle.lastUpdatedAt());
 		node.put("ttl", handle.ttl());
 		node.put("pollInterval", handle.pollInterval());
+		if (handle.keepAlive() != null) {
+			node.put("keepAlive", handle.keepAlive());
+		}
 		return node;
 	}
 
