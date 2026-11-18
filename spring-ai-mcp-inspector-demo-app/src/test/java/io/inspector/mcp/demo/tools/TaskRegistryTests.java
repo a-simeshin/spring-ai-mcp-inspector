@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 
+import io.inspector.mcp.core.task.TaskHandle;
 import io.inspector.mcp.demo.tools.TaskRegistry.Entry;
 
 import org.assertj.core.api.Assertions;
@@ -164,6 +165,18 @@ class TaskRegistryTests {
 		Assertions.assertThat(kept).isTrue();
 		Assertions.assertThat(entry.lastKeepAlive.get()).isAfter(before);
 		Assertions.assertThat(entry.lastUpdatedAt.get()).isAfter(updatedBefore);
+	}
+
+	@Test
+	void taskServiceHandleCarriesKeepAliveUrl() throws Exception {
+		// given
+		final Entry entry = registry.createTask(Duration.ofMinutes(1), 2, "demo://task/status");
+
+		// when: the TaskService view is what the proxy's tasks/get answers from
+		final TaskHandle handle = registry.getTask(entry.taskId);
+
+		// then: the keep-alive URI must survive into the handle (issue #182 AC5)
+		Assertions.assertThat(handle.keepAlive()).isEqualTo("demo://task/status");
 	}
 
 	@Test

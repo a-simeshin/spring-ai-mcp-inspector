@@ -36,12 +36,20 @@ A polled tasks/get result is propagated
 into the tasks list through the updateTask callback, not only
 into the selected task. TERMINAL_STATUSES follows the SDK
 TaskStatus enum exactly ("completed", "failed", "cancelled");
-the backend emits "completed" and never "success". Covered by 31
-behavior tests in src/components/__tests__/TasksTab.test.tsx
+the backend emits "completed" and never "success". The task row
+also carries createdAt next to the status badge: compact
+time-of-day, full ISO value in the title tooltip and the detail
+panel, an unparsable timestamp renders verbatim. The Spec
+Attributes keepAlive cell renders the proxy-passed value
+verbatim when it is an opaque refresh URI (the demo provider's
+"demo://task/status") or appends ms for numeric durations;
+absent keeps N/A. Covered by 35 behavior tests in
+src/components/__tests__/TasksTab.test.tsx
 (fake timers for list poll, per-task poll, per-task poll gating,
 terminal-state stop, identity-churn regression,
 poller-survival regression, backoff, TTL formatting with
-floor-seconds mutations, visible poll-failure hint, cancel)
+floor-seconds mutations, visible poll-failure hint, cancel,
+row createdAt, keepAlive passthrough rendering)
 plus 3 App-level tests in
 src/__tests__/App.tasksTabTooltip.test.tsx (capability gate
 and the updateTask prop wiring to TasksTab).

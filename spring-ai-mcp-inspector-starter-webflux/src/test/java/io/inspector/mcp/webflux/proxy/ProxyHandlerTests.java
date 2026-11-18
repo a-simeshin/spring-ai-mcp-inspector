@@ -2748,7 +2748,7 @@ class ProxyHandlerTests {
 			final ProxySession session = newSession("s1");
 			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
 			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-123",
-					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000, "demo://task/status");
 			given(this.taskService.getTask("t-123")).willReturn(handle);
 			final ServerRequest request = buildTaskRequest("s1",
 					"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
@@ -2763,6 +2763,7 @@ class ProxyHandlerTests {
 			final JsonNode result = body.get("result");
 			assertThat(result.get("taskId").asText()).isEqualTo("t-123");
 			assertThat(result.get("status").asText()).isEqualTo("working");
+			assertThat(result.get("keepAlive").asText()).isEqualTo("demo://task/status");
 		}
 
 		@Test
@@ -2799,7 +2800,7 @@ class ProxyHandlerTests {
 			final ProxySession session = newSession("s1");
 			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
 			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-456",
-					"cancelled", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+					"cancelled", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.cancelTask("t-456")).willReturn(handle);
 			final ServerRequest request = buildTaskRequest("s1",
 					"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"t-456\"}}");
@@ -2872,7 +2873,7 @@ class ProxyHandlerTests {
 			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
 			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-msg",
 					"failed", "Tool execution failed: timeout", "2025-01-01T00:00:00Z", "2025-01-01T00:01:00Z", 60000,
-					5000);
+					5000, null);
 			given(this.taskService.getTask("t-msg")).willReturn(handle);
 			final ServerRequest request = buildTaskRequest("s1",
 					"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-msg\"}}");
@@ -2886,6 +2887,7 @@ class ProxyHandlerTests {
 			final JsonNode body = ProxyHandlerTests.entityJson(response);
 			final JsonNode result = body.get("result");
 			assertThat(result.get("statusMessage").asText()).isEqualTo("Tool execution failed: timeout");
+			assertThat(result.has("keepAlive")).isFalse();
 		}
 
 		@Test
@@ -3047,7 +3049,7 @@ class ProxyHandlerTests {
 			final java.time.Instant before = session.lastActivity();
 			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
 			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-123",
-					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.getTask("t-123")).willReturn(handle);
 			final ServerRequest request = buildTaskRequest("s1",
 					"{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
@@ -3071,7 +3073,7 @@ class ProxyHandlerTests {
 			final java.util.List<io.inspector.mcp.core.task.TaskHandle> handles = new java.util.ArrayList<>(102);
 			for (int i = 1; i <= 102; i++) {
 				handles.add(new io.inspector.mcp.core.task.TaskHandle("t-" + i, "working", null, "2025-01-01T00:00:00Z",
-						"2025-01-01T00:00:00Z", 60000, 5000));
+						"2025-01-01T00:00:00Z", 60000, 5000, null));
 			}
 			given(this.taskService.listTasks()).willReturn(handles);
 			final ServerRequest request = buildTaskRequest("s1",
@@ -3097,9 +3099,9 @@ class ProxyHandlerTests {
 			final ProxySession session = newSession("s1");
 			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
 			final io.inspector.mcp.core.task.TaskHandle first = new io.inspector.mcp.core.task.TaskHandle("t-1",
-					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000, null);
 			final io.inspector.mcp.core.task.TaskHandle second = new io.inspector.mcp.core.task.TaskHandle("t-2",
-					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.listTasks()).willReturn(java.util.List.of(first, second));
 			final ServerRequest request = buildTaskRequest("s1",
 					"{\"jsonrpc\":\"2.0\",\"id\":43,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"1\"}}");

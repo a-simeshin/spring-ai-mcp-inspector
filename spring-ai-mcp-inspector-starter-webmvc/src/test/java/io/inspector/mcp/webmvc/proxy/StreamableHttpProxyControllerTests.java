@@ -1382,7 +1382,7 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
 			final TaskHandle handle = new TaskHandle("t-123", "working", null, "2025-01-01T00:00:00Z",
-					"2025-01-01T00:00:00Z", 60000, 5000);
+					"2025-01-01T00:00:00Z", 60000, 5000, "demo://task/status");
 			given(this.taskService.getTask("t-123")).willReturn(handle);
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
@@ -1394,6 +1394,7 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode responseBody = (JsonNode) response.getBody();
 			assertThat(responseBody.get("result").get("taskId").asText()).isEqualTo("t-123");
 			assertThat(responseBody.get("result").get("status").asText()).isEqualTo("working");
+			assertThat(responseBody.get("result").get("keepAlive").asText()).isEqualTo("demo://task/status");
 			verify(this.taskService).getTask("t-123");
 			// The upstream is never consulted for task methods
 			verify(session.targetTransport(), never()).sendMessage(any());
@@ -1431,7 +1432,7 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
 					"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"t-456\"}}");
 			final TaskHandle handle = new TaskHandle("t-456", "cancelled", null, "2025-01-01T00:00:00Z",
-					"2025-01-01T00:00:00Z", 60000, 5000);
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.cancelTask("t-456")).willReturn(handle);
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
@@ -1498,7 +1499,7 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-msg\"}}");
 			final TaskHandle handle = new TaskHandle("t-msg", "failed", "Tool execution failed: timeout",
-					"2025-01-01T00:00:00Z", "2025-01-01T00:01:00Z", 60000, 5000);
+					"2025-01-01T00:00:00Z", "2025-01-01T00:01:00Z", 60000, 5000, null);
 			given(this.taskService.getTask("t-msg")).willReturn(handle);
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
@@ -1510,6 +1511,7 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode responseBody = (JsonNode) response.getBody();
 			assertThat(responseBody.get("result").get("statusMessage").asText())
 				.isEqualTo("Tool execution failed: timeout");
+			assertThat(responseBody.get("result").has("keepAlive")).isFalse();
 		}
 
 		@Test
@@ -1559,7 +1561,7 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tasks/list\"}");
 			final TaskHandle handle = new TaskHandle("t-1", "working", null, "2025-01-01T00:00:00Z",
-					"2025-01-01T00:00:00Z", 60000, 5000);
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.listTasks()).willReturn(java.util.List.of(handle));
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
@@ -1757,7 +1759,7 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
 			final TaskHandle handle = new TaskHandle("t-123", "working", null, "2025-01-01T00:00:00Z",
-					"2025-01-01T00:00:00Z", 60000, 5000);
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.getTask("t-123")).willReturn(handle);
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 			Thread.sleep(5);
@@ -1781,7 +1783,7 @@ class StreamableHttpProxyControllerTests {
 			final java.util.List<TaskHandle> handles = new java.util.ArrayList<>(102);
 			for (int i = 1; i <= 102; i++) {
 				handles.add(new TaskHandle("t-" + i, "working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z",
-						60000, 5000));
+						60000, 5000, null));
 			}
 			given(this.taskService.listTasks()).willReturn(handles);
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
@@ -1808,9 +1810,9 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":43,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"1\"}}");
 			final TaskHandle first = new TaskHandle("t-1", "working", null, "2025-01-01T00:00:00Z",
-					"2025-01-01T00:00:00Z", 60000, 5000);
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
 			final TaskHandle second = new TaskHandle("t-2", "working", null, "2025-01-01T00:00:00Z",
-					"2025-01-01T00:00:00Z", 60000, 5000);
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.listTasks()).willReturn(java.util.List.of(first, second));
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
