@@ -68,6 +68,55 @@ describe("VersionBadge", () => {
     expect(screen.getAllByText(/MethodNotFound/).length).toBeGreaterThan(0);
   });
 
+  it("pins the mismatch notice on DOWNGRADE: names both revisions, no method list", () => {
+    render(
+      <VersionBadge
+        snapshot={snapshot({
+          clientRequestedVersion: "2026-07-28",
+          negotiatedVersion: "2025-11-25",
+        })}
+      />,
+    );
+
+    fireEvent.click(badge().querySelector("[class*=cursor-pointer]")!);
+
+    // Pinned to the notice element itself, not to strings the Compatibility
+    // summary also produces: deleting the whole notice block must turn this
+    // test red (issue #79 AC #2). A downgrade names both revisions and
+    // carries no method list: the negotiated older revision still offers
+    // every method the client requested.
+    const notice = screen.getByTestId("version-mismatch-notice");
+    expect(notice.textContent).toContain("Downgraded");
+    expect(notice.textContent).toContain("2026-07-28");
+    expect(notice.textContent).toContain("2025-11-25");
+    expect(notice.querySelector("ul")).toBeNull();
+  });
+
+  it("pins the mismatch notice on INCOMPATIBLE: names both revisions and the affected methods", () => {
+    render(
+      <VersionBadge
+        snapshot={snapshot({
+          clientRequestedVersion: "2025-11-25",
+          negotiatedVersion: "2026-07-28",
+        })}
+      />,
+    );
+
+    fireEvent.click(badge().querySelector("[class*=cursor-pointer]")!);
+
+    const notice = screen.getByTestId("version-mismatch-notice");
+    expect(notice.textContent).toContain("Incompatible");
+    expect(notice.textContent).toContain("2025-11-25");
+    expect(notice.textContent).toContain("2026-07-28");
+    expect(notice.textContent).toContain("MethodNotFound");
+    const methods = Array.from(notice.querySelectorAll("li")).map(
+      (li) => li.textContent,
+    );
+    expect(methods.length).toBeGreaterThan(0);
+    expect(methods).toContain("ping");
+    expect(methods).toContain("initialize");
+  });
+
   it("renders a blue UNKNOWN badge for revisions the matrix does not recognise", () => {
     render(
       <VersionBadge

@@ -221,7 +221,10 @@ export default function VersionBadge({ snapshot }: VersionBadgeProps) {
           {compatibility &&
             (compatibility.severity === "DOWNGRADE" ||
               compatibility.severity === "INCOMPATIBLE") && (
-              <div className="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 p-3">
+              <div
+                data-testid="version-mismatch-notice"
+                className="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950 p-3"
+              >
                 <div className="flex items-center gap-1.5 mb-1">
                   <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                   <span className="text-sm font-medium text-amber-800 dark:text-amber-200">

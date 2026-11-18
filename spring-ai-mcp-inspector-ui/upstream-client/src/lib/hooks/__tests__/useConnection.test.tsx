@@ -3396,6 +3396,56 @@ describe("useConnection", () => {
       expect(mockClient.request).toBe(mockRequest);
     });
 
+    test("ref-counts overlapping connects: only the last exit restores the original request", async () => {
+      // Production builds a fresh Client per connect, so two overlapping
+      // connects share one client only when the instance is reused, which is
+      // exactly what this module-level mockClient does. The pin (issue #79
+      // rework): the first exiting connect must NOT restore the original
+      // request while the second handshake is still wrapped; the last exit
+      // must bring back the exact original reference.
+      let resolveHsA: () => void;
+      const hsA = new Promise<void>((resolve) => {
+        resolveHsA = resolve;
+      });
+      let resolveHsB: () => void;
+      const hsB = new Promise<void>((resolve) => {
+        resolveHsB = resolve;
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // Attempt A parks inside its handshake.
+      mockClient.connect.mockReturnValueOnce(hsA);
+      const aPromise = result.current.connect();
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+
+      // Attempt B (reset bypasses the double-click guard) parks too: both
+      // handshakes now share the one wrapper on the reused client.
+      mockClient.connect.mockReturnValueOnce(hsB);
+      const bPromise = result.current.resetSessionAndConnect();
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      expect(mockClient.request).not.toBe(mockRequest);
+
+      // The FIRST exit (A) must not restore while B is still wrapped.
+      resolveHsA!();
+      await act(async () => {
+        await aPromise;
+      });
+      expect(mockClient.request).not.toBe(mockRequest);
+
+      // The LAST exit (B) restores the exact original reference.
+      resolveHsB!();
+      await act(async () => {
+        await bPromise;
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      expect(mockClient.request).toBe(mockRequest);
+    });
+
     test("keeps a null snapshot when connect skips the handshake (resume)", async () => {
       // connect() that performs no initialize frame: transport-level resume.
       mockClient.connect.mockResolvedValueOnce(undefined);
