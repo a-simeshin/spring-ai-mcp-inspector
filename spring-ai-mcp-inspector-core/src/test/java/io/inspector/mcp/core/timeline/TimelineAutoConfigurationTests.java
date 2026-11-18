@@ -16,9 +16,16 @@
 
 package io.inspector.mcp.core.timeline;
 
+import java.util.List;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
@@ -69,6 +76,69 @@ class TimelineAutoConfigurationTests {
 				.withPropertyValues("spring.ai.mcp.inspector.timeline.enabled=false")
 				.run((context) -> assertThat(context).doesNotHaveBean(McpTrafficRecorder.class)
 					.doesNotHaveBean(TimelineService.class));
+		}
+
+	}
+
+	@Nested
+	@DisplayName("client capture")
+	class ClientCapture {
+
+		@Test
+		@DisplayName("creates recorder, registry and post-processor beans when client-capture-enabled=true")
+		void createsClientCaptureBeans() {
+			TimelineAutoConfigurationTests.this.runner
+				.withPropertyValues("spring.ai.mcp.inspector.timeline.enabled=true",
+						"spring.ai.mcp.inspector.timeline.client-capture-enabled=true",
+						"spring.ai.mcp.inspector.timeline.logs-enabled=false",
+						"spring.ai.mcp.inspector.timeline.stdio-capture-enabled=false")
+				.run((context) -> {
+					assertThat(context).hasSingleBean(McpClientTrafficRecorder.class);
+					assertThat(context).hasSingleBean(ClientConnectionRegistry.class);
+					assertThat(context).hasSingleBean(RecordingTransportPostProcessor.class);
+				});
+		}
+
+		@Test
+		@DisplayName("creates no client capture beans when the flag is off")
+		void noClientCaptureBeansWhenOff() {
+			TimelineAutoConfigurationTests.this.runner
+				.withPropertyValues("spring.ai.mcp.inspector.timeline.enabled=true",
+						"spring.ai.mcp.inspector.timeline.logs-enabled=false")
+				.run((context) -> assertThat(context).doesNotHaveBean(McpClientTrafficRecorder.class)
+					.doesNotHaveBean(ClientConnectionRegistry.class)
+					.doesNotHaveBean(RecordingTransportPostProcessor.class));
+		}
+
+		@Test
+		@DisplayName("no BeanPostProcessorChecker WARN when client-capture-enabled=true")
+		void noBeanPostProcessorCheckerWarn() {
+			final ListAppender<ILoggingEvent> appender = new ListAppender<>();
+			appender.start();
+			final Logger rootLogger = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+			rootLogger.addAppender(appender);
+			try {
+				TimelineAutoConfigurationTests.this.runner
+					.withPropertyValues("spring.ai.mcp.inspector.timeline.enabled=true",
+							"spring.ai.mcp.inspector.timeline.client-capture-enabled=true",
+							"spring.ai.mcp.inspector.timeline.logs-enabled=false",
+							"spring.ai.mcp.inspector.timeline.stdio-capture-enabled=false")
+					.run((context) -> {
+						assertThat(context).hasSingleBean(McpClientTrafficRecorder.class);
+						assertThat(context).hasSingleBean(RecordingTransportPostProcessor.class);
+						// The BPP must not trigger eager instantiation of the recorder
+						// (and its dependencies) during registerBeanPostProcessors.
+						final List<ILoggingEvent> warnOrHigher = appender.list.stream()
+							.filter((event) -> event.getLevel().isGreaterOrEqual(Level.WARN))
+							.toList();
+						assertThat(warnOrHigher)
+							.noneMatch((event) -> event.getFormattedMessage().contains("BeanPostProcessorChecker"));
+					});
+			}
+			finally {
+				rootLogger.detachAppender(appender);
+				appender.stop();
+			}
 		}
 
 	}

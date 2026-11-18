@@ -20,6 +20,7 @@ import ch.qos.logback.classic.AsyncAppender;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -94,6 +95,55 @@ public class TimelineAutoConfiguration {
 			havingValue = "true", matchIfMissing = true)
 	public ExceptionLeakDetector mcpInspectorExceptionLeakDetector() {
 		return new ExceptionLeakDetector();
+	}
+
+	/**
+	 * The client-side connection registry tracking every wrapped client transport (name,
+	 * transport type, sanitized target, state and message counters). Absent when client
+	 * capture is switched off (default).
+	 * @return a new {@link ClientConnectionRegistry}
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline", name = "client-capture-enabled",
+			havingValue = "true")
+	public ClientConnectionRegistry mcpInspectorClientConnectionRegistry() {
+		return new ClientConnectionRegistry();
+	}
+
+	/**
+	 * The client-side traffic recorder that captures outgoing MCP client traffic into the
+	 * timeline. Absent when client capture is switched off (default). When present, a
+	 * {@link RecordingTransportPostProcessor} wraps every {@code NamedClientMcpTransport}
+	 * bean with a {@link RecordingMcpClientTransport} decorator.
+	 * @param timelineService the timeline service to append events to
+	 * @return a new {@link McpClientTrafficRecorder}
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline", name = "client-capture-enabled",
+			havingValue = "true")
+	public McpClientTrafficRecorder mcpInspectorMcpClientTrafficRecorder(final TimelineService timelineService) {
+		return new McpClientTrafficRecorder(timelineService);
+	}
+
+	/**
+	 * Bean post-processor that wraps {@code NamedClientMcpTransport} beans with recording
+	 * decorators. Static so it is registered before regular bean instantiation; the
+	 * recorder and the registry are resolved lazily on the first wrap via
+	 * {@link ObjectProvider} to avoid eager instantiation during
+	 * registerBeanPostProcessors.
+	 * @param trafficRecorderProvider the provider for the client traffic recorder
+	 * @param connectionRegistryProvider the provider for the client connection registry
+	 * @return a new {@link RecordingTransportPostProcessor}
+	 */
+	@Bean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline", name = "client-capture-enabled",
+			havingValue = "true")
+	public static RecordingTransportPostProcessor mcpInspectorRecordingTransportPostProcessor(
+			final ObjectProvider<McpClientTrafficRecorder> trafficRecorderProvider,
+			final ObjectProvider<ClientConnectionRegistry> connectionRegistryProvider) {
+		return new RecordingTransportPostProcessor(trafficRecorderProvider, connectionRegistryProvider);
 	}
 
 	/**
