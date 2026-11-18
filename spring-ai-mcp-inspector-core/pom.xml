@@ -74,6 +74,29 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- Test-only: real Spring AI client transport auto-configurations for
+             ApplicationContextRunner coverage of RecordingTransportPostProcessor.
+             Main code detects NamedClientMcpTransport by FQCN at runtime and imports
+             no spring-ai classes. spring-ai-mcp is needed because
+             spring-ai-autoconfigure-mcp-client-common references McpClientCustomizer
+             from it, so the test classpath needs both jars to avoid
+             NoClassDefFoundError when the auto-configurations are processed. -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-autoconfigure-mcp-client-common</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-autoconfigure-mcp-client-httpclient</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-mcp</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- Test-only: ProxySessionRegistryShutdownOrderingTests pins its probe phase to
              Boot's own WebServerGracefulShutdownLifecycle.SMART_LIFECYCLE_PHASE rather
              than to a copied 2147482623. Boot 4 split that class out of the spring-boot
