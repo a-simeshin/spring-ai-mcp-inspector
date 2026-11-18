@@ -100,6 +100,9 @@ import {
   clearHistory,
   loadHistory,
 } from "../persistentHistory";
+// [spring-ai-mcp-inspector PATCH] Initialize snapshot type for the
+// VersionBadge (src/lib/protocolRevision.ts).
+import type { InitializeSnapshot } from "../protocolRevision";
 
 interface UseConnectionOptions {
   transportType: "stdio" | "sse" | "streamable-http";
@@ -239,6 +242,12 @@ export function useConnection({
   const [mcpProtocolVersion, setMcpProtocolVersion] = useState<string | null>(
     null,
   );
+  // [spring-ai-mcp-inspector PATCH] Initialize handshake observed on the wire
+  // (requested + negotiated protocol revision, server info, capabilities),
+  // captured from the client's own request layer. Feeds the VersionBadge in
+  // the connect zone.
+  const [initializeSnapshot, setInitializeSnapshot] =
+    useState<InitializeSnapshot | null>(null);
   const [serverImplementation, setServerImplementation] =
     useState<Implementation | null>(null);
 
@@ -838,6 +847,7 @@ export function useConnection({
       clientCapabilities,
     );
 
+
     // Only check proxy health for proxy connections
     if (connectionType === "proxy") {
       try {
@@ -1304,7 +1314,98 @@ export function useConnection({
           setServerImplementation(null);
         };
 
-        await client.connect(transport as Transport);
+        /* [spring-ai-mcp-inspector PATCH] Capture the initialize handshake by
+           observing the client's own JSON-RPC request layer. Client#connect
+           always performs the handshake through this.request, in every
+           connection type (direct and via proxy) and on every transport (SSE,
+           Streamable HTTP, STDIO), so this is the one capture point that cannot
+           miss. Response headers are not a reliable source: SSE never returns
+           mcp-session-id, and the inspector REST session registry is not on the
+           wire in direct mode. The snapshot feeds the VersionBadge.
+           The interception is scoped to the handshake call below and the
+           original method reference is restored afterwards, so nothing outside
+           connect() observes a wrapper. */
+        // Holder object: TS control-flow analysis cannot see the closure
+        // assignment inside the wrapper, so a plain let would narrow to its
+        // initial value at the read site.
+        const observedInitializeRef: {
+          current: {
+            requestedVersion: string | null;
+            negotiatedVersion: string | null;
+            serverInfo: { name?: string; version?: string } | null;
+            capabilities: Record<string, unknown> | null;
+          } | null;
+        } = { current: null };
+        const clientWithCapture = client as unknown as {
+          request: (
+            request: { method?: string; params?: { protocolVersion?: string } },
+            ...rest: never[]
+          ) => Promise<unknown>;
+        };
+        interface InitializeCaptureState {
+          original: (
+            request: { method?: string; params?: { protocolVersion?: string } },
+            ...rest: never[]
+          ) => Promise<unknown>;
+          depth: number;
+        }
+        const holder = clientWithCapture as unknown as {
+          __initializeCapture?: InitializeCaptureState;
+        };
+        const originalRequest = clientWithCapture.request;
+        if (typeof originalRequest === "function") {
+          // Re-entrancy guard: concurrent connect() calls are real (e.g.
+          // resetSessionAndConnect while a previous handshake is still
+          // pending). Wrapping twice captures the first wrapper as the
+          // "original" and an out-of-order restore then loses the exact
+          // original method reference forever, leaking a wrapper chain onto
+          // the client. Count depth instead: the first enter wraps, the
+          // last exit restores.
+          if (!holder.__initializeCapture) {
+            const state: InitializeCaptureState = {
+              original: originalRequest,
+              depth: 1,
+            };
+            holder.__initializeCapture = state;
+            clientWithCapture.request = async (request, ...rest) => {
+              const result = await state.original.apply(clientWithCapture, [
+                request,
+                ...rest,
+              ]);
+              if (request.method === "initialize" && result != null) {
+                const initializeResult = result as {
+                  protocolVersion?: string;
+                  serverInfo?: { name?: string; version?: string };
+                  capabilities?: Record<string, unknown>;
+                };
+                observedInitializeRef.current = {
+                  requestedVersion: request.params?.protocolVersion ?? null,
+                  negotiatedVersion: initializeResult.protocolVersion ?? null,
+                  serverInfo: initializeResult.serverInfo ?? null,
+                  capabilities: initializeResult.capabilities ?? null,
+                };
+              }
+              return result;
+            };
+          } else {
+            holder.__initializeCapture.depth += 1;
+          }
+        }
+
+        // [spring-ai-mcp-inspector PATCH] The interception stays scoped to the
+        // handshake window: the finally restores the exact original method
+        // reference so nothing downstream observes a wrapper, even if
+        // connect() throws. With concurrent connects the wrapper is shared
+        // and only the last exiting connect restores.
+        try {
+          await client.connect(transport as Transport);
+        } finally {
+          const state = holder.__initializeCapture;
+          if (state && --state.depth === 0) {
+            clientWithCapture.request = state.original;
+            delete holder.__initializeCapture;
+          }
+        }
 
         const protocolOnMessage = transport.onmessage;
         if (protocolOnMessage) {
@@ -1362,6 +1463,20 @@ export function useConnection({
         capabilities = client.getServerCapabilities();
         const serverInfo = client.getServerVersion();
         setServerImplementation(serverInfo || null);
+        // [spring-ai-mcp-inspector PATCH] Publish the observed handshake for
+        // the VersionBadge. On a transport-level resume (client.connect
+        // returns early when the transport already has a session id) no
+        // initialize frame passes, and the badge honestly shows unknown.
+        setInitializeSnapshot(
+          observedInitializeRef.current && {
+            clientRequestedVersion: observedInitializeRef.current.requestedVersion,
+            negotiatedVersion: observedInitializeRef.current.negotiatedVersion,
+            serverName: observedInitializeRef.current.serverInfo?.name ?? null,
+            serverVersion:
+              observedInitializeRef.current.serverInfo?.version ?? null,
+            capabilities: observedInitializeRef.current.capabilities,
+          },
+        );
         const initializeRequest = {
           method: "initialize",
         };
@@ -1914,6 +2029,9 @@ export function useConnection({
     // rest of the per-connection state
     setProxySessionId(null);
     setMcpProtocolVersion(null);
+    // [spring-ai-mcp-inspector PATCH] Drop the observed handshake with the
+    // session it belonged to.
+    setInitializeSnapshot(null);
   };
 
   const clearRequestHistory = () => {
@@ -1986,6 +2104,9 @@ export function useConnection({
     mcpSessionId,
     // [spring-ai-mcp-inspector PATCH] proxy-side session id for keep-alive
     proxySessionId,
+    // [spring-ai-mcp-inspector PATCH] Observed initialize handshake for the
+    // VersionBadge in the connect zone (src/lib/protocolRevision.ts).
+    initializeSnapshot,
     requestHistory,
     clearRequestHistory,
     makeRequest,
