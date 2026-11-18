@@ -2628,16 +2628,16 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// N. TasksTab. Every connection in this file goes through the inspector
-	// proxy, which INJECTS `capabilities.tasks` for upstreams that lack them
-	// and answers tasks/get, tasks/list and tasks/cancel locally (core
-	// ProxySession, tasksInterceptionEnabled). After the capability gating
-	// (issue #212) the Tasks trigger is therefore always enabled here and the
-	// active/cancelled scenarios run for real; the Assumptions guard only
-	// trips when tasksCapabilityAdvertised() no longer holds. The taskless
-	// branch has its own IT: TasksCapabilityGap below connects in Direct
-	// mode to the demo MCP server, which does not advertise tasks and has no
-	// proxy to inject them.
+	// N. TasksTab. The SSE proxy connection used here does NOT inject
+	// `capabilities.tasks`: only StreamableHttpProxyController and the
+	// webflux ProxyHandler implement the injection (tasksInterceptionEnabled
+	// in core ProxySession). After the capability gating (issue #212) the
+	// Tasks trigger stays disabled on this connection, so both scenarios
+	// below SKIP in the webmvc job (pre-existing: the base skips them too);
+	// the Assumptions guard trips when tasksCapabilityAdvertised() no longer
+	// holds. The taskless branch has its own IT: TasksCapabilityGap below
+	// connects in Direct mode to the demo MCP server, which does not
+	// advertise tasks and has no proxy at all.
 	// =====================================================================
 
 	@Nested

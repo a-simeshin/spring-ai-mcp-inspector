@@ -107,10 +107,10 @@ jest.mock("../components/HistoryAndNotifications", () => ({
   __esModule: true,
   default: () => <div>HistoryAndNotifications</div>,
 }));
-// ToolsTab is NOT mocked: the stale-polling regression test needs the real
-// callTool prop to reach App.callTool (App.tsx:1083) and its polling loop.
-// The mock captures the prop so the test can drive it directly without
-// rendering the full tab tree.
+// ToolsTab is mocked with a stub that captures the callTool prop and renders
+// the tool result text: the stale-polling regression test drives the real
+// App.callTool (App.tsx:1083) and pins the rendered stop message through
+// the tools-tab-result surface below.
 let capturedCallTool:
   | ((
       name: string,
@@ -123,6 +123,7 @@ jest.mock("../components/ToolsTab", () => ({
   __esModule: true,
   default: ({
     callTool,
+    toolResult,
   }: {
     callTool: (
       name: string,
@@ -130,9 +131,21 @@ jest.mock("../components/ToolsTab", () => ({
       metadata?: Record<string, unknown>,
       runAsTask?: boolean,
     ) => Promise<unknown>;
+    toolResult: unknown;
   }) => {
     capturedCallTool = callTool;
-    return <div data-testid="tools-tab">ToolsTab</div>;
+    const result = toolResult as
+      | { content?: Array<{ text?: string }> }
+      | null
+      | undefined;
+    return (
+      <div data-testid="tools-tab">
+        ToolsTab
+        <div data-testid="tools-tab-result">
+          {result?.content?.map((part) => part.text ?? "").join("\n") ?? ""}
+        </div>
+      </div>
+    );
   },
 }));
 jest.mock("../components/AppsTab", () => ({
@@ -661,20 +674,25 @@ describe("App - tasks capability gating", () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
       });
 
-      // Fire the notification handler that was installed in Phase 1.
-      // In pre-fix code the stale closure guards on null capabilities
-      // and the handler is a no-op. With the fix, serverCapabilitiesRef
-      // points to the Phase 2 capabilities, so listTasks is called.
+      // Pin the notification path itself: drop the collateral listTasks
+      // call the active-tab effect already made during the Phase-2 settle,
+      // then fire the notification and require exactly one further call.
+      // With the stale-closure mutant (the handler reading
+      // serverCapabilities from the install-time render, null at fire
+      // time) the dead handler issues no call and this test is RED.
+      listTasksMock.mockClear();
       act(() => {
         capturedOnNotification!({
           method: "notifications/tasks/list_changed",
         });
       });
 
-      // listTasks must have been called: the fixed notification handler
-      // reads serverCapabilitiesRef.current?.tasks?.list.
+      // listTasks must have been called exactly once BY the notification
+      // handler: the fixed handler reads
+      // serverCapabilitiesRef.current?.tasks?.list (live), not the stale
+      // null closure.
       await waitFor(() => {
-        expect(listTasksMock).toHaveBeenCalled();
+        expect(listTasksMock).toHaveBeenCalledTimes(1);
       });
     },
   );
@@ -791,6 +809,15 @@ describe("App - tasks capability gating", () => {
         ([req]) => (req as { method: string }).method,
       );
       expect(wireMethods).toEqual(["tools/call"]);
+
+      // Pin the visible stop: after the loop exits, the rendered tool
+      // result must carry the exact stop message (the post-await guard
+      // sets it via setToolResult). Without that setToolResult the panel
+      // would still show the pre-loop "Task created: ... Polling for
+      // status..." text, so a deleting mutant is RED here.
+      expect(screen.getByTestId("tools-tab-result")).toHaveTextContent(
+        "Task polling stopped: server no longer advertises the tasks capability.",
+      );
     },
   );
 
