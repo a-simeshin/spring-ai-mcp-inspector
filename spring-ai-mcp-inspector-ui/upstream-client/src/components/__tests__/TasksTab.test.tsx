@@ -871,6 +871,17 @@ describe("TasksTab behavior tests", () => {
       expect(screen.getByTestId("task-row-t1")).toHaveTextContent(
         new Date(task.createdAt).toLocaleTimeString(),
       );
+      expect(screen.getByTitle(task.createdAt)).toBeInTheDocument();
+    });
+
+    it("renders an unparsable createdAt verbatim in the task row", () => {
+      const task = makeTask({ taskId: "t2", createdAt: "not-a-timestamp" });
+
+      render(<TasksTab {...defaultProps} tasks={[task]} />);
+
+      expect(screen.getByTestId("task-row-t2")).toHaveTextContent(
+        "not-a-timestamp",
+      );
     });
 
     it("renders a keepAlive URI from the proxy verbatim in the detail", () => {
