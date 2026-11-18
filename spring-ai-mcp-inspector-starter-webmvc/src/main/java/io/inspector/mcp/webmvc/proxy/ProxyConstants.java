@@ -21,7 +21,7 @@ package io.inspector.mcp.webmvc.proxy;
  *
  * <p>
  * Endpoint layout (kept in lock-step with the upstream
- * {@code modelcontextprotocol/inspector} server, minus the {@code /sandbox} route):
+ * {@code modelcontextprotocol/inspector} server):
  *
  * <ul>
  * <li>{@code GET    /mcp-inspector-api/sse} — open a session against an SSE / Streamable
@@ -34,6 +34,7 @@ package io.inspector.mcp.webmvc.proxy;
  * <li>{@code GET    /mcp-inspector-api/config} — defaults for the client form</li>
  * <li>{@code GET    /mcp-inspector-api/health} — liveness probe (no auth)</li>
  * <li>{@code POST   /mcp-inspector-api/fetch} — generic outbound HTTP fetch</li>
+ * <li>{@code GET    /mcp-inspector-api/sandbox} - SEP-1865 sandbox proxy page</li>
  * </ul>
  *
  * @author Artem Simeshin

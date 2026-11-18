@@ -136,12 +136,16 @@ class InspectorUiIT {
 	}
 
 	/**
-	 * Every demo tool advertised by {@code tools/list} (22 entries).
+	 * Every demo tool advertised by {@code tools/list} (29 entries): the 22 core tools,
+	 * the four task-emulating tools from {@code DemoTaskEmulatingToolsProvider}
+	 * (generateReport, getTaskStatus, cancelTask, keepAliveTask), and the three MCP Apps
+	 * fixtures from {@code DemoUiAppsProvider} (formApp, dashboardApp, malformedAppTool).
 	 */
 	private static final String[] ALL_DEMO_TOOLS = { "echo", "sum", "currentTime", "addNumbers", "concatenate",
 			"lookupUser", "chooseColor", "toggleFlag", "optionalGreeting", "errorTool", "largeOutput",
 			"structuredOutput", "multiContent", "slowEcho", "deepJson", "blobAttachment", "askLlm", "askUser",
-			"deployService", "findFiles", "authorizeViaUrl", "listMyRoots" };
+			"deployService", "findFiles", "authorizeViaUrl", "listMyRoots", "generateReport", "getTaskStatus",
+			"cancelTask", "keepAliveTask", "formApp", "dashboardApp", "malformedAppTool" };
 
 	/**
 	 * Connect matrix actually exposed by the upstream UI: only the three transport
@@ -933,9 +937,9 @@ class InspectorUiIT {
 		@Test
 		@Story("Tool list")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("After listing tools, every one of the 22 demo tools is present in the tool list.")
-		@DisplayName("toolsListShowsAll22Tools — every demo tool appears in the list")
-		void toolsList_afterListTools_showsAll22Tools() {
+		@Description("After listing tools, every one of the 29 demo tools is present in the tool list.")
+		@DisplayName("toolsListShowsAll29Tools - every demo tool appears in the list")
+		void toolsList_afterListTools_showsAll29Tools() {
 			// given
 			String[] expected = ALL_DEMO_TOOLS;
 
@@ -2658,10 +2662,10 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// M. AppsTab — assert empty state (no app tools registered by demo).
-	// Per the demo's capability matrix none of the demo tools carry
-	// _meta.ui.resourceUri, so the AppsTab empty-state copy is the expected
-	// outcome (UPSTREAM_DOM_MAP.md §9.2).
+	// M. AppsTab — fixture app list plus the open-app lifecycle flow:
+	// DemoUiAppsProvider registers three tools carrying _meta.ui.resourceUri,
+	// so the tab lists them, and "Open as App" -> "Open App" drives the real
+	// SEP-1865 sandbox handshake to the ready pill (issue #183).
 	// =====================================================================
 
 	@Nested
@@ -2683,20 +2687,78 @@ class InspectorUiIT {
 		@Test
 		@Story("Apps tab")
 		@Severity(SeverityLevel.MINOR)
-		@Description("With no app tools registered, the Apps tab renders the empty-state 'No MCP Apps available' message.")
-		@DisplayName("appsTabRendersAtLeastEmptyState — empty MCP Apps message visible")
-		void appsTab_noAppTools_rendersEmptyState() {
+		@Description("The demo registers three MCP Apps fixtures (DemoUiAppsProvider), so the Apps tab "
+				+ "lists them and shows the placeholder right pane until one is selected.")
+		@DisplayName("appsTabListsFixtureApps - fixture app tools listed, placeholder right pane")
+		void appsTab_fixtureApps_rendersAppList() {
 			// given & when
 			clickTab("apps");
 
 			// then
 			// Refresh Apps trigger must be visible — proves the list pane rendered.
 			activePanel().$(byText("Refresh Apps")).shouldBe(visible, Duration.ofSeconds(10));
-			// Demo registers 22 tools but none with _meta.ui.resourceUri, so the right
-			// pane shows the "No MCP Apps available..." copy. We match a stable substring
-			// to insulate the assertion from upstream wording tweaks like the trailing
-			// "_meta.ui.resourceUri" code span.
-			activePanel().shouldHave(text("No MCP Apps available"), Duration.ofSeconds(10));
+			// DemoUiAppsProvider registers three tools carrying _meta.ui.resourceUri, so
+			// the Apps tab lists them as MCP Apps. The empty-state copy ("No MCP Apps
+			// available") stays covered by the AppsTab jest suite, which renders the
+			// component with a tool list that has no UI metadata.
+			activePanel().shouldHave(text("dashboardApp"), Duration.ofSeconds(10));
+			activePanel().shouldHave(text("formApp"));
+			activePanel().shouldHave(text("malformedAppTool"));
+			// Right pane shows the placeholder until an app is selected.
+			activePanel().shouldHave(text("Select an app from the list to get started"));
+		}
+
+	}
+
+	@Nested
+	@DisplayName("App lifecycle")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class AppLifecycle {
+
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			openAndConnect();
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@Test
+		@Story("Apps tab")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("The rework closure path for issue #183: select formApp, Open as App, "
+				+ "Open App. The sandboxed app mounts, the guest answers the host handshake, "
+				+ "the lifecycle pill reaches ready, and the App Panel logs frames in both "
+				+ "directions (proxy-ready and initialized notifications up from the guest, "
+				+ "the ui/initialize request down to it).")
+		@DisplayName("appsTabOpenAppReachesReady - Open as App -> Open App renders app to ready")
+		void appsTab_openApp_reachesReadyWithBidirectionalTraffic() {
+			// given: the app is preselected from the Tools tab ("Open as App").
+			clickTab("tools");
+			activePanel().$(byText("List Tools")).shouldBe(visible, Duration.ofSeconds(10)).click();
+			selectRow("formApp");
+			activePanel().$("[data-testid=open-as-app-button]").shouldBe(visible, Duration.ofSeconds(10)).click();
+
+			// when: the input form is reviewed and the app is opened for real.
+			clickTab("apps");
+			activePanel().$(byText("Open App")).shouldBe(visible, Duration.ofSeconds(10)).click();
+
+			// then: the guest bridge completes the handshake, so the pill reaches ready
+			// instead of stalling on initializing after sandbox-proxy-ready.
+			activePanel().$("[data-testid=app-lifecycle-pill]").shouldHave(text("ready"), Duration.ofSeconds(20));
+			// Both directions are logged: guest->host frames (proxy-ready, the
+			// ui/initialize request and the initialized notification) and at least
+			// one host->guest frame (the initialize result / resource-ready), so
+			// the tap captures the chronological host<->guest conversation.
+			activePanel().shouldHave(text("ui/notifications/sandbox-proxy-ready"), Duration.ofSeconds(5));
+			activePanel().shouldHave(text("ui/initialize"));
+			activePanel().shouldHave(text("ui/notifications/initialized"));
+			// An arrow pin is enough for the host->guest direction: any host frame
+			// (initialize result or resource-ready) carries it.
+			activePanel().$("[data-testid=app-panel]").shouldHave(text("\u2192"));
 		}
 
 	}

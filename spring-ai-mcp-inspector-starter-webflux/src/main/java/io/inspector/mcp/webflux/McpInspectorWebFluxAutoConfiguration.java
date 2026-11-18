@@ -65,6 +65,7 @@ import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
 import io.inspector.mcp.webflux.filter.InspectorAuthWebFilter;
 import io.inspector.mcp.webflux.proxy.ProxyAuthWebFilter;
 import io.inspector.mcp.webflux.proxy.ProxyHandler;
+import io.inspector.mcp.webflux.proxy.SandboxProxyHandler;
 import io.inspector.mcp.webflux.router.InspectorHandler;
 import io.inspector.mcp.webflux.router.InspectorRouterConfig;
 import io.inspector.mcp.webflux.router.KeepAliveEventRegistry;
@@ -323,6 +324,12 @@ public class McpInspectorWebFluxAutoConfiguration {
 	public ProxyUpstreamProber mcpInspectorProxyUpstreamProber(final ProxySessionRegistry registry,
 			final McpInspectorProperties properties) {
 		return new ProxyUpstreamProber(registry, properties.getTimeouts());
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public SandboxProxyHandler mcpInspectorSandboxProxyHandler() {
+		return new SandboxProxyHandler();
 	}
 
 	@Bean
