@@ -159,6 +159,7 @@ public final class RecordingTransportPostProcessor implements BeanPostProcessor 
 		}
 		final String transportType = detectTransportType(delegate);
 		final String target = resolveTarget(delegate);
+		registry.recordDiscovered(clientName, transportType);
 		final RecordingMcpClientTransport recordingTransport = new RecordingMcpClientTransport(delegate,
 				new McpClientTrafficRecorder.ClientEndpoint(clientName, transportType, target), recorder, registry);
 		return newNamedClientMcpTransport(clientName, recordingTransport);
@@ -229,12 +230,12 @@ public final class RecordingTransportPostProcessor implements BeanPostProcessor 
 		// private final URI baseUri field.
 		final Object baseUri = readField(transport, "baseUri");
 		if (baseUri instanceof URI uri) {
-			return sanitizeTarget(uri.toString());
+			return TargetSanitizer.sanitizeTarget(uri.toString());
 		}
 		// StdioClientTransport carries a private final ServerParameters params field.
 		final Object params = readField(transport, "params");
 		if (params instanceof ServerParameters serverParameters) {
-			return sanitizeTarget(serverParameters.getCommand());
+			return TargetSanitizer.sanitizeCommand(serverParameters.getCommand(), serverParameters.getArgs());
 		}
 		return null;
 	}
@@ -248,34 +249,6 @@ public final class RecordingTransportPostProcessor implements BeanPostProcessor 
 		catch (final ReflectiveOperationException | IllegalArgumentException ex) {
 			return null;
 		}
-	}
-
-	/**
-	 * Sanitizes a target for the timeline payload: userinfo credentials are replaced with
-	 * {@code ***} and the query string is dropped entirely; host and path are kept. Stdio
-	 * command strings pass through unchanged unless they embed a query.
-	 * @param rawTarget the raw target, may be {@code null}
-	 * @return the sanitized target, or {@code null} when the input was {@code null}
-	 */
-	static String sanitizeTarget(final String rawTarget) {
-		if (rawTarget == null || rawTarget.isEmpty()) {
-			return rawTarget;
-		}
-		String sanitized = rawTarget;
-		final int queryIndex = sanitized.indexOf('?');
-		if (queryIndex >= 0) {
-			sanitized = sanitized.substring(0, queryIndex);
-		}
-		final int schemeIndex = sanitized.indexOf("://");
-		if (schemeIndex >= 0) {
-			final int pathIndex = sanitized.indexOf('/', schemeIndex + 3);
-			final int authorityEnd = (pathIndex >= 0) ? pathIndex : sanitized.length();
-			final int atIndex = sanitized.indexOf('@', schemeIndex + 3);
-			if (atIndex >= 0 && atIndex < authorityEnd) {
-				sanitized = sanitized.substring(0, schemeIndex + 3) + "***" + sanitized.substring(atIndex);
-			}
-		}
-		return sanitized;
 	}
 
 }

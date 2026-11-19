@@ -36,6 +36,8 @@ public final class ClientConnectionRegistry {
 
 	private final Map<String, ClientState> clients = new ConcurrentHashMap<>();
 
+	private final Map<String, String> discoveredClients = new ConcurrentHashMap<>();
+
 	/**
 	 * Marks a connect attempt for the client. Creates the entry when absent and
 	 * (re-)enters INITIALIZING.
@@ -45,6 +47,27 @@ public final class ClientConnectionRegistry {
 	 */
 	public void markInitializing(final String clientName, final String transportType, final String target) {
 		this.clients.computeIfAbsent(clientName, ClientState::new).initialize(transportType, target);
+	}
+
+	/**
+	 * Records that a client transport was discovered at bean creation, independent of the
+	 * connection lifecycle: this is the set of configured clients used by
+	 * {@link ClientDesyncDetector}, populated by {@link RecordingTransportPostProcessor}
+	 * when it wraps the transport, before any connect attempt.
+	 * @param clientName the configured client name (must not be {@code null})
+	 * @param transportType a transport type label, may be {@code null}
+	 */
+	public void recordDiscovered(final String clientName, final String transportType) {
+		this.discoveredClients.putIfAbsent(clientName, transportType);
+	}
+
+	/**
+	 * Returns a snapshot of all discovered clients keyed by name with their transport
+	 * type.
+	 * @return the discovered clients (never {@code null})
+	 */
+	public Map<String, String> discoveredClients() {
+		return Map.copyOf(this.discoveredClients);
 	}
 
 	/**
