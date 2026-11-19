@@ -100,7 +100,11 @@ const AuthProfiles = ({
 }: AuthProfilesProps) => {
   const { toast } = useToast();
   const [draft, setDraft] = useState<ProfileDraft>(() => draftTemplate("BEARER"));
-  const [validationError, setValidationError] = useState<string | null>(null);
+  // [spring-ai-mcp-inspector PATCH] Issue #268: the editor starts collapsed and
+  // field errors stay hidden until the user blurs a field or attempts a save,
+  // so a pristine load renders zero validation errors.
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [touched, setTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [authCodeBusy, setAuthCodeBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -176,7 +180,7 @@ const AuthProfiles = ({
   const switchType = (type: AuthProfileType) => {
     setDraft(draftTemplate(type));
     setEditingProfileId(null);
-    setValidationError(null);
+    setTouched(false);
   };
 
   const handleSaved = async (
@@ -185,7 +189,7 @@ const AuthProfiles = ({
     message: string,
   ) => {
     setLastDraftByProfileId((prev) => ({ ...prev, [profileId]: savedDraft }));
-    setValidationError(null);
+    setTouched(false);
     setEditingProfileId(null);
     setDraft(draftTemplate(savedDraft.type));
     onActiveProfileChange(profileId);
@@ -194,9 +198,9 @@ const AuthProfiles = ({
   };
 
   const handleSave = async () => {
-    const error = validateProfileDraft(draft, otherNames);
-    setValidationError(error);
-    if (error) {
+    // Issue #268: a save attempt reveals field errors.
+    setTouched(true);
+    if (validateProfileDraft(draft, otherNames)) {
       return;
     }
     setSaving(true);
@@ -212,9 +216,9 @@ const AuthProfiles = ({
 
   /** D9B phase 1+2: pending create → PKCE redirect with server-issued state. */
   const handleAuthorize = async () => {
-    const error = validateProfileDraft(draft, otherNames);
-    setValidationError(error);
-    if (error) {
+    // Issue #268: an authorize attempt reveals field errors.
+    setTouched(true);
+    if (validateProfileDraft(draft, otherNames)) {
       return;
     }
     if (draft.type !== "OAUTH2" || draft.grantMode !== "AUTHORIZATION_CODE") {
@@ -267,6 +271,17 @@ const AuthProfiles = ({
     }
   }, [editingProfileId]);
 
+  /**
+   * [spring-ai-mcp-inspector PATCH] Issue #268: expanding the editor is an
+   * explicit user action, producing a fresh creation draft with errors hidden.
+   */
+  const startCreate = () => {
+    setEditorOpen(true);
+    setEditingProfileId(null);
+    setDraft(draftTemplate(draft.type));
+    setTouched(false);
+  };
+
   /** Loads a saved profile into the editor for rename / field update (PUT). */
   const handleEdit = (summary: AuthProfileSummary) => {
     setEditingProfileId(summary.profileId ?? null);
@@ -274,16 +289,17 @@ const AuthProfiles = ({
       ? lastDraftByProfileId[summary.profileId]
       : undefined;
     setDraft(known ?? draftFromPrefill(summary));
-    setValidationError(null);
+    setTouched(false);
+    setEditorOpen(true);
   };
 
   const handleUpdate = async () => {
     if (!editingProfileId) {
       return;
     }
-    const error = validateProfileDraft(draft, otherNames);
-    setValidationError(error);
-    if (error) {
+    // Issue #268: an update attempt reveals field errors.
+    setTouched(true);
+    if (validateProfileDraft(draft, otherNames)) {
       return;
     }
     setSaving(true);
@@ -444,8 +460,18 @@ const AuthProfiles = ({
         </div>
       )}
 
-      {/* Editor */}
-      <div className="space-y-2 rounded border p-3" data-testid="auth-profile-editor">
+      {/*
+        [spring-ai-mcp-inspector PATCH] Issue #268: the editor section is
+        collapsed on load; the "New profile" toggle (or editing an existing
+        profile) is the only way to expand it.
+      */}
+      {editorOpen ? (
+      <div
+        className="space-y-2 rounded border p-3"
+        data-testid="auth-profile-editor"
+        // Blur anywhere inside the editor reveals field errors (issue #268).
+        onBlurCapture={() => setTouched(true)}
+      >
         <div className="flex items-center gap-2">
           <Label htmlFor="auth-profile-type" className="text-xs text-muted-foreground shrink-0">Type</Label>
           <Select
@@ -708,14 +734,18 @@ const AuthProfiles = ({
           </div>
         )}
 
-        {(validationError || editorError) && (
+        {/*
+          [spring-ai-mcp-inspector PATCH] Issue #268: field errors surface only
+          after a blur or a save attempt, never on a pristine mount.
+        */}
+        {touched && editorError && (
           <div
             className="flex items-center gap-1.5 text-xs text-red-600"
             data-testid="auth-profile-validation"
             role="alert"
           >
             <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-            {validationError ?? editorError}
+            {editorError}
           </div>
         )}
 
@@ -736,7 +766,7 @@ const AuthProfiles = ({
               onClick={() => {
                 setEditingProfileId(null);
                 setDraft(draftTemplate(draft.type));
-                setValidationError(null);
+                setTouched(false);
               }}
               data-testid="auth-profile-cancel-edit"
             >
@@ -775,6 +805,17 @@ const AuthProfiles = ({
           </p>
         )}
       </div>
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-full justify-start text-xs"
+          onClick={startCreate}
+          data-testid="auth-profile-editor-toggle"
+        >
+          New profile
+        </Button>
+      )}
     </div>
   );
 };
