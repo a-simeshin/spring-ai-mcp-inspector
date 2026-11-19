@@ -68,6 +68,17 @@
         </dependency>
 
         <!--
+            The demo app's own outbound MCP client (issue #120): one named
+            streamable-http connection pointing back at the app's own MCP server
+            endpoint, so the inspector shows a live client connection and
+            client-side traffic in the timeline without any external stub server.
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-client</artifactId>
+        </dependency>
+
+        <!--
             Test scope. These are compile-scope FOR THE TEST SOURCES of this module,
             which are published as a test-jar and consumed by both stack modules — so
             every dependency the shared ITs touch has to be declared here too.
