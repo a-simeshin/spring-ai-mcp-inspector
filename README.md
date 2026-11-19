@@ -339,7 +339,7 @@ The bundled demo app is a working example: it connects one client named
 `demo-loopback` to its own MCP server endpoint, so the inspector UI always shows a live
 client connection out of the box. Because the client beans are created before the web
 server port exists, the demo sets `spring.ai.mcp.client.initialized=false` and
-initializes the client from a `WebServerInitializedEvent` listener:
+initializes the client from an `ApplicationReadyEvent` listener:
 
 ```yaml
 spring:
