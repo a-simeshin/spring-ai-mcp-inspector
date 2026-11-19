@@ -67,6 +67,11 @@ describe("AuthProfiles editor validation (AC1)", () => {
     delete (window as { location?: unknown }).location;
   });
 
+  // jsdom lacks scrollIntoView; Radix Select calls it on open
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = jest.fn();
+  });
+
   // [spring-ai-mcp-inspector PATCH] Issue #268: a pristine load renders zero
   // validation errors and keeps the editor collapsed; errors surface only via
   // blur or a save attempt.
@@ -91,6 +96,163 @@ describe("AuthProfiles editor validation (AC1)", () => {
       screen.queryByTestId("auth-profile-validation"),
     ).not.toBeInTheDocument();
     fireEvent.blur(screen.getByTestId("auth-profile-name"));
+    expect(screen.getByTestId("auth-profile-validation")).toHaveTextContent(
+      "Profile name is required",
+    );
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Issue #268: save/update/authorize attempts
+  // arm the same error gate a blur arms. With an invalid draft the buttons are
+  // disabled and jsdom clicks on them never reach the handlers, so the
+  // reachable attempt is a valid draft whose server call fails; invalidating
+  // the draft afterwards must reveal the error with no blur in between, which
+  // only the handler's setTouched(true) can do.
+  it("reveals the required-name error after a failed save attempt once the draft turns invalid", async () => {
+    const fetchMock = global.fetch as jest.Mock;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === `${API_BASE}/auth-profile/prefill`) {
+        return okJson([]);
+      }
+      if (init?.method === "POST") {
+        return okJson({ message: "server unavailable" }, 500);
+      }
+      return okJson([]);
+    });
+
+    renderPanel();
+    fireEvent.click(await screen.findByTestId("auth-profile-editor-toggle"));
+    fireEvent.change(screen.getByTestId("auth-profile-name"), {
+      target: { value: "Prod" },
+    });
+    fireEvent.change(screen.getByTestId("auth-profile-bearer-token"), {
+      target: { value: "tok" },
+    });
+    const save = screen.getByTestId("auth-profile-save");
+    expect(save).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(save);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    // The attempt reached the server and failed; the still-valid draft keeps
+    // rendering zero errors (the armed gate alone renders nothing).
+    const postCall = fetchMock.mock.calls.find(
+      ([, init]: [string, RequestInit]) => init?.method === "POST",
+    );
+    expect(postCall).toBeDefined();
+    expect(
+      screen.queryByTestId("auth-profile-validation"),
+    ).not.toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("auth-profile-name"), {
+      target: { value: "" },
+    });
+    expect(screen.getByTestId("auth-profile-validation")).toHaveTextContent(
+      "Profile name is required",
+    );
+  });
+
+  it("reveals the required-name error after a failed update attempt once the draft turns invalid", async () => {
+    const fetchMock = global.fetch as jest.Mock;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === `${API_BASE}/auth-profile/prefill`) {
+        return okJson([]);
+      }
+      if (init?.method === "PUT") {
+        return okJson({ message: "server unavailable" }, 500);
+      }
+      return okJson([{ profileId: "p-1", name: "Prod", type: "BEARER" }]);
+    });
+
+    renderPanel({
+      profiles: [{ profileId: "p-1", name: "Prod", type: "BEARER" }],
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId("auth-profile-edit-p-1"));
+    });
+    fireEvent.change(screen.getByTestId("auth-profile-bearer-token"), {
+      target: { value: "tok" },
+    });
+    const update = screen.getByTestId("auth-profile-update");
+    expect(update).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(update);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const putCall = fetchMock.mock.calls.find(
+      ([, init]: [string, RequestInit]) => init?.method === "PUT",
+    );
+    expect(putCall).toBeDefined();
+    expect(
+      screen.queryByTestId("auth-profile-validation"),
+    ).not.toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("auth-profile-name"), {
+      target: { value: "" },
+    });
+    expect(screen.getByTestId("auth-profile-validation")).toHaveTextContent(
+      "Profile name is required",
+    );
+  });
+
+  it("reveals the required-name error after a failed authorize attempt once the draft turns invalid", async () => {
+    const fetchMock = global.fetch as jest.Mock;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === `${API_BASE}/auth-profile/prefill`) {
+        return okJson([]);
+      }
+      if (init?.method === "POST") {
+        return okJson({ message: "server unavailable" }, 500);
+      }
+      return okJson([]);
+    });
+
+    renderPanel();
+    fireEvent.click(await screen.findByTestId("auth-profile-editor-toggle"));
+    await screen.findByTestId("auth-profile-type");
+    await act(async () => {
+      const typeSelect = screen.getByTestId("auth-profile-type");
+      fireEvent.mouseDown(typeSelect);
+      fireEvent.mouseUp(typeSelect);
+      fireEvent.click(typeSelect);
+    });
+    fireEvent.click(await screen.findByText("OAuth2"));
+    await screen.findByTestId("auth-profile-grant-mode");
+    await act(async () => {
+      const grantSelect = screen.getByTestId("auth-profile-grant-mode");
+      fireEvent.mouseDown(grantSelect);
+      fireEvent.mouseUp(grantSelect);
+      fireEvent.click(grantSelect);
+    });
+    fireEvent.click(await screen.findByText("Authorization code (PKCE)"));
+    fireEvent.change(screen.getByTestId("auth-profile-name"), {
+      target: { value: "Browser" },
+    });
+    fireEvent.change(screen.getByTestId("auth-profile-token-url"), {
+      target: { value: "https://idp/token" },
+    });
+    fireEvent.change(screen.getByTestId("auth-profile-client-id"), {
+      target: { value: "client-1" },
+    });
+    fireEvent.change(screen.getByTestId("auth-profile-authorization-url"), {
+      target: { value: "https://idp/authorize" },
+    });
+    fireEvent.change(screen.getByTestId("auth-profile-redirect-uri"), {
+      target: { value: "https://inspector/oauth/callback" },
+    });
+    const authorize = screen.getByTestId("auth-profile-authorize");
+    expect(authorize).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(authorize);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const pendingPost = fetchMock.mock.calls.find(
+      ([, init]: [string, RequestInit]) => init?.method === "POST",
+    );
+    expect(pendingPost).toBeDefined();
+    expect(
+      screen.queryByTestId("auth-profile-validation"),
+    ).not.toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("auth-profile-name"), {
+      target: { value: "" },
+    });
     expect(screen.getByTestId("auth-profile-validation")).toHaveTextContent(
       "Profile name is required",
     );
