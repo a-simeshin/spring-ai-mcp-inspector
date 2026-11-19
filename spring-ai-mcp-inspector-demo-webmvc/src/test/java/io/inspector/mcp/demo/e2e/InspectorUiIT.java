@@ -2764,6 +2764,79 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
+	// M2. Apps tab iframe width at 1280x800 (issue #409): with the App
+	// Panel open the fixture app iframe must keep a usable width. Before
+	// the fix the two-column grid (tool list + app card) plus the 280px
+	// traffic panel squeezed the sandboxed frame to ~142 CSS px at this
+	// viewport, clipping the fixture form text behind both scrollbars.
+	// The fix collapses the tool list while an app is open, so this story
+	// drives the real open flow (List Tools, select formApp, Open as App,
+	// Open App) and pins the minimum frame width at the target viewport.
+	// Separate @Nested class with its own boot: the app-open road is
+	// stateful and resizes the shared browser window.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Apps frame width (1280x800)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class AppsFrameWidth {
+
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			openAndConnect();
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@BeforeEach
+		void setTargetViewport() {
+			ResponsiveTestHelpers.setViewport(1280, 800);
+		}
+
+		@AfterEach
+		void restoreViewport() {
+			ResponsiveTestHelpers.setViewport(1366, 900);
+		}
+
+		@Test
+		@Story("Apps tab")
+		@Severity(SeverityLevel.MINOR)
+		@Description("At 1280x800 with the App Panel open the sandboxed app iframe keeps at least 400 CSS px of width: "
+				+ "the real open flow (List Tools, select formApp, Open as App, Open App) drives the handshake to ready, "
+				+ "and the frame width is measured live so the traffic panel cannot squeeze the app to clipped text.")
+		@DisplayName("appsTabOpenAppAt1280KeepsMinimumIframeWidth - real open flow pins frame width >= 400px")
+		void appsTab_openAppAt1280_keepsMinimumIframeWidth() {
+			// given: the app is preselected from the Tools tab ("Open as App").
+			clickTab("tools");
+			activePanel().$(byText("List Tools")).shouldBe(visible, Duration.ofSeconds(10)).click();
+			selectRow("formApp");
+			activePanel().$("[data-testid=open-as-app-button]").shouldBe(visible, Duration.ofSeconds(10)).click();
+
+			// when: the input form is reviewed and the app is opened for real.
+			clickTab("apps");
+			activePanel().$(byText("Open App")).shouldBe(visible, Duration.ofSeconds(10)).click();
+
+			// then: the guest bridge completes the handshake, so the pill reaches ready.
+			activePanel().$("[data-testid=app-lifecycle-pill]").shouldHave(text("ready"), Duration.ofSeconds(20));
+
+			// and: the sandboxed frame keeps a usable width: >= 400 CSS px. The
+			// outer iframe is cross-origin (opaque sandbox origin), so the width
+			// is read from the host DOM, not from inside the guest document.
+			double frameWidth = ((Number) Selenide
+				.executeJavaScript("return document.querySelector('[data-testid=app-frame-box] iframe')"
+						+ ".getBoundingClientRect().width;"))
+				.doubleValue();
+			Assertions.assertTrue(frameWidth >= 400.0,
+					"app iframe width at 1280x800 with the App Panel open, got: " + frameWidth);
+		}
+
+	}
+
+	// =====================================================================
 	// N. TasksTab. The SSE proxy connection used here does NOT inject
 	// `capabilities.tasks`: only StreamableHttpProxyController and the
 	// webflux ProxyHandler implement the injection (tasksInterceptionEnabled

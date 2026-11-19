@@ -347,21 +347,47 @@ describe("AppsTab", () => {
       ).toBeInTheDocument();
     });
 
-    // Initially, ListPane should be visible
-    expect(screen.getByText("MCP Apps")).toBeInTheDocument();
+    // Issue #409: with the app open the list pane is collapsed (single-column
+    // grid), so the app iframe keeps a usable width next to the traffic panel.
+    expect(screen.queryByText("MCP Apps")).not.toBeInTheDocument();
 
     // Click Maximize
     const maximizeButton = screen.getByRole("button", { name: /maximize/i });
     fireEvent.click(maximizeButton);
 
-    // ListPane should be hidden
+    // ListPane stays hidden while maximized
     expect(screen.queryByText("MCP Apps")).not.toBeInTheDocument();
 
-    // Click Minimize
+    // Click Minimize: the app is still open, so the list stays collapsed
     const minimizeButton = screen.getByRole("button", { name: /minimize/i });
     fireEvent.click(minimizeButton);
 
-    // ListPane should be visible again
+    expect(screen.queryByText("MCP Apps")).not.toBeInTheDocument();
+    expect(screen.getByTestId("app-renderer")).toBeInTheDocument();
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Issue #409: the open app takes the full
+  // tab width (the tool list collapses), so the 280px traffic panel cannot
+  // squeeze the app iframe to ~140px at a 1280px viewport. Closing the app
+  // restores the list pane.
+  it("collapses the app list while an app is open and restores it on close", async () => {
+    renderAppsTab({
+      tools: [mockAppTool],
+    });
+
+    // Select the app: with no input fields it opens immediately.
+    const appCard = screen.getByText("weatherApp").closest("div");
+    fireEvent.click(appCard!);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("app-renderer")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("MCP Apps")).not.toBeInTheDocument();
+    expect(screen.getByTestId("app-traffic-panel")).toBeInTheDocument();
+
+    // Closing the app restores the list pane.
+    fireEvent.click(screen.getByRole("button", { name: /close app/i }));
     expect(screen.getByText("MCP Apps")).toBeInTheDocument();
   });
 
