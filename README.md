@@ -56,6 +56,23 @@ The table below records the exact stack a given inspector release was verified w
 | `2.1.0`                   | `4.1.0`     | `2.0.0`   | `2.0.0`      | `0.22.0`                 |
 | `2.2.0`                   | `4.1.0`     | `2.0.1`   | `2.0.1`      | `0.22.0`                 |
 | `2.3.0`                   | `4.1.0`     | `2.0.1`   | `2.0.1`      | `0.22.0`                 |
+| `2.4.0`                   | `4.1.0`     | `2.0.1`   | `2.0.1`      | `0.22.0`                 |
+
+### Upgrading from `2.3.0`
+
+No code change is required. The runtime changes are opt-in or UI-level:
+
+- Outgoing MCP client traffic lands in the timeline only with
+  `spring.ai.mcp.inspector.timeline.client-capture-enabled=true` (default
+  `false`); when enabled, server-initiated exchanges also name the
+  `@Mcp*` handler that consumed them and startup warns about silent
+  wiring mistakes (#406, #407).
+- `tasks/*` RPC calls are gated on the capabilities the server advertises:
+  on a server without tasks support the Tasks tab renders a self-explained
+  capability-gap body instead of a raw `-32601` error toast (#405).
+- The legacy protocol revision `2024-11-05` is part of the known-revision
+  matrix, so a live downgrade from `2025-11-25` renders the amber
+  downgrade notice instead of UNKNOWN (#416).
 
 ### Upgrading from `2.2.0`
 
@@ -109,7 +126,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webmvc</artifactId>
-    <version>2.3.0</version>
+    <version>2.4.0</version>
 </dependency>
 ```
 
@@ -119,7 +136,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webflux</artifactId>
-    <version>2.3.0</version>
+    <version>2.4.0</version>
 </dependency>
 ```
 
