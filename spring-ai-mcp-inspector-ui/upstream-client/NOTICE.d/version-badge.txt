@@ -10,6 +10,11 @@ What: Version badge in the connect zone showing the negotiated MCP protocol
   revision, color-coded by compatibility severity, expanding to server info
   (name/version), requested-vs-negotiated revisions, capabilities, and an
   amber/red notice on a revision mismatch naming both revisions. The
+  expand/collapse chevron is keyboard-operable (owner follow-up to PR #416,
+  issue #418): the svg sits inside a native button (tabindex, role=button,
+  Enter/Space handler with preventDefault, focus ring), so the DOM node is
+  stable across the open/close re-render and focus survives the toggle;
+  aria-expanded is mirrored on the badge container. The
   affected-methods list appears only when the negotiated revision is newer
   (INCOMPATIBLE): on a downgrade the negotiated older revision still offers
   every method the client requested, so listing methods there would
@@ -46,7 +51,11 @@ Covered by:
     same revision, unknown requested/negotiated, nulls, sorting)
   - src/components/__tests__/VersionBadge.test.tsx (OK green, DOWNGRADE
     amber, INCOMPATIBLE red + method list, UNKNOWN blue, no-snapshot gray
-    "unknown" that must never render green, expandable details; the mismatch
+    "unknown" that must never render green, expandable details, keyboard
+    operability of the toggle (Enter/Space toggling, focusable button
+    semantics, aria-expanded synced on toggle and container, other keys
+    inert, Enter reaching the mismatch notice on the legacy downgrade case);
+    the mismatch
     notice itself is pinned by data-testid=version-mismatch-notice on both
     severities: DOWNGRADE names both revisions with no method list,
     INCOMPATIBLE adds the affected-methods items; mutation-checked: with the

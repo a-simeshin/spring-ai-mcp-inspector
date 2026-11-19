@@ -188,4 +188,62 @@ describe("VersionBadge", () => {
     expect(screen.getByText("tools")).toBeTruthy();
     expect(screen.getByText("logging")).toBeTruthy();
   });
+
+  // [spring-ai-mcp-inspector PATCH] Keyboard operability (owner follow-up to
+  // PR #416): the toggle chevron was a bare svg, so the details panel and the
+  // mismatch notice were unreachable without a pointer. Pinned here: button
+  // semantics on the svg, Enter/Space toggling, aria-expanded synced with the
+  // panel on both the toggle and the badge container.
+  describe("keyboard operability", () => {
+    const toggle = (): HTMLElement =>
+      screen.getByTestId("version-badge-toggle");
+
+    it("exposes the chevron as a focusable button and toggles on Enter/Space", () => {
+      render(<VersionBadge snapshot={snapshot()} />);
+
+      expect(toggle().getAttribute("tabindex")).toBe("0");
+      expect(toggle().getAttribute("role")).toBe("button");
+      expect(toggle().getAttribute("aria-expanded")).toBe("false");
+      expect(badge().getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByText("demo-server")).toBeNull();
+
+      fireEvent.keyDown(toggle(), { key: "Enter" });
+
+      expect(screen.getByText("demo-server")).toBeTruthy();
+      expect(toggle().getAttribute("aria-expanded")).toBe("true");
+      expect(badge().getAttribute("aria-expanded")).toBe("true");
+
+      fireEvent.keyDown(toggle(), { key: " " });
+
+      expect(screen.queryByText("demo-server")).toBeNull();
+      expect(toggle().getAttribute("aria-expanded")).toBe("false");
+      expect(badge().getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("reaches the mismatch notice from the keyboard on the live downgrade case", () => {
+      render(
+        <VersionBadge
+          snapshot={snapshot({
+            clientRequestedVersion: "2025-11-25",
+            negotiatedVersion: "2024-11-05",
+          })}
+        />,
+      );
+
+      fireEvent.keyDown(toggle(), { key: "Enter" });
+
+      const notice = screen.getByTestId("version-mismatch-notice");
+      expect(notice.textContent).toContain("2025-11-25");
+      expect(notice.textContent).toContain("2024-11-05");
+    });
+
+    it("leaves the panel closed for keys that are not Enter or Space", () => {
+      render(<VersionBadge snapshot={snapshot()} />);
+
+      fireEvent.keyDown(toggle(), { key: "Tab" });
+      fireEvent.keyDown(toggle(), { key: "Escape" });
+
+      expect(screen.queryByText("demo-server")).toBeNull();
+    });
+  });
 });
