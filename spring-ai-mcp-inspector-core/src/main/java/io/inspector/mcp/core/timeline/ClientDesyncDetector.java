@@ -27,6 +27,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.SmartInitializingSingleton;
+import org.springframework.util.StringUtils;
 import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -41,6 +42,9 @@ import tools.jackson.databind.node.ObjectNode;
  * <ol>
  * <li><b>Orphan handler</b>: an annotation names a client that is not configured. The
  * handler is dead: the client never binds it.</li>
+ * <li><b>Unnamed handler</b>: an annotation names no client (empty {@code clients()}).
+ * Spring AI rejects such an annotation at startup with {@code clients must not be
+ * empty}, so the handler never binds either.</li>
  * <li><b>Orphan client</b>: a client is configured without any handler while a sibling
  * client of the same transport family has one. The unhandled client answers
  * server-initiated exchanges with {@code METHOD_NOT_FOUND}. The sibling signal expresses
@@ -141,10 +145,14 @@ public final class ClientDesyncDetector implements SmartInitializingSingleton {
 			final Set<String> configuredClientNames) {
 		final List<DesyncFinding> findings = new ArrayList<>();
 		for (final ClientHandlerScanner.HandlerBinding binding : handlerBindings) {
-			if (ClientHandlerScanner.ALL_CLIENTS.equals(binding.clientName())) {
-				continue;
+			if (!StringUtils.hasText(binding.clientName())) {
+				final String message = "Handler annotation names no client (empty clients() attribute); Spring AI"
+						+ " rejects such an annotation at startup with 'clients must not be empty', so the"
+						+ " handler never binds";
+				findings.add(new DesyncFinding(DesyncType.EMPTY_CLIENTS, null, binding.handlerKind(), binding.source(),
+						message));
 			}
-			if (!configuredClientNames.contains(binding.clientName())) {
+			else if (!configuredClientNames.contains(binding.clientName())) {
 				findings.add(new DesyncFinding(DesyncType.ORPHAN_HANDLER, binding.clientName(), binding.handlerKind(),
 						binding.source(), "Handler references client '" + binding.clientName()
 								+ "' which is not configured; the handler never fires"));
@@ -158,18 +166,9 @@ public final class ClientDesyncDetector implements SmartInitializingSingleton {
 		if (handlerBindings.isEmpty()) {
 			return List.of();
 		}
-		boolean hasWildcard = false;
-		for (final ClientHandlerScanner.HandlerBinding binding : handlerBindings) {
-			if (ClientHandlerScanner.ALL_CLIENTS.equals(binding.clientName())) {
-				hasWildcard = true;
-			}
-		}
-		if (hasWildcard) {
-			return List.of();
-		}
 		final Set<String> boundClients = new LinkedHashSet<>();
 		for (final ClientHandlerScanner.HandlerBinding binding : handlerBindings) {
-			if (!ClientHandlerScanner.ALL_CLIENTS.equals(binding.clientName())) {
+			if (StringUtils.hasText(binding.clientName())) {
 				boundClients.add(binding.clientName());
 			}
 		}
@@ -213,8 +212,9 @@ public final class ClientDesyncDetector implements SmartInitializingSingleton {
 			payload.put("source", finding.source());
 		}
 		payload.put("message", finding.message());
-		final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(),
-				CORRELATION_PREFIX + finding.type().name() + ":" + finding.clientName(), null,
+		final String correlationId = CORRELATION_PREFIX + finding.type().name()
+				+ ((finding.clientName() != null) ? ":" + finding.clientName() : "");
+		final TimelineEvent event = new TimelineEvent(UUID.randomUUID().toString(), correlationId, null,
 				TimelineEventType.APP_LOG, Instant.now(), payload);
 		this.timelineService.append(event);
 	}
@@ -224,6 +224,9 @@ public final class ClientDesyncDetector implements SmartInitializingSingleton {
 
 		/** A handler references a client name that is not configured. */
 		ORPHAN_HANDLER,
+
+		/** A handler annotation names no client: its clients() attribute is empty. */
+		EMPTY_CLIENTS,
 
 		/** A configured client has no handler while a same-transport sibling has one. */
 		ORPHAN_CLIENT

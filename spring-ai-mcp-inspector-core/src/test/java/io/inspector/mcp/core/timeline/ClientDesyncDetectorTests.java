@@ -41,8 +41,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 /**
- * Unit tests for {@link ClientDesyncDetector}: orphan handler and orphan client detection
- * plus the WARN + timeline event emission with {@code endpoint=client-diagnostics}.
+ * Unit tests for {@link ClientDesyncDetector}: orphan handler, unnamed handler and orphan
+ * client detection plus the WARN + timeline event emission with
+ * {@code endpoint=client-diagnostics}.
  *
  * @author Artem Simeshin
  */
@@ -88,12 +89,17 @@ class ClientDesyncDetectorTests {
 	}
 
 	@Test
-	@DisplayName("a wildcard handler is never an orphan")
-	void wildcardHandlerNeverOrphan() {
-		final List<HandlerBinding> bindings = List
-			.of(binding("sampling", ClientHandlerScanner.ALL_CLIENTS, "wild", "sample"));
+	@DisplayName("an annotation naming no client is its own desync finding")
+	void emptyClientsHandlerIsItsOwnFinding() {
+		final List<HandlerBinding> bindings = List.of(binding("sampling", "", "wild", "sample"));
 		final List<DesyncFinding> findings = ClientDesyncDetector.detectOrphanHandlers(bindings, java.util.Set.of());
-		assertThat(findings).isEmpty();
+		assertThat(findings).hasSize(1);
+		final DesyncFinding finding = findings.get(0);
+		assertThat(finding.type()).isEqualTo(DesyncType.EMPTY_CLIENTS);
+		assertThat(finding.clientName()).isNull();
+		assertThat(finding.handlerKind()).isEqualTo("sampling");
+		assertThat(finding.source()).isEqualTo("wild#sample");
+		assertThat(finding.message()).contains("clients must not be empty");
 	}
 
 	@Test
@@ -121,13 +127,15 @@ class ClientDesyncDetectorTests {
 	}
 
 	@Test
-	@DisplayName("a wildcard binding covers every configured client")
-	void wildcardCoversEveryClient() {
-		final List<HandlerBinding> bindings = List.of(
-				binding("sampling", ClientHandlerScanner.ALL_CLIENTS, "wild", "sample"),
+	@DisplayName("a binding naming no client does not cover any configured client")
+	void emptyClientsBindingDoesNotSuppressOrphanClients() {
+		final List<HandlerBinding> bindings = List.of(binding("sampling", "", "wild", "sample"),
 				binding("logging", "weather", "weatherHandler", "log"));
-		final Map<String, String> configured = Map.of("weather", "streamable-http", "maps", "stdio");
-		assertThat(ClientDesyncDetector.detectOrphanClients(bindings, configured)).isEmpty();
+		final Map<String, String> configured = Map.of("weather", "streamable-http", "maps", "streamable-http");
+		final List<DesyncFinding> findings = ClientDesyncDetector.detectOrphanClients(bindings, configured);
+		assertThat(findings).hasSize(1);
+		assertThat(findings.get(0).type()).isEqualTo(DesyncType.ORPHAN_CLIENT);
+		assertThat(findings.get(0).clientName()).isEqualTo("maps");
 	}
 
 	@Test
@@ -221,6 +229,22 @@ class ClientDesyncDetectorTests {
 	}
 
 	@Test
+	@DisplayName("an annotation naming no client is emitted through the pipeline")
+	void emptyClientsEmittedThroughPipeline() {
+		final AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(
+				EmptyClientsDetectorConfig.class);
+		final ClientHandlerScanner scanner = new ClientHandlerScanner();
+		scanner.setApplicationContext(context);
+		final ClientConnectionRegistry registry = new ClientConnectionRegistry();
+		registry.recordDiscovered("weather", "streamable-http");
+		registry.recordDiscovered("maps", "streamable-http");
+		final ClientDesyncDetector detector = detectorOver(scanner, registry, this.timeline);
+		detector.afterSingletonsInstantiated();
+		assertThat(this.timeline.events).extracting(TimelineEvent::correlationId)
+			.containsExactlyInAnyOrder("mcpcd:EMPTY_CLIENTS", "mcpcd:ORPHAN_CLIENT:maps");
+	}
+
+	@Test
 	@DisplayName("a failing scanner is contained without touching the timeline")
 	void scannerFailureIsContained() {
 		final ClientHandlerScanner failing = new ClientHandlerScanner() {
@@ -260,6 +284,30 @@ class ClientDesyncDetectorTests {
 	static class DetectorTestHandler {
 
 		@McpSampling(clients = "weather")
+		String sample(final String request) {
+			return request;
+		}
+
+	}
+
+	@Configuration
+	static class EmptyClientsDetectorConfig {
+
+		@Bean
+		DetectorTestHandler weatherHandler() {
+			return new DetectorTestHandler();
+		}
+
+		@Bean
+		EmptyClientsDetectorHandler unnamedHandler() {
+			return new EmptyClientsDetectorHandler();
+		}
+
+	}
+
+	static class EmptyClientsDetectorHandler {
+
+		@McpSampling(clients = {})
 		String sample(final String request) {
 			return request;
 		}

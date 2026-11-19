@@ -54,9 +54,10 @@ import org.springframework.util.StringUtils;
  * The annotations live in {@code org.springframework.ai.mcp.annotation} and are absent
  * from core's compile classpath by design; detection is by FQCN through
  * {@link MergedAnnotations}, reading bean types without instantiating beans. An empty
- * {@code clients()} array means the handler applies to all clients and is represented by
- * the sentinel {@link #ALL_CLIENTS}. An annotation without a readable {@code clients}
- * attribute is skipped instead of failing the scan.
+ * {@code clients()} array names no client and binds none: the annotation is kept as a
+ * binding with an empty client name so the desync detector can report it (Spring AI
+ * rejects an empty {@code clients()} at startup). An annotation without a readable
+ * {@code clients} attribute is skipped instead of failing the scan.
  *
  * <p>
  * The scan result is computed once and cached; the first scan may run while the context
@@ -80,9 +81,6 @@ public class ClientHandlerScanner implements ApplicationContextAware {
 
 	/** FQCN of {@code @McpProgress} from spring-ai-mcp-annotations. */
 	static final String MCP_PROGRESS_FQCN = "org.springframework.ai.mcp.annotation.McpProgress";
-
-	/** Sentinel client name of a handler bound to every configured client. */
-	static final String ALL_CLIENTS = "*";
 
 	private volatile ConfigurableListableBeanFactory beanFactory;
 
@@ -109,8 +107,8 @@ public class ClientHandlerScanner implements ApplicationContextAware {
 
 	/**
 	 * Returns the {@code beanName#method} sources consuming the given exchange for the
-	 * given client: bindings naming the client explicitly plus bindings declared for all
-	 * clients. Sorted and free of duplicates.
+	 * given client: bindings naming that client explicitly. Sorted and free of
+	 * duplicates.
 	 * @param clientName the configured client name (must not be {@code null})
 	 * @param handlerKind one of {@code sampling}, {@code elicitation}, {@code logging},
 	 * {@code progress} (must not be {@code null})
@@ -123,35 +121,22 @@ public class ClientHandlerScanner implements ApplicationContextAware {
 		if (exact != null) {
 			sources.addAll(exact);
 		}
-		final Set<String> wildcard = byKey.get(bindingKey(handlerKind, ALL_CLIENTS));
-		if (wildcard != null) {
-			sources.addAll(wildcard);
-		}
 		return List.copyOf(sources);
 	}
 
 	/**
-	 * Returns the distinct client names explicitly targeted by scanned bindings,
-	 * excluding the {@link #ALL_CLIENTS} sentinel.
+	 * Returns the distinct client names explicitly targeted by scanned bindings; blank
+	 * client names (annotations naming no client) are skipped.
 	 * @return the explicitly named clients (never {@code null})
 	 */
 	public Set<String> explicitClientNames() {
 		final Set<String> names = new LinkedHashSet<>();
 		for (final HandlerBinding binding : result().bindings()) {
-			if (!ALL_CLIENTS.equals(binding.clientName())) {
+			if (StringUtils.hasText(binding.clientName())) {
 				names.add(binding.clientName());
 			}
 		}
 		return names;
-	}
-
-	/**
-	 * Returns whether at least one scanned binding is declared for all clients (empty or
-	 * absent {@code clients()} attribute).
-	 * @return {@code true} when a wildcard binding exists
-	 */
-	public boolean hasWildcardBinding() {
-		return result().bindings().stream().anyMatch((binding) -> ALL_CLIENTS.equals(binding.clientName()));
 	}
 
 	private ScanResult result() {
@@ -253,8 +238,11 @@ public class ClientHandlerScanner implements ApplicationContextAware {
 				clientNames.add(client.trim());
 			}
 		}
+		// An annotation naming no client (empty clients()) is kept with an empty
+		// client name: Spring AI rejects such an annotation at startup, and the
+		// desync detector reports it as its own finding.
 		if (clientNames.isEmpty()) {
-			clientNames.add(ALL_CLIENTS);
+			clientNames.add("");
 		}
 		final String beanClassName = ClassUtils.getUserClass(beanClass).getName();
 		for (final String clientName : clientNames) {
@@ -277,8 +265,8 @@ public class ClientHandlerScanner implements ApplicationContextAware {
 	 *
 	 * @param handlerKind one of {@code sampling}, {@code elicitation}, {@code logging},
 	 * {@code progress}
-	 * @param clientName the target client name, or {@link #ALL_CLIENTS} when the
-	 * annotation's {@code clients()} was empty
+	 * @param clientName the target client name; empty when the annotation names no client
+	 * (its {@code clients()} attribute was empty)
 	 * @param beanName the Spring bean name carrying the annotated method
 	 * @param beanClassName the user class of the bean
 	 * @param methodName the annotated method name

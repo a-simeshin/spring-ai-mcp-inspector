@@ -38,8 +38,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Unit tests for {@link ClientHandlerScanner}: discovery of all four {@code @Mcp*}
- * handler kinds, multi-client {@code clients()} arrays, wildcard bindings for empty
- * arrays, beans without annotations and the {@code consumedBy} lookup.
+ * handler kinds, multi-client {@code clients()} arrays, empty arrays that name no client,
+ * beans without annotations and the {@code consumedBy} lookup.
  *
  * @author Artem Simeshin
  */
@@ -88,26 +88,26 @@ class ClientHandlerScannerTests {
 	}
 
 	@Test
-	@DisplayName("an empty clients() array is a wildcard binding for all clients")
-	void emptyClientsIsWildcard() {
-		final ClientHandlerScanner scanner = scannerOver(WildcardConfig.class);
-		assertThat(scanner.hasWildcardBinding()).isTrue();
+	@DisplayName("an empty clients() array names no client and binds none")
+	void emptyClientsNamesNoClient() {
+		final ClientHandlerScanner scanner = scannerOver(EmptyClientsConfig.class);
 		assertThat(scanner.explicitClientNames()).containsExactly("weather");
-		assertThat(scanner.consumedBy("any-client", "sampling")).containsExactly("wildcardHandler#sample");
-		assertThat(scanner.consumedBy("weather", "sampling")).containsExactly("wildcardHandler#sample");
-		assertThat(scanner.consumedBy("weather", "logging")).containsExactly("wildcardHandler#log");
+		assertThat(scanner.scan()).extracting(ClientHandlerScanner.HandlerBinding::source)
+			.contains("emptyClientsHandler#sample");
+		assertThat(scanner.consumedBy("any-client", "sampling")).isEmpty();
+		assertThat(scanner.consumedBy("weather", "sampling")).isEmpty();
+		assertThat(scanner.consumedBy("weather", "logging")).containsExactly("emptyClientsHandler#log");
 		assertThat(scanner.consumedBy("weather", "progress")).isEmpty();
 	}
 
 	@Test
-	@DisplayName("consumedBy merges exact and wildcard bindings, sorted and distinct")
-	void consumedByMergesExactAndWildcard() {
+	@DisplayName("consumedBy matches only clients named explicitly")
+	void consumedByMatchesOnlyNamedClients() {
 		final AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(MergeConfig.class);
 		final ClientHandlerScanner scanner = new ClientHandlerScanner();
 		scanner.setApplicationContext(context);
-		assertThat(scanner.consumedBy("weather", "sampling")).containsExactly("exactHandler#sample",
-				"wildHandler#sample");
-		assertThat(scanner.consumedBy("maps", "sampling")).containsExactly("wildHandler#sample");
+		assertThat(scanner.consumedBy("weather", "sampling")).containsExactly("exactHandler#sample");
+		assertThat(scanner.consumedBy("maps", "sampling")).isEmpty();
 		assertThat(scanner.consumedBy("weather", "elicitation")).isEmpty();
 	}
 
@@ -125,7 +125,6 @@ class ClientHandlerScannerTests {
 		assertThat(scanner.scan()).isEmpty();
 		assertThat(scanner.consumedBy("weather", "sampling")).isEmpty();
 		assertThat(scanner.explicitClientNames()).isEmpty();
-		assertThat(scanner.hasWildcardBinding()).isFalse();
 	}
 
 	@Test
@@ -257,16 +256,16 @@ class ClientHandlerScannerTests {
 	}
 
 	@Configuration
-	static class WildcardConfig {
+	static class EmptyClientsConfig {
 
 		@Bean
-		WildcardHandler wildcardHandler() {
-			return new WildcardHandler();
+		EmptyClientsHandler emptyClientsHandler() {
+			return new EmptyClientsHandler();
 		}
 
 	}
 
-	static class WildcardHandler {
+	static class EmptyClientsHandler {
 
 		@McpSampling(clients = {})
 		String sample(final String request) {
@@ -299,8 +298,8 @@ class ClientHandlerScannerTests {
 		}
 
 		@Bean
-		MergeWildcardHandler wildHandler() {
-			return new MergeWildcardHandler();
+		MergeUnnamedHandler unnamedHandler() {
+			return new MergeUnnamedHandler();
 		}
 
 	}
@@ -314,7 +313,7 @@ class ClientHandlerScannerTests {
 
 	}
 
-	static class MergeWildcardHandler {
+	static class MergeUnnamedHandler {
 
 		@McpSampling(clients = {})
 		String sample(final String request) {
