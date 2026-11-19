@@ -317,6 +317,18 @@ function TimelineEventRow({
   // results (#251): parsed defensively, so a malformed node renders as absent.
   const leak = isError ? parseLeakAnnotation(payload) : null;
 
+  // [spring-ai-mcp-inspector PATCH] Client-traffic provenance (#120): frames
+  // captured from the configured MCP clients carry side=client, the client
+  // name and the direction (from the client's perspective), so the inspector
+  // can tell client traffic apart from proxied server traffic.
+  const clientSide = payload["side"] === "client";
+  const clientName =
+    typeof payload["clientName"] === "string" ? payload["clientName"] : null;
+  const direction =
+    payload["direction"] === "in" || payload["direction"] === "out"
+      ? payload["direction"]
+      : null;
+
   const colorClass = isError ? ERROR_COLOR : (EVENT_COLORS[type] || "text-gray-400");
   const bgClass = isError ? ERROR_BG : (EVENT_BG[type] || "bg-gray-950/30");
 
@@ -339,6 +351,21 @@ function TimelineEventRow({
         <span className="font-mono opacity-70 shrink-0 w-14">{formatTimestamp(event.timestamp)}</span>
         <span className="font-semibold shrink-0 w-20">{typeLabel}</span>
         <span className="truncate min-w-0 flex-1">{label}</span>
+        {/* [spring-ai-mcp-inspector PATCH] Client-traffic badge (#120):
+            provenance of side=client frames, with the client name and the
+            direction arrow (out = client sent it, in = client received it). */}
+        {clientSide && (
+          <span
+            data-testid="timeline-side-badge"
+            className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-sky-800 text-sky-200"
+            title={`Client-side MCP traffic (side=client)${
+              clientName ? `, client: ${clientName}` : ""
+            }${direction ? `, direction: ${direction}` : ""}`}
+          >
+            client{clientName ? `: ${clientName}` : ""}
+            {direction ? (direction === "out" ? " →" : " ←") : ""}
+          </span>
+        )}
         {negotiation && <ProtocolBadge negotiation={negotiation} />}
         {isError && (
           <span
@@ -457,14 +484,36 @@ function ChainGroup({
   );
 }
 
+// [spring-ai-mcp-inspector PATCH] Side of a timeline event (#120): frames
+// captured from the configured MCP clients carry side=client; everything
+// else is server-side traffic seen by the proxied server connection.
+function sideOf(event: TimelineEvent): "client" | "server" {
+  return event.payload?.["side"] === "client" ? "client" : "server";
+}
+
 // [spring-ai-mcp-inspector PATCH] TimelineTab — scrollable timeline of MCP events.
 // [spring-ai-mcp-inspector PATCH] Keep-alive pings rendered as KEEP_ALIVE events (#235).
 const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  // [spring-ai-mcp-inspector PATCH] Side filter (#120): which half of the
+  // traffic the log shows; purely client-side, the server exposes no filter
+  // parameter for it.
+  const [sideFilter, setSideFilter] = useState<"all" | "client" | "server">("all");
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const keepAlive = useKeepAlive(sessionId ?? null);
+
+  // [spring-ai-mcp-inspector PATCH] Side filter chips (#120): options derive
+  // from the UNFILTERED event set (#142 lesson 4), so selecting a side never
+  // removes the other side's chip from the bar.
+  const availableSides = useMemo(() => {
+    const sides = new Set<"client" | "server">();
+    for (const event of events) {
+      sides.add(sideOf(event));
+    }
+    return sides;
+  }, [events]);
 
   // [spring-ai-mcp-inspector PATCH] Exception-leak jump (#251): row refs by
   // event id so a badge click (this tab) or a Tool Result pane link (other tab,
@@ -581,8 +630,14 @@ const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
   // round-trips into chains and render each chain once, at the position of
   // its newest event; standalone events render exactly as before.
   const renderItems = useMemo(() => {
+    // [spring-ai-mcp-inspector PATCH] Side filter (#120): applied before chain
+    // threading; an empty visible list renders the existing empty state.
+    const visible =
+      sideFilter === "all"
+        ? events
+        : events.filter((event) => sideOf(event) === sideFilter);
     const threaded = threadInputRequiredChains(
-      events as ChainSourceEvent[],
+      visible as ChainSourceEvent[],
     ) as (TimelineEvent & { chainId: string | null })[];
     const items: (
       | { kind: "single"; event: TimelineEvent }
@@ -605,7 +660,7 @@ const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
       });
     }
     return items;
-  }, [events]);
+  }, [events, sideFilter]);
 
   // [spring-ai-mcp-inspector PATCH] Pitfalls panel detector (#184): the
   // isError=true entry activates when the timeline holds a CallToolResult
@@ -627,15 +682,42 @@ const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
           <span className="text-xs opacity-50">
             {events.length} event{events.length !== 1 ? "s" : ""}
           </span>
-          <label className="flex items-center gap-1 text-xs opacity-70 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={autoRefresh}
-              onChange={(e) => setAutoRefresh(e.target.checked)}
-              className="w-3 h-3"
-            />
-            Auto-refresh (3s)
-          </label>
+          <div className="flex items-center gap-2 shrink-0">
+            {/* [spring-ai-mcp-inspector PATCH] Side filter chips (#120):
+                client vs server traffic; options derive from the unfiltered
+                event set, "all" is always available. */}
+            <div
+              className="flex items-center gap-1"
+              data-testid="timeline-side-filter"
+            >
+              {(["all", "client", "server"] as const)
+                .filter((side) => side === "all" || availableSides.has(side))
+                .map((side) => (
+                  <button
+                    key={side}
+                    type="button"
+                    data-testid={`timeline-side-filter-${side}`}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono cursor-pointer ${
+                      sideFilter === side
+                        ? "bg-gray-200 text-gray-900"
+                        : "bg-gray-700 text-gray-300"
+                    }`}
+                    onClick={() => setSideFilter(side)}
+                  >
+                    {side}
+                  </button>
+                ))}
+            </div>
+            <label className="flex items-center gap-1 text-xs opacity-70 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoRefresh}
+                onChange={(e) => setAutoRefresh(e.target.checked)}
+                className="w-3 h-3"
+              />
+              Auto-refresh (3s)
+            </label>
+          </div>
         </div>
         {/* [spring-ai-mcp-inspector PATCH] Pitfalls panel: hint reachable
             from the Timeline view. The isError=true entry activates when a

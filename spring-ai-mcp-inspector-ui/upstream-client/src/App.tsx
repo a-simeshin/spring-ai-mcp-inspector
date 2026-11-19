@@ -76,11 +76,14 @@ import {
   MessageSquare,
   MessageSquarePlus,
   Settings,
+  Users,
 } from "lucide-react";
 
 import { z } from "zod";
 import "./App.css";
 import AuthDebugger from "./components/AuthDebugger";
+// [spring-ai-mcp-inspector PATCH] ClientsTab: live client connection registry (#120).
+import ClientsTab from "./components/ClientsTab";
 import ConsoleTab from "./components/ConsoleTab";
 import HistoryAndNotifications from "./components/HistoryAndNotifications";
 import PingTab from "./components/PingTab";
@@ -213,6 +216,7 @@ const ALL_TABS: string[] = [
   "auth",
   "metadata",
   "timeline",
+  "clients",
 ];
 
 const getDefaultTab = (caps: ServerCapabilities | null | undefined): string => {
@@ -243,6 +247,7 @@ const buildValidTabs = (
   "auth",
   "metadata",
   "timeline",
+  "clients",
 ];
 
 // Near-miss normalization: case-insensitive match and simple singular/plural
@@ -2407,6 +2412,12 @@ const App = () => {
                   <Bell className="w-4 h-4 mr-2" />
                   Timeline
                 </TabsTrigger>
+                {/* [spring-ai-mcp-inspector PATCH] Clients tab (#120): live
+                    client connection registry from the recording transports. */}
+                <TabsTrigger value="clients">
+                  <Users className="w-4 h-4 mr-2" />
+                  Clients
+                </TabsTrigger>
               </TabsList>
 
               <div className="w-full">
@@ -2714,6 +2725,9 @@ const App = () => {
                     {/* [spring-ai-mcp-inspector PATCH] Timeline tab (#112). */}
                     {/* [spring-ai-mcp-inspector PATCH] keep-alive resolves the proxy-side session id */}
                     <TimelineTab sessionId={proxySessionId} />
+                    {/* [spring-ai-mcp-inspector PATCH] Clients tab (#120): live
+                        client connection registry from the recording transports. */}
+                    <ClientsTab />
                   </>
                 )}
               </div>

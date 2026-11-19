@@ -169,6 +169,14 @@ jest.mock("../components/TimelineTab", () => {
   };
 });
 
+jest.mock("../components/ClientsTab", () => {
+  const { TabsContent } = jest.requireActual("../components/ui/tabs");
+  return {
+    __esModule: true,
+    default: () => <TabsContent value="clients">ClientsTab</TabsContent>,
+  };
+});
+
 global.fetch = jest
   .fn()
   .mockResolvedValue({ json: () => Promise.resolve({}) });
@@ -231,6 +239,7 @@ const TAB_NAMES: Record<string, string> = {
   auth: "Auth",
   metadata: "Metadata",
   timeline: "Timeline",
+  clients: "Clients",
 };
 
 const expectSingleSelectedTab = (tabId: string) => {

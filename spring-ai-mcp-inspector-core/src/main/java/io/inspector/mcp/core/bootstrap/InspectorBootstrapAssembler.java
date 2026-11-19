@@ -95,6 +95,10 @@ public class InspectorBootstrapAssembler {
 		// application's context path.
 		bootstrap.setDetectedUrl((detected.endpoint() != null) ? detected.endpoint() : "");
 
+		// Customizers run after this line and keep the last word, matching the other
+		// fields above.
+		bootstrap.setClientCaptureEnabled(this.properties.getTimeline().isClientCaptureEnabled());
+
 		for (final InspectorBootstrapCustomizer customizer : this.customizers) {
 			customizer.customize(bootstrap);
 		}

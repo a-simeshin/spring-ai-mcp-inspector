@@ -1,0 +1,10 @@
+src/components/TimelineTab.tsx, src/components/__tests__/TimelineTab.test.tsx:
+client-traffic provenance in the timeline (issue #120, layer C3). Rows whose
+payload carries side=client render a sky "client: <name>" badge with a direction
+arrow (out = the client sent the frame, in = the client received it; data-testid
+timeline-side-badge, tooltip carries side, client and direction); proxied server
+rows stay unbadged. New side filter chips (all/client/server, data-testid
+timeline-side-filter and timeline-side-filter-<side>) applied client-side before
+chain threading; chip options derive from the UNFILTERED event set (issue #142
+lesson 4: selecting a side never removes the other side's chip). The server
+exposes no filter parameter for the side.

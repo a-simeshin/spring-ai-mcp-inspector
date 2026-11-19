@@ -59,12 +59,14 @@ import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.proxy.ProxyUpstreamProber;
 import io.inspector.mcp.core.shutdown.McpServerTransportDrain;
+import io.inspector.mcp.core.timeline.ClientConnectionRegistry;
 import io.inspector.mcp.core.timeline.ExceptionLeakDetector;
 import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 import io.inspector.mcp.core.timeline.TimelineService;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
 import io.inspector.mcp.webmvc.controller.AuthProfileController;
+import io.inspector.mcp.webmvc.controller.ClientConnectionsController;
 import io.inspector.mcp.webmvc.controller.InspectorConfigController;
 import io.inspector.mcp.webmvc.controller.InspectorIndexController;
 import io.inspector.mcp.webmvc.controller.InspectorRestController;
@@ -297,6 +299,22 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 	public TimelineController mcpInspectorTimelineController(final TimelineService timelineService,
 			final ObjectProvider<ExceptionLeakDetector> leakDetector) {
 		return new TimelineController(timelineService, leakDetector.getIfAvailable());
+	}
+
+	/**
+	 * REST endpoint exposing the client connection registry snapshot, active only when
+	 * client capture is enabled via
+	 * {@code spring.ai.mcp.inspector.timeline.client-capture-enabled=true} (the same
+	 * condition that gates the {@link ClientConnectionRegistry} bean in the core
+	 * auto-configuration). Mirrors the WebFlux {@code ClientConnectionsHandler}.
+	 * @param connectionRegistry the client connection registry
+	 * @return the client connections controller
+	 */
+	@Bean
+	@ConditionalOnBean(ClientConnectionRegistry.class)
+	public ClientConnectionsController mcpInspectorClientConnectionsController(
+			final ClientConnectionRegistry connectionRegistry) {
+		return new ClientConnectionsController(connectionRegistry);
 	}
 
 	@Bean

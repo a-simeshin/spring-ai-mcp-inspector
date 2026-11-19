@@ -48,6 +48,7 @@ class InspectorBootstrapJacksonTests {
 		bootstrap.setDetectedUrl("/mcp");
 		bootstrap.setDefaultUrl("https://example.com/mcp");
 		bootstrap.setDefaultTransport("sse");
+		bootstrap.setClientCaptureEnabled(true);
 		bootstrap.setDefaultHeaders(List.of(new CustomHeader("X-Tenant", "acme", true)));
 		bootstrap.setServerEntries(List
 			.of(new ServerEntry("internal", "https://internal/mcp", "streamable-http", Map.of("X-Env", "prod"))));
@@ -63,6 +64,7 @@ class InspectorBootstrapJacksonTests {
 			.contains("\"detectedUrl\":\"/mcp\"")
 			.contains("\"defaultUrl\":\"https://example.com/mcp\"")
 			.contains("\"defaultTransport\":\"sse\"")
+			.contains("\"clientCaptureEnabled\":true")
 			.contains("\"defaultHeaders\"")
 			.contains("\"X-Tenant\"")
 			.contains("\"serverEntries\"")
