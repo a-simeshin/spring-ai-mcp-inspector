@@ -72,6 +72,33 @@ jobs:
           java-version: ${{ matrix.java }}
           cache: maven
 
+      # The wrapper unpacks apache-maven-3.9.9-bin.zip into ~/.m2/wrapper/dists
+      # on every job, and the download from repo.maven.apache.org fails
+      # intermittently (issue #411: three red jobs in three days, each before a
+      # single test ran). Cache the unpacked distribution; setup-java's
+      # `cache: maven` covers ~/.m2/repository only.
+      - name: Cache the Maven wrapper distribution
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ runner.os }}-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+
+      # Fetch the distribution outside the build step (cache miss only) and
+      # under a retry loop: --version already triggers the download, so a flaky
+      # fetch costs a 30s pause instead of a red job that needs a rerun.
+      - name: Prime the Maven wrapper (up to 3 attempts)
+        run: |
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt}: priming the Maven wrapper"
+            if ./mvnw --version; then
+              exit 0
+            fi
+            echo "Wrapper fetch failed (attempt ${attempt}/3), retrying in 30s"
+            sleep 30
+          done
+          echo "Maven wrapper download failed after 3 attempts"
+          exit 1
+
       # Unit + integration tests and the quality gates (spring-javaformat,
       # checkstyle, SpotBugs, JaCoCo coverage). Both stack demo modules are
       # excluded — their browser E2E runs in the two `e2e-*` jobs below. No
@@ -113,6 +140,33 @@ jobs:
           java-version: '17'
           cache: maven
 
+      # The wrapper unpacks apache-maven-3.9.9-bin.zip into ~/.m2/wrapper/dists
+      # on every job, and the download from repo.maven.apache.org fails
+      # intermittently (issue #411: three red jobs in three days, each before a
+      # single test ran). Cache the unpacked distribution; setup-java's
+      # `cache: maven` covers ~/.m2/repository only.
+      - name: Cache the Maven wrapper distribution
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ runner.os }}-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+
+      # Fetch the distribution outside the build step (cache miss only) and
+      # under a retry loop: --version already triggers the download, so a flaky
+      # fetch costs a 30s pause instead of a red job that needs a rerun.
+      - name: Prime the Maven wrapper (up to 3 attempts)
+        run: |
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt}: priming the Maven wrapper"
+            if ./mvnw --version; then
+              exit 0
+            fi
+            echo "Wrapper fetch failed (attempt ${attempt}/3), retrying in 30s"
+            sleep 30
+          done
+          echo "Maven wrapper download failed after 3 attempts"
+          exit 1
+
       - name: Build and test the servlet reactor
         env:
           CHROME_BINARY: ${{ steps.setup-chrome.outputs.chrome-path }}
@@ -143,6 +197,33 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: maven
+
+      # The wrapper unpacks apache-maven-3.9.9-bin.zip into ~/.m2/wrapper/dists
+      # on every job, and the download from repo.maven.apache.org fails
+      # intermittently (issue #411: three red jobs in three days, each before a
+      # single test ran). Cache the unpacked distribution; setup-java's
+      # `cache: maven` covers ~/.m2/repository only.
+      - name: Cache the Maven wrapper distribution
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ runner.os }}-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+
+      # Fetch the distribution outside the build step (cache miss only) and
+      # under a retry loop: --version already triggers the download, so a flaky
+      # fetch costs a 30s pause instead of a red job that needs a rerun.
+      - name: Prime the Maven wrapper (up to 3 attempts)
+        run: |
+          for attempt in 1 2 3; do
+            echo "Attempt ${attempt}: priming the Maven wrapper"
+            if ./mvnw --version; then
+              exit 0
+            fi
+            echo "Wrapper fetch failed (attempt ${attempt}/3), retrying in 30s"
+            sleep 30
+          done
+          echo "Maven wrapper download failed after 3 attempts"
+          exit 1
 
       - name: Build and test the reactive reactor
         env:
