@@ -31,8 +31,10 @@ Local fix:
   connection and the missing profile. Names render as React text nodes, so
   markup inside a stored name is escaped.
 - `src/components/ui/toaster.tsx` + `src/components/ui/toast.tsx`: the toast
-  viewport measures the notifications pane (`data-testid` on the pane in
-  App.tsx) and raises itself above the pane's top edge via the
+  viewport measures the server notifications pane through its existing
+  `data-testid=notifications-pane` anchor (HistoryAndNotifications.tsx, the
+  demo E2E contract anchor; the pane's own testid is not duplicated elsewhere)
+  and raises itself above the pane's top edge via the
   `--toast-viewport-offset` CSS variable, so toasts no longer cover the
   pane; without the pane the original position is kept.
 

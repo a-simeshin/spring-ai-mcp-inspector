@@ -2820,7 +2820,6 @@ const App = () => {
                   height: `${historyPaneHeight}px`,
                 }
           }
-          data-testid="notifications-pane"
         >
           {!isCompactLayout && (
             <div
