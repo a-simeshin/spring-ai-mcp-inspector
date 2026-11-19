@@ -4,6 +4,7 @@
    drift apart silently. */
 import { checkProtocolRevision } from "../protocolRevision";
 
+const REV_2024_11_05 = "2024-11-05";
 const REV_2025_11_25 = "2025-11-25";
 const REV_2026_07_28 = "2026-07-28";
 
@@ -31,6 +32,16 @@ describe("checkProtocolRevision", () => {
       expect(result.summary).toContain("2025-11-25");
       expect(result.summary).toContain("unavailable");
     });
+
+    it("reports DOWNGRADE against a legacy pre-baseline negotiated revision", () => {
+      const result = checkProtocolRevision(REV_2025_11_25, REV_2024_11_05);
+
+      expect(result.severity).toBe("DOWNGRADE");
+      expect(result.affectedMethods).toEqual([]);
+      expect(result.summary).toContain(REV_2025_11_25);
+      expect(result.summary).toContain(REV_2024_11_05);
+      expect(result.summary).toContain("unavailable");
+    });
   });
 
   describe("incompatible: client requests older revision than server negotiated", () => {
@@ -48,11 +59,26 @@ describe("checkProtocolRevision", () => {
       expect(result.summary).toContain("2026-07-28");
       expect(result.summary).toContain("MethodNotFound");
     });
+
+    it("reports INCOMPATIBLE for a legacy requested revision against the newest server", () => {
+      const result = checkProtocolRevision(REV_2024_11_05, REV_2026_07_28);
+
+      expect(result.severity).toBe("INCOMPATIBLE");
+      expect(result.affectedMethods).toEqual(
+        expect.arrayContaining(ALL_REMOVED_2026_07_28),
+      );
+      expect(result.affectedMethods).toHaveLength(
+        ALL_REMOVED_2026_07_28.length,
+      );
+      expect(result.summary).toContain(REV_2024_11_05);
+      expect(result.summary).toContain(REV_2026_07_28);
+      expect(result.summary).toContain("MethodNotFound");
+    });
   });
 
   describe("same revision on both sides", () => {
     it("reports OK for every known revision", () => {
-      for (const revision of [REV_2025_11_25, REV_2026_07_28]) {
+      for (const revision of [REV_2024_11_05, REV_2025_11_25, REV_2026_07_28]) {
         const result = checkProtocolRevision(revision, revision);
 
         expect(result.severity).toBe("OK");

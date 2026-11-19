@@ -1123,7 +1123,7 @@ class McpTrafficRecorderTests {
 				.put("jsonrpc", "2.0")
 				.put("id", 6)
 				.put("method", "initialize");
-			reqFrame.putObject("params").put("protocolVersion", "2024-11-05");
+			reqFrame.putObject("params").put("protocolVersion", "2099-01-01");
 			final JSONRPCMessage reqTyped = McpSchema.deserializeJsonRpcMessage(
 					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
 					reqFrame.toString());
@@ -1133,7 +1133,7 @@ class McpTrafficRecorderTests {
 			final ObjectNode resFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
 				.put("jsonrpc", "2.0")
 				.put("id", 6);
-			resFrame.putObject("result").put("protocolVersion", "2024-11-05");
+			resFrame.putObject("result").put("protocolVersion", "2099-01-01");
 			final JSONRPCMessage resTyped = McpSchema.deserializeJsonRpcMessage(
 					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
 					resFrame.toString());
@@ -1149,6 +1149,42 @@ class McpTrafficRecorderTests {
 			assertThat(negotiation).as("_protocolNegotiation present").isNotNull();
 			assertThat(negotiation.get("severity").asText()).isEqualTo("UNKNOWN");
 			assertThat(negotiation.get("summary").asText()).contains("Both revisions are unknown");
+		}
+
+		@Test
+		@DisplayName("enriches with DOWNGRADE severity for a legacy negotiated revision")
+		void enrichesWithDowngradeForLegacyNegotiation() throws Exception {
+			// given: a current client requesting 2025-11-25
+			final ObjectNode reqFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 7)
+				.put("method", "initialize");
+			reqFrame.putObject("params").put("protocolVersion", "2025-11-25");
+			final JSONRPCMessage reqTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					reqFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordOutbound("s-1", reqTyped, reqFrame);
+
+			// when: a legacy server negotiates 2024-11-05 (issue #79 AC #2: the
+			// demo's SSE flavour does exactly this)
+			final ObjectNode resFrame = McpTrafficRecorderTests.this.mapper.createObjectNode()
+				.put("jsonrpc", "2.0")
+				.put("id", 7);
+			resFrame.putObject("result").put("protocolVersion", "2024-11-05");
+			final JSONRPCMessage resTyped = McpSchema.deserializeJsonRpcMessage(
+					new io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper(McpTrafficRecorderTests.this.mapper),
+					resFrame.toString());
+			McpTrafficRecorderTests.this.recorder.recordInbound("s-1", resTyped, resFrame);
+
+			// then: DOWNGRADE severity
+			final List<TimelineEvent> events = McpTrafficRecorderTests.this.timelineService.query(TimelineQuery.all());
+			final TimelineEvent responseEvent = events.stream()
+				.filter((e) -> e.type() == TimelineEventType.MCP_JSONRPC_RESPONSE)
+				.findFirst()
+				.orElseThrow();
+			final JsonNode negotiation = responseEvent.payload().get("_protocolNegotiation");
+			assertThat(negotiation).as("_protocolNegotiation present").isNotNull();
+			assertThat(negotiation.get("severity").asText()).isEqualTo("DOWNGRADE");
 		}
 
 		@Test

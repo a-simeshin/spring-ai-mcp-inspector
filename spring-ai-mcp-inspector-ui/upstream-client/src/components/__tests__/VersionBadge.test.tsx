@@ -92,6 +92,30 @@ describe("VersionBadge", () => {
     expect(notice.querySelector("ul")).toBeNull();
   });
 
+  it("pins the legacy-server downgrade seen on the wire: amber notice naming both revisions", () => {
+    // The live old-server/new-client case (issue #79 AC #2): the inspector
+    // client (2025-11-25) negotiating with a legacy server that answers
+    // 2024-11-05, exactly what the demo's SSE flavour does.
+    render(
+      <VersionBadge
+        snapshot={snapshot({
+          clientRequestedVersion: "2025-11-25",
+          negotiatedVersion: "2024-11-05",
+        })}
+      />,
+    );
+
+    expect(badge().getAttribute("data-severity")).toBe("DOWNGRADE");
+    expect(badge().className).toContain("bg-amber-100");
+
+    fireEvent.click(badge().querySelector("[class*=cursor-pointer]")!);
+
+    const notice = screen.getByTestId("version-mismatch-notice");
+    expect(notice.textContent).toContain("2025-11-25");
+    expect(notice.textContent).toContain("2024-11-05");
+    expect(notice.querySelector("ul")).toBeNull();
+  });
+
   it("pins the mismatch notice on INCOMPATIBLE: names both revisions and the affected methods", () => {
     render(
       <VersionBadge

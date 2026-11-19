@@ -100,14 +100,14 @@ const UNKNOWN_RESPONSE_EVENT: WireEvent = {
   payload: {
     jsonrpc: "2.0",
     id: 3,
-    result: { protocolVersion: "2024-11-05" },
+    result: { protocolVersion: "2099-01-01" },
     _protocolNegotiation: {
-      requested: "2024-11-05",
-      negotiated: "2024-11-05",
+      requested: "2099-01-01",
+      negotiated: "2099-01-01",
       severity: "UNKNOWN",
       affectedMethods: [],
       summary:
-        "Both revisions are unknown: requested=2024-11-05, negotiated=2024-11-05",
+        "Both revisions are unknown: requested=2099-01-01, negotiated=2099-01-01",
     },
   },
 };
@@ -426,7 +426,7 @@ describe("TimelineTab", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText(/protocol: 2024-11-05 \? \(unknown\)/),
+        screen.getByText(/protocol: 2099-01-01 \? \(unknown\)/),
       ).toBeInTheDocument(),
     );
   });
