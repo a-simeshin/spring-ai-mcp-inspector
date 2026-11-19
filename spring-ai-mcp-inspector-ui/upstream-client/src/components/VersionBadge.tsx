@@ -88,6 +88,17 @@ export default function VersionBadge({ snapshot }: VersionBadgeProps) {
 
   const negotiatedVersion = snapshot?.negotiatedVersion ?? null;
 
+  // [spring-ai-mcp-inspector PATCH] Keyboard operability (issue #418): the
+  // toggle handles Enter/Space itself. preventDefault stops both the page
+  // scroll and the native button's click-on-keyup, which would otherwise
+  // toggle a second time right after the handler.
+  const handleToggleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setShowDetails((shown) => !shown);
+    }
+  };
+
   const capabilityNames = snapshot?.capabilities
     ? Object.keys(snapshot.capabilities).sort()
     : [];
@@ -101,6 +112,7 @@ export default function VersionBadge({ snapshot }: VersionBadgeProps) {
         role="status"
         data-testid="version-badge"
         data-severity={severity}
+        aria-expanded={showDetails}
       >
         <div className="flex items-center gap-1.5 min-w-0">
           {severityIcon}
@@ -108,24 +120,40 @@ export default function VersionBadge({ snapshot }: VersionBadgeProps) {
             {negotiatedVersion ?? "unknown"}
           </span>
         </div>
-        {showDetails ? (
-          <ChevronDown
-            className="w-4 h-4 ml-auto cursor-pointer shrink-0"
-            data-testid="version-badge-toggle"
-            onClick={() => setShowDetails(false)}
-          />
-        ) : (
-          <ChevronRight
-            className="w-4 h-4 ml-auto cursor-pointer shrink-0"
-            data-testid="version-badge-toggle"
-            onClick={() => setShowDetails(true)}
-          />
-        )}
+        {/* [spring-ai-mcp-inspector PATCH] The toggle was a bare svg (owner
+            follow-up to PR #416, issue #418): invisible to keyboards, and the
+            showDetails ternary unmounted it on every state flip, dropping
+            focus mid-toggle. A native button keeps one stable DOM node (the
+            icon inside is the only thing that changes), so Enter/Space and
+            the focus ring work across open/close. */}
+        <button
+          type="button"
+          className="ml-auto shrink-0 cursor-pointer bg-transparent p-0 border-0 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1"
+          data-testid="version-badge-toggle"
+          tabIndex={0}
+          role="button"
+          aria-expanded={showDetails}
+          aria-controls="version-badge-details"
+          aria-label={showDetails
+            ? "Collapse protocol revision details"
+            : "Show protocol revision details"}
+          onClick={() => setShowDetails((shown) => !shown)}
+          onKeyDown={handleToggleKeyDown}
+        >
+          {showDetails ? (
+            <ChevronDown className="w-4 h-4" />
+          ) : (
+            <ChevronRight className="w-4 h-4" />
+          )}
+        </button>
       </div>
 
       {/* Expandable details */}
       {showDetails && (
-        <div className="mb-4 space-y-3 p-3 rounded-lg border bg-card text-sm">
+        <div
+          id="version-badge-details"
+          className="mb-4 space-y-3 p-3 rounded-lg border bg-card text-sm"
+        >
           {/* No snapshot notice */}
           {!snapshot && (
             <div className="rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-950 p-3">

@@ -3,6 +3,7 @@
    arrives as a prop from useConnection's handshake capture, so these tests
    cover the rendering decisions only. */
 import { render, screen, fireEvent } from "@testing-library/react";
+import "@testing-library/jest-dom";
 import VersionBadge from "../VersionBadge";
 import { InitializeSnapshot } from "@/lib/protocolRevision";
 
@@ -187,5 +188,82 @@ describe("VersionBadge", () => {
     expect(screen.getAllByText(/2025-11-25/).length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("tools")).toBeTruthy();
     expect(screen.getByText("logging")).toBeTruthy();
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Keyboard operability (owner follow-up to
+  // PR #416): the toggle chevron was a bare svg, so the details panel and the
+  // mismatch notice were unreachable without a pointer. Pinned here: button
+  // semantics on the svg, Enter/Space toggling, aria-expanded synced with the
+  // panel on both the toggle and the badge container.
+  describe("keyboard operability", () => {
+    const toggle = (): HTMLElement =>
+      screen.getByTestId("version-badge-toggle");
+
+    it("exposes the chevron as a focusable button and toggles on Enter/Space", () => {
+      render(<VersionBadge snapshot={snapshot()} />);
+
+      expect(toggle().getAttribute("tabindex")).toBe("0");
+      expect(toggle().getAttribute("role")).toBe("button");
+      expect(toggle().getAttribute("aria-expanded")).toBe("false");
+      expect(badge().getAttribute("aria-expanded")).toBe("false");
+      expect(toggle().getAttribute("aria-controls")).toBe(
+        "version-badge-details",
+      );
+      expect(screen.queryByText("demo-server")).toBeNull();
+
+      // Keyboard focus must survive the open/close round trip: the toggle is
+      // one stable DOM node, never remounted when the panel flips.
+      toggle().focus();
+      expect(toggle()).toHaveFocus();
+
+      fireEvent.keyDown(toggle(), { key: "Enter" });
+
+      expect(screen.getByText("demo-server")).toBeTruthy();
+      const panel = document.getElementById("version-badge-details");
+      expect(panel).toContainElement(screen.getByText("demo-server"));
+      expect(toggle()).toHaveFocus();
+      expect(toggle().getAttribute("aria-expanded")).toBe("true");
+      expect(badge().getAttribute("aria-expanded")).toBe("true");
+
+      fireEvent.keyDown(toggle(), { key: " " });
+
+      expect(screen.queryByText("demo-server")).toBeNull();
+      expect(toggle()).toHaveFocus();
+      expect(toggle().getAttribute("aria-expanded")).toBe("false");
+      expect(badge().getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("reaches the mismatch notice from the keyboard on the live downgrade case", () => {
+      render(
+        <VersionBadge
+          snapshot={snapshot({
+            clientRequestedVersion: "2025-11-25",
+            negotiatedVersion: "2024-11-05",
+          })}
+        />,
+      );
+
+      fireEvent.keyDown(toggle(), { key: "Enter" });
+
+      const notice = screen.getByTestId("version-mismatch-notice");
+      expect(notice.textContent).toContain("2025-11-25");
+      expect(notice.textContent).toContain("2024-11-05");
+    });
+
+    it("leaves the panel closed for keys that are not Enter or Space", () => {
+      render(<VersionBadge snapshot={snapshot()} />);
+
+      // The panel state is asserted after every key: two foreign keys in a
+      // row with a single final check would cancel out under a mutant that
+      // toggles on any key (Tab would open, Escape would close, and the
+      // last assertion would still pass).
+      fireEvent.keyDown(toggle(), { key: "Tab" });
+      expect(screen.queryByText("demo-server")).toBeNull();
+      expect(badge().getAttribute("aria-expanded")).toBe("false");
+
+      fireEvent.keyDown(toggle(), { key: "Escape" });
+      expect(screen.queryByText("demo-server")).toBeNull();
+      expect(badge().getAttribute("aria-expanded")).toBe("false");
+    });
   });
 });
