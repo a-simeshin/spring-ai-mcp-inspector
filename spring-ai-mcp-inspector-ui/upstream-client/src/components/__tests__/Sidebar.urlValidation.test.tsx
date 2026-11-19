@@ -1,4 +1,6 @@
 // jsdom lacks MediaQueryList; useTheme calls window.matchMedia on mount.
+import { useState } from "react";
+import type { ComponentProps } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import Sidebar from "../Sidebar";
@@ -65,12 +67,30 @@ const baseProps = {
 };
 
 describe("Sidebar URL validation", () => {
-  const renderSidebar = (props: Partial<typeof baseProps> = {}) =>
-    render(
+  // [spring-ai-mcp-inspector PATCH] issue #269 rework: urlError/urlTouched
+  // moved up to App; this harness owns them so these tests keep exercising
+  // the same sidebar validation flow through the props.
+  const SidebarHarness = ({
+    ...props
+  }: Partial<ComponentProps<typeof Sidebar>>) => {
+    const [urlError, setUrlError] = useState<string | null>(null);
+    const [urlTouched, setUrlTouched] = useState(false);
+    return (
       <TooltipProvider>
-        <Sidebar {...baseProps} {...props} />
-      </TooltipProvider>,
+        <Sidebar
+          {...baseProps}
+          {...props}
+          urlError={urlError}
+          setUrlError={setUrlError}
+          urlTouched={urlTouched}
+          setUrlTouched={setUrlTouched}
+        />
+      </TooltipProvider>
     );
+  };
+
+  const renderSidebar = (props: Partial<ComponentProps<typeof Sidebar>> = {}) =>
+    render(<SidebarHarness {...props} />);
 
   const getConnectButton = () =>
     screen.getByRole("button", { name: /^connect$/i });
@@ -94,40 +114,31 @@ describe("Sidebar URL validation", () => {
     expect(getConnectButton()).toBeDisabled();
   });
 
-  it("shows red border and inline error on invalid URL without blur when Connect is clicked", () => {
+  it("delegates the Connect click to the shared validating onConnect handler", () => {
     const onConnect = jest.fn();
     renderSidebar({
       sseUrl: "example.com/mcp",
       onConnect,
     });
 
+    // Issue #269 rework: click-time URL validation moved into App's shared
+    // connect handler so the canvas CTA validates identically; Sidebar
+    // forwards the click and App blocks the invalid connect (covered in
+    // src/__tests__/App.emptyStateConnect.test.tsx).
     fireEvent.click(getConnectButton());
 
-    const input = screen.getByPlaceholderText("URL");
-    expect(input).toHaveClass("border-red-500");
-    expect(screen.getByRole("alert")).toHaveTextContent("http://");
-    expect(getConnectButton()).toBeDisabled();
-    // Connect was NOT called because URL is invalid
-    expect(onConnect).not.toHaveBeenCalled();
+    expect(onConnect).toHaveBeenCalledTimes(1);
   });
 
   it("disables Connect button when URL is invalid, enables when valid", () => {
-    const { rerender } = render(
-      <TooltipProvider>
-        <Sidebar {...baseProps} sseUrl="bad-url" />
-      </TooltipProvider>,
-    );
+    const { rerender } = render(<SidebarHarness sseUrl="bad-url" />);
 
     // Blur triggers validation
     fireEvent.blur(screen.getByPlaceholderText("URL"));
     expect(getConnectButton()).toBeDisabled();
 
-    // Rerender with valid URL
-    rerender(
-      <TooltipProvider>
-        <Sidebar {...baseProps} sseUrl="http://localhost:8080/mcp" />
-      </TooltipProvider>,
-    );
+    // Rerender with valid URL (harness state persists)
+    rerender(<SidebarHarness sseUrl="http://localhost:8080/mcp" />);
 
     // After blur with valid URL, error clears
     fireEvent.blur(screen.getByPlaceholderText("URL"));

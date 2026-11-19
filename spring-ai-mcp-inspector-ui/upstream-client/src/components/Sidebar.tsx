@@ -105,6 +105,12 @@ interface SidebarProps {
   // D3 authorization DTO (issue #54): the server answered and refused.
   // Distinct from connectionError, which means the server was never reached.
   authError?: ProxyErrorDto | null;
+  // [spring-ai-mcp-inspector PATCH] issue #269 rework: URL validation state
+  // is owned by App so the empty-state canvas CTA shares this exact state.
+  urlError: string | null;
+  setUrlError: (error: string | null) => void;
+  urlTouched: boolean;
+  setUrlTouched: (touched: boolean) => void;
   onConnect: () => void;
   onDisconnect: () => Promise<void>;
   onResetSession: () => void;
@@ -120,6 +126,11 @@ interface SidebarProps {
   // for stdio the budget covers spawn + initialize.
   connectionTimeout: string;
   setConnectionTimeout: (value: string) => void;
+  // [spring-ai-mcp-inspector PATCH] Connection timeout validation state is
+  // owned by App (shared connect handler); surfaced here for the field
+  // highlight and the Connect disable condition.
+  timeoutError: string | null;
+  validateConnectionTimeout: () => void;
   serverImplementation?:
     | (WithIcons & { name?: string; version?: string; websiteUrl?: string })
     | null;
@@ -208,28 +219,6 @@ function KeepAliveIndicator({
     </div>
   );
 }
-// [spring-ai-mcp-inspector PATCH] Connection timeout bounds mirror the proxy
-// contract (ProxyConnectionBudgets): a whole number of seconds 1..600.
-// Anything else must be rejected client-side, otherwise the request reaches
-// the proxy and fails with a bare 400 banner. Accepted input is decimal
-// digits only: the proxy parses the raw string with Long.parseLong, so
-// "1e1" and "0x10" fail there and are caught here with the field-level
-// error instead. "+30" parses as 30 at the proxy, so rejecting it is
-// stricter than the proxy on purpose (one accepted notation per value).
-const CONNECTION_TIMEOUT_MAX_SECONDS = 600;
-const CONNECTION_TIMEOUT_ERROR = `Must be a whole number of seconds between 1 and ${CONNECTION_TIMEOUT_MAX_SECONDS}`;
-
-const isValidConnectionTimeout = (raw: string): boolean => {
-  const trimmed = raw.trim();
-  if (trimmed === "") {
-    return true;
-  }
-  if (!/^[0-9]+$/.test(trimmed)) {
-    return false;
-  }
-  const n = Number(trimmed);
-  return n >= 1 && n <= CONNECTION_TIMEOUT_MAX_SECONDS;
-};
 
 const Sidebar = ({
   connectionStatus,
@@ -260,6 +249,10 @@ const Sidebar = ({
   activeProfileId,
   onActiveProfileChange,
   authError,
+  urlError,
+  setUrlError,
+  urlTouched,
+  setUrlTouched,
   onConnect,
   onDisconnect,
   onResetSession,
@@ -272,6 +265,8 @@ const Sidebar = ({
   setConnectionType,
   connectionTimeout,
   setConnectionTimeout,
+  timeoutError,
+  validateConnectionTimeout,
   serverImplementation,
   // [spring-ai-mcp-inspector PATCH] VersionBadge handshake snapshot.
   initializeSnapshot,
@@ -289,11 +284,10 @@ const Sidebar = ({
   const [showClientSecret, setShowClientSecret] = useState(false);
   const [copiedServerEntry, setCopiedServerEntry] = useState(false);
   const [copiedServerFile, setCopiedServerFile] = useState(false);
-  // [spring-ai-mcp-inspector PATCH] URL validation state: error message and touched flag.
-  const [urlError, setUrlError] = useState<string | null>(null);
-  const [urlTouched, setUrlTouched] = useState(false);
-  // [spring-ai-mcp-inspector PATCH] Connection timeout validation state.
-  const [timeoutError, setTimeoutError] = useState<string | null>(null);
+  // [spring-ai-mcp-inspector PATCH] issue #269 rework: urlError/urlTouched
+  // moved up to App and arrive as props so the empty-state canvas CTA
+  // validates and disables under the same condition; connection timeout
+  // validation lives in App too, so timeoutError arrives as a prop.
   const { toast } = useToast();
   // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
   const [showSavedConnections, setShowSavedConnections] = useState(true);
@@ -351,7 +345,7 @@ const Sidebar = ({
         setUrlError(result.errorMessage);
       }
     },
-    [setSseUrl, urlTouched],
+    [setSseUrl, urlTouched, setUrlError],
   );
 
   const handleUrlBlur = useCallback(
@@ -360,7 +354,7 @@ const Sidebar = ({
       const result = validateServerUrl(value);
       setUrlError(result.isValid ? null : result.errorMessage);
     },
-    [],
+    [setUrlTouched, setUrlError],
   );
 
   // Shared utility function to generate server config
@@ -955,13 +949,7 @@ const Sidebar = ({
               placeholder="30 (default)"
               value={connectionTimeout}
               onChange={(e) => setConnectionTimeout(e.target.value)}
-              onBlur={() => {
-                if (isValidConnectionTimeout(connectionTimeout)) {
-                  setTimeoutError(null);
-                } else {
-                  setTimeoutError(CONNECTION_TIMEOUT_ERROR);
-                }
-              }}
+              onBlur={validateConnectionTimeout}
               className={`font-mono ${timeoutError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
             />
             {timeoutError && (
@@ -1368,31 +1356,11 @@ const Sidebar = ({
                 </Button>
               </div>
             )}
-            {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). Block onConnect when invalid. */}
-            {/* [spring-ai-mcp-inspector PATCH] Also block Connect when connection timeout is invalid (proxy connections only: direct never forwards the timeout, so a stale invalid persisted value must not silently lock Connect). */}
+            {/* [spring-ai-mcp-inspector PATCH] Disable Connect when the URL is invalid (non-STDIO transports) or the connection timeout is invalid (proxy connections only: direct never forwards the timeout, so a stale invalid persisted value must not silently lock Connect); issue #269 rework: validation moved into the shared connect handler App passes via onConnect, so the canvas CTA validates identically. */}
             {connectionStatus !== "connected" && (
               <Button
                 className="w-full"
-                onClick={() => {
-                  // Mark URL as touched on first connect attempt
-                  if (transportType !== "stdio") {
-                    setUrlTouched(true);
-                    const result = validateServerUrl(sseUrl);
-                    if (!result.isValid) {
-                      setUrlError(result.errorMessage);
-                      return;
-                    }
-                  }
-                  // Block connect if connection timeout is invalid (proxy only)
-                  if (
-                    connectionType === "proxy" &&
-                    !isValidConnectionTimeout(connectionTimeout)
-                  ) {
-                    setTimeoutError(CONNECTION_TIMEOUT_ERROR);
-                    return;
-                  }
-                  onConnect();
-                }}
+                onClick={onConnect}
                 disabled={
                   (transportType !== "stdio" && !!urlError) ||
                   (connectionType === "proxy" && !!timeoutError)

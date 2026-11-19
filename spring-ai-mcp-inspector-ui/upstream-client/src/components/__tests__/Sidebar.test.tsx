@@ -123,6 +123,9 @@ describe("Sidebar", () => {
   });
 
   describe("Connection timeout", () => {
+    const TIMEOUT_ERROR_TEXT =
+      "Must be a whole number of seconds between 1 and 600";
+
     it("renders the connection timeout input field", () => {
       renderSidebar();
       const input = screen.getByLabelText("Connection timeout (s)");
@@ -147,143 +150,47 @@ describe("Sidebar", () => {
       expect(setConnectionTimeout).toHaveBeenCalledWith("45");
     });
 
-    it("shows inline error for non-numeric value on blur", () => {
-      renderSidebar({ connectionTimeout: "abc" });
-      const input = screen.getByLabelText("Connection timeout (s)");
-      fireEvent.blur(input);
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Must be a whole number of seconds between 1 and 600",
-      );
-    });
-
-    it("shows inline error for value less than 1 on blur", () => {
-      renderSidebar({ connectionTimeout: "0" });
-      const input = screen.getByLabelText("Connection timeout (s)");
-      fireEvent.blur(input);
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Must be a whole number of seconds between 1 and 600",
-      );
-    });
-
-    it("shows inline error for fractional value on blur", () => {
-      renderSidebar({ connectionTimeout: "1.5" });
-      const input = screen.getByLabelText("Connection timeout (s)");
-      fireEvent.blur(input);
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Must be a whole number of seconds between 1 and 600",
-      );
-    });
-
-    it("shows inline error for value above 600 on blur", () => {
-      renderSidebar({ connectionTimeout: "601" });
-      const input = screen.getByLabelText("Connection timeout (s)");
-      fireEvent.blur(input);
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Must be a whole number of seconds between 1 and 600",
-      );
-    });
-
-    it("shows inline error for exponent notation above 600 on blur", () => {
-      renderSidebar({ connectionTimeout: "1e3" });
-      const input = screen.getByLabelText("Connection timeout (s)");
-      fireEvent.blur(input);
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Must be a whole number of seconds between 1 and 600",
-      );
-    });
-
-    it("shows inline error for exponent notation within range on blur", () => {
-      renderSidebar({ connectionTimeout: "1e2" });
-      const input = screen.getByLabelText("Connection timeout (s)");
-      fireEvent.blur(input);
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Must be a whole number of seconds between 1 and 600",
-      );
-    });
-
-    it("shows inline error for hex notation within range on blur", () => {
-      renderSidebar({ connectionTimeout: "0x10" });
-      const input = screen.getByLabelText("Connection timeout (s)");
-      fireEvent.blur(input);
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Must be a whole number of seconds between 1 and 600",
-      );
-    });
-
-    it("accepts boundary values 1 and 600", () => {
-      for (const value of ["1", "600"]) {
-        const { unmount } = renderSidebar({ connectionTimeout: value });
-        fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
-        expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-        unmount();
-      }
-    });
-
-    it("clears error when input is emptied and blurred", () => {
-      const { rerender } = renderSidebar({ connectionTimeout: "0" });
-      const input = screen.getByLabelText("Connection timeout (s)");
-      fireEvent.blur(input);
-      expect(screen.getByRole("alert")).toBeInTheDocument();
-      // Simulate clearing the field and blurring again
-      rerender(
-        <TooltipProvider>
-          <Sidebar {...defaultProps} connectionTimeout="" />
-        </TooltipProvider>,
-      );
-      fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
+    // [spring-ai-mcp-inspector PATCH] issue #269 rework + #335 rebase owner
+    // decision (2026-11-19): the timeout validator and its validation state
+    // live in App (shared connect handler). Sidebar only renders the field,
+    // delegates blur validation via the validateConnectionTimeout prop and
+    // mirrors the timeoutError prop for the highlight, the inline error and
+    // the Connect disable condition. The value matrix moved to
+    // App.connectionTimeoutPersistence.test.tsx.
+    it("delegates blur validation to the shared App handler", () => {
+      const validateConnectionTimeout = jest.fn();
+      renderSidebar({ validateConnectionTimeout });
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
+      expect(validateConnectionTimeout).toHaveBeenCalledTimes(1);
     });
 
-    it("disables Connect button when timeout is invalid after blur", () => {
-      renderSidebar({ connectionTimeout: "abc" });
-      const input = screen.getByLabelText("Connection timeout (s)");
-      fireEvent.blur(input);
-      const connectButton = screen.getByRole("button", { name: /^connect$/i });
-      expect(connectButton).toBeDisabled();
-    });
-
-    it("blocks connect when timeout is invalid on click", () => {
-      const onConnect = jest.fn();
-      renderSidebar({ connectionTimeout: "0", onConnect });
-      const connectButton = screen.getByRole("button", { name: /^connect$/i });
-      fireEvent.click(connectButton);
-      expect(onConnect).not.toHaveBeenCalled();
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Must be a whole number of seconds between 1 and 600",
+    it("surfaces the timeoutError prop as the inline field error", () => {
+      renderSidebar({ timeoutError: TIMEOUT_ERROR_TEXT });
+      expect(screen.getByRole("alert")).toHaveTextContent(TIMEOUT_ERROR_TEXT);
+      expect(screen.getByLabelText("Connection timeout (s)")).toHaveClass(
+        "border-red-500",
       );
     });
 
-    it("blocks connect when timeout is fractional on click", () => {
-      const onConnect = jest.fn();
-      renderSidebar({ connectionTimeout: "1.5", onConnect });
-      const connectButton = screen.getByRole("button", { name: /^connect$/i });
-      fireEvent.click(connectButton);
-      expect(onConnect).not.toHaveBeenCalled();
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Must be a whole number of seconds between 1 and 600",
-      );
+    it("disables Connect while timeoutError is set in proxy mode", () => {
+      renderSidebar({ timeoutError: TIMEOUT_ERROR_TEXT });
+      expect(
+        screen.getByRole("button", { name: /^connect$/i }),
+      ).toBeDisabled();
     });
 
-    it("blocks connect when timeout is above 600 on click", () => {
+    it("keeps Connect enabled in direct mode even when timeoutError is set", () => {
       const onConnect = jest.fn();
-      renderSidebar({ connectionTimeout: "601", onConnect });
+      renderSidebar({
+        connectionType: "direct",
+        timeoutError: TIMEOUT_ERROR_TEXT,
+        onConnect,
+      });
       const connectButton = screen.getByRole("button", { name: /^connect$/i });
+      expect(connectButton).toBeEnabled();
       fireEvent.click(connectButton);
-      expect(onConnect).not.toHaveBeenCalled();
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Must be a whole number of seconds between 1 and 600",
-      );
-    });
-
-    it("blocks connect when timeout is exponent notation within range on click", () => {
-      const onConnect = jest.fn();
-      renderSidebar({ connectionTimeout: "1e2", onConnect });
-      const connectButton = screen.getByRole("button", { name: /^connect$/i });
-      fireEvent.click(connectButton);
-      expect(onConnect).not.toHaveBeenCalled();
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Must be a whole number of seconds between 1 and 600",
-      );
+      expect(onConnect).toHaveBeenCalledTimes(1);
     });
 
     it("renders for all transport types", () => {
@@ -304,35 +211,6 @@ describe("Sidebar", () => {
       ).not.toBeInTheDocument();
     });
 
-    it("keeps Connect enabled and clickable in direct mode after a proxy-mode timeout error", () => {
-      const onConnect = jest.fn();
-      const { rerender } = renderSidebar({
-        connectionTimeout: "700",
-        onConnect,
-      });
-      fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
-      expect(screen.getByRole("alert")).toBeInTheDocument();
-      expect(
-        screen.getByRole("button", { name: /^connect$/i }),
-      ).toBeDisabled();
-      // Same session switched to Direct: field and error gone, Connect live
-      rerender(
-        <TooltipProvider>
-          <Sidebar
-            {...defaultProps}
-            connectionType="direct"
-            connectionTimeout="700"
-            onConnect={onConnect}
-          />
-        </TooltipProvider>,
-      );
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-      const connectButton = screen.getByRole("button", { name: /^connect$/i });
-      expect(connectButton).toBeEnabled();
-      fireEvent.click(connectButton);
-      expect(onConnect).toHaveBeenCalledTimes(1);
-    });
-
     it("connects in direct mode with a stale invalid persisted timeout", () => {
       const onConnect = jest.fn();
       renderSidebar({
@@ -345,48 +223,6 @@ describe("Sidebar", () => {
       fireEvent.click(connectButton);
       expect(onConnect).toHaveBeenCalledTimes(1);
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    });
-
-    // [spring-ai-mcp-inspector PATCH] Guard regressions
-    // (connection-timeout.txt): the guard once converted with Number(),
-    // which accepted JS numeric literals ("1e1", "0x10", "+30"). The
-    // proxy's Long.parseLong rejects the first two and accepts "+30";
-    // the client rejects it too, stricter than the proxy on purpose.
-    it("rejects JS numeric literals that Number() would accept and issues no connect request", () => {
-      for (const value of ["1e1", "0x10", "+30", "1.5"]) {
-        const onConnect = jest.fn();
-        const { unmount } = renderSidebar({
-          connectionTimeout: value,
-          onConnect,
-        });
-        fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
-        expect(screen.getByRole("alert")).toHaveTextContent(
-          "Must be a whole number of seconds between 1 and 600",
-        );
-        fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
-        expect(onConnect).not.toHaveBeenCalled();
-        unmount();
-      }
-    });
-
-    it("accepts 120 like the proxy's Long.parseLong", () => {
-      const onConnect = jest.fn();
-      renderSidebar({ connectionTimeout: "120", onConnect });
-      fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
-      expect(onConnect).toHaveBeenCalledTimes(1);
-    });
-
-    it("renders the timeout error and disables Connect in proxy mode for invalid timeout 700", () => {
-      renderSidebar({ connectionTimeout: "700" });
-      fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "Must be a whole number of seconds between 1 and 600",
-      );
-      expect(
-        screen.getByRole("button", { name: /^connect$/i }),
-      ).toBeDisabled();
     });
   });
 
