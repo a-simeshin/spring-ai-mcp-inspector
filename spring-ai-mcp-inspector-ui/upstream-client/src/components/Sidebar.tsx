@@ -469,7 +469,13 @@ const Sidebar = ({
         </div>
       </div>
 
-      <div className="p-4 flex-1 overflow-auto">
+      {/* [spring-ai-mcp-inspector PATCH] Issue #269: stable anchor for the
+          sidebar scroll area: the fold checks reset its scrollTop and
+          probe its height (see NOTICE.d/connect-cta.txt). */}
+      <div
+        className="p-4 flex-1 overflow-auto"
+        data-testid="sidebar-scroll-area"
+      >
         <div className="space-y-4">
           <div className="space-y-2">
             <label

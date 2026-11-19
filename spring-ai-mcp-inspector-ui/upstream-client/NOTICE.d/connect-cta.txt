@@ -17,7 +17,11 @@ clicks on the auth/config toggles. Also tags the pristine Connect
 button with `data-testid=sidebar-connect-button`, tags the fixed
 region with `data-testid=sidebar-connect-region` and the server URL
 input with `data-testid=sse-url-input` so the fold checks and the
-layout e2e can read geometry without scrolling elements into view.
+layout e2e can read geometry without scrolling elements into view,
+and tags the sidebar scroll container with
+`data-testid=sidebar-scroll-area` so the same checks can reset its
+scrollTop and probe its height without Tailwind-class probes (the
+issue #378 selector gate bans class selectors in the demo e2e).
 Covered by src/components/__tests__/Sidebar.connectCta.test.tsx and
 the InspectorUiIT#ConnectCtaArea e2e group (pristine load, expanded
 auth editor and failed-connect scenarios at an exact 1280x800

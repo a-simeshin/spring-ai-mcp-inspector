@@ -591,14 +591,14 @@ class InspectorUiIT {
 		// Force SSE — the proxy branch whose SSE error event drives the D3
 		// banner (the demo config already defaults to SSE, but be explicit).
 		$("#transport-type-select").shouldBe(visible).click();
-		$$("[role=option]").findBy(text("SSE")).shouldBe(visible).click();
+		$("[data-testid=select-option-sse]").shouldBe(visible).click();
 
 		// Create the CLIENT_CREDENTIALS profile (registration performs the
 		// initial token exchange server-side; the profile auto-selects on save).
 		$("[data-testid=auth-profile-type]").shouldBe(visible).click();
-		$$("[role=option]").findBy(text("OAuth2")).shouldBe(visible).click();
+		$("[data-testid=select-option-OAUTH2]").shouldBe(visible).click();
 		$("[data-testid=auth-profile-grant-mode]").shouldBe(visible).click();
-		$$("[role=option]").findBy(text("Client credentials")).shouldBe(visible).click();
+		$("[data-testid=select-option-CLIENT_CREDENTIALS]").shouldBe(visible).click();
 		setReactInputValue("[data-testid=auth-profile-name]", "e2e-cc");
 		setReactInputValue("[data-testid=auth-profile-token-url]", tokenServer.tokenUrl());
 		setReactInputValue("[data-testid=auth-profile-client-id]", "e2e-cid");
@@ -4777,49 +4777,6 @@ class InspectorUiIT {
 		}
 
 		/**
-		 * Boots the app, opens the page, forces SSE transport and creates + selects a
-		 * {@code CLIENT_CREDENTIALS} profile via the real editor.
-		 */
-		private void bootAndCreateProfile(final E2eTokenServer tokenServer) {
-			startApp(new Combo("sse"));
-			open("/mcp-inspector/index.html");
-
-			// Auth profile panel must render first (issue #54).
-			$("[data-testid=auth-profiles-panel]").shouldBe(visible, Duration.ofSeconds(15));
-			// [spring-ai-mcp-inspector PATCH] Issue #268: the editor section starts
-			// collapsed; expand it explicitly before touching the fields.
-			$("[data-testid=auth-profile-editor-toggle]").shouldBe(visible, Duration.ofSeconds(15)).click();
-			// The auth-profile editor must render before we touch it.
-			$("[data-testid=auth-profile-type]").shouldBe(visible, Duration.ofSeconds(15));
-
-			// Force SSE — the proxy branch whose SSE error event drives the D3
-			// banner (the demo config already defaults to SSE, but be explicit).
-			$("#transport-type-select").shouldBe(visible).click();
-			$("[data-testid=select-option-sse]").shouldBe(visible).click();
-
-			// Create the CLIENT_CREDENTIALS profile (registration performs the
-			// initial token exchange server-side; the profile auto-selects on save).
-			$("[data-testid=auth-profile-type]").shouldBe(visible).click();
-			$("[data-testid=select-option-OAUTH2]").shouldBe(visible).click();
-			$("[data-testid=auth-profile-grant-mode]").shouldBe(visible).click();
-			$("[data-testid=select-option-CLIENT_CREDENTIALS]").shouldBe(visible).click();
-			setReactInputValue("[data-testid=auth-profile-name]", "e2e-cc");
-			setReactInputValue("[data-testid=auth-profile-token-url]", tokenServer.tokenUrl());
-			setReactInputValue("[data-testid=auth-profile-client-id]", "e2e-cid");
-			setReactInputValue("[data-testid=auth-profile-client-secret]", "e2e-secret");
-			$("[data-testid=auth-profile-save]").shouldBe(visible).click();
-
-			// The saved row appears in the list (auto-selected active profile).
-			$("[data-testid=auth-profiles-list]").shouldBe(visible, Duration.ofSeconds(15)).shouldHave(text("e2e-cc"));
-		}
-
-		/** Points the server-URL input at the SSE stub and clicks Connect. */
-		private void connectTo(final E2eSseMcpStub stub) {
-			setReactInputValue("#sse-url-input", stub.sseUrl());
-			connectButton().shouldBe(visible).click();
-		}
-
-		/**
 		 * Awaits the token server's request count to reach {@code expected} within the
 		 * given timeout, polling every 100ms. Fails with a clear message when the count
 		 * never reaches the expected value, so the caller can assert the exact count
@@ -5904,7 +5861,7 @@ class InspectorUiIT {
 		 * scrolled it).
 		 */
 		private static void resetSidebarScroll() {
-			Selenide.executeJavaScript("var c = document.querySelector('.bg-card.border-r .overflow-auto');"
+			Selenide.executeJavaScript("var c = document.querySelector('[data-testid=sidebar-scroll-area]');"
 					+ "if (c) { c.scrollTop = 0; }");
 		}
 
@@ -5985,7 +5942,7 @@ class InspectorUiIT {
 				// input stays fully visible, so the failed connect extends the
 				// scroll area instead of squeezing it out of the viewport.
 				final Number scrollAreaHeight = Selenide
-					.executeJavaScript("var c = document.querySelector('.bg-card.border-r .overflow-auto');"
+					.executeJavaScript("var c = document.querySelector('[data-testid=sidebar-scroll-area]');"
 							+ "return c ? Math.round(c.getBoundingClientRect().height) : -1;");
 				Assertions.assertNotNull(scrollAreaHeight, "scroll area probe ran");
 				Assertions.assertTrue(scrollAreaHeight.longValue() >= 400,
