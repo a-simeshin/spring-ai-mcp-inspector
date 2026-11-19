@@ -3,6 +3,65 @@
 Notable changes per release, grouped as features, fixes and internal work.
 Every line references the pull request it landed through.
 
+## 2.4.0
+
+Stack: Spring Boot `4.1.0`, Spring AI `2.0.1`, Java MCP SDK `2.0.1`, bundled
+MCP Inspector UI `0.22.0`, Java 17+.
+
+### Features
+
+- Outgoing MCP client traffic is captured into the timeline (#406): with
+  `spring.ai.mcp.inspector.timeline.client-capture-enabled=true` (default
+  `false`) an app that also acts as an MCP client records its outgoing
+  JSON-RPC requests, responses and notifications with client provenance
+  (`side=client`).
+- Server-initiated exchanges (sampling, elicitation, logging, progress)
+  carry the `beanName#method` identity of the `@Mcp*` handler that consumed
+  them, and startup warns about silent wiring mistakes, when client capture
+  is enabled (#407).
+- A client connections snapshot API (`GET
+  ${spring.ai.mcp.inspector.path}/api/client-connections`) returns the live
+  MCP client connection registry on both stacks, and the vendored SPA gains
+  a Clients tab (#408).
+- MCP Apps tool resources (`ui://` URIs advertising
+  `text/html;profile=mcp-app`) render in a sandboxed iframe chain served by
+  the proxy, with a lifecycle and traffic panel (#398).
+- The connect zone shows a version badge with the protocol revision the
+  server actually negotiated, color-coded by compatibility severity (#399),
+  and the legacy `2024-11-05` revision is registered, so a live downgrade
+  renders the notice instead of UNKNOWN (#416).
+- Task rows show `createdAt`, and `keepAlive` passes through the proxy
+  instead of rendering `N/A` (#397).
+- The bundled demo app runs its own outbound loopback MCP client pointing
+  at the demo server, so the UI shows a live client connection and
+  client-side timeline traffic out of the box (#413).
+
+### Fixes
+
+- `tasks/*` RPC calls are gated on the capabilities the server actually
+  advertises: the Tasks tab renders a self-explained capability-gap body
+  instead of a raw `-32601` error toast on servers without tasks support
+  (#405).
+- Demo tool bodies on the reactive stack run off the Netty event loop, so
+  blocking calls such as elicitation no longer settle with an error before
+  the user can answer (#380).
+- The app iframe stays usable at 1280px next to the traffic panel (#410).
+
+### Internal, docs and build
+
+- The OAuth-refresh retry pins the fresh Authorization header, with tests
+  across core, webflux and webmvc (#387); flaky tests fixed:
+  ResourceRacePaneUiIT gates the delayed reply behind the fast one (#388),
+  the McpProxyTests warm-up wait handles the empty initial state (#384).
+- The demo E2E suite drives through `data-testid` anchors (#389), and
+  fragile E2E selectors are gated in CI (#390).
+- Vendored-client governance: every vendored patch file requires its own
+  NOTICE.d entry (#392); the 23 unbound marker files are bound to their
+  entries (#395) and the re-vendor drill gaps are registered (#393).
+- Docs: the stale `mcpSessionId` claim in the keep-alive timeline entry is
+  corrected (#414).
+- CI caches the Maven wrapper distribution and retries its download (#412).
+
 ## 2.3.0
 
 Stack: Spring Boot `4.1.0`, Spring AI `2.0.1`, Java MCP SDK `2.0.1`, bundled
