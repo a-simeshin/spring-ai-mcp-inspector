@@ -51,8 +51,7 @@ MCP Inspector UI `0.22.0`, Java 17+.
 
 - The OAuth-refresh retry pins the fresh Authorization header, with tests
   across core, webflux and webmvc (#387); flaky tests fixed:
-  ResourceRacePaneUiIT gates the delayed reply behind the fast one (#388),
-  the McpProxyTests warm-up wait handles the empty initial state (#384).
+  ResourceRacePaneUiIT gates the delayed reply behind the fast one (#388).
 - The demo E2E suite drives through `data-testid` anchors (#389), and
   fragile E2E selectors are gated in CI (#390).
 - Vendored-client governance: every vendored patch file requires its own
@@ -138,6 +137,7 @@ MCP Inspector UI `0.22.0`, Java 17+.
 - Two flaky test causes fixed on `develop/2.x`: the SSE helper buffer race
   and the `/config` URL clobber (#376); test hardening (#322, #331, #348,
   #363) and unit-test pins (#280, #287).
+- The McpProxyTests warm-up wait handles the empty initial state (#384).
 - Dead proxy code dropped: the unreachable session-header branch in the
   tasks intercept (#319) and the dead budget-timeout fallback in
   SseProxyController (#360).
