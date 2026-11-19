@@ -111,11 +111,13 @@ export default function VersionBadge({ snapshot }: VersionBadgeProps) {
         {showDetails ? (
           <ChevronDown
             className="w-4 h-4 ml-auto cursor-pointer shrink-0"
+            data-testid="version-badge-toggle"
             onClick={() => setShowDetails(false)}
           />
         ) : (
           <ChevronRight
             className="w-4 h-4 ml-auto cursor-pointer shrink-0"
+            data-testid="version-badge-toggle"
             onClick={() => setShowDetails(true)}
           />
         )}

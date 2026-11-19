@@ -813,6 +813,10 @@ class InspectorUiIT {
 			// 2024-11-05 (issue #79 AC #2).
 			badge.shouldHave(Condition.attribute("data-severity", "DOWNGRADE"));
 			badge.shouldHave(text("2024-11-05"));
+			// The mismatch notice sits inside the badge's expandable details
+			// panel, which starts collapsed: expand it through the toggle
+			// anchor before pinning both revisions (issue #79 AC #2).
+			$("[data-testid=version-badge-toggle]").shouldBe(visible, Duration.ofSeconds(10)).click();
 			$("[data-testid=version-mismatch-notice]").shouldBe(visible, Duration.ofSeconds(10))
 				.shouldHave(text("2025-11-25"))
 				.shouldHave(text("2024-11-05"));

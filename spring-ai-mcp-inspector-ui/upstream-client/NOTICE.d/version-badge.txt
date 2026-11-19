@@ -65,6 +65,9 @@ Covered by:
     request, so severity=DOWNGRADE and the mismatch notice names both
     revisions (proving the live downgrade-notice branch, issue #79 AC #2),
     while Direct + Streamable HTTP negotiates 2025-11-25 (severity=OK,
-    proving the green branch). Mutation-checked: with the snapshot
+    proving the green branch). The mismatch notice sits inside the badge's
+    collapsed details panel, so the live test expands it through the
+    data-testid=version-badge-toggle anchor before asserting the notice.
+    Mutation-checked: with the snapshot
     publication disabled both live tests fail on their data-severity asserts.
 Upstream-removed: none (badge unmounts when disconnected)
