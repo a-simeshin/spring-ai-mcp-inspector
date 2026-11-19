@@ -3,6 +3,7 @@
    arrives as a prop from useConnection's handshake capture, so these tests
    cover the rendering decisions only. */
 import { render, screen, fireEvent } from "@testing-library/react";
+import "@testing-library/jest-dom";
 import VersionBadge from "../VersionBadge";
 import { InitializeSnapshot } from "@/lib/protocolRevision";
 
@@ -205,17 +206,29 @@ describe("VersionBadge", () => {
       expect(toggle().getAttribute("role")).toBe("button");
       expect(toggle().getAttribute("aria-expanded")).toBe("false");
       expect(badge().getAttribute("aria-expanded")).toBe("false");
+      expect(toggle().getAttribute("aria-controls")).toBe(
+        "version-badge-details",
+      );
       expect(screen.queryByText("demo-server")).toBeNull();
+
+      // Keyboard focus must survive the open/close round trip: the toggle is
+      // one stable DOM node, never remounted when the panel flips.
+      toggle().focus();
+      expect(toggle()).toHaveFocus();
 
       fireEvent.keyDown(toggle(), { key: "Enter" });
 
       expect(screen.getByText("demo-server")).toBeTruthy();
+      const panel = document.getElementById("version-badge-details");
+      expect(panel).toContainElement(screen.getByText("demo-server"));
+      expect(toggle()).toHaveFocus();
       expect(toggle().getAttribute("aria-expanded")).toBe("true");
       expect(badge().getAttribute("aria-expanded")).toBe("true");
 
       fireEvent.keyDown(toggle(), { key: " " });
 
       expect(screen.queryByText("demo-server")).toBeNull();
+      expect(toggle()).toHaveFocus();
       expect(toggle().getAttribute("aria-expanded")).toBe("false");
       expect(badge().getAttribute("aria-expanded")).toBe("false");
     });
@@ -240,10 +253,17 @@ describe("VersionBadge", () => {
     it("leaves the panel closed for keys that are not Enter or Space", () => {
       render(<VersionBadge snapshot={snapshot()} />);
 
+      // The panel state is asserted after every key: two foreign keys in a
+      // row with a single final check would cancel out under a mutant that
+      // toggles on any key (Tab would open, Escape would close, and the
+      // last assertion would still pass).
       fireEvent.keyDown(toggle(), { key: "Tab" });
-      fireEvent.keyDown(toggle(), { key: "Escape" });
-
       expect(screen.queryByText("demo-server")).toBeNull();
+      expect(badge().getAttribute("aria-expanded")).toBe("false");
+
+      fireEvent.keyDown(toggle(), { key: "Escape" });
+      expect(screen.queryByText("demo-server")).toBeNull();
+      expect(badge().getAttribute("aria-expanded")).toBe("false");
     });
   });
 });
