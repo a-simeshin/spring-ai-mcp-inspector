@@ -18,8 +18,10 @@ HistoryAndNotifications shows a collapsed "Keep-alive pings" section
 (Enter expands, Space collapses; it is a real button), keeping the main
 History list free of ping spam.
 
-App.tsx passes mcpSessionId (exposed by useConnection) to both components
-so the hook can subscribe to the correct session.
+App.tsx passes the proxy-side session id (proxySessionId, exposed by
+useConnection) to useKeepAlive and both components so the keep-alive wiring
+resolves on the session the inspector's endpoints know; the wiring and its
+regression tests are covered by NOTICE.d/keep-alive-session-wiring-test.txt.
 
 Covered by src/lib/hooks/__tests__/useKeepAlive.test.ts (11 tests: null session, snapshot fetch,
 SSE subscription, live ping merge, ping cap, cleanup, auth forms,
