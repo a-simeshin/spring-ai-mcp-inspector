@@ -16,6 +16,7 @@
 
 package io.inspector.mcp.webflux.router;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -197,6 +198,36 @@ class ClientConnectionsHandlerTests {
 					true);
 			assertConnectionShape(array.get(1), "beta", "sse", "https://***@sse.example.com/mcp", "INITIALIZING", 0, 0,
 					null, true);
+		}
+
+		@Test
+		@Story("Failed client")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("snapshot() masks credential-bearing URLs inside lastError, the raw failure text never leaves the endpoint")
+		void snapshot_failedClient_masksCredentialsInLastError() {
+			// given
+			ClientConnectionsHandlerTests.this.registry.markInitializing("demo", "streamable-http",
+					"https://***@mcp.example.com/mcp");
+			ClientConnectionsHandlerTests.this.registry.markFailed("demo",
+					"java.net.ConnectException: https://user:secret@mcp.example.com/mcp?token=abc123");
+
+			// when
+			final byte[] body = ClientConnectionsHandlerTests.this.client.get()
+				.uri("/mcp-inspector/api/client-connections")
+				.exchange()
+				.expectStatus()
+				.isOk()
+				.expectBody(byte[].class)
+				.returnResult()
+				.getResponseBody();
+			final JsonNode array = MAPPER.readTree(body);
+
+			// then
+			assertThat(array.size()).isEqualTo(1);
+			assertConnectionShape(array.get(0), "demo", "streamable-http", "https://***@mcp.example.com/mcp", "FAILED",
+					0, 0, "java.net.ConnectException: https://***@mcp.example.com/mcp", true);
+			assertThat(new String(body, StandardCharsets.UTF_8)).doesNotContain("user:secret")
+				.doesNotContain("token=abc123");
 		}
 
 	}

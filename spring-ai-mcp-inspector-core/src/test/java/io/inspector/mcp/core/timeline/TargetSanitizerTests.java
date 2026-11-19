@@ -25,7 +25,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Unit tests for {@link TargetSanitizer}: userinfo and query redaction for URL targets
- * (including scheme-less values), value-free stdio command lines and idempotence.
+ * (including scheme-less values), free-form text sanitization, value-free stdio command
+ * lines and idempotence.
  *
  * @author Artem Simeshin
  */
@@ -114,6 +115,35 @@ class TargetSanitizerTests {
 		assertThat(TargetSanitizer.sanitizeTarget(sanitized)).isEqualTo(sanitized);
 		final String command = TargetSanitizer.sanitizeCommand("npx", List.of("-y", "--api-key=SECRET"));
 		assertThat(TargetSanitizer.sanitizeCommand(command, List.of())).isEqualTo(command);
+	}
+
+	@Test
+	@DisplayName("free-form text keeps its wording while every URL inside is sanitized")
+	void textKeepsWordingUrlsSanitized() {
+		assertThat(TargetSanitizer.sanitizeText("java.net.ConnectException: https://user:pass@host/mcp?token=x"))
+			.isEqualTo("java.net.ConnectException: https://***@host/mcp");
+		assertThat(TargetSanitizer.sanitizeText("failed https://a@b/c then https://u:p@d/e?k=v stop"))
+			.isEqualTo("failed https://***@b/c then https://***@d/e stop");
+	}
+
+	@Test
+	@DisplayName("text without any scheme URL passes through unchanged")
+	void textWithoutUrlsPassesThrough() {
+		assertThat(TargetSanitizer.sanitizeText("spawn ENOENT")).isEqualTo("spawn ENOENT");
+	}
+
+	@Test
+	@DisplayName("null and empty text pass through")
+	void nullAndEmptyTextPassThrough() {
+		assertThat(TargetSanitizer.sanitizeText(null)).isNull();
+		assertThat(TargetSanitizer.sanitizeText("")).isEmpty();
+	}
+
+	@Test
+	@DisplayName("sanitizing already sanitized text is a no-op")
+	void textIdempotent() {
+		final String once = TargetSanitizer.sanitizeText("connect https://user:pass@host/path?token=x");
+		assertThat(TargetSanitizer.sanitizeText(once)).isEqualTo(once);
 	}
 
 }

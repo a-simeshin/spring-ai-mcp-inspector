@@ -192,6 +192,33 @@ class ClientConnectionsControllerTests {
 					null, true);
 		}
 
+		@Test
+		@Story("Failed client")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("connections() masks credential-bearing URLs inside lastError, the raw failure text never leaves the endpoint")
+		void connections_failedClient_masksCredentialsInLastError() throws Exception {
+			// given
+			ClientConnectionsControllerTests.this.registry.markInitializing("demo", "streamable-http",
+					"https://***@mcp.example.com/mcp");
+			ClientConnectionsControllerTests.this.registry.markFailed("demo",
+					"java.net.ConnectException: https://user:secret@mcp.example.com/mcp?token=abc123");
+
+			// when
+			final String body = ClientConnectionsControllerTests.this.mockMvc
+				.perform(get("/mcp-inspector/api/client-connections"))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+			final JsonNode array = MAPPER.readTree(body);
+
+			// then
+			assertThat(array.size()).isEqualTo(1);
+			assertConnectionShape(array.get(0), "demo", "streamable-http", "https://***@mcp.example.com/mcp", "FAILED",
+					0, 0, "java.net.ConnectException: https://***@mcp.example.com/mcp", true);
+			assertThat(body).doesNotContain("user:secret").doesNotContain("token=abc123");
+		}
+
 	}
 
 }

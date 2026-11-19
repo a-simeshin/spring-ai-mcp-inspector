@@ -24,6 +24,7 @@ import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Mono;
 
 import io.inspector.mcp.core.timeline.ClientConnectionRegistry;
+import io.inspector.mcp.core.timeline.TargetSanitizer;
 
 /**
  * Reactive HTTP handler for {@code GET ${path}/api/client-connections}. Mirrors the
@@ -60,8 +61,24 @@ public class ClientConnectionsHandler {
 	 * @return the connection snapshots as JSON
 	 */
 	public Mono<ServerResponse> snapshot(final ServerRequest request) {
-		final List<ClientConnectionRegistry.ClientConnectionSnapshot> connections = this.connectionRegistry.snapshot();
+		final List<ClientConnectionRegistry.ClientConnectionSnapshot> connections = this.connectionRegistry.snapshot()
+			.stream()
+			.map(ClientConnectionsHandler::sanitized)
+			.toList();
 		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(connections);
+	}
+
+	/**
+	 * Copy of one connection with the failure description sanitized: raw exception text
+	 * may embed credential-bearing URLs, which must never leave the endpoint verbatim.
+	 * @param connection the registry snapshot entry
+	 * @return the same entry with {@code lastError} sanitized
+	 */
+	private static ClientConnectionRegistry.ClientConnectionSnapshot sanitized(
+			final ClientConnectionRegistry.ClientConnectionSnapshot connection) {
+		return new ClientConnectionRegistry.ClientConnectionSnapshot(connection.name(), connection.transportType(),
+				connection.target(), connection.state(), connection.since(), connection.lastActivity(),
+				connection.inCount(), connection.outCount(), TargetSanitizer.sanitizeText(connection.lastError()));
 	}
 
 }

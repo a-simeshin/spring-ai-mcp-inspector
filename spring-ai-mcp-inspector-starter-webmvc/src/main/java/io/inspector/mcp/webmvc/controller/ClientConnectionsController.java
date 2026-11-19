@@ -24,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import io.inspector.mcp.core.timeline.ClientConnectionRegistry;
+import io.inspector.mcp.core.timeline.TargetSanitizer;
 
 /**
  * REST controller exposing the {@link ClientConnectionRegistry} snapshot to the inspector
@@ -62,7 +63,20 @@ public class ClientConnectionsController {
 	 */
 	@GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
 	public List<ClientConnectionRegistry.ClientConnectionSnapshot> connections() {
-		return this.connectionRegistry.snapshot();
+		return this.connectionRegistry.snapshot().stream().map(ClientConnectionsController::sanitized).toList();
+	}
+
+	/**
+	 * Copy of one connection with the failure description sanitized: raw exception text
+	 * may embed credential-bearing URLs, which must never leave the endpoint verbatim.
+	 * @param connection the registry snapshot entry
+	 * @return the same entry with {@code lastError} sanitized
+	 */
+	private static ClientConnectionRegistry.ClientConnectionSnapshot sanitized(
+			final ClientConnectionRegistry.ClientConnectionSnapshot connection) {
+		return new ClientConnectionRegistry.ClientConnectionSnapshot(connection.name(), connection.transportType(),
+				connection.target(), connection.state(), connection.since(), connection.lastActivity(),
+				connection.inCount(), connection.outCount(), TargetSanitizer.sanitizeText(connection.lastError()));
 	}
 
 }

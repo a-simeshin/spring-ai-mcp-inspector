@@ -17,6 +17,8 @@
 package io.inspector.mcp.core.timeline;
 
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Redacts connection targets before they reach timeline payloads, the live registry or
@@ -44,6 +46,8 @@ public final class TargetSanitizer {
 
 	/** Replacement shown in place of credentials. */
 	public static final String REDACTED = "***";
+
+	private static final Pattern SCHEME_URL = Pattern.compile("\\w+://\\S+");
 
 	private TargetSanitizer() {
 	}
@@ -105,6 +109,35 @@ public final class TargetSanitizer {
 			final int equalsIndex = arg.indexOf('=');
 			sb.append((equalsIndex >= 0) ? arg.substring(0, equalsIndex) : arg);
 		}
+		return sb.toString();
+	}
+
+	/**
+	 * Sanitizes free-form text (a failure description, an exception message) by applying
+	 * {@link #sanitizeTarget(String)} to every scheme-bearing URL it contains: userinfo
+	 * credentials become {@code ***} and each URL's query string is dropped. Text without
+	 * any {@code scheme://} occurrence passes through unchanged, which keeps the method
+	 * idempotent and safe to apply to already sanitized input.
+	 * @param rawText the raw text, may be {@code null}
+	 * @return the sanitized text, or the input unchanged when it is {@code null} or empty
+	 */
+	public static String sanitizeText(final String rawText) {
+		if (rawText == null || rawText.isEmpty()) {
+			return rawText;
+		}
+		final Matcher matcher = SCHEME_URL.matcher(rawText);
+		if (!matcher.find()) {
+			return rawText;
+		}
+		final StringBuilder sb = new StringBuilder();
+		int last = 0;
+		do {
+			sb.append(rawText, last, matcher.start());
+			sb.append(sanitizeTarget(matcher.group()));
+			last = matcher.end();
+		}
+		while (matcher.find());
+		sb.append(rawText, last, rawText.length());
 		return sb.toString();
 	}
 
