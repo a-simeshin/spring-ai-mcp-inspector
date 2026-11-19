@@ -771,10 +771,13 @@ class InspectorUiIT {
 	// observed in useConnection (NOTICE.d/version-badge.txt), so it must
 	// render in every connection type and transport. Both live tests assert
 	// the real negotiated revision: the UI SDK (0.22.0) requests its LATEST
-	// 2025-11-25 and the demo's Spring AI server negotiates 2025-11-25, so
-	// the severity is OK. The downgrade/incompatible/unknown branches are
-	// covered by the unit suites (VersionBadge.test.tsx,
-	// protocolRevision.test.ts, useConnection.test.tsx).
+	// 2025-11-25. The demo's Streamable HTTP flavour negotiates 2025-11-25
+	// (severity OK); the SSE flavour negotiates legacy 2024-11-05, so the
+	// live proxy test pins the downgrade notice with both revisions named
+	// (issue #79 AC #2). The incompatible branch stays covered by the unit
+	// suites (VersionBadge.test.tsx, protocolRevision.test.ts): the UI SDK
+	// refuses a handshake that negotiates a revision newer than its own, so
+	// no live server can drive that branch.
 	// =====================================================================
 
 	@Nested
@@ -803,12 +806,16 @@ class InspectorUiIT {
 			badge.shouldBe(visible, Duration.ofSeconds(10));
 			// The demo's SSE flavour negotiates the legacy 2024-11-05 revision
 			// (its server stack predates the 2025 revisions; the UI SDK requested
-			// its LATEST 2025-11-25). 2024-11-05 is not in the known-revision
-			// matrix (mirroring the server-side ProtocolRevision, PR #129), so
-			// the badge honestly reports UNKNOWN severity while still showing
-			// the revision that was actually negotiated on the wire.
-			badge.shouldHave(Condition.attribute("data-severity", "UNKNOWN"));
+			// its LATEST 2025-11-25). 2024-11-05 is registered in the
+			// known-revision matrix (mirroring the server-side ProtocolRevision,
+			// PR #129), so the badge reports DOWNGRADE and the mismatch notice
+			// names both revisions: the requested 2025-11-25 and the supported
+			// 2024-11-05 (issue #79 AC #2).
+			badge.shouldHave(Condition.attribute("data-severity", "DOWNGRADE"));
 			badge.shouldHave(text("2024-11-05"));
+			$("[data-testid=version-mismatch-notice]").shouldBe(visible, Duration.ofSeconds(10))
+				.shouldHave(text("2025-11-25"))
+				.shouldHave(text("2024-11-05"));
 		}
 
 		@Test

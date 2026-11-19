@@ -32,6 +32,11 @@ export interface InitializeSnapshot {
  * logic is table-driven, not an if-cascade.
  */
 const KNOWN_REVISIONS: ReadonlyMap<string, readonly string[]> = new Map([
+  // 2024-11-05: last legacy revision before the baseline, additive relative
+  // to its predecessor, removes nothing. Registered so a live
+  // old-server/new-client downgrade (a current client negotiating with a
+  // legacy 2024-11-05 server) is reported as DOWNGRADE, not UNKNOWN.
+  ["2024-11-05", []],
   // 2025-11-25: baseline revision, nothing removed.
   ["2025-11-25", []],
   // 2026-07-28: stateless protocol; removes handshake, ping, logging,
