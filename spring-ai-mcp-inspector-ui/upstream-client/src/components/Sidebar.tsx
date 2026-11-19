@@ -1572,26 +1572,7 @@ const Sidebar = ({
           <Button
             className="w-full"
             data-testid="sidebar-connect-button"
-            onClick={() => {
-              // Mark URL as touched on first connect attempt
-              if (transportType !== "stdio") {
-                setUrlTouched(true);
-                const result = validateServerUrl(sseUrl);
-                if (!result.isValid) {
-                  setUrlError(result.errorMessage);
-                  return;
-                }
-              }
-              // Block connect if connection timeout is invalid (proxy only)
-              if (
-                connectionType === "proxy" &&
-                !isValidConnectionTimeout(connectionTimeout)
-              ) {
-                setTimeoutError(CONNECTION_TIMEOUT_ERROR);
-                return;
-              }
-              onConnect();
-            }}
+            onClick={onConnect}
             disabled={
               (transportType !== "stdio" && !!urlError) ||
               (connectionType === "proxy" && !!timeoutError)
