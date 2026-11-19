@@ -309,6 +309,51 @@ spring:
 
 Inspector now lives at `/admin/inspector/`; the proxy is at `/admin/inspector-api`.
 
+### Client connection capture
+
+Applications that embed an outbound MCP client (for example a Spring AI
+`spring-ai-starter-mcp-client` named connection) can have that client's traffic
+inspected alongside the server. The feature is off by default:
+
+```yaml
+spring:
+  ai:
+    mcp:
+      inspector:
+        timeline:
+          client-capture-enabled: true
+```
+
+When enabled, the inspector wraps every `NamedClientMcpTransport` bean and:
+
+- serves live connection snapshots (name, transport type, sanitized target, state,
+  counters) at `${path}/api/client-connections`, rendered in the **Clients** tab;
+- records the client's JSON-RPC requests, responses and notifications into the
+  Timeline with `side=client` provenance, a distinct client badge and a client/server
+  filter;
+- correlates server-initiated requests (sampling, elicitation, logging, progress) with
+  the `@McpSampling` / `@McpElicitation` / `@McpLogging` / `@McpProgress` handler beans
+  that consume them (`consumedBy`), and flags unhandled clients as desync diagnostics.
+
+The bundled demo app is a working example: it connects one client named
+`demo-loopback` to its own MCP server endpoint, so the inspector UI always shows a live
+client connection out of the box. Because the client beans are created before the web
+server port exists, the demo sets `spring.ai.mcp.client.initialized=false` and
+initializes the client from an `ApplicationReadyEvent` listener:
+
+```yaml
+spring:
+  ai:
+    mcp:
+      client:
+        initialized: false
+        streamable-http:
+          connections:
+            demo-loopback:
+              url: http://127.0.0.1:${server.port:8080}
+              endpoint: /mcp
+```
+
 ### Proxy timeouts
 
 The proxy backend ships with upstream-compatible defaults. Override them under

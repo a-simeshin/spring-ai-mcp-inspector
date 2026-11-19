@@ -6,9 +6,34 @@ spring:
       inspector:
         timeline:
           enabled: true
+          # Capture the demo app's own outbound MCP client traffic into the
+          # timeline (issue #120): connection snapshots under
+          # ${path}/api/client-connections and side=client frames in the timeline.
+          client-capture-enabled: true
       server:
         name: mcp-inspector-demo
         version: 0.1.0
         protocol: STREAMABLE
+      client:
+        enabled: true
+        # The loopback client is initialized explicitly by
+        # DemoLoopbackClientInitializer once the embedded web server is up:
+        # client beans are created during context refresh, before the server
+        # port exists, so eager initialization would hit the app's own MCP
+        # endpoint with connection refused.
+        initialized: false
+        # The demo has no ChatClient, so the client's tools must not be exposed
+        # as ToolCallbacks.
+        toolcallback:
+          enabled: false
+        streamable-http:
+          connections:
+            # The demo app connects one client to its own MCP server endpoint
+            # (loopback). ${server.port} keeps integration tests working on a
+            # port chosen before boot; tests must pass an explicit non-zero
+            # --server.port, RANDOM_PORT would resolve the placeholder to 0.
+            demo-loopback:
+              url: http://127.0.0.1:${server.port:8080}
+              endpoint: /mcp
 server:
   port: 8080
