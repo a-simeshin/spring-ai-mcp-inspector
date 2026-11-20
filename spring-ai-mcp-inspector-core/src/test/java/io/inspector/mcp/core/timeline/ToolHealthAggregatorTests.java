@@ -154,6 +154,21 @@ class ToolHealthAggregatorTests {
 		}
 
 		@Test
+		@DisplayName("sorts the result by tool name even when insertion order differs")
+		void statsSortedByToolNameRegardlessOfInsertionOrder() {
+			// given: the newest-first walk sees beta first, so the per-tool state is
+			// built in beta, alpha order; the documented result order is by name
+			final List<TimelineEvent> events = List.of(requestEvent("o2", "beta", BASE.plusMillis(200)),
+					responseWithResult("o2", false, BASE.plusMillis(210)),
+					requestEvent("o1", "alpha", BASE.plusMillis(100)),
+					responseWithResult("o1", false, BASE.plusMillis(110)));
+			// when
+			final List<ToolHealthStat> stats = ToolHealthAggregator.computeToolHealth(events);
+			// then
+			assertThat(stats).extracting(ToolHealthStat::method).containsExactly("alpha", "beta");
+		}
+
+		@Test
 		@DisplayName("p50 and p95 match the manual nearest-rank calculation")
 		void nearestRankPercentiles() {
 			// given: four answered calls with durations 10, 20, 30, 40.
