@@ -89,6 +89,11 @@
             <scope>test</scope>
         </dependency>
         <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>io.github.a-simeshin</groupId>
             <artifactId>spring-ai-mcp-inspector-core</artifactId>
             <version>${project.version}</version>

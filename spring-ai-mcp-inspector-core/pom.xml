@@ -117,6 +117,28 @@
                 </exclusion>
             </exclusions>
         </dependency>
+        <!-- The stack test modules provide the annotations the generated regression
+             test sources import (@AutoConfigureMockMvc / @AutoConfigureWebTestClient);
+             the compile test in JUnitTestSkeletonGeneratorTests javacs both generated
+             variants against exactly these. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-webtestclient</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- MockMvc signatures reference the servlet API (async requests, response
+             access); the host project's web starter brings it, and the compile test
+             mirrors that contract. -->
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <scope>test</scope>
+        </dependency>
 
         <!-- SLF4J binding for tests only: the excluded spring-boot-starter would
              normally supply it, and without a binding no log output reaches
