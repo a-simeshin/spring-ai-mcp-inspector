@@ -16,6 +16,24 @@
 
 package io.inspector.mcp.core.export;
 
+import java.io.File;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
+import java.util.stream.Collectors;
+
+import javax.tools.Diagnostic;
+import javax.tools.DiagnosticCollector;
+import javax.tools.JavaCompiler;
+import javax.tools.JavaFileObject;
+import javax.tools.SimpleJavaFileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.StandardLocation;
+import javax.tools.ToolProvider;
+
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
 import io.qameta.allure.Feature;
@@ -25,6 +43,7 @@ import io.qameta.allure.Story;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -220,10 +239,10 @@ class JUnitTestSkeletonGeneratorTests {
 
 			final String flat = unwrapped(source);
 			assertThat(flat).contains("REQUEST_JSON = \"" + ESCAPED_SAMPLE_ARGS + "\";");
-			assertThat(flat).contains("ETALON_RESULT_JSON = \"" + ESCAPED_SAMPLE_RESULT + "\";");
+			assertThat(flat).contains("ETALON_RESPONSE_JSON = \"" + ESCAPED_SAMPLE_RESULT + "\";");
 			assertThat(source).contains(CONTINUATION);
 			assertThat(source)
-				.contains("JSONAssert.assertEquals(ETALON_RESULT_JSON, responseBody, JSONCompareMode.LENIENT);");
+				.contains("JSONAssert.assertEquals(extractResult(ETALON_RESPONSE_JSON), extractResult(response),");
 		}
 
 		@Test
@@ -281,7 +300,7 @@ class JUnitTestSkeletonGeneratorTests {
 
 			final String flat = unwrapped(source);
 			assertThat(flat).contains("REQUEST_JSON = \"" + ESCAPED_SAMPLE_ARGS + "\";");
-			assertThat(flat).contains("ETALON_RESULT_JSON = \"" + ESCAPED_SAMPLE_RESULT + "\";");
+			assertThat(flat).contains("ETALON_RESPONSE_JSON = \"" + ESCAPED_SAMPLE_RESULT + "\";");
 			assertThat(source).contains(CONTINUATION);
 		}
 
@@ -341,6 +360,113 @@ class JUnitTestSkeletonGeneratorTests {
 			final String source = generator.generate(call, "com.example.demo");
 
 			assertThat(source).contains("{\\\"text\\\":\\\"ok\\\"}\\n");
+		}
+
+	}
+
+	@Nested
+	@DisplayName("Streamable HTTP handshake contract")
+	class StreamableHttpHandshake {
+
+		@Test
+		@Story("WebMVC skeleton")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("WebMVC skeleton declares the Accept pair, initializes the session, extracts SSE answers and compares result only")
+		void generate_whenSampleCall_webMvcCarriesStreamableHttpContract() {
+			final MockMvcSkeletonGenerator generator = new MockMvcSkeletonGenerator();
+
+			final String source = generator.generate(SAMPLE_CALL, "com.example.demo");
+
+			assertThat(source).contains(".accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)");
+			assertThat(source).contains("notifications/initialized");
+			assertThat(source).contains("Mcp-Session-Id");
+			assertThat(source).contains("extractJsonRpcResponse(replay.body(), requestId())");
+			assertThat(source).contains("extractResult(ETALON_RESPONSE_JSON)");
+			assertThat(source).contains("asyncDispatch(result)");
+		}
+
+		@Test
+		@Story("WebFlux skeleton")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("WebFlux skeleton declares the Accept pair, initializes the session, extracts SSE answers and compares result only")
+		void generate_whenSampleCall_webFluxCarriesStreamableHttpContract() {
+			final WebTestClientSkeletonGenerator generator = new WebTestClientSkeletonGenerator();
+
+			final String source = generator.generate(SAMPLE_CALL, "com.example.demo");
+
+			assertThat(source).contains(".accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)");
+			assertThat(source).contains("notifications/initialized");
+			assertThat(source).contains("Mcp-Session-Id");
+			assertThat(source).contains("extractJsonRpcResponse(replay.body(), requestId())");
+			assertThat(source).contains("extractResult(ETALON_RESPONSE_JSON)");
+		}
+
+	}
+
+	@Nested
+	@DisplayName("Generated sources compile")
+	class Compiles {
+
+		@Test
+		@Story("Compilable skeleton")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("the generated WebMVC source compiles with javac against this module's test classpath")
+		void compile_whenWebMvcVariant_compilesAgainstTestClasspath(final @TempDir Path outputDir) throws Exception {
+			final MockMvcSkeletonGenerator generator = new MockMvcSkeletonGenerator();
+
+			assertCompiles("EchoRegressionTest", generator.generate(SAMPLE_CALL, "com.example.demo"), outputDir);
+		}
+
+		@Test
+		@Story("Compilable skeleton")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("the generated WebFlux source compiles with javac against this module's test classpath")
+		void compile_whenWebFluxVariant_compilesAgainstTestClasspath(final @TempDir Path outputDir) throws Exception {
+			final WebTestClientSkeletonGenerator generator = new WebTestClientSkeletonGenerator();
+
+			assertCompiles("EchoRegressionTest", generator.generate(SAMPLE_CALL, "com.example.demo"), outputDir);
+		}
+
+		/**
+		 * Compiles {@code source} with the platform compiler against this module's test
+		 * classpath: exactly the jars a generated regression test may reference
+		 * ({@code spring-boot-starter-test} and the stack test module).
+		 * @param className simple name of the generated class
+		 * @param source generated Java source
+		 * @param outputDir directory the class files are written to
+		 * @throws Exception when the compiler cannot be configured
+		 */
+		private static void assertCompiles(final String className, final String source, final Path outputDir)
+				throws Exception {
+			final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+			assertThat(compiler).as("system Java compiler (a JDK is required)").isNotNull();
+			final DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+			try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, Locale.ROOT,
+					StandardCharsets.UTF_8)) {
+				fileManager.setLocation(StandardLocation.CLASS_OUTPUT, List.of(outputDir.toFile()));
+				fileManager.setLocation(StandardLocation.CLASS_PATH,
+						Arrays.stream(System.getProperty("java.class.path").split(File.pathSeparator))
+							.map(File::new)
+							.toList());
+				final JavaFileObject unit = new SimpleJavaFileObject(
+						URI.create("string:///" + className + JavaFileObject.Kind.SOURCE.extension),
+						JavaFileObject.Kind.SOURCE) {
+
+					@Override
+					public CharSequence getCharContent(final boolean ignoreEncodingErrors) {
+						return source;
+					}
+				};
+				final Boolean success = compiler.getTask(null, fileManager, diagnostics, null, null, List.of(unit))
+					.call();
+				final String errors = diagnostics.getDiagnostics()
+					.stream()
+					.filter((diagnostic) -> diagnostic.getKind() == Diagnostic.Kind.ERROR)
+					.map((diagnostic) -> "line " + diagnostic.getLineNumber() + ": "
+							+ diagnostic.getMessage(Locale.ROOT))
+					.collect(Collectors.joining("\n"));
+				assertThat(success).as("generated source must compile, javac errors:\n%s", errors).isTrue();
+			}
 		}
 
 	}
