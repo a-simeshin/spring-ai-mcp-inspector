@@ -50,6 +50,8 @@ import io.qameta.allure.Feature;
 import io.qameta.allure.Severity;
 import io.qameta.allure.SeverityLevel;
 import io.qameta.allure.Story;
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -75,9 +77,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  * recorded etalon on the demo application.
  *
  * <p>
+ * The recorded etalon id is rewritten to a sentinel before generating, so it can never
+ * match the id the replay runs under: the generated test can only pass on the comparison
+ * of the {@code result} members. Two transports are exercised: the stateful STREAMABLE
+ * demo server (returns {@code Mcp-Session-Id}) and the stateless one (never returns a
+ * session id, the notification branch is skipped).
+ * </p>
+ *
+ * <p>
  * This IT runs on both stacks (the module supplies the stack): WebMVC boots the generated
  * MockMvc variant, WebFlux the WebTestClient variant. A mutant that drops the Accept
- * header turns the generated replay into a 400 and fails here.
+ * header turns the generated replay into a 400 and fails here; a mutant that compares the
+ * full JSON-RPC envelope fails here on the sentinel id.
  * </p>
  */
 @Epic("Demo MCP Server")
@@ -96,35 +107,82 @@ class GeneratedSkeletonReplayIT {
 
 	private static final String TEST_CLASS_NAME = "io.inspector.mcp.demo.tools.EchoRegressionTest";
 
+	/**
+	 * Sentinel replacing the recorded JSON-RPC id in the etalon: the replayed request
+	 * keeps its own id, so a full-envelope comparison can never pass and the replay
+	 * proves the result-only comparison.
+	 */
+	private static final String SENTINEL_ETALON_ID = "recorded-by-inspector";
+
 	@Test
 	@Story("Generated skeleton replay")
 	@Severity(SeverityLevel.CRITICAL)
-	@DisplayName("generatedSkeletonReplaysCapturedEchoCall - recorded from the live server, replayed green")
-	@Description("Records a real echo tools/call from a running demo app (STREAMABLE), generates the skeleton for "
-			+ "this stack, compiles it with javac, and runs it through the JUnit Platform Launcher: the generated "
-			+ "@SpringBootTest replays the call against the demo MCP endpoint and must reproduce the etalon.")
-	void generatedSkeleton_replaysCapturedEchoCall_againstDemoServer(@TempDir Path generatedClasses) throws Exception {
-		// given: a captured (recorded) echo call against the live demo server
-		final String recordedResponse = recordEchoCall();
-		final ToolCallRecord call = new ToolCallRecord("echo", "tools/call", REQUEST_JSON, recordedResponse,
-				Instant.now().toString());
+	@DisplayName("generatedSkeletonReplaysCapturedEchoCall - stateful server, green on a sentinel etalon id")
+	@Description("Records a real echo tools/call from a running stateful demo app (STREAMABLE, Mcp-Session-Id returned), "
+			+ "rewrites the recorded etalon id to a sentinel, generates the skeleton for this stack, compiles it with javac, "
+			+ "and runs it through the JUnit Platform Launcher: the generated @SpringBootTest replays the call and must "
+			+ "reproduce the etalon result-only, under an etalon id that can never match the replayed one.")
+	void generatedSkeleton_replaysCapturedEchoCall_onStatefulDemoServer(@TempDir Path generatedClasses)
+			throws Exception {
+		final RecordedEcho recorded = recordEchoCall("STREAMABLE");
+		assertThat(recorded.sessionSeen()).as("the STREAMABLE demo server must be stateful and return Mcp-Session-Id")
+			.isTrue();
+		replayGeneratedSkeleton(recorded.etalon(), generatedClasses);
+	}
 
+	@Test
+	@Story("Generated skeleton replay")
+	@Severity(SeverityLevel.CRITICAL)
+	@DisplayName("generatedSkeletonReplaysCapturedEchoCall - stateless server, green without a session")
+	@Description("Same round trip against the stateless demo transport (STATELESS, no Mcp-Session-Id): the generated "
+			+ "test must skip the initialized notification (no session id) and reproduce the etalon result-only.")
+	void generatedSkeleton_replaysCapturedEchoCall_onStatelessDemoServer(@TempDir Path generatedClasses)
+			throws Exception {
+		final RecordedEcho recorded = recordEchoCall("STATELESS");
+		assertThat(recorded.sessionSeen()).as("the STATELESS demo server must not return Mcp-Session-Id").isFalse();
+		replayGeneratedSkeleton(recorded.etalon(), generatedClasses);
+	}
+
+	/**
+	 * Result of recording one echo call against a live demo server: the etalon handed to
+	 * the generator, and whether the server proved stateful by returning a session id.
+	 */
+	private record RecordedEcho(String etalon, boolean sessionSeen) {
+	}
+
+	/**
+	 * Generates the stack-specific skeleton for the given etalon, compiles it and runs it
+	 * through the JUnit Platform Launcher: the generated test must reproduce the etalon
+	 * on the live demo application.
+	 * @param etalon captured JSON-RPC response with the sentinel id
+	 * @param generatedClasses directory the generated classes are compiled into
+	 * @throws Exception when generation or compilation fails
+	 */
+	private static void replayGeneratedSkeleton(String etalon, Path generatedClasses) throws Exception {
+		// given: a captured (recorded) echo call against the live demo server
+		final ToolCallRecord call = new ToolCallRecord("echo", "tools/call", REQUEST_JSON, etalon,
+				Instant.now().toString());
 		// when: the stack-specific skeleton is generated and compiled
 		final JUnitTestSkeletonGenerator generator = "webflux".equals(ProxyAppHarness.stack())
 				? new WebTestClientSkeletonGenerator() : new MockMvcSkeletonGenerator();
 		final String source = generator.generate(call, "io.inspector.mcp.demo");
 		compileGeneratedSource("EchoRegressionTest", source, generatedClasses);
-
 		// then: the generated test boots the demo app and replays the captured call
 		runGeneratedTest(generatedClasses);
 	}
 
 	/**
-	 * Response body recorded from the live demo server: the JSON-RPC answer of the echo
-	 * call, reduced out of an SSE stream when the server streamed it.
+	 * Records a real echo call against the live demo server ({@code STREAMABLE} or
+	 * {@code STATELESS}): performs the handshake the way the inspector recording client
+	 * would, captures the raw echo answer, reduces it to the JSON-RPC response and
+	 * rewrites its id to the sentinel, so the etalon handed to the generator can never
+	 * match the replayed id by construction.
+	 * @param protocol demo transport protocol, {@code STREAMABLE} or {@code STATELESS}
+	 * @return the sentinel-id etalon with the statefulness the server proved
+	 * @throws Exception when the server misbehaves
 	 */
-	private static String recordEchoCall() throws Exception {
-		final ConfigurableApplicationContext app = ProxyAppHarness.start("STREAMABLE", false, null);
+	private static RecordedEcho recordEchoCall(String protocol) throws Exception {
+		final ConfigurableApplicationContext app = ProxyAppHarness.start(protocol, false, null);
 		try {
 			final String base = "http://127.0.0.1:" + ProxyAppHarness.port(app) + "/mcp";
 			final HttpClient client = HttpClient.newHttpClient();
@@ -134,22 +192,37 @@ class GeneratedSkeletonReplayIT {
 					HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
 			assertThat(response.statusCode()).as("initialize against the demo server must succeed").isEqualTo(200);
 			final String session = response.headers().firstValue("mcp-session-id").orElse(null);
-			if (session != null) {
+			final boolean sessionSeen = session != null && !session.isBlank();
+			if (sessionSeen) {
 				response = client.send(post(base, INITIALIZED_NOTIFICATION_JSON, session),
 						HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
 				assertThat(response.statusCode()).as("notifications/initialized must be accepted").isEqualTo(202);
 			}
 
-			// the captured call itself; its raw answer is the etalon for the generated
-			// test
+			// the captured call itself; its raw answer is reduced to the etalon and
+			// given the sentinel id
 			response = client.send(post(base, REQUEST_JSON, session),
 					HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
 			assertThat(response.statusCode()).as("echo tools/call against the demo server must succeed").isEqualTo(200);
-			return jsonRpcAnswer(response.body(), "42");
+			return new RecordedEcho(etalonWithSentinelId(jsonRpcAnswer(response.body(), "42")), sessionSeen);
 		}
 		finally {
 			app.close();
 		}
+	}
+
+	/**
+	 * Rewrites the recorded JSON-RPC id to {@link #SENTINEL_ETALON_ID}: the replayed
+	 * request keeps its own id, so the generated test can only pass on the comparison of
+	 * the {@code result} members.
+	 * @param recordedResponse JSON-RPC response captured from the live server
+	 * @return the same envelope under the sentinel id
+	 */
+	private static String etalonWithSentinelId(String recordedResponse) throws JSONException {
+		final JSONObject envelope = new JSONObject(recordedResponse);
+		envelope.put("id", SENTINEL_ETALON_ID);
+		assertThat(envelope.optString("id")).as("the etalon id rewrite must take effect").isEqualTo(SENTINEL_ETALON_ID);
+		return envelope.toString();
 	}
 
 	/**

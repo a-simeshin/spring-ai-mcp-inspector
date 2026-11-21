@@ -17,7 +17,10 @@
 package io.inspector.mcp.core.export;
 
 import java.io.File;
+import java.lang.reflect.Method;
 import java.net.URI;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -77,6 +80,46 @@ class JUnitTestSkeletonGeneratorTests {
 	 */
 	private static String unwrapped(final String source) {
 		return source.replace(CONTINUATION, "");
+	}
+
+	/**
+	 * Compiles {@code source} with the platform compiler against this module's test
+	 * classpath: exactly the jars a generated regression test may reference
+	 * ({@code spring-boot-starter-test} and the stack test module).
+	 * @param className simple name of the generated class
+	 * @param source generated Java source
+	 * @param outputDir directory the class files are written to
+	 * @throws Exception when the compiler cannot be configured
+	 */
+	private static void assertCompiles(final String className, final String source, final Path outputDir)
+			throws Exception {
+		final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+		assertThat(compiler).as("system Java compiler (a JDK is required)").isNotNull();
+		final DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+		try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, Locale.ROOT,
+				StandardCharsets.UTF_8)) {
+			fileManager.setLocation(StandardLocation.CLASS_OUTPUT, List.of(outputDir.toFile()));
+			fileManager.setLocation(StandardLocation.CLASS_PATH,
+					Arrays.stream(System.getProperty("java.class.path").split(File.pathSeparator))
+						.map(File::new)
+						.toList());
+			final JavaFileObject unit = new SimpleJavaFileObject(
+					URI.create("string:///" + className + JavaFileObject.Kind.SOURCE.extension),
+					JavaFileObject.Kind.SOURCE) {
+
+				@Override
+				public CharSequence getCharContent(final boolean ignoreEncodingErrors) {
+					return source;
+				}
+			};
+			final Boolean success = compiler.getTask(null, fileManager, diagnostics, null, null, List.of(unit)).call();
+			final String errors = diagnostics.getDiagnostics()
+				.stream()
+				.filter((diagnostic) -> diagnostic.getKind() == Diagnostic.Kind.ERROR)
+				.map((diagnostic) -> "line " + diagnostic.getLineNumber() + ": " + diagnostic.getMessage(Locale.ROOT))
+				.collect(Collectors.joining("\n"));
+			assertThat(success).as("generated source must compile, javac errors:\n%s", errors).isTrue();
+		}
 	}
 
 	@Nested
@@ -427,45 +470,80 @@ class JUnitTestSkeletonGeneratorTests {
 			assertCompiles("EchoRegressionTest", generator.generate(SAMPLE_CALL, "com.example.demo"), outputDir);
 		}
 
-		/**
-		 * Compiles {@code source} with the platform compiler against this module's test
-		 * classpath: exactly the jars a generated regression test may reference
-		 * ({@code spring-boot-starter-test} and the stack test module).
-		 * @param className simple name of the generated class
-		 * @param source generated Java source
-		 * @param outputDir directory the class files are written to
-		 * @throws Exception when the compiler cannot be configured
-		 */
-		private static void assertCompiles(final String className, final String source, final Path outputDir)
-				throws Exception {
-			final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-			assertThat(compiler).as("system Java compiler (a JDK is required)").isNotNull();
-			final DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-			try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(diagnostics, Locale.ROOT,
-					StandardCharsets.UTF_8)) {
-				fileManager.setLocation(StandardLocation.CLASS_OUTPUT, List.of(outputDir.toFile()));
-				fileManager.setLocation(StandardLocation.CLASS_PATH,
-						Arrays.stream(System.getProperty("java.class.path").split(File.pathSeparator))
-							.map(File::new)
-							.toList());
-				final JavaFileObject unit = new SimpleJavaFileObject(
-						URI.create("string:///" + className + JavaFileObject.Kind.SOURCE.extension),
-						JavaFileObject.Kind.SOURCE) {
+	}
 
-					@Override
-					public CharSequence getCharContent(final boolean ignoreEncodingErrors) {
-						return source;
-					}
-				};
-				final Boolean success = compiler.getTask(null, fileManager, diagnostics, null, null, List.of(unit))
-					.call();
-				final String errors = diagnostics.getDiagnostics()
-					.stream()
-					.filter((diagnostic) -> diagnostic.getKind() == Diagnostic.Kind.ERROR)
-					.map((diagnostic) -> "line " + diagnostic.getLineNumber() + ": "
-							+ diagnostic.getMessage(Locale.ROOT))
-					.collect(Collectors.joining("\n"));
-				assertThat(success).as("generated source must compile, javac errors:\n%s", errors).isTrue();
+	@Nested
+	@DisplayName("SSE answer extraction targets the replayed request id")
+	class SseAnswerExtraction {
+
+		private static final String NOTIFICATION_DATA = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\"}";
+
+		private static final String FOREIGN_ID_DATA = "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"content\":"
+				+ "[{\"type\":\"text\",\"text\":\"foreign\"}]}}";
+
+		private static final String REPLAYED_ID_DATA = "{\"jsonrpc\":\"2.0\",\"id\":42,\"result\":{\"content\":"
+				+ "[{\"type\":\"text\",\"text\":\"replayed\"}]}}";
+
+		private static final String MULTI_EVENT_STREAM = "event: message\ndata: " + NOTIFICATION_DATA
+				+ "\n\nevent: message\ndata: " + FOREIGN_ID_DATA + "\n\nevent: message\ndata: " + REPLAYED_ID_DATA
+				+ "\n\n";
+
+		@Test
+		@Story("WebMVC skeleton")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("compiled WebMVC extractJsonRpcResponse returns the data line answering the replayed id only, "
+				+ "server notifications and foreign-id answers are ignored")
+		void extract_whenStreamCarriesForeignIdAndNotification_returnsReplayedIdAnswer_webMvc(
+				final @TempDir Path outputDir) throws Exception {
+			final MockMvcSkeletonGenerator generator = new MockMvcSkeletonGenerator();
+
+			assertCompiles("EchoRegressionTest", generator.generate(SAMPLE_CALL, "com.example.demo"), outputDir);
+
+			assertThat(extractViaReflection(outputDir, MULTI_EVENT_STREAM, "42"))
+				.as("the data line answering the replayed id must be returned")
+				.isEqualTo(REPLAYED_ID_DATA);
+			assertThat(extractViaReflection(outputDir, MULTI_EVENT_STREAM, "99"))
+				.as("events not answering the replayed id must be ignored, the raw body returned")
+				.isEqualTo(MULTI_EVENT_STREAM);
+		}
+
+		@Test
+		@Story("WebFlux skeleton")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("compiled WebFlux extractJsonRpcResponse returns the data line answering the replayed id only, "
+				+ "server notifications and foreign-id answers are ignored")
+		void extract_whenStreamCarriesForeignIdAndNotification_returnsReplayedIdAnswer_webFlux(
+				final @TempDir Path outputDir) throws Exception {
+			final WebTestClientSkeletonGenerator generator = new WebTestClientSkeletonGenerator();
+
+			assertCompiles("EchoRegressionTest", generator.generate(SAMPLE_CALL, "com.example.demo"), outputDir);
+
+			assertThat(extractViaReflection(outputDir, MULTI_EVENT_STREAM, "42"))
+				.as("the data line answering the replayed id must be returned")
+				.isEqualTo(REPLAYED_ID_DATA);
+			assertThat(extractViaReflection(outputDir, MULTI_EVENT_STREAM, "99"))
+				.as("events not answering the replayed id must be ignored, the raw body returned")
+				.isEqualTo(MULTI_EVENT_STREAM);
+		}
+
+		/**
+		 * Invokes the generated static {@code extractJsonRpcResponse} of the class
+		 * compiled into {@code outputDir} reflectively: the extraction logic is asserted
+		 * as behavior of the compiled generated code, not as template text.
+		 * @param outputDir directory holding the compiled generated test
+		 * @param rawBody raw answer body the generated test would inspect
+		 * @param requestId id of the replayed request
+		 * @return the reduced JSON-RPC response the generated code computes
+		 * @throws Exception when the compiled class cannot be loaded or invoked
+		 */
+		private static String extractViaReflection(final Path outputDir, final String rawBody, final String requestId)
+				throws Exception {
+			try (URLClassLoader loader = new URLClassLoader(new URL[] { outputDir.toUri().toURL() },
+					JUnitTestSkeletonGeneratorTests.class.getClassLoader())) {
+				final Class<?> generated = Class.forName("com.example.demo.tools.EchoRegressionTest", true, loader);
+				final Method method = generated.getDeclaredMethod("extractJsonRpcResponse", String.class, String.class);
+				method.setAccessible(true);
+				return (String) method.invoke(null, rawBody, requestId);
 			}
 		}
 
