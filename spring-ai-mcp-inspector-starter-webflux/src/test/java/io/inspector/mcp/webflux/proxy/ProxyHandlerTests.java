@@ -2776,7 +2776,7 @@ class ProxyHandlerTests {
 			final ProxySession session = newSession("s1");
 			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
 			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-123",
-					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.getTask("t-123")).willReturn(handle);
 			final ServerRequest request = buildTaskRequest("s1",
 					"{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");

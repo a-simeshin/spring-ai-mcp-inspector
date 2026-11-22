@@ -1410,7 +1410,7 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
 			final TaskHandle handle = new TaskHandle("t-123", "working", null, "2025-01-01T00:00:00Z",
-					"2025-01-01T00:00:00Z", 60000, 5000);
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.getTask("t-123")).willReturn(handle);
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
