@@ -1957,6 +1957,70 @@ class StreamableHttpProxyControllerTests {
 			assertThat(recordedResponse.get("error").get("message").asText()).contains("not-a-number");
 		}
 
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/list records the request and the locally produced response into the traffic timeline")
+		void tasksList_interceptedLocally_recordsLocalExchange() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":48,\"method\":\"tasks/list\"}");
+			final TaskHandle handle = new TaskHandle("t-1", "working", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
+			given(this.taskService.listTasks()).willReturn(java.util.List.of(handle));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: the recorded pair correlates through the shared JSON-RPC id and the
+			// recorded payload equals the body returned to the client
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy).recordLocalExchange(eq(session), eq(body),
+					responseCaptor.capture());
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(48);
+			assertThat(recordedResponse.get("result").get("tasks")).hasSize(1);
+			assertThat(recordedResponse.get("result").get("tasks").get(0).get("taskId").asText()).isEqualTo("t-1");
+			assertThat(recordedResponse).isEqualTo((JsonNode) response.getBody());
+			// the locally answered frame never reaches the upstream
+			verify(session.targetTransport(), never()).sendMessage(any());
+		}
+
+		@Test
+		@Story("tasks/cancel interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/cancel records the request and the locally produced response into the traffic timeline")
+		void tasksCancel_interceptedLocally_recordsLocalExchange() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":49,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"t-456\"}}");
+			final TaskHandle handle = new TaskHandle("t-456", "cancelled", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
+			given(this.taskService.cancelTask("t-456")).willReturn(handle);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: the recorded pair correlates through the shared JSON-RPC id and the
+			// recorded payload equals the body returned to the client
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy).recordLocalExchange(eq(session), eq(body),
+					responseCaptor.capture());
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(49);
+			assertThat(recordedResponse.get("result").get("taskId").asText()).isEqualTo("t-456");
+			assertThat(recordedResponse.get("result").get("status").asText()).isEqualTo("cancelled");
+			assertThat(recordedResponse).isEqualTo((JsonNode) response.getBody());
+			// the locally answered frame never reaches the upstream
+			verify(session.targetTransport(), never()).sendMessage(any());
+		}
+
 	}
 
 	@Nested
