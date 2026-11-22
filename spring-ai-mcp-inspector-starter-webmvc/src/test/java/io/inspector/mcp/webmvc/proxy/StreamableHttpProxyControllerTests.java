@@ -1902,6 +1902,61 @@ class StreamableHttpProxyControllerTests {
 			assertThat(responseBody.get("error").get("message").asText()).contains("not-a-number");
 		}
 
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/get error records the request and the -32602 error envelope into the timeline")
+		void tasksGet_unknownTask_recordsRequestAndErrorEnvelopeInTimeline() throws Exception {
+			// given: an unknown taskId answered locally with a -32602 error
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":45,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"missing\"}}");
+			given(this.taskService.getTask("missing")).willThrow(new TaskNotFoundException("missing"));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: the request and the locally produced -32602 error envelope are
+			// recorded together into the traffic timeline
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy).recordLocalExchange(eq(session), eq(body),
+					responseCaptor.capture());
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(45);
+			assertThat(recordedResponse.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(recordedResponse.get("error").get("message").asText()).containsIgnoringCase("not found");
+		}
+
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/list error records the request and the -32602 error envelope into the timeline")
+		void tasksList_nonNumericCursor_recordsRequestAndErrorEnvelopeInTimeline() throws Exception {
+			// given: a cursor that is not a decimal offset
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":46,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"not-a-number\"}}");
+			final java.util.List<TaskHandle> noTasks = java.util.List.of();
+			given(this.taskService.listTasks()).willReturn(noTasks);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: the request and the locally produced -32602 error envelope are
+			// recorded together into the traffic timeline
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy).recordLocalExchange(eq(session), eq(body),
+					responseCaptor.capture());
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(46);
+			assertThat(recordedResponse.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(recordedResponse.get("error").get("message").asText()).contains("not-a-number");
+		}
+
 	}
 
 	@Nested

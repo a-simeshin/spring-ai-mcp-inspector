@@ -139,6 +139,36 @@ class McpProxyTests {
 
 		@Test
 		@Story("Locally answered frames hit the traffic timeline")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered -32602 error envelope is recorded as a correlated response and leaves no pending correlation behind")
+		void recordLocalExchange_correlatesErrorEnvelopeAndClearsPendingCorrelation() throws Exception {
+			// given
+			final BoundedTimelineService timeline = new BoundedTimelineService(16);
+			final McpTrafficRecorder recorder = new McpTrafficRecorder(timeline);
+			final McpProxy localProxy = new McpProxy(McpProxyTests.this.mapper, recorder);
+			final JsonNode request = McpProxyTests.this.mapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-missing\"}}");
+			final JsonNode errorResponse = McpProxyTests.this.mapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":3,\"error\":{\"code\":-32602,\"message\":\"Task not found: t-missing\"}}");
+
+			// when
+			localProxy.recordLocalExchange(McpProxyTests.this.session, request, errorResponse);
+
+			// then: the timeline contract is newest-first, so the locally produced
+			// error envelope comes before the recorded request
+			final List<TimelineEvent> events = timeline.query(TimelineQuery.all());
+			assertThat(events).hasSize(2);
+			assertThat(events.get(0).type()).isEqualTo(TimelineEventType.MCP_JSONRPC_RESPONSE);
+			assertThat(events.get(0).payload()).isEqualTo(errorResponse);
+			assertThat(events.get(1).type()).isEqualTo(TimelineEventType.MCP_JSONRPC_REQUEST);
+			assertThat(events.get(1).payload()).isEqualTo(request);
+			assertThat(events.get(0).correlationId()).isEqualTo(events.get(1).correlationId());
+			// the error envelope must release the pending correlation of its request
+			assertThat(recorder.pendingCorrelations()).isZero();
+		}
+
+		@Test
+		@Story("Locally answered frames hit the traffic timeline")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("recordLocalExchange without a configured recorder is a no-op")
 		void recordLocalExchange_withoutRecorder_isNoop() throws Exception {

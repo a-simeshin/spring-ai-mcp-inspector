@@ -3227,6 +3227,38 @@ class ProxyHandlerTests {
 			assertThat(recordedResponse.get("error").get("message").asText()).contains("not-a-number");
 		}
 
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/get error records the request and the -32602 error envelope into the timeline")
+		void tasksGet_unknownTask_recordsRequestAndErrorEnvelopeInTimeline() throws Exception {
+			// given: an unknown taskId answered locally with a -32602 error
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			given(this.taskService.getTask("missing"))
+				.willThrow(new io.inspector.mcp.core.task.TaskNotFoundException("missing"));
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":45,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"missing\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then: the request and the locally produced -32602 error envelope are
+			// recorded together into the traffic timeline, request first
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> requestCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(ProxyHandlerTests.this.mcpProxy).recordLocalExchange(eq(session), requestCaptor.capture(),
+					responseCaptor.capture());
+			assertThat(requestCaptor.getValue().get("method").asText()).isEqualTo("tasks/get");
+			assertThat(requestCaptor.getValue().get("id").asInt()).isEqualTo(45);
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(45);
+			assertThat(recordedResponse.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(recordedResponse.get("error").get("message").asText()).containsIgnoringCase("not found");
+		}
+
 	}
 
 	@Nested
