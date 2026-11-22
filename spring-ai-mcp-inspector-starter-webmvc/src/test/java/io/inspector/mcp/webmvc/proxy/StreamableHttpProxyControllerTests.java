@@ -1434,11 +1434,11 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("a non-task method relayed upstream is never recorded as a locally answered exchange")
 		void nonTaskMethod_neverRecordsLocalExchange() throws Exception {
-			// given: a notification (no id) so the relay path answers immediately
-			// instead of blocking on the await-response timeout
+			// given: a request frame with an id (a notification returns 202 before the
+			// interception block is reached, which would make the never() assert vacuous)
 			final ProxySession session = newSession("s1");
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
-				.readTree("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/list\"}");
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willReturn(Mono.empty());
 
