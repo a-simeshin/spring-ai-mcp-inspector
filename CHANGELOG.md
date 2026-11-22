@@ -3,6 +3,49 @@
 Notable changes per release, grouped as features, fixes and internal work.
 Every line references the pull request it landed through.
 
+## 2.5.0
+
+Stack: Spring Boot `4.1.0`, Spring AI `2.0.1`, Java MCP SDK `2.0.1`, bundled
+MCP Inspector UI `0.22.0`, Java 17+.
+
+### Features
+
+- Captured tool calls can be exported as compilable JUnit 5 regression
+  tests (#415): the new skeleton generators in core replay the captured
+  request against the MCP endpoint and compare the response with the
+  recorded etalon, with a MockMvc variant for the servlet stack and a
+  WebTestClient variant for the reactive stack.
+- The pre-connect empty canvas gains a primary Connect button wired to
+  the same URL-validating connect flow as the sidebar CTA; an empty or
+  invalid server URL blocks the connect with an inline error instead of
+  silently falling back to the loopback demo server (#335).
+
+### Fixes
+
+- A 404 on the mount-time auth-profile requests no longer fires the raw
+  'Auth Profile Error / Not Found' toast on every load: saved connections
+  with a missing bound profile resolve to an empty set and render a
+  sidebar warning banner with one-click Unlink profile and Open Auth
+  Settings actions (#323).
+- The sidebar connect CTA renders as a fixed flex region under the
+  sidebar scroll area instead of a sticky overlay, so the Connect button
+  stays visible at 1280x800 and scrolled sections remain clickable (#334).
+- The version badge expand/collapse chevron is keyboard operable: the
+  native button is focusable, Enter and Space toggle the details panel
+  and mismatch notice, and aria-expanded/aria-controls stay in sync (#420).
+- The Auth Profiles editor starts collapsed and renders no validation
+  errors on a pristine load; field errors appear only after a blur or a
+  save/update/authorize attempt (#332).
+
+### Internal, docs and build
+
+- A dedicated regression spec pins the pristine-load auth-profile
+  contract: no validation messages on fresh mount, the collapsed editor,
+  and the blur- and attempt-revealed errors (#333).
+- The timeline partial-match floor (`PARTIAL_MIN_CHARS`, 24 chars) gets
+  an independent regression case that is the only gate blocking the
+  match (#341).
+
 ## 2.4.0
 
 Stack: Spring Boot `4.1.0`, Spring AI `2.0.1`, Java MCP SDK `2.0.1`, bundled

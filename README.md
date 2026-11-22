@@ -57,6 +57,24 @@ The table below records the exact stack a given inspector release was verified w
 | `2.2.0`                   | `4.1.0`     | `2.0.1`   | `2.0.1`      | `0.22.0`                 |
 | `2.3.0`                   | `4.1.0`     | `2.0.1`   | `2.0.1`      | `0.22.0`                 |
 | `2.4.0`                   | `4.1.0`     | `2.0.1`   | `2.0.1`      | `0.22.0`                 |
+| `2.5.0`                   | `4.1.0`     | `2.0.1`   | `2.0.1`      | `0.22.0`                 |
+
+### Upgrading from `2.4.0`
+
+No code change is required. The changes are a new additive core API and
+UI-level behaviour:
+
+- Captured tool calls can be exported as compilable JUnit 5 regression
+  tests (#415): a new `io.inspector.mcp.core.export` package generates a
+  MockMvc (servlet stack) or WebTestClient (reactive stack) skeleton that
+  replays the captured request and compares the response with the
+  recorded etalon.
+- The empty canvas and the sidebar share one URL-validating Connect
+  action (#335), the sidebar connect CTA moved into a fixed region so it
+  cannot cover scrolled content (#334), a stale auth-profile binding no
+  longer fires a raw 404 toast on load (#323), the Auth Profiles editor
+  starts collapsed without pristine-load validation errors (#332), and
+  the version badge toggle is keyboard operable (#420).
 
 ### Upgrading from `2.3.0`
 
@@ -126,7 +144,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webmvc</artifactId>
-    <version>2.4.0</version>
+    <version>2.5.0</version>
 </dependency>
 ```
 
@@ -136,7 +154,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webflux</artifactId>
-    <version>2.4.0</version>
+    <version>2.5.0</version>
 </dependency>
 ```
 
