@@ -90,8 +90,15 @@ class StreamableHttpProxyControllerConnectHintTests {
 		this.timeline = new BoundedTimelineService(20);
 		this.properties = new McpInspectorProperties();
 		this.properties.getTimeouts().setStreamableRequest(Duration.ofSeconds(3));
+		final McpTrafficRecorder recorder = new McpTrafficRecorder(this.timeline);
 		this.controller = new StreamableHttpProxyController(this.registry, this.transportFactory, this.mcpProxy,
-				this.objectMapper, this.properties, null, null, new McpTrafficRecorder(this.timeline));
+				this.objectMapper, this.properties, null, null,
+				new org.springframework.beans.factory.ObjectProvider<McpTrafficRecorder>() {
+					@Override
+					public McpTrafficRecorder getObject() {
+						return recorder;
+					}
+				});
 		final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
 		RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
 	}
@@ -276,8 +283,15 @@ class StreamableHttpProxyControllerConnectHintTests {
 	@Test
 	@DisplayName("a broken timeline must not turn the connect failure into a proxy failure")
 	void brokenTimelineStillHints() {
+		final McpTrafficRecorder throwingRecorder = new McpTrafficRecorder(new ThrowingTimelineService());
 		this.controller = new StreamableHttpProxyController(this.registry, this.transportFactory, this.mcpProxy,
-				this.objectMapper, this.properties, null, null, new McpTrafficRecorder(new ThrowingTimelineService()));
+				this.objectMapper, this.properties, null, null,
+				new org.springframework.beans.factory.ObjectProvider<McpTrafficRecorder>() {
+					@Override
+					public McpTrafficRecorder getObject() {
+						return throwingRecorder;
+					}
+				});
 		stubUpstream(404, true, "text/event-stream", false);
 		final ResponseEntity<Object> response = this.controller.postMcp(null, this.upstreamBase + "/mcp", null,
 				this.objectMapper.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"));

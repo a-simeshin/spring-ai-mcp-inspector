@@ -237,8 +237,9 @@ public class StreamableHttpProxyController {
 	/**
 	 * Constructor variant for tests and minimal wiring: the optional {@link TaskService}
 	 * via an {@link ObjectProvider} plus the optional timeline {@link McpTrafficRecorder}
-	 * (issue #250) used to record {@code MCP_CONNECT_FAILED} events. An absent recorder
-	 * simply disables connect-failure timeline recording. No D8/D9 auth wiring.
+	 * (issue #250) via a provider, used to record {@code MCP_CONNECT_FAILED} events. An
+	 * absent recorder simply disables connect-failure timeline recording. No D8/D9 auth
+	 * wiring.
 	 * @param registry the proxy session registry
 	 * @param transportFactory the proxy transport factory
 	 * @param mcpProxy the MCP proxy relay
@@ -246,14 +247,16 @@ public class StreamableHttpProxyController {
 	 * @param properties the inspector properties
 	 * @param portHolder the server port holder
 	 * @param taskServiceProvider provider for an optional {@link TaskService}
-	 * @param trafficRecorder the optional traffic recorder, or {@code null}
+	 * @param trafficRecorderProvider provider for the optional traffic recorder, or
+	 * {@code null}
 	 */
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
 			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,
-			final ObjectProvider<TaskService> taskServiceProvider, final McpTrafficRecorder trafficRecorder) {
+			final ObjectProvider<TaskService> taskServiceProvider,
+			final ObjectProvider<McpTrafficRecorder> trafficRecorderProvider) {
 		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, null, null, null, null,
-				taskServiceProvider, null, trafficRecorder);
+				taskServiceProvider, null, trafficRecorderProvider);
 	}
 
 	/**
@@ -300,9 +303,9 @@ public class StreamableHttpProxyController {
 	 * @param taskServiceProvider provider for an optional {@link TaskService}
 	 * @param emitterRegistry the SSE emitter registry used to broadcast keep-alive pings;
 	 * may be {@code null} to disable broadcasting
-	 * @param trafficRecorder the optional timeline recorder for
-	 * {@code MCP_CONNECT_FAILED} events, or {@code null} {@code mcp:keepalive-ping}
-	 * events to UI subscribers
+	 * @param trafficRecorderProvider provider for the optional timeline recorder used to
+	 * record {@code MCP_CONNECT_FAILED} events; an absent recorder simply disables
+	 * connect-failure timeline recording
 	 */
 	@Autowired
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
@@ -311,7 +314,8 @@ public class StreamableHttpProxyController {
 			final ServletSessionOwnerResolver sessionOwnerResolver, final AuthProfileStore authProfileStore,
 			final OAuth2ClientCredentialsTokenManager ccTokenManager,
 			final OAuth2AuthCodeTokenExchanger authCodeExchanger, final ObjectProvider<TaskService> taskServiceProvider,
-			final InspectorSseEmitterRegistry emitterRegistry, final McpTrafficRecorder trafficRecorder) {
+			final InspectorSseEmitterRegistry emitterRegistry,
+			final ObjectProvider<McpTrafficRecorder> trafficRecorderProvider) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
@@ -324,7 +328,7 @@ public class StreamableHttpProxyController {
 		this.authCodeExchanger = authCodeExchanger;
 		this.taskServiceProvider = taskServiceProvider;
 		this.emitterRegistry = emitterRegistry;
-		this.trafficRecorder = trafficRecorder;
+		this.trafficRecorder = (trafficRecorderProvider != null) ? trafficRecorderProvider.getIfAvailable() : null;
 	}
 
 	/**
