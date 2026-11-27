@@ -162,14 +162,14 @@ public class ProxyHandler {
 	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper) {
 		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, null, null, null, null, null, null,
-				null);
+				null, null);
 	}
 
 	public ProxyHandler(final ProxySessionRegistry registry, final ProxyTransportFactory transportFactory,
 			final McpProxy mcpProxy, final TransportDetector transportDetector, final JsonMapper objectMapper,
 			final McpInspectorProperties properties) {
 		this(registry, transportFactory, mcpProxy, transportDetector, objectMapper, properties, null, null, null, null,
-				null, null);
+				null, null, null);
 	}
 
 	/**

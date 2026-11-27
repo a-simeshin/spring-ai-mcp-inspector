@@ -298,11 +298,11 @@ public class StreamableHttpProxyController {
 	 * @param ccTokenManager the client-credentials token manager
 	 * @param authCodeExchanger the auth-code exchanger
 	 * @param taskServiceProvider provider for an optional {@link TaskService}
-	 * @param emitterRegistry the SSE emitter registry used to broadcast
-	 * keep-alive pings; may be {@code null} to disable broadcasting
+	 * @param emitterRegistry the SSE emitter registry used to broadcast keep-alive pings;
+	 * may be {@code null} to disable broadcasting
 	 * @param trafficRecorder the optional timeline recorder for
-	 * {@code MCP_CONNECT_FAILED} events, or {@code null}
-	 * {@code mcp:keepalive-ping} events to UI subscribers
+	 * {@code MCP_CONNECT_FAILED} events, or {@code null} {@code mcp:keepalive-ping}
+	 * events to UI subscribers
 	 */
 	@Autowired
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
@@ -533,7 +533,6 @@ public class StreamableHttpProxyController {
 		return ResponseEntity.status(status)
 			.contentType(MediaType.APPLICATION_JSON)
 			.body(Map.of("error", ConnectHint.errorPayload(failure, hint, ERROR_CODE_MCP_CONNECT_FAILED)));
-					"message", failure.message(), "retryable", failure.retryable())));
 	}
 
 	/**
@@ -562,6 +561,7 @@ public class StreamableHttpProxyController {
 		return ResponseEntity.badRequest()
 			.contentType(MediaType.APPLICATION_JSON)
 			.body(ProxyConnectionBudgets.invalidParameterBody(ex.rawValue(), ex.getMessage()));
+	}
 
 	/**
 	 * Records a {@code MCP_CONNECT_FAILED} timeline event for a failed connect attempt
