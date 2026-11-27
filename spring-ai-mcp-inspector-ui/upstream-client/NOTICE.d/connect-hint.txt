@@ -1,0 +1,48 @@
+src/lib/connectionErrors.ts + src/components/Sidebar.tsx +
+ src/components/TimelineTab.tsx + src/App.tsx (issue #250, upstream
+spring-projects/spring-ai#7207): surface a transport-switch hint inside
+the connect-failure alert when the proxy's SSE probe proves the upstream
+serves the legacy SSE transport instead of Streamable HTTP.
+
+Local changes:
+
+1. connectionErrors.ts: the MCP_CONNECT_FAILED contract gains the
+optional `hint` object (`kind: "sse_only" | "maybe_sse"`, `probePath`,
+optional `refs` pair). Parsing is tolerant: a well-formed hint is
+carried on ConnectFailure and through ConnectFailedError so
+connectionFailureFromError restores it; a malformed hint degrades to
+null; a legacy payload without the key keeps the parsed object
+byte-identical (the hint key is simply absent), so the existing strict
+deep-equality expectations in connectErrors.test.ts stay green. The
+verbatim S1/S2 user-facing strings and the two refs URLs live here as
+exported constants, the single source of truth for the sidebar alert
+and the timeline entry.
+2. Sidebar.tsx: the generic connect-failure alert adds the strong-hint
+block (data-testid=connect-hint-strong: the verbatim S1 copy, the
+upstream/local refs links opening in a new tab with
+rel="noopener noreferrer", and the data-testid=switch-to-sse-button
+styled like Retry) and the weak-hint block
+(data-testid=connect-hint-weak: the S2 paragraph only, no links, no
+button). A failure without a hint keeps the alert byte-identical. The
+button click delegates to the new optional onSwitchToSse prop.
+3. TimelineTab.tsx: the local TimelineEventType union gains
+MCP_CONNECT_FAILED (mirrors the core enum added by the backend PR this
+branches on), amber left-border/background in EVENT_COLORS/EVENT_BG,
+and a specialized row: collapsed title "MCP connect failed (reason)"
+plus the S1/S2 hint text when payload.hintKind says so (plain text,
+no button; hintKind carries no links in the timeline), the same title
+and hint in the expanded block above the raw payload.
+4. App.tsx: owns the switch (onSwitchToSse): setTransportType("sse")
+plus a pending-flag effect that re-runs the shared validating connect
+handler only after the re-render carrying the new transport, so
+connect() (which closes over transportType) actually connects over
+SSE with the same, unrewritten URL.
+
+Covered by src/lib/__tests__/connectHint.test.ts (parsing matrix,
+legacy byte-identity, verbatim-copy string asserts) and
+src/components/__tests__/Sidebar.connectHint.test.tsx (strong hint
+verbatim copy + refs + button, click delegates to onSwitchToSse and
+does not double as Retry, weak hint without links or button, legacy
+payload renders the untouched alert), and end to end by
+spring-ai-mcp-inspector-demo-webmvc ConnectHintSseOnlyIT (Selenide:
+verbatim hint, switch reconnects, timeline entry).

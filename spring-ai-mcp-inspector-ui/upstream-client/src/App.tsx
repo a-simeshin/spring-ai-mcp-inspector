@@ -1214,6 +1214,26 @@ const App = () => {
     connectionTimeout,
   ]);
 
+  // [spring-ai-mcp-inspector PATCH] Switch to SSE (issue #250): the sidebar
+  // hint button flips the transport selector to SSE and reconnects with the
+  // same URL (the URL field is not rewritten). connect() closes over the
+  // current transportType state, so the reconnect must wait for the
+  // re-render that carries the new transport: the pending flag makes the
+  // effect below fire handleConnectRequest exactly once, after the selector
+  // actually switched, and lets the same validation run as a normal connect.
+  const pendingSseSwitchRef = useRef(false);
+  const handleSwitchToSse = useCallback(() => {
+    pendingSseSwitchRef.current = true;
+    setTransportType("sse");
+  }, [setTransportType]);
+  useEffect(() => {
+    if (!pendingSseSwitchRef.current || transportType !== "sse") {
+      return;
+    }
+    pendingSseSwitchRef.current = false;
+    handleConnectRequest();
+  }, [transportType, handleConnectRequest]);
+
   const onOAuthConnect = useCallback(
     (serverUrl: string) => {
       setSseUrl(serverUrl);
@@ -2384,6 +2404,8 @@ const App = () => {
           // lifted to App so the canvas CTA validates under the same
           // condition.
           onConnect={handleConnectRequest}
+          // [spring-ai-mcp-inspector PATCH] Transport-switch hint (issue #250).
+          onSwitchToSse={handleSwitchToSse}
           urlError={urlError}
           setUrlError={setUrlError}
           urlTouched={urlTouched}
