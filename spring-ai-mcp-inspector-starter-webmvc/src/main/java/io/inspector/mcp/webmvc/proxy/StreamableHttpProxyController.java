@@ -159,7 +159,7 @@ public class StreamableHttpProxyController {
 
 	private final InspectorSseEmitterRegistry emitterRegistry;
 
-	private final McpTrafficRecorder trafficRecorder;
+	private final ObjectProvider<McpTrafficRecorder> trafficRecorderProvider;
 
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper) {
@@ -231,7 +231,7 @@ public class StreamableHttpProxyController {
 		this.authCodeExchanger = authCodeExchanger;
 		this.taskServiceProvider = null;
 		this.emitterRegistry = null;
-		this.trafficRecorder = null;
+		this.trafficRecorderProvider = null;
 	}
 
 	/**
@@ -328,7 +328,7 @@ public class StreamableHttpProxyController {
 		this.authCodeExchanger = authCodeExchanger;
 		this.taskServiceProvider = taskServiceProvider;
 		this.emitterRegistry = emitterRegistry;
-		this.trafficRecorder = (trafficRecorderProvider != null) ? trafficRecorderProvider.getIfAvailable() : null;
+		this.trafficRecorderProvider = trafficRecorderProvider;
 	}
 
 	/**
@@ -362,6 +362,10 @@ public class StreamableHttpProxyController {
 
 	private TaskService taskService() {
 		return (this.taskServiceProvider != null) ? this.taskServiceProvider.getIfAvailable() : null;
+	}
+
+	private McpTrafficRecorder trafficRecorder() {
+		return (this.trafficRecorderProvider != null) ? this.trafficRecorderProvider.getIfAvailable() : null;
 	}
 
 	/**
@@ -607,15 +611,16 @@ public class StreamableHttpProxyController {
 	 */
 	private void recordConnectFailed(final String sessionId, final ProxyConnectFailure failure,
 			final SseConnectProbe.SseProbeVerdict verdict, final URI target) {
-		if (this.trafficRecorder == null) {
+		final McpTrafficRecorder trafficRecorder = trafficRecorder();
+		if (trafficRecorder == null) {
 			return;
 		}
 		final SseConnectProbe.SseProbeVerdict effective = (verdict != null) ? verdict
 				: SseConnectProbe.SseProbeVerdict.notRun();
 		final String hintKind = (effective.hint() != null) ? effective.hint().kind() : null;
 		try {
-			this.trafficRecorder.recordConnectFailed(sessionId, failure.reason().wire(), hintKind,
-					effective.probedPaths(), effective.outcome(), (target != null) ? target.toString() : null);
+			trafficRecorder.recordConnectFailed(sessionId, failure.reason().wire(), hintKind, effective.probedPaths(),
+					effective.outcome(), (target != null) ? target.toString() : null);
 		}
 		catch (final RuntimeException ex) {
 			// A broken timeline must never turn a connect failure into a proxy failure.
