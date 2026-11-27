@@ -1402,6 +1402,56 @@ class StreamableHttpProxyControllerTests {
 
 		@Test
 		@Story("tasks/get interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/get records the request and the locally produced response into the traffic timeline")
+		void tasksGet_interceptedLocally_recordsLocalExchange() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
+			final TaskHandle handle = new TaskHandle("t-123", "working", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
+			given(this.taskService.getTask("t-123")).willReturn(handle);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy).recordLocalExchange(eq(session), eq(body),
+					responseCaptor.capture());
+			final JsonNode recorded = responseCaptor.getValue();
+			assertThat(recorded.get("id").asInt()).isEqualTo(11);
+			assertThat(recorded.get("result").get("taskId").asText()).isEqualTo("t-123");
+			// the locally answered frame never reaches the upstream
+			verify(session.targetTransport(), never()).sendMessage(any());
+		}
+
+		@Test
+		@Story("no interception for non-task methods")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a non-task method relayed upstream is never recorded as a locally answered exchange")
+		void nonTaskMethod_neverRecordsLocalExchange() throws Exception {
+			// given: a request frame with an id (a notification returns 202 before the
+			// interception block is reached, which would make the never() assert vacuous)
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/list\"}");
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willReturn(Mono.empty());
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: passthrough traffic keeps the plain relay timeline behavior
+			assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy, never()).recordLocalExchange(any(), any(), any());
+		}
+
+		@Test
+		@Story("tasks/get interception")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("tasks/get with an unknown taskId returns a JSON-RPC -32602 error")
 		void tasksGet_unknownTask_returnsError() throws Exception {
@@ -1850,6 +1900,125 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode responseBody = (JsonNode) response.getBody();
 			assertThat(responseBody.get("error").get("code").asInt()).isEqualTo(-32602);
 			assertThat(responseBody.get("error").get("message").asText()).contains("not-a-number");
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/get error records the request and the -32602 error envelope into the timeline")
+		void tasksGet_unknownTask_recordsRequestAndErrorEnvelopeInTimeline() throws Exception {
+			// given: an unknown taskId answered locally with a -32602 error
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":45,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"missing\"}}");
+			given(this.taskService.getTask("missing")).willThrow(new TaskNotFoundException("missing"));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: the request and the locally produced -32602 error envelope are
+			// recorded together into the traffic timeline
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy).recordLocalExchange(eq(session), eq(body),
+					responseCaptor.capture());
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(45);
+			assertThat(recordedResponse.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(recordedResponse.get("error").get("message").asText()).containsIgnoringCase("not found");
+		}
+
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/list error records the request and the -32602 error envelope into the timeline")
+		void tasksList_nonNumericCursor_recordsRequestAndErrorEnvelopeInTimeline() throws Exception {
+			// given: a cursor that is not a decimal offset
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":46,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"not-a-number\"}}");
+			final java.util.List<TaskHandle> noTasks = java.util.List.of();
+			given(this.taskService.listTasks()).willReturn(noTasks);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: the request and the locally produced -32602 error envelope are
+			// recorded together into the traffic timeline
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy).recordLocalExchange(eq(session), eq(body),
+					responseCaptor.capture());
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(46);
+			assertThat(recordedResponse.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(recordedResponse.get("error").get("message").asText()).contains("not-a-number");
+		}
+
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/list records the request and the locally produced response into the traffic timeline")
+		void tasksList_interceptedLocally_recordsLocalExchange() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":48,\"method\":\"tasks/list\"}");
+			final TaskHandle handle = new TaskHandle("t-1", "working", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
+			given(this.taskService.listTasks()).willReturn(java.util.List.of(handle));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: the recorded pair correlates through the shared JSON-RPC id and the
+			// recorded payload equals the body returned to the client
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy).recordLocalExchange(eq(session), eq(body),
+					responseCaptor.capture());
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(48);
+			assertThat(recordedResponse.get("result").get("tasks")).hasSize(1);
+			assertThat(recordedResponse.get("result").get("tasks").get(0).get("taskId").asText()).isEqualTo("t-1");
+			assertThat(recordedResponse).isEqualTo((JsonNode) response.getBody());
+			// the locally answered frame never reaches the upstream
+			verify(session.targetTransport(), never()).sendMessage(any());
+		}
+
+		@Test
+		@Story("tasks/cancel interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/cancel records the request and the locally produced response into the traffic timeline")
+		void tasksCancel_interceptedLocally_recordsLocalExchange() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":49,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"t-456\"}}");
+			final TaskHandle handle = new TaskHandle("t-456", "cancelled", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
+			given(this.taskService.cancelTask("t-456")).willReturn(handle);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: the recorded pair correlates through the shared JSON-RPC id and the
+			// recorded payload equals the body returned to the client
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy).recordLocalExchange(eq(session), eq(body),
+					responseCaptor.capture());
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(49);
+			assertThat(recordedResponse.get("result").get("taskId").asText()).isEqualTo("t-456");
+			assertThat(recordedResponse.get("result").get("status").asText()).isEqualTo("cancelled");
+			assertThat(recordedResponse).isEqualTo((JsonNode) response.getBody());
+			// the locally answered frame never reaches the upstream
+			verify(session.targetTransport(), never()).sendMessage(any());
 		}
 
 	}
