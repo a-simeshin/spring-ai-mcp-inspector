@@ -327,6 +327,35 @@ public class StreamableHttpProxyController {
 		this.trafficRecorder = trafficRecorder;
 	}
 
+	/**
+	 * Constructor variant that wires keep-alive ping broadcasting through the SSE emitter
+	 * registry on top of the D8/D9 auth wiring (no task interception, no timeline
+	 * recording).
+	 * @param registry the proxy session registry
+	 * @param transportFactory the transport factory
+	 * @param mcpProxy the proxy pump
+	 * @param objectMapper the JSON mapper
+	 * @param properties the inspector properties
+	 * @param portHolder the loopback port holder
+	 * @param sessionOwnerResolver the signed-cookie owner resolver
+	 * @param authProfileStore the owner-scoped profile store
+	 * @param ccTokenManager the client-credentials token manager
+	 * @param authCodeExchanger the auth-code exchanger
+	 * @param taskServiceProvider provider for an optional {@link TaskService}
+	 * @param emitterRegistry the SSE emitter registry used to broadcast keep-alive pings;
+	 * may be {@code null} to disable broadcasting
+	 */
+	public StreamableHttpProxyController(final ProxySessionRegistry registry,
+			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
+			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,
+			final ServletSessionOwnerResolver sessionOwnerResolver, final AuthProfileStore authProfileStore,
+			final OAuth2ClientCredentialsTokenManager ccTokenManager,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger, final ObjectProvider<TaskService> taskServiceProvider,
+			final InspectorSseEmitterRegistry emitterRegistry) {
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, sessionOwnerResolver,
+				authProfileStore, ccTokenManager, authCodeExchanger, taskServiceProvider, emitterRegistry, null);
+	}
+
 	private TaskService taskService() {
 		return (this.taskServiceProvider != null) ? this.taskServiceProvider.getIfAvailable() : null;
 	}
@@ -580,8 +609,14 @@ public class StreamableHttpProxyController {
 		final SseConnectProbe.SseProbeVerdict effective = (verdict != null) ? verdict
 				: SseConnectProbe.SseProbeVerdict.notRun();
 		final String hintKind = (effective.hint() != null) ? effective.hint().kind() : null;
-		this.trafficRecorder.recordConnectFailed(sessionId, failure.reason().wire(), hintKind, effective.probedPaths(),
-				effective.outcome(), (target != null) ? target.toString() : null);
+		try {
+			this.trafficRecorder.recordConnectFailed(sessionId, failure.reason().wire(), hintKind,
+					effective.probedPaths(), effective.outcome(), (target != null) ? target.toString() : null);
+		}
+		catch (final RuntimeException ex) {
+			// A broken timeline must never turn a connect failure into a proxy failure.
+			LOG.debug("MCP_CONNECT_FAILED timeline recording failed; the connect error path continues", ex);
+		}
 	}
 
 	/**

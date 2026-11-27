@@ -1413,8 +1413,14 @@ public class ProxyHandler {
 		final SseConnectProbe.SseProbeVerdict effective = (verdict != null) ? verdict
 				: SseConnectProbe.SseProbeVerdict.notRun();
 		final String hintKind = (effective.hint() != null) ? effective.hint().kind() : null;
-		this.trafficRecorder.recordConnectFailed(sessionId, failure.reason().wire(), hintKind, effective.probedPaths(),
-				effective.outcome(), (target != null) ? target.toString() : null);
+		try {
+			this.trafficRecorder.recordConnectFailed(sessionId, failure.reason().wire(), hintKind,
+					effective.probedPaths(), effective.outcome(), (target != null) ? target.toString() : null);
+		}
+		catch (final RuntimeException ex) {
+			// A broken timeline must never turn a connect failure into a proxy failure.
+			LOG.debug("MCP_CONNECT_FAILED timeline recording failed; the connect error path continues", ex);
+		}
 	}
 
 	/**
