@@ -47,7 +47,10 @@ public record ConnectHint(String kind, String probePath, Refs refs) {
 	 * Builds the wire {@code error} object of the {@code MCP_CONNECT_FAILED} payload
 	 * shared verbatim by both stacks (WebMVC controller and WebFlux handler), so the JSON
 	 * shape is identical field for field. The optional {@code hint} object is appended
-	 * only when the SSE probe produced one (issue #250).
+	 * only when the SSE probe produced one (issue #250). The {@code retryable} flag
+	 * mirrors {@link ProxyConnectFailure#retryable()}: {@code false} only for
+	 * {@code invalid_request} (an identical retry fails identically), {@code true}
+	 * otherwise.
 	 * @param failure the classified connect failure (must not be {@code null})
 	 * @param hint the probe hint, or {@code null} to omit the {@code hint} key
 	 * @param errorCode the {@code MCP_CONNECT_FAILED} error code constant
@@ -59,7 +62,7 @@ public record ConnectHint(String kind, String probePath, Refs refs) {
 		error.put("code", errorCode);
 		error.put("reason", failure.reason().wire());
 		error.put("message", failure.message());
-		error.put("retryable", Boolean.TRUE);
+		error.put("retryable", failure.retryable());
 		if (hint != null) {
 			final Map<String, Object> hintMap = new LinkedHashMap<>();
 			hintMap.put("kind", hint.kind());

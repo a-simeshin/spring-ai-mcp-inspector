@@ -54,8 +54,11 @@ public final class SseConnectProbe {
 
 	private static final Logger LOG = LoggerFactory.getLogger(SseConnectProbe.class);
 
-	/** Wire signature of the mcp-core 2.0.0 SDK bucket that hides HTTP 405/5xx. */
+	/** Wire signature of the mcp-core SDK bucket that hides HTTP 5xx. */
 	static final String FAILED_TO_SEND_MESSAGE_SIGNATURE = "Failed to send message";
+
+	/** Wire signature of the mcp-core 2.0.1 bucket that hides HTTP 405-499. */
+	static final String INVALID_REQUEST_STATUS_SIGNATURE = "Invalid request. Status code:";
 
 	/** Content type / Allow token that identifies an SSE endpoint. */
 	private static final String EVENT_STREAM = "text/event-stream";
@@ -108,8 +111,8 @@ public final class SseConnectProbe {
 	 * connect whose classified failure is {@link ProxyConnectFailure.Reason#NOT_FOUND}
 	 * (the SDK "Server Not Found" bucket, HTTP 404) or
 	 * {@link ProxyConnectFailure.Reason#UNKNOWN} carrying the SDK "Failed to send
-	 * message" signature (the bucket that hides HTTP 405 and 5xx, because mcp-core 2.0.0
-	 * does not surface the numeric status).
+	 * message" signature (the bucket that hides HTTP 5xx) or the SDK 2.0.1 "Invalid
+	 * request. Status code:" signature (the bucket that hides HTTP 405-499).
 	 * @param failure the classified connect failure (must not be {@code null})
 	 * @param cause the original connect exception whose chain carries the SDK message
 	 * @return {@code true} when the probe should run
@@ -118,14 +121,39 @@ public final class SseConnectProbe {
 		if (failure.reason() == ProxyConnectFailure.Reason.NOT_FOUND) {
 			return true;
 		}
-		return failure.reason() == ProxyConnectFailure.Reason.UNKNOWN && hasFailedToSendMessageSignature(cause);
+		return failure.reason() == ProxyConnectFailure.Reason.UNKNOWN
+				&& (hasFailedToSendMessageSignature(cause) || hasInvalidRequestStatusSignature(cause));
 	}
 
 	private static boolean hasFailedToSendMessageSignature(final Throwable cause) {
+		return hasSignature(cause, FAILED_TO_SEND_MESSAGE_SIGNATURE);
+	}
+
+	/**
+	 * mcp-core 2.0.1 moved the 405-499 bucket (minus 400/401/403/404) out of the
+	 * {@code Failed to send message} RuntimeException into
+	 * {@code McpTransportException("Invalid request. Status code: N")} with the numeric
+	 * status surfaced; for the trigger matrix (spec M2/M4: the 405/5xx family) it is the
+	 * same bucket, so both signatures open the gate.
+	 * @param cause the original connect exception whose chain carries the SDK message
+	 * @return {@code true} when some cause message starts with the 2.0.1 signature
+	 */
+	private static boolean hasInvalidRequestStatusSignature(final Throwable cause) {
+		return hasSignature(cause, INVALID_REQUEST_STATUS_SIGNATURE);
+	}
+
+	/**
+	 * Walks the cause chain looking for a message that starts with the given SDK
+	 * signature.
+	 * @param cause the original connect exception whose chain carries the SDK message
+	 * @param signature the wire signature of the SDK bucket
+	 * @return {@code true} when some cause message starts with the signature
+	 */
+	private static boolean hasSignature(final Throwable cause, final String signature) {
 		Throwable current = cause;
 		while (current != null) {
 			final String message = current.getMessage();
-			if (message != null && message.trim().startsWith(FAILED_TO_SEND_MESSAGE_SIGNATURE)) {
+			if (message != null && message.trim().startsWith(signature)) {
 				return true;
 			}
 			current = current.getCause();
