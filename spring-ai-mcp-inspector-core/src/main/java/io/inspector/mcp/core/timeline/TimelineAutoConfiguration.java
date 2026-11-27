@@ -20,6 +20,7 @@ import ch.qos.logback.classic.AsyncAppender;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -79,6 +80,108 @@ public class TimelineAutoConfiguration {
 			matchIfMissing = true)
 	public McpTrafficRecorder mcpInspectorMcpTrafficRecorder(final TimelineService timelineService) {
 		return new McpTrafficRecorder(timelineService);
+	}
+
+	/**
+	 * The exception-leak detector. Absent when
+	 * {@code spring.ai.mcp.inspector.timeline.leak-detector.enabled=false}; the timeline
+	 * query endpoints then return events without the {@code _leak} annotation and nothing
+	 * else changes (issue #251).
+	 * @return a new {@link ExceptionLeakDetector}
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline.leak-detector", name = "enabled",
+			havingValue = "true", matchIfMissing = true)
+	public ExceptionLeakDetector mcpInspectorExceptionLeakDetector() {
+		return new ExceptionLeakDetector();
+	}
+
+	/**
+	 * The client-side connection registry tracking every wrapped client transport (name,
+	 * transport type, sanitized target, state and message counters). Absent when client
+	 * capture is switched off (default).
+	 * @return a new {@link ClientConnectionRegistry}
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline", name = "client-capture-enabled",
+			havingValue = "true")
+	public ClientConnectionRegistry mcpInspectorClientConnectionRegistry() {
+		return new ClientConnectionRegistry();
+	}
+
+	/**
+	 * The client-side traffic recorder that captures outgoing MCP client traffic into the
+	 * timeline. Absent when client capture is switched off (default). When present, a
+	 * {@link RecordingTransportPostProcessor} wraps every {@code NamedClientMcpTransport}
+	 * bean with a {@link RecordingMcpClientTransport} decorator.
+	 * @param timelineService the timeline service to append events to
+	 * @param handlerScanner the scanner providing the {@code @Mcp*} handler bindings for
+	 * {@code consumedBy} enrichment
+	 * @return a new {@link McpClientTrafficRecorder}
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline", name = "client-capture-enabled",
+			havingValue = "true")
+	public McpClientTrafficRecorder mcpInspectorMcpClientTrafficRecorder(final TimelineService timelineService,
+			final ClientHandlerScanner handlerScanner) {
+		return new McpClientTrafficRecorder(timelineService, handlerScanner);
+	}
+
+	/**
+	 * Scans the context for {@code @McpSampling}, {@code @McpElicitation},
+	 * {@code @McpLogging} and {@code @McpProgress} handler beans, providing the
+	 * {@code (clientName, kind) &rarr; beanName#method} mapping used for
+	 * {@code consumedBy} enrichment and desync diagnostics. Absent when client capture is
+	 * switched off (default).
+	 * @return a new {@link ClientHandlerScanner}
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline", name = "client-capture-enabled",
+			havingValue = "true")
+	public ClientHandlerScanner mcpInspectorClientHandlerScanner() {
+		return new ClientHandlerScanner();
+	}
+
+	/**
+	 * Runs the handler-client desync diagnostics once after all singletons are
+	 * instantiated: WARN logs plus timeline events with
+	 * {@code endpoint=client-diagnostics}. Absent when client capture is switched off
+	 * (default).
+	 * @param handlerScanner the handler binding scanner
+	 * @param connectionRegistry the registry carrying the configured clients
+	 * @param timelineService the timeline to append diagnostics events to
+	 * @return a new {@link ClientDesyncDetector}
+	 */
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline", name = "client-capture-enabled",
+			havingValue = "true")
+	public ClientDesyncDetector mcpInspectorClientDesyncDetector(final ClientHandlerScanner handlerScanner,
+			final ClientConnectionRegistry connectionRegistry, final TimelineService timelineService) {
+		return new ClientDesyncDetector(handlerScanner, connectionRegistry, timelineService);
+	}
+
+	/**
+	 * Bean post-processor that wraps {@code NamedClientMcpTransport} beans with recording
+	 * decorators. Static so it is registered before regular bean instantiation; the
+	 * recorder and the registry are resolved lazily on the first wrap via
+	 * {@link ObjectProvider} to avoid eager instantiation during
+	 * registerBeanPostProcessors.
+	 * @param trafficRecorderProvider the provider for the client traffic recorder
+	 * @param connectionRegistryProvider the provider for the client connection registry
+	 * @return a new {@link RecordingTransportPostProcessor}
+	 */
+	@Bean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector.timeline", name = "client-capture-enabled",
+			havingValue = "true")
+	public static RecordingTransportPostProcessor mcpInspectorRecordingTransportPostProcessor(
+			final ObjectProvider<McpClientTrafficRecorder> trafficRecorderProvider,
+			final ObjectProvider<ClientConnectionRegistry> connectionRegistryProvider) {
+		return new RecordingTransportPostProcessor(trafficRecorderProvider, connectionRegistryProvider);
 	}
 
 	/**

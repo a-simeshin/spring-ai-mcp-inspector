@@ -18,6 +18,7 @@ package io.inspector.mcp.core.client;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
@@ -54,6 +55,21 @@ public class ExternalStdioClientFactory {
 	 * @return an unconnected {@link McpSyncClient} ready for {@code initialize()}
 	 */
 	public McpSyncClient forCommand(final List<String> command, final Map<String, String> env) {
+		return forCommand(command, env, null);
+	}
+
+	/**
+	 * Variant of {@link #forCommand(List, Map)} that also captures the raw initialize
+	 * result frame for SEP-2640 extension detection.
+	 * @param command command-line tokens (first element = executable, rest = args); must
+	 * contain at least one element
+	 * @param env additional environment variables; may be {@code null} or empty
+	 * @param capture receives the {@link InitializeResultCapturingTransport} wrapper;
+	 * {@code null} skips the wrapping
+	 * @return an unconnected {@link McpSyncClient} ready for {@code initialize()}
+	 */
+	public McpSyncClient forCommand(final List<String> command, final Map<String, String> env,
+			final AtomicReference<InitializeResultCapturingTransport> capture) {
 		if (command == null || command.isEmpty()) {
 			throw new IllegalArgumentException("command must contain at least the executable");
 		}
@@ -69,7 +85,7 @@ public class ExternalStdioClientFactory {
 
 		final StdioClientTransport transport = new StdioClientTransport(parameters,
 				new JacksonMcpJsonMapper(this.objectMapper));
-		return McpClient.sync(transport).build();
+		return McpClient.sync(InitializeResultCapturingTransport.wrapIfObserved(transport, capture)).build();
 	}
 
 }

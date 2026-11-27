@@ -36,9 +36,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -47,7 +52,12 @@ import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.BearerProfile;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
@@ -56,6 +66,9 @@ import io.inspector.mcp.core.task.TaskHandle;
 import io.inspector.mcp.core.task.TaskNotCancelableException;
 import io.inspector.mcp.core.task.TaskNotFoundException;
 import io.inspector.mcp.core.task.TaskService;
+import io.inspector.mcp.webmvc.InspectorServerPortHolder;
+import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
+import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -64,6 +77,8 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * Unit tests for {@link StreamableHttpProxyController}. Collaborators are mocked;
@@ -75,9 +90,9 @@ import static org.mockito.Mockito.verify;
  * After the WAF-safe loopback fix, a {@code null} url is resolved to the loopback
  * {@code /mcp} endpoint server-side (via {@code ProxyTargetResolver}). In unit tests the
  * controller is constructed without a {@code portHolder}, so {@code loopbackPort()} falls
- * back to 8080. Consequently, calling {@code postMcp(null, null, body)} no longer returns
- * 400; instead the resolver produces {@code http://127.0.0.1:8080/mcp} and the mocked
- * factory is invoked.
+ * back to 8080. Consequently, calling {@code postMcp(null, null, null, body)} no longer
+ * returns 400; instead the resolver produces {@code http://127.0.0.1:8080/mcp} and the
+ * mocked factory is invoked.
  */
 @Epic("WebMvc Inspector")
 @Feature("StreamableHttpProxyController")
@@ -115,6 +130,22 @@ class StreamableHttpProxyControllerTests {
 		return new ProxySession(id, target, browserToTarget, targetToBrowser);
 	}
 
+	/**
+	 * Builds a controller with the D8/D9 auth wiring: a signed-cookie owner resolver and
+	 * an owner-scoped auth-profile store plus the OAuth2 managers.
+	 * @param store the auth-profile store
+	 * @param resolver the session-owner resolver
+	 * @return the wired controller
+	 */
+	private StreamableHttpProxyController authController(final AuthProfileStore store,
+			final ServletSessionOwnerResolver resolver) {
+		return new StreamableHttpProxyController(StreamableHttpProxyControllerTests.this.registry,
+				StreamableHttpProxyControllerTests.this.transportFactory,
+				StreamableHttpProxyControllerTests.this.mcpProxy, StreamableHttpProxyControllerTests.this.objectMapper,
+				new McpInspectorProperties(), null, resolver, store, mock(OAuth2ClientCredentialsTokenManager.class),
+				mock(OAuth2AuthCodeTokenExchanger.class));
+	}
+
 	@Nested
 	@DisplayName("POST /mcp — new session")
 	class PostNewSession {
@@ -143,7 +174,7 @@ class StreamableHttpProxyControllerTests {
 			// when — no url: ProxyTargetResolver resolves blank to
 			// http://127.0.0.1:8080/mcp
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
-					null, body);
+					null, null, body);
 
 			// then — NOT 400; the factory is called with the loopback URI and a session
 			// is
@@ -167,7 +198,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
-					"http://target/mcp", body);
+					"http://target/mcp", null, body);
 
 			// then — non-2xx with the machine-readable error contract; stack details
 			// stay out of the body
@@ -193,7 +224,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
-					"http://target/mcp", body);
+					"http://target/mcp", null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
@@ -201,6 +232,68 @@ class StreamableHttpProxyControllerTests {
 				.path("error");
 			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
 			assertThat(error.path("reason").asText()).isEqualTo("connection_refused");
+			assertThat(error.path("retryable").asBoolean()).isTrue();
+		}
+
+		@Test
+		@Story("New session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() surfaces the offending header name and JDK reason when a restricted "
+				+ "custom header name is rejected at transport build time")
+		void postMcp_whenRestrictedCustomHeaderRejected_surfacesHeaderNameAndReason() throws Exception {
+			// given - inbound custom headers route the controller onto the header-aware
+			// overload; the factory throws the value-safe IllegalArgumentException built
+			// by validateHeaderNames(), which the controller must not collapse into the
+			// generic "failed to connect" message
+			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
+			request.addHeader("x-custom-auth-headers", "[\"X-Tenant\"]");
+			request.addHeader("X-Tenant", "acme");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class), any(), any()))
+				.willThrow(new InvalidProxyRequestException(
+						"custom header 'host' is not allowed by the JDK HTTP client: restricted header name"));
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
+
+			// when
+			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", null, body);
+
+			// then - the header name and the JDK reason reach the caller
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(response.getBody())
+				.path("error");
+			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.path("reason").asText()).isEqualTo("invalid_request");
+			assertThat(error.path("message").asText())
+				.isEqualTo("custom header 'host' is not allowed by the JDK HTTP client: restricted header name");
+			assertThat(error.path("retryable").asBoolean()).isFalse();
+		}
+
+		@Test
+		@Story("New session")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() keeps a foreign IllegalArgumentException (NumberFormatException) unknown "
+				+ "and never copies its raw message into the response body")
+		void postMcp_whenForeignIllegalArgument_returnsUnknownWithoutRawMessage() throws Exception {
+			// given - a JDK parser blow-up is NOT a proxy rejection; its message may
+			// quote user input, so it must not travel to the browser
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willThrow(new RuntimeException(new NumberFormatException("For input string: \"pw-123\"")));
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
+
+			// when
+			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", null, body);
+
+			// then - classified unknown, generic message, retryable stays true
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(response.getBody())
+				.path("error");
+			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.path("reason").asText()).isEqualTo("unknown");
+			assertThat(error.path("message").asText()).doesNotContain("pw-123");
 			assertThat(error.path("retryable").asBoolean()).isTrue();
 		}
 
@@ -217,7 +310,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
-					"http://target/mcp", body);
+					"http://target/mcp", null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
@@ -248,7 +341,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
-					"http://target/mcp", body);
+					"http://target/mcp", null, body);
 
 			// then
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -274,10 +367,45 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller
-				.postMcp("missing", null, body);
+				.postMcp("missing", null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with an existing session and an invalid connectionTimeout answers 400 with the structured error body before touching the session (parity with the reactive stack)")
+		void postMcp_invalidParameterOnExistingSession_answers400structuredBody() throws Exception {
+			// given: a live session and a MockMvc entry point so the full annotation
+			// pipeline (argument resolution + @ExceptionHandler) runs, as in production;
+			// the body is a notification so a regression to the old silently-ignore
+			// behavior would answer 202 immediately instead of hanging on the relay
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final MockMvc mvc = MockMvcBuilders.standaloneSetup(StreamableHttpProxyControllerTests.this.controller)
+				.addPlaceholderValue("spring.ai.mcp.inspector.path", "/mcp-inspector")
+				.build();
+
+			// when
+			final MvcResult result = mvc
+				.perform(post("/mcp-inspector-api/mcp?connectionTimeout=abc")
+					.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s1")
+					.contentType(MediaType.APPLICATION_JSON)
+					.content("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/x\"}"))
+				.andExpect(status().isBadRequest())
+				.andReturn();
+
+			// then: the structured MCP_CONNECT_FAILED validation body, no session created
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree(result.getResponse().getContentAsString())
+				.path("error");
+			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.path("reason").asText()).isEqualTo("validation");
+			assertThat(error.path("connectionTimeout").asText()).isEqualTo("abc");
+			assertThat(error.path("retryable").asBoolean()).isFalse();
+			verify(StreamableHttpProxyControllerTests.this.registry, never()).put(any(ProxySession.class));
 		}
 
 		@Test
@@ -293,7 +421,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp("s1",
-					null, body);
+					null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
@@ -317,7 +445,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp("s1", null,
-					body);
+					null, body);
 
 			// then
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -337,7 +465,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp("s1", null,
-					body);
+					null, body);
 
 			// then — the timeout is surfaced as a machine-readable reason=timeout
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
@@ -372,7 +500,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp("s1", null,
-					body);
+					null, body);
 
 			// then
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -400,7 +528,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp("   ",
-					"http://target/mcp", body);
+					"http://target/mcp", null, body);
 
 			// then
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -420,7 +548,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp("s1",
-					null, body);
+					null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
@@ -438,7 +566,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp("s1",
-					null, body);
+					null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
@@ -458,7 +586,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp("s1",
-					null, body);
+					null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
@@ -493,7 +621,7 @@ class StreamableHttpProxyControllerTests {
 			final AtomicReference<ResponseEntity<Object>> holder = new AtomicReference<>();
 			final Thread poster = new Thread(() -> {
 				final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller
-					.postMcp("s-close-await", null, body);
+					.postMcp("s-close-await", null, null, body);
 				holder.set(entity);
 			});
 			poster.setDaemon(true);
@@ -567,6 +695,8 @@ class StreamableHttpProxyControllerTests {
 		@Description("deleteMcp() returns 200 when the registry removed an existing session")
 		void deleteMcp_whenRemoved_returns200() {
 			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 			given(StreamableHttpProxyControllerTests.this.registry.removeAndClose("s1")).willReturn(true);
 
 			// when
@@ -612,7 +742,7 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"method\":\"notify\"}");
 
 			// when
-			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", body);
+			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", null, body);
 
 			// then
 			verify(StreamableHttpProxyControllerTests.this.transportFactory)
@@ -629,7 +759,7 @@ class StreamableHttpProxyControllerTests {
 			// given
 			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
 			request.addHeader("Authorization", "Bearer tok");
-			request.addHeader("x-custom-auth-headers", "X-Tenant, X-Trace");
+			request.addHeader("x-custom-auth-headers", "[\"X-Tenant\", \"X-Trace\"]");
 			request.addHeader("X-Tenant", "acme");
 			request.addHeader("X-Trace", "abc123");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
@@ -640,7 +770,7 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"method\":\"notify\"}");
 
 			// when
-			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", body);
+			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", null, body);
 
 			// then
 			verify(StreamableHttpProxyControllerTests.this.transportFactory).openStreamable(
@@ -664,11 +794,42 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"method\":\"notify\"}");
 
 			// when
-			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", body);
+			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", null, body);
 
 			// then
 			verify(StreamableHttpProxyControllerTests.this.transportFactory)
 				.openStreamable(URI.create("http://target/mcp"));
+			verify(StreamableHttpProxyControllerTests.this.transportFactory, never()).openStreamable(any(URI.class),
+					any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSession() with a malformed x-custom-auth-headers payload returns 400 and opens no session")
+		void openSession_withMalformedCustomHeaderList_returns400() throws Exception {
+			// given
+			// the legacy comma-separated shape the UI never sent
+			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
+			request.addHeader("x-custom-auth-headers", "X-Tenant, X-Trace");
+			request.addHeader("X-Tenant", "acme");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"method\":\"notify\"}");
+
+			// when
+			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", null, body);
+
+			// then
+			// explicit 400, no session opened, no transport built
+			assertThat(response).isNotNull();
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(response.getBody())
+				.path("error");
+			assertThat(error.asText())
+				.isEqualTo("x-custom-auth-headers must be a JSON array of header names, but is not valid JSON");
+			verify(StreamableHttpProxyControllerTests.this.transportFactory, never()).openStreamable(any(URI.class));
 			verify(StreamableHttpProxyControllerTests.this.transportFactory, never()).openStreamable(any(URI.class),
 					any(), any());
 		}
@@ -690,7 +851,7 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"method\":\"notify\"}");
 
 			// when
-			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", body);
+			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", null, body);
 
 			// then
 			verify(StreamableHttpProxyControllerTests.this.transportFactory)
@@ -704,7 +865,7 @@ class StreamableHttpProxyControllerTests {
 		void openSession_skipsBlankAndAbsentCustomHeaderNames() throws Exception {
 			// given — empty token, a present header and a named-but-absent header
 			final MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp-inspector-api/mcp");
-			request.addHeader("x-custom-auth-headers", "X-Present, , X-Missing");
+			request.addHeader("x-custom-auth-headers", "[\"X-Present\", \" \", \"X-Missing\"]");
 			request.addHeader("X-Present", "yes");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
 			final McpClientTransport target = mock(McpClientTransport.class);
@@ -714,11 +875,156 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"method\":\"notify\"}");
 
 			// when
-			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", body);
+			StreamableHttpProxyControllerTests.this.controller.postMcp(null, "http://target/mcp", null, body);
 
 			// then — only the present header survives; null authorization is forwarded
 			verify(StreamableHttpProxyControllerTests.this.transportFactory)
 				.openStreamable(eq(URI.create("http://target/mcp")), eq(null), eq(Map.of("X-Present", "yes")));
+		}
+
+	}
+
+	@Nested
+	@DisplayName("connection timeout budget")
+	class ConnectionTimeoutBudget {
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() with connectionTimeout=1s and an upstream stuck before initialize returns a 504 whose payload names the connect phase")
+		void postMcp_connectPhaseOverrun_namesConnectPhase() throws Exception {
+			// given: the bring-up hangs; the start stub ALSO times out on its own at
+			// 400ms, well inside the 1s connect budget, so the CONNECT phase always
+			// wins the race against the initialize-phase timer subscribed at the same
+			// moment (a bare Mono.never() lets either timer fire first)
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any()))
+				.willReturn(reactor.core.publisher.Mono.<Void>never().timeout(Duration.ofMillis(400)));
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", "1", body);
+
+			// then: 504 with the existing MCP_CONNECT_FAILED contract, reason=timeout,
+			// phase=connect, and elapsed within the budget plus scheduling slack
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
+				.path("error");
+			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.path("reason").asText()).isEqualTo("timeout");
+			assertThat(error.path("phase").asText()).isEqualTo("connect");
+			assertThat(error.path("budgetMs").asLong()).isEqualTo(1000L);
+			assertThat(error.path("elapsedMs").asLong()).isLessThan(1000L + 5000L);
+			assertThat(error.path("retryable").asBoolean()).isTrue();
+			verify(StreamableHttpProxyControllerTests.this.registry, org.mockito.Mockito.atLeastOnce())
+				.removeAndClose(any(String.class));
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() with connectionTimeout=1s and an initialize that never answers returns a 504 whose payload names the initialize phase and elapsed within the budget")
+		void postMcp_initializePhaseOverrun_namesInitializePhase() throws Exception {
+			// given: the bring-up completes instantly but the initialize answer never
+			// arrives, so the initialize-phase budget fires
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willReturn(Mono.empty());
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", "1", body);
+
+			// then: 504 with the MCP_CONNECT_FAILED contract and the initialize phase
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
+				.path("error");
+			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.path("reason").asText()).isEqualTo("timeout");
+			assertThat(error.path("phase").asText()).isEqualTo("initialize");
+			assertThat(error.path("budgetMs").asLong()).isEqualTo(1000L);
+			assertThat(error.path("elapsedMs").asLong()).isLessThan(1000L + 5000L);
+			assertThat(error.path("retryable").asBoolean()).isTrue();
+			verify(StreamableHttpProxyControllerTests.this.registry, org.mockito.Mockito.atLeastOnce())
+				.removeAndClose(any(String.class));
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("absent connectionTimeout falls back to timeouts.connection, not to streamable-request (distinct values)")
+		void postMcp_withoutParameter_usesConfiguredConnectionTimeout() throws Exception {
+			// given: connection=200ms (the fallback under test) and a much longer
+			// streamable-request so a legacy-path wait would be plainly slower
+			final McpInspectorProperties props = new McpInspectorProperties();
+			props.getTimeouts().setConnection(Duration.ofMillis(200));
+			props.getTimeouts().setStreamableRequest(Duration.ofSeconds(30));
+			final StreamableHttpProxyController budgetController = new StreamableHttpProxyController(
+					StreamableHttpProxyControllerTests.this.registry,
+					StreamableHttpProxyControllerTests.this.transportFactory,
+					StreamableHttpProxyControllerTests.this.mcpProxy,
+					StreamableHttpProxyControllerTests.this.objectMapper, props);
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willReturn(Mono.empty());
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when: no connectionTimeout parameter
+			final long startedAt = System.nanoTime();
+			final ResponseEntity<Object> entity = budgetController.postMcp(null, "http://target/mcp", null, body);
+			final long waitedMs = (System.nanoTime() - startedAt) / 1_000_000L;
+
+			// then: the wait matches the 200ms connection budget, not the 30s
+			// streamable-request
+			assertThat(waitedMs).isLessThan(5000L);
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
+				.path("error");
+			assertThat(error.path("reason").asText()).isEqualTo("timeout");
+			assertThat(error.path("budgetMs").asLong()).isEqualTo(200L);
+			assertThat(error.path("elapsedMs").asLong()).isLessThan(200L + 5000L);
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("out-of-range or malformed connectionTimeout values answer 400 with the structured error body")
+		void postMcp_invalidParameter_answers400structuredBody() throws Exception {
+			// given: a body and a list of invalid raw values (non-numeric, decimal,
+			// zero, negative, huge)
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+			final String[] invalid = { "abc", "1.5", "0", "-5", "9223372036854775807", "9300000000000", "10000000000",
+					"601" };
+
+			for (final String raw : invalid) {
+				// when
+				final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+						"http://target/mcp", raw, body);
+
+				// then: 400 with the structured MCP_CONNECT_FAILED body, no session
+				assertThat(entity.getStatusCode()).as("raw value %s", raw).isEqualTo(HttpStatus.BAD_REQUEST);
+				final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper
+					.valueToTree(entity.getBody())
+					.path("error");
+				assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+				assertThat(error.path("reason").asText()).isEqualTo("validation");
+				assertThat(error.path("connectionTimeout").asText()).isEqualTo(raw);
+				assertThat(error.path("retryable").asBoolean()).isFalse();
+			}
+			verify(StreamableHttpProxyControllerTests.this.registry, never()).put(any(ProxySession.class));
 		}
 
 	}
@@ -730,13 +1036,18 @@ class StreamableHttpProxyControllerTests {
 		@Test
 		@Story("New session")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("postMcp() new-session request that times out tears down the orphaned session and returns a structured 504")
+		@Description("postMcp() new-session initialize wait is bounded by the 200ms connection budget (streamable-request stays 30s): the 504 names the initialize phase, budget source and elapsed, and the orphaned session is torn down")
 		void postMcp_newSessionRequestTimesOut_closesSessionAndReturns504() throws Exception {
-			// given — a short request timeout so the await fails fast, and a transport
-			// that
-			// builds but whose proxy never emits a matching response
+			// given: the initialize wait of a new session is bounded by the connection
+			// budget, so a 200ms timeouts.connection is the budget under test and
+			// streamable-request stays at its 30s default. If the wait ever regressed to
+			// streamable-request, this test would hold the servlet thread for 30s and
+			// fail
+			// on the elapsedMs bound below. The transport builds but its proxy never
+			// emits a matching response.
 			final McpInspectorProperties props = new McpInspectorProperties();
-			props.getTimeouts().setStreamableRequest(Duration.ofMillis(200));
+			props.getTimeouts().setConnection(Duration.ofMillis(200));
+			props.getTimeouts().setStreamableRequest(Duration.ofSeconds(30));
 			final StreamableHttpProxyController shortTimeoutController = new StreamableHttpProxyController(
 					StreamableHttpProxyControllerTests.this.registry,
 					StreamableHttpProxyControllerTests.this.transportFactory,
@@ -749,7 +1060,7 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
 
 			// when
-			final ResponseEntity<Object> entity = shortTimeoutController.postMcp(null, "http://target/mcp", body);
+			final ResponseEntity<Object> entity = shortTimeoutController.postMcp(null, "http://target/mcp", null, body);
 
 			// then
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
@@ -757,6 +1068,15 @@ class StreamableHttpProxyControllerTests {
 				.path("error");
 			assertThat(error.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
 			assertThat(error.path("reason").asText()).isEqualTo("timeout");
+			assertThat(error.path("phase").asText()).isEqualTo("initialize");
+			assertThat(error.path("budgetMs").asLong()).isEqualTo(200L);
+			// budget source pin: the wait came from the 200ms connection budget, not from
+			// the 30s streamable-request. The lower bound carries 10ms of slack: timer
+			// delivery and the elapsed nanoTime read can disagree by a tick, so the
+			// timeout can land a millisecond under the budget without firing early.
+			final long elapsedMs = error.path("elapsedMs").asLong();
+			assertThat(elapsedMs).isGreaterThanOrEqualTo(190L);
+			assertThat(elapsedMs).isLessThan(200L + 5000L);
 			assertThat(error.path("retryable").asBoolean()).isTrue();
 			verify(StreamableHttpProxyControllerTests.this.registry).removeAndClose(any(String.class));
 		}
@@ -781,7 +1101,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
-					"http://target/mcp", body);
+					"http://target/mcp", null, body);
 
 			// then — the refusal is classified, not masked as a timeout
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
@@ -813,6 +1133,204 @@ class StreamableHttpProxyControllerTests {
 			// then
 			assertThat(c).isNotNull();
 			verify(StreamableHttpProxyControllerTests.this.mcpProxy, never()).start(any());
+		}
+
+		@Test
+		@Story("Construction")
+		@Severity(SeverityLevel.MINOR)
+		@Description("the portHolder-aware constructor keeps the supplied loopback port")
+		void constructor_withPortHolder_usesGivenPort() {
+			// given / when
+			final StreamableHttpProxyController c = new StreamableHttpProxyController(
+					StreamableHttpProxyControllerTests.this.registry,
+					StreamableHttpProxyControllerTests.this.transportFactory,
+					StreamableHttpProxyControllerTests.this.mcpProxy,
+					StreamableHttpProxyControllerTests.this.objectMapper, new McpInspectorProperties(),
+					mock(InspectorServerPortHolder.class));
+
+			// then
+			assertThat(c).isNotNull();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("D8 auth-profile session bring-up")
+	class AuthProfileSession {
+
+		@Test
+		@Story("Auth profile")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with a foreign/unknown profileId returns a structured 400 bad_request and opens no session")
+		void postMcp_withForeignProfile_returnsStructured400() throws Exception {
+			// given — the owner is resolved but the store has no such profile
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-1");
+			given(store.resolve(any(), any())).willReturn(java.util.Optional.empty());
+			final StreamableHttpProxyController wired = authController(store, resolver);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> response = wired.postMcp(null, null, "foreign", null, body);
+
+			// then — structured 400, no session opened
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(response.getBody())
+				.path("code");
+			assertThat(error.asText()).isEqualTo("bad_request");
+			verify(StreamableHttpProxyControllerTests.this.registry, never()).put(any());
+		}
+
+		@Test
+		@Story("Auth profile")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with an owned profile whose one-time bind is rejected falls back to 502")
+		void postMcp_withOwnedProfileButBindRejected_returns502() throws Exception {
+			// given — the profile resolves (owned) but the one-time bind is rejected
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-1");
+			given(store.resolve(any(), any())).willReturn(java.util.Optional.of(new BearerProfile("p", "tok")));
+			given(store.bind(any(), any(), any())).willReturn(false);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamableWithAuth(any(), any(), any()))
+				.willReturn(mock(McpClientTransport.class));
+			final StreamableHttpProxyController wired = authController(store, resolver);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> response = wired.postMcp(null, null, "p", null, body);
+
+			// then — owned profile means no 400; the null session surfaces as legacy 502
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			verify(StreamableHttpProxyControllerTests.this.transportFactory).openStreamableWithAuth(any(), any(),
+					any());
+			verify(StreamableHttpProxyControllerTests.this.registry, never()).put(any());
+		}
+
+		@Test
+		@Story("Auth profile")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() with an owned profile applies auth headers to the upstream transport and opens the session")
+		void postMcp_withOwnedProfile_appliesAuthHeadersAndOpensSession() throws Exception {
+			// given — the profile resolves and binds; the proxy echoes a matching
+			// response
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-1");
+			given(store.resolve(any(), any())).willReturn(java.util.Optional.of(new BearerProfile("p", "tok")));
+			given(store.bind(any(), any(), any())).willReturn(true);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamableWithAuth(any(), any(), any()))
+				.willReturn(mock(McpClientTransport.class));
+			final JsonNode answer = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}");
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(answer);
+				return Mono.empty();
+			});
+			final StreamableHttpProxyController wired = authController(store, resolver);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> response = wired.postMcp(null, null, "p", null, body);
+
+			// then — the auth-bearing transport is used, the session binds and the
+			// response relays
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(response.getHeaders().getFirst(ProxyConstants.MCP_SESSION_ID_HEADER)).isNotBlank();
+			verify(StreamableHttpProxyControllerTests.this.transportFactory).openStreamableWithAuth(any(), any(),
+					any());
+			verify(store).bind(any(), any(), any());
+			verify(StreamableHttpProxyControllerTests.this.registry).put(any(ProxySession.class));
+		}
+
+	}
+
+	@Nested
+	@DisplayName("D3 auth-failure mapping")
+	class AuthFailureMapping {
+
+		@Test
+		@Story("Auth failure")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() existing-session request whose upstream answers with 401 returns the structured unauthorized DTO")
+		void postMcp_existingSessionAuthFailure_returnsStructured401() throws Exception {
+			// given — the replay sink carries an authorization failure as the upstream
+			// answer
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			session.targetToBrowser().tryEmitError(new RuntimeException("401 Unauthorized"));
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
+
+			// when
+			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp("s1", null,
+					null, body);
+
+			// then — the live-server 401 becomes the structured DTO, not a connect
+			// failure
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
+				.path("code");
+			assertThat(error.asText()).isEqualTo("unauthorized");
+		}
+
+		@Test
+		@Story("Auth failure")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() new-session request whose upstream answers with 401 tears down the orphaned session and returns the structured DTO")
+		void postMcp_newSessionAuthFailure_closesSessionAndReturns401() throws Exception {
+			// given — a new session whose proxy immediately fails the handshake with 401
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitError(new RuntimeException("401 Unauthorized"));
+				return Mono.empty();
+			});
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+
+			// when
+			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
+					"http://target/mcp", null, body);
+
+			// then — structured 401 and the never-returned session is cleaned up
+			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+			final JsonNode error = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
+				.path("code");
+			assertThat(error.asText()).isEqualTo("unauthorized");
+			// D5: the redacted target url is attached — scheme/host/path present, the
+			// query (with its secret) absent.
+			final JsonNode url = StreamableHttpProxyControllerTests.this.objectMapper.valueToTree(entity.getBody())
+				.path("url");
+			assertThat(url.asText()).isEqualTo("http://target/mcp");
+			verify(StreamableHttpProxyControllerTests.this.registry).removeAndClose(any(String.class));
+		}
+
+		@Test
+		@Story("Existing session")
+		@Severity(SeverityLevel.MINOR)
+		@Description("postMcp() request whose emit into a terminated sink fails returns 500")
+		void postMcp_existingSessionRequestEmitFails_returns500() throws Exception {
+			// given — the browserToTarget sink is already terminated
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.browserToTarget().tryEmitComplete();
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
+
+			// when
+			final ResponseEntity<Object> response = StreamableHttpProxyControllerTests.this.controller.postMcp("s1",
+					null, null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
 		}
 
 	}
@@ -864,21 +1382,72 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
 			final TaskHandle handle = new TaskHandle("t-123", "working", null, "2025-01-01T00:00:00Z",
-					"2025-01-01T00:00:00Z", 60000, 5000);
+					"2025-01-01T00:00:00Z", 60000, 5000, "demo://task/status");
 			given(this.taskService.getTask("t-123")).willReturn(handle);
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 			final JsonNode responseBody = (JsonNode) response.getBody();
 			assertThat(responseBody.get("result").get("taskId").asText()).isEqualTo("t-123");
 			assertThat(responseBody.get("result").get("status").asText()).isEqualTo("working");
+			assertThat(responseBody.get("result").get("keepAlive").asText()).isEqualTo("demo://task/status");
 			verify(this.taskService).getTask("t-123");
 			// The upstream is never consulted for task methods
 			verify(session.targetTransport(), never()).sendMessage(any());
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/get records the request and the locally produced response into the traffic timeline")
+		void tasksGet_interceptedLocally_recordsLocalExchange() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
+			final TaskHandle handle = new TaskHandle("t-123", "working", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
+			given(this.taskService.getTask("t-123")).willReturn(handle);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy).recordLocalExchange(eq(session), eq(body),
+					responseCaptor.capture());
+			final JsonNode recorded = responseCaptor.getValue();
+			assertThat(recorded.get("id").asInt()).isEqualTo(11);
+			assertThat(recorded.get("result").get("taskId").asText()).isEqualTo("t-123");
+			// the locally answered frame never reaches the upstream
+			verify(session.targetTransport(), never()).sendMessage(any());
+		}
+
+		@Test
+		@Story("no interception for non-task methods")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a non-task method relayed upstream is never recorded as a locally answered exchange")
+		void nonTaskMethod_neverRecordsLocalExchange() throws Exception {
+			// given: a request frame with an id (a notification returns 202 before the
+			// interception block is reached, which would make the never() assert vacuous)
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/list\"}");
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willReturn(Mono.empty());
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: passthrough traffic keeps the plain relay timeline behavior
+			assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy, never()).recordLocalExchange(any(), any(), any());
 		}
 
 		@Test
@@ -894,7 +1463,7 @@ class StreamableHttpProxyControllerTests {
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -913,12 +1482,12 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
 					"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"t-456\"}}");
 			final TaskHandle handle = new TaskHandle("t-456", "cancelled", null, "2025-01-01T00:00:00Z",
-					"2025-01-01T00:00:00Z", 60000, 5000);
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.cancelTask("t-456")).willReturn(handle);
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -940,7 +1509,7 @@ class StreamableHttpProxyControllerTests {
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -962,7 +1531,7 @@ class StreamableHttpProxyControllerTests {
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -980,18 +1549,19 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-msg\"}}");
 			final TaskHandle handle = new TaskHandle("t-msg", "failed", "Tool execution failed: timeout",
-					"2025-01-01T00:00:00Z", "2025-01-01T00:01:00Z", 60000, 5000);
+					"2025-01-01T00:00:00Z", "2025-01-01T00:01:00Z", 60000, 5000, null);
 			given(this.taskService.getTask("t-msg")).willReturn(handle);
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
 			final JsonNode responseBody = (JsonNode) response.getBody();
 			assertThat(responseBody.get("result").get("statusMessage").asText())
 				.isEqualTo("Tool execution failed: timeout");
+			assertThat(responseBody.get("result").has("keepAlive")).isFalse();
 		}
 
 		@Test
@@ -999,10 +1569,16 @@ class StreamableHttpProxyControllerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("when no TaskService bean is available, tasks/get falls through to the regular relay path")
 		void tasksGet_withoutTaskService_relaysToUpstream() throws Exception {
-			// given
+			// given: the upstream answer is pre-emitted on the session replay sink, so
+			// the
+			// relay await resolves immediately instead of waiting out the 30 s request
+			// timeout
 			final ProxySession session = newSession("s1");
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}");
+			final JsonNode upstreamAnswer = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":6,\"result\":{\"taskId\":\"t-1\",\"status\":\"vendor-implementation\"}}");
+			session.targetToBrowser().tryEmitNext(upstreamAnswer);
 			// Default controller has no TaskService
 			final StreamableHttpProxyController noTaskController = new StreamableHttpProxyController(
 					StreamableHttpProxyControllerTests.this.registry,
@@ -1013,10 +1589,15 @@ class StreamableHttpProxyControllerTests {
 			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willReturn(Mono.empty());
 
 			// when
-			final ResponseEntity<Object> response = noTaskController.postMcp("s1", null, body);
+			final ResponseEntity<Object> response = noTaskController.postMcp("s1", null, null, body);
 
-			// then - the frame is relayed, not intercepted locally
-			assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+			// then - the frame is relayed upstream and the upstream answer comes back
+			// verbatim
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			assertThat((JsonNode) response.getBody()).isEqualTo(upstreamAnswer);
+			assertThat(session.browserToTarget().asFlux().blockFirst(Duration.ofMillis(500)))
+				.as("tasks/get frame must be emitted toward upstream")
+				.isEqualTo(body);
 			verify(StreamableHttpProxyControllerTests.this.registry).get("s1");
 		}
 
@@ -1030,12 +1611,12 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tasks/list\"}");
 			final TaskHandle handle = new TaskHandle("t-1", "working", null, "2025-01-01T00:00:00Z",
-					"2025-01-01T00:00:00Z", 60000, 5000);
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.listTasks()).willReturn(java.util.List.of(handle));
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1059,7 +1640,7 @@ class StreamableHttpProxyControllerTests {
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1081,7 +1662,7 @@ class StreamableHttpProxyControllerTests {
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1103,7 +1684,7 @@ class StreamableHttpProxyControllerTests {
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1124,7 +1705,7 @@ class StreamableHttpProxyControllerTests {
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1144,7 +1725,7 @@ class StreamableHttpProxyControllerTests {
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
 
 			// then
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1174,7 +1755,8 @@ class StreamableHttpProxyControllerTests {
 			});
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp(null, "http://target/mcp", null,
+					body);
 
 			// then: the frame is relayed (upstream answer returned verbatim), the session
 			// header is present, and the TaskService was never consulted
@@ -1207,7 +1789,7 @@ class StreamableHttpProxyControllerTests {
 			given(StreamableHttpProxyControllerTests.this.registry.get("s-upstream")).willReturn(upstreamTasksSession);
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s-upstream", null, body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s-upstream", null, null, body);
 
 			// then: the upstream answer is returned verbatim and the local TaskService
 			// was never consulted
@@ -1227,13 +1809,13 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
 			final TaskHandle handle = new TaskHandle("t-123", "working", null, "2025-01-01T00:00:00Z",
-					"2025-01-01T00:00:00Z", 60000, 5000);
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.getTask("t-123")).willReturn(handle);
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 			Thread.sleep(5);
 
 			// when
-			this.controllerWithTasks.postMcp("s1", null, body);
+			this.controllerWithTasks.postMcp("s1", null, null, body);
 
 			// then: lastActivity advanced past the pre-call value
 			assertThat(session.lastActivity()).isAfter(before);
@@ -1251,13 +1833,13 @@ class StreamableHttpProxyControllerTests {
 			final java.util.List<TaskHandle> handles = new java.util.ArrayList<>(102);
 			for (int i = 1; i <= 102; i++) {
 				handles.add(new TaskHandle("t-" + i, "working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z",
-						60000, 5000));
+						60000, 5000, null));
 			}
 			given(this.taskService.listTasks()).willReturn(handles);
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
 
 			// then: a full page is returned past the cursor and a nextCursor is emitted
 			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1278,14 +1860,14 @@ class StreamableHttpProxyControllerTests {
 			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":43,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"1\"}}");
 			final TaskHandle first = new TaskHandle("t-1", "working", null, "2025-01-01T00:00:00Z",
-					"2025-01-01T00:00:00Z", 60000, 5000);
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
 			final TaskHandle second = new TaskHandle("t-2", "working", null, "2025-01-01T00:00:00Z",
-					"2025-01-01T00:00:00Z", 60000, 5000);
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.listTasks()).willReturn(java.util.List.of(first, second));
 			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
 
 			// when
-			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, body);
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
 
 			// then: the remaining task is returned and the page reaches the list end, so
 			// no nextCursor
@@ -1294,6 +1876,149 @@ class StreamableHttpProxyControllerTests {
 			assertThat(responseBody.get("result").get("tasks")).hasSize(1);
 			assertThat(responseBody.get("result").get("tasks").get(0).get("taskId").asText()).isEqualTo("t-2");
 			assertThat(responseBody.get("result").has("nextCursor")).as("last page has no nextCursor").isFalse();
+		}
+
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/list with a non-numeric cursor returns a JSON-RPC -32602 error naming the cursor")
+		void tasksList_nonNumericCursor_returnsInvalidParamsError() throws Exception {
+			// given: a cursor that is not a decimal offset
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"not-a-number\"}}");
+			final java.util.List<TaskHandle> noTasks = java.util.List.of();
+			given(this.taskService.listTasks()).willReturn(noTasks);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: a -32602 Invalid params error naming the offending cursor instead of
+			// an empty page
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode responseBody = (JsonNode) response.getBody();
+			assertThat(responseBody.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(responseBody.get("error").get("message").asText()).contains("not-a-number");
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/get error records the request and the -32602 error envelope into the timeline")
+		void tasksGet_unknownTask_recordsRequestAndErrorEnvelopeInTimeline() throws Exception {
+			// given: an unknown taskId answered locally with a -32602 error
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":45,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"missing\"}}");
+			given(this.taskService.getTask("missing")).willThrow(new TaskNotFoundException("missing"));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: the request and the locally produced -32602 error envelope are
+			// recorded together into the traffic timeline
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy).recordLocalExchange(eq(session), eq(body),
+					responseCaptor.capture());
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(45);
+			assertThat(recordedResponse.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(recordedResponse.get("error").get("message").asText()).containsIgnoringCase("not found");
+		}
+
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/list error records the request and the -32602 error envelope into the timeline")
+		void tasksList_nonNumericCursor_recordsRequestAndErrorEnvelopeInTimeline() throws Exception {
+			// given: a cursor that is not a decimal offset
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":46,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"not-a-number\"}}");
+			final java.util.List<TaskHandle> noTasks = java.util.List.of();
+			given(this.taskService.listTasks()).willReturn(noTasks);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: the request and the locally produced -32602 error envelope are
+			// recorded together into the traffic timeline
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy).recordLocalExchange(eq(session), eq(body),
+					responseCaptor.capture());
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(46);
+			assertThat(recordedResponse.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(recordedResponse.get("error").get("message").asText()).contains("not-a-number");
+		}
+
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/list records the request and the locally produced response into the traffic timeline")
+		void tasksList_interceptedLocally_recordsLocalExchange() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":48,\"method\":\"tasks/list\"}");
+			final TaskHandle handle = new TaskHandle("t-1", "working", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
+			given(this.taskService.listTasks()).willReturn(java.util.List.of(handle));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: the recorded pair correlates through the shared JSON-RPC id and the
+			// recorded payload equals the body returned to the client
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy).recordLocalExchange(eq(session), eq(body),
+					responseCaptor.capture());
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(48);
+			assertThat(recordedResponse.get("result").get("tasks")).hasSize(1);
+			assertThat(recordedResponse.get("result").get("tasks").get(0).get("taskId").asText()).isEqualTo("t-1");
+			assertThat(recordedResponse).isEqualTo((JsonNode) response.getBody());
+			// the locally answered frame never reaches the upstream
+			verify(session.targetTransport(), never()).sendMessage(any());
+		}
+
+		@Test
+		@Story("tasks/cancel interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/cancel records the request and the locally produced response into the traffic timeline")
+		void tasksCancel_interceptedLocally_recordsLocalExchange() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":49,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"t-456\"}}");
+			final TaskHandle handle = new TaskHandle("t-456", "cancelled", null, "2025-01-01T00:00:00Z",
+					"2025-01-01T00:00:00Z", 60000, 5000, null);
+			given(this.taskService.cancelTask("t-456")).willReturn(handle);
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+
+			// when
+			final ResponseEntity<Object> response = this.controllerWithTasks.postMcp("s1", null, null, body);
+
+			// then: the recorded pair correlates through the shared JSON-RPC id and the
+			// recorded payload equals the body returned to the client
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(StreamableHttpProxyControllerTests.this.mcpProxy).recordLocalExchange(eq(session), eq(body),
+					responseCaptor.capture());
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(49);
+			assertThat(recordedResponse.get("result").get("taskId").asText()).isEqualTo("t-456");
+			assertThat(recordedResponse.get("result").get("status").asText()).isEqualTo("cancelled");
+			assertThat(recordedResponse).isEqualTo((JsonNode) response.getBody());
+			// the locally answered frame never reaches the upstream
+			verify(session.targetTransport(), never()).sendMessage(any());
 		}
 
 	}
@@ -1342,7 +2067,8 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
 
 			// when
-			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", null,
+					body);
 
 			// then
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1368,8 +2094,10 @@ class StreamableHttpProxyControllerTests {
 				.willReturn(target);
 			final JsonNode response = StreamableHttpProxyControllerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":{\"tasks\":{\"custom\":true}}}}");
+			final AtomicReference<ProxySession> startedSession = new AtomicReference<>();
 			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
 				final ProxySession s = inv.getArgument(0);
+				startedSession.set(s);
 				s.targetToBrowser().tryEmitNext(response);
 				return Mono.empty();
 			});
@@ -1377,8 +2105,8 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
 
 			// when
-			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
-					"http://target/mcp", body);
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", null,
+					body);
 
 			// then
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1387,6 +2115,10 @@ class StreamableHttpProxyControllerTests {
 			assertThat(responseBody.path("result").path("capabilities").path("tasks").path("custom").asBoolean())
 				.as("upstream tasks must be preserved")
 				.isTrue();
+			assertThat(startedSession.get()).isNotNull();
+			assertThat(startedSession.get().isTasksInterceptionEnabled())
+				.as("upstream-advertised tasks keeps task-method interception off")
+				.isFalse();
 		}
 
 		@Test
@@ -1410,7 +2142,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when: using the default controller without TaskService
 			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
-					"http://target/mcp", body);
+					"http://target/mcp", null, body);
 
 			// then: no tasks capability is injected
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1441,7 +2173,8 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
 
 			// when
-			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", null,
+					body);
 
 			// then
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1470,7 +2203,8 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
 
 			// when
-			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", null,
+					body);
 
 			// then
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1499,7 +2233,8 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
 
 			// when
-			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", null,
+					body);
 
 			// then
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1529,7 +2264,8 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
 
 			// when
-			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", null,
+					body);
 
 			// then
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1558,7 +2294,8 @@ class StreamableHttpProxyControllerTests {
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
 
 			// when
-			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", body);
+			final ResponseEntity<Object> entity = this.controllerWithTasks.postMcp(null, "http://target/mcp", null,
+					body);
 
 			// then - a null upstream response passes through without injection or crash
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1586,7 +2323,7 @@ class StreamableHttpProxyControllerTests {
 
 			// when
 			final ResponseEntity<Object> entity = StreamableHttpProxyControllerTests.this.controller.postMcp(null,
-					"http://target/mcp", body);
+					"http://target/mcp", null, body);
 
 			// then - no injection happens, no crash
 			assertThat(entity.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -1594,6 +2331,137 @@ class StreamableHttpProxyControllerTests {
 				.valueToTree(entity.getBody());
 			assertThat(responseBody.has("error")).as("error response must pass through").isTrue();
 			assertThat(responseBody.path("error").path("code").asInt()).isEqualTo(-32603);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("D8 legacy-session WARN")
+	class LegacySessionWarn {
+
+		@Test
+		@Story("Legacy session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("repeat access to the same owner-less session logs the legacy WARN exactly once")
+		void legacySession_repeatAccess_logsWarnOnce() {
+			// given - an unbound (legacy) session; no owner resolver wired
+			final ProxySession session = newSession("s-legacy", mock(McpClientTransport.class));
+			given(StreamableHttpProxyControllerTests.this.registry.get("s-legacy")).willReturn(session);
+			final ch.qos.logback.classic.Logger warnerLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
+				.getLogger(io.inspector.mcp.core.proxy.LegacySessionAccessWarner.class);
+			final ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender = new ch.qos.logback.core.read.ListAppender<>();
+			appender.start();
+			warnerLogger.addAppender(appender);
+			try {
+				// when - the same session is hit on every endpoint that checks ownership
+				StreamableHttpProxyControllerTests.this.controller.getMcp("s-legacy");
+				StreamableHttpProxyControllerTests.this.controller.deleteMcp("s-legacy");
+				StreamableHttpProxyControllerTests.this.controller.getMcp("s-legacy");
+
+				// then - exactly one WARN was emitted for the session
+				final long warns = appender.list.stream()
+					.filter((e) -> e.getFormattedMessage() != null
+							&& e.getFormattedMessage().contains("legacy session without owner binding"))
+					.count();
+				assertThat(warns).isEqualTo(1);
+			}
+			finally {
+				warnerLogger.detachAppender(appender);
+			}
+		}
+
+	}
+
+	@Nested
+	@DisplayName("D8 owner-check on delete")
+	class DeleteOwnerCheck {
+
+		@Test
+		@Story("Teardown")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("deleteMcp() returns 404 when the session owner differs from the caller")
+		void deleteMcp_foreignOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.bindProfile("owner-A", "profile-1");
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-B");
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final StreamableHttpProxyController wired = authController(store, resolver);
+
+			// when
+			final ResponseEntity<Void> response = wired.deleteMcp("s1");
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+			verify(StreamableHttpProxyControllerTests.this.registry, never()).removeAndClose(any());
+		}
+
+		@Test
+		@Story("Teardown")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("deleteMcp() returns 404 when the caller owner cannot be resolved")
+		void deleteMcp_nullCallerOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.bindProfile("owner-A", "profile-1");
+			given(StreamableHttpProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn(null);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final StreamableHttpProxyController wired = authController(store, resolver);
+
+			// when
+			final ResponseEntity<Void> response = wired.deleteMcp("s1");
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+			verify(StreamableHttpProxyControllerTests.this.registry, never()).removeAndClose(any());
+		}
+
+	}
+
+	@Nested
+	@DisplayName("Proxy keep-alive")
+	class KeepAlive {
+
+		@Test
+		@Story("Proxy keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a recorded streamable proxy ping is broadcast as mcp:keepalive-ping with the unified {at} payload")
+		void recordedPing_broadcastsKeepAliveEventToEmitterRegistry() throws Exception {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(StreamableHttpProxyControllerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willReturn(target);
+			final InspectorSseEmitterRegistry emitters = mock(InspectorSseEmitterRegistry.class);
+			final StreamableHttpProxyController wired = new StreamableHttpProxyController(
+					StreamableHttpProxyControllerTests.this.registry,
+					StreamableHttpProxyControllerTests.this.transportFactory,
+					StreamableHttpProxyControllerTests.this.mcpProxy,
+					StreamableHttpProxyControllerTests.this.objectMapper, null, null, null, null, null, null, null,
+					emitters);
+			final JsonNode answer = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}");
+			given(StreamableHttpProxyControllerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitNext(answer);
+				return Mono.empty();
+			});
+			final JsonNode body = StreamableHttpProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\"}");
+
+			// when
+			wired.postMcp(null, null, null, body);
+			final ArgumentCaptor<ProxySession> session = ArgumentCaptor.forClass(ProxySession.class);
+			verify(StreamableHttpProxyControllerTests.this.registry).put(session.capture());
+			session.getValue().keepAliveTracker().recordPing(Instant.parse("2026-09-20T10:00:00Z"));
+
+			// then: the same {"at": "<ISO>"} shape the SSE proxy and WebFlux stacks emit
+			final ArgumentCaptor<Map<String, String>> payload = ArgumentCaptor.forClass(Map.class);
+			verify(emitters).broadcast(eq(session.getValue().sessionId()), eq("mcp:keepalive-ping"), payload.capture());
+			assertThat(payload.getValue()).containsEntry("at", "2026-09-20T10:00:00Z");
 		}
 
 	}

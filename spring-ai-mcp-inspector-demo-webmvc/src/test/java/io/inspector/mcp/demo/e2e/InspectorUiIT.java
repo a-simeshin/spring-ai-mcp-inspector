@@ -16,9 +16,14 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import com.codeborne.selenide.CollectionCondition;
@@ -26,6 +31,7 @@ import com.codeborne.selenide.Condition;
 import com.codeborne.selenide.Configuration;
 import com.codeborne.selenide.Selenide;
 import com.codeborne.selenide.SelenideElement;
+import com.codeborne.selenide.WebDriverRunner;
 import io.github.bonigarcia.wdm.WebDriverManager;
 import io.qameta.allure.Description;
 import io.qameta.allure.Epic;
@@ -46,6 +52,7 @@ import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
 import org.openqa.selenium.logging.LogEntries;
 import org.openqa.selenium.logging.LogEntry;
@@ -58,12 +65,15 @@ import org.springframework.context.ConfigurableApplicationContext;
 import io.inspector.mcp.demo.DemoApplication;
 
 import static com.codeborne.selenide.Condition.attributeMatching;
+import static com.codeborne.selenide.Condition.cssClass;
+import static com.codeborne.selenide.Condition.disabled;
 import static com.codeborne.selenide.Condition.exactText;
 import static com.codeborne.selenide.Condition.text;
 import static com.codeborne.selenide.Condition.visible;
 import static com.codeborne.selenide.Selectors.byText;
 import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.$$;
+import static com.codeborne.selenide.Selenide.$x;
 import static com.codeborne.selenide.Selenide.open;
 
 /**
@@ -93,12 +103,14 @@ import static com.codeborne.selenide.Selenide.open;
  * <li>{@link SidebarAndTheme} — collapsibles, custom header add/remove, theme
  * switch.</li>
  * <li>{@link TabsAvailability} — verifies the rendered tab list against expected.</li>
- * <li>{@link ResponsiveTabBar} — CI regression for the <640px wrap patch (375px /
- * sm-boundary / 1024px control).</li>
+ * <li>{@link ResponsiveTabBar}: CI regression for the tab-bar wrap patch at every width
+ * (375 / 639 / 640+1024 / 1280x800, #275).</li>
  * <li>{@link ResponsiveHistoryLayout}: CI regression for the <1024px compact layout patch
  * (History pane never overlaps tab content; elementFromPoint at 780x437 with both drag
  * handles absent and the History/Notifications columns scrolling under real overflow,
  * disjoint panes at 768/1023, desktop control at 1024px).</li>
+ * <li>{@link LeakDetection} - live leak-detector flow (issue #251): leakyInsert called
+ * through the UI, verbatim Tool Results note, Timeline leak badge, APP_LOG jump.</li>
  * </ul>
  *
  * <p>
@@ -124,12 +136,16 @@ class InspectorUiIT {
 	}
 
 	/**
-	 * Every demo tool advertised by {@code tools/list} (22 entries).
+	 * Every demo tool advertised by {@code tools/list} (29 entries): the 22 core tools,
+	 * the four task-emulating tools from {@code DemoTaskEmulatingToolsProvider}
+	 * (generateReport, getTaskStatus, cancelTask, keepAliveTask), and the three MCP Apps
+	 * fixtures from {@code DemoUiAppsProvider} (formApp, dashboardApp, malformedAppTool).
 	 */
 	private static final String[] ALL_DEMO_TOOLS = { "echo", "sum", "currentTime", "addNumbers", "concatenate",
 			"lookupUser", "chooseColor", "toggleFlag", "optionalGreeting", "errorTool", "largeOutput",
 			"structuredOutput", "multiContent", "slowEcho", "deepJson", "blobAttachment", "askLlm", "askUser",
-			"deployService", "findFiles", "authorizeViaUrl", "listMyRoots" };
+			"deployService", "findFiles", "authorizeViaUrl", "listMyRoots", "generateReport", "getTaskStatus",
+			"cancelTask", "keepAliveTask", "formApp", "dashboardApp", "malformedAppTool" };
 
 	/**
 	 * Connect matrix actually exposed by the upstream UI: only the three transport
@@ -363,12 +379,22 @@ class InspectorUiIT {
 	 * only the transport protocol is left to vary per test.
 	 */
 	private void startApp(Combo combo) {
-		String[] args = new String[] { "--server.port=0",
-				"--spring.ai.mcp.server.protocol=" + combo.protocol.toUpperCase(),
-				"--spring.ai.mcp.inspector.auth-enabled=false", };
-		app = new SpringApplicationBuilder(DemoApplication.class).run(args);
+		startApp(combo, new String[0]);
+	}
 
-		int port = ((WebServerApplicationContext) app).getWebServer().getPort();
+	/**
+	 * Boots {@link DemoApplication} for the given combo on a random port, with extra
+	 * command-line args appended to the standard combo wiring (used by the
+	 * {@code UpstreamDeath} group to enable the fast upstream liveness probe config).
+	 */
+	private void startApp(Combo combo, String... extraArgs) {
+		final List<String> args = new ArrayList<>(
+				List.of("--server.port=0", "--spring.ai.mcp.server.protocol=" + combo.protocol.toUpperCase(),
+						"--spring.ai.mcp.inspector.auth-enabled=false"));
+		args.addAll(List.of(extraArgs));
+		app = new SpringApplicationBuilder(DemoApplication.class).run(args.toArray(String[]::new));
+
+		final int port = ((WebServerApplicationContext) app).getWebServer().getPort();
 		Configuration.baseUrl = "http://localhost:" + port;
 	}
 
@@ -377,9 +403,9 @@ class InspectorUiIT {
 	// UPSTREAM_DOM_MAP.md. Keep these tiny; complex assertions live in tests.
 	// ---------------------------------------------------------------------
 
-	/** Sidebar wrapper — the {@code bg-card border-r border-border} flex column. */
+	/** Sidebar wrapper — carries the {@code data-testid=sidebar} anchor (issue #378). */
 	private static SelenideElement sidebar() {
-		return $(".bg-card.border-r");
+		return $("[data-testid=sidebar]");
 	}
 
 	/** Sidebar Connect button (first-time; has no testid — match by visible text). */
@@ -387,34 +413,38 @@ class InspectorUiIT {
 		return sidebar().$(byText("Connect"));
 	}
 
-	/** Active Radix tab panel ({@code [role=tabpanel][data-state=active]}). */
+	/**
+	 * Active tab panel (issue #378). Radix mounts only the active TabsContent, so exactly
+	 * one {@code tab-content-<value>} anchor exists while a tab is open; the
+	 * {@code :not([hidden])} filter is kept as an explicit visibility guard.
+	 */
 	private static SelenideElement activePanel() {
-		return $("[role=tabpanel][data-state=active]");
+		return $("[data-testid^=tab-content-]:not([hidden])");
 	}
 
 	/**
 	 * Selects a row from the active ListPane by its exact visible name. The name lives in
-	 * a {@code <span class="truncate">} inside the clickable row (see ListPane row
+	 * a {@code <span data-testid="row-name">} inside the clickable row (see ListPane row
 	 * markup), and {@code findBy(text(...))} matches substrings — so asking for "echo"
 	 * resolved to the "slowEcho" row whenever it rendered first. Match the name span with
 	 * {@code exactText} instead; the click bubbles up to the row.
 	 */
 	private static void selectRow(String name) {
-		activePanel().$$(".cursor-pointer .truncate")
+		activePanel().$$("[data-testid=row-name]")
 			.findBy(exactText(name))
 			.shouldBe(visible, Duration.ofSeconds(10))
 			.click();
 	}
 
 	/**
-	 * Clears every {@code <input name="search">} inside the active tab panel by
-	 * selecting-all and pressing Backspace. Selenide's plain {@code clear()} and
-	 * {@code setValue("")} routes don't always synthesise the {@code input} event React's
-	 * controlled-input wiring requires, leaving the list-pane filter "stuck" between
-	 * methods of the same {@code @Nested} group.
+	 * Clears every ListPane search input ({@code data-testid=search-input}) inside the
+	 * active tab panel by selecting-all and pressing Backspace. Selenide's plain
+	 * {@code clear()} and {@code setValue("")} routes don't always synthesise the
+	 * {@code input} event React's controlled-input wiring requires, leaving the list-pane
+	 * filter "stuck" between methods of the same {@code @Nested} group.
 	 */
 	private static void clearAllSearchInputs() {
-		for (SelenideElement search : activePanel().$$("input[name=search]")) {
+		for (SelenideElement search : activePanel().$$("[data-testid=search-input]")) {
 			if (!search.exists() || search.getValue() == null || search.getValue().isEmpty()) {
 				continue;
 			}
@@ -435,14 +465,26 @@ class InspectorUiIT {
 	}
 
 	/**
-	 * History column inside the bottom {@code HistoryAndNotifications} panel. The
-	 * upstream component renders the left column as
-	 * {@code <div class="flex-1 overflow-y-auto p-4 border-r">} — the {@code border-r} is
-	 * unique to the left (History) side; the right (Server Notifications) side has no
-	 * right border. Use {@code .flex-1.border-r} as a stable anchor.
+	 * History column inside the bottom {@code HistoryAndNotifications} panel, anchored by
+	 * its {@code data-testid=history-pane} (issue #378).
 	 */
 	private static SelenideElement historyColumn() {
-		return $(".flex-1.overflow-y-auto.p-4.border-r");
+		return $("[data-testid=history-pane]");
+	}
+
+	/**
+	 * Counts non-overlapping occurrences of {@code needle} in {@code haystack}. Used by
+	 * the doubled-error-message regression checks that must assert EXACTLY ONE occurrence
+	 * rather than mere presence.
+	 */
+	private static int countOccurrences(String haystack, String needle) {
+		int count = 0;
+		int index = 0;
+		while ((index = haystack.indexOf(needle, index)) >= 0) {
+			count++;
+			index += needle.length();
+		}
+		return count;
 	}
 
 	/**
@@ -451,17 +493,16 @@ class InspectorUiIT {
 	 * a successful connect.
 	 *
 	 * <p>
-	 * Radix's {@code TabsTrigger} does NOT reflect its {@code value} prop as a DOM
-	 * attribute — only as the suffix of the rendered {@code id} (e.g.
-	 * {@code radix-:rg:-trigger-tools}). We therefore match on
-	 * {@code [id$="-trigger-${value}"]}.
+	 * Triggers carry {@code data-testid=tab-trigger-<value>} and the content pane
+	 * {@code data-testid=tab-content-<value>} (issue #378). Radix mounts only the active
+	 * TabsContent, so the content anchor is visible exactly when the tab opened.
 	 */
 	private static void clickTab(String value) {
-		$("[role=tablist]").shouldBe(visible, Duration.ofSeconds(15));
-		$("[role=tab][id$='-trigger-" + value + "']").shouldBe(visible, Duration.ofSeconds(10)).click();
-		// Confirm the trigger is now the active one (Radix sets data-state=active on
-		// click).
-		$("[role=tab][data-state=active][id$='-trigger-" + value + "']").shouldBe(visible, Duration.ofSeconds(5));
+		$("[data-testid=tab-list]").shouldBe(visible, Duration.ofSeconds(15));
+		$("[data-testid=tab-trigger-" + value + "]").shouldBe(visible, Duration.ofSeconds(10)).click();
+		// Confirm the tab actually opened: the content pane is mounted only while
+		// its tab is the active one.
+		$("[data-testid=tab-content-" + value + "]").shouldBe(visible, Duration.ofSeconds(5));
 	}
 
 	/**
@@ -476,6 +517,38 @@ class InspectorUiIT {
 		// Sidebar must finish first render before we click anything.
 		connectButton().shouldBe(visible, Duration.ofSeconds(15));
 		connectButton().click();
+		// Restart/Reconnect button is only mounted when connectionStatus === "connected".
+		$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+	}
+
+	/**
+	 * New connect helper for the auth profiles flow (issue #54). Opens the page, ensures
+	 * an auth profile is selected/created, then connects. Uses a simple BEARER token
+	 * profile (no OAuth flow) for tests that don't specifically exercise OAuth2
+	 * client-credentials.
+	 */
+	private static void openAndConnectWithProfile() {
+		open("/mcp-inspector/index.html");
+		// Auth profile panel must render first (issue #54).
+		$("[data-testid=auth-profiles-panel]").shouldBe(visible, Duration.ofSeconds(15));
+		// If no profiles exist, create a simple Bearer token profile.
+		// Check if the profiles list is empty (no auth-profile-row-* elements).
+		if ($$("[data-testid^=auth-profile-row-]").isEmpty()) {
+			// [spring-ai-mcp-inspector PATCH] Issue #268: the editor section starts
+			// collapsed; expand it explicitly before filling the fields.
+			$("[data-testid=auth-profile-editor-toggle]").shouldBe(visible, Duration.ofSeconds(15)).click();
+			// The auth-profile editor must render before we touch it (race condition).
+			$("[data-testid=auth-profile-type]").shouldBe(visible, Duration.ofSeconds(15));
+			// Type select defaults to BEARER.
+			setReactInputValue("[data-testid=auth-profile-name]", "e2e-default");
+			setReactInputValue("[data-testid=auth-profile-bearer-token]", "e2e-token");
+			$("[data-testid=auth-profile-save]").shouldBe(visible).click();
+			// Wait for the saved row to appear and be auto-selected.
+			$("[data-testid=auth-profiles-list]").shouldBe(visible, Duration.ofSeconds(15))
+				.shouldHave(text("e2e-default"));
+		}
+		// Now connect.
+		connectButton().shouldBe(visible, Duration.ofSeconds(15)).click();
 		// Restart/Reconnect button is only mounted when connectionStatus === "connected".
 		$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
 	}
@@ -497,6 +570,49 @@ class InspectorUiIT {
 				+ "var setter = Object.getOwnPropertyDescriptor(" + "  window.HTMLInputElement.prototype, 'value').set;"
 				+ "setter.call(el, arguments[1]);" + "el.dispatchEvent(new Event('input', { bubbles: true }));"
 				+ "el.dispatchEvent(new Event('change', { bubbles: true }));", cssSelector, value);
+	}
+
+	/**
+	 * Boots the app, opens the page, forces SSE transport and creates + selects a
+	 * {@code CLIENT_CREDENTIALS} profile via the real editor.
+	 */
+	private void bootAndCreateProfile(final E2eTokenServer tokenServer) {
+		startApp(new Combo("sse"));
+		open("/mcp-inspector/index.html");
+
+		// Auth profile panel must render first (issue #54).
+		$("[data-testid=auth-profiles-panel]").shouldBe(visible, Duration.ofSeconds(15));
+		// [spring-ai-mcp-inspector PATCH] Issue #268: the editor section starts
+		// collapsed; expand it explicitly before touching the fields.
+		$("[data-testid=auth-profile-editor-toggle]").shouldBe(visible, Duration.ofSeconds(15)).click();
+		// The auth-profile editor must render before we touch it.
+		$("[data-testid=auth-profile-type]").shouldBe(visible, Duration.ofSeconds(15));
+
+		// Force SSE — the proxy branch whose SSE error event drives the D3
+		// banner (the demo config already defaults to SSE, but be explicit).
+		$("#transport-type-select").shouldBe(visible).click();
+		$("[data-testid=select-option-sse]").shouldBe(visible).click();
+
+		// Create the CLIENT_CREDENTIALS profile (registration performs the
+		// initial token exchange server-side; the profile auto-selects on save).
+		$("[data-testid=auth-profile-type]").shouldBe(visible).click();
+		$("[data-testid=select-option-OAUTH2]").shouldBe(visible).click();
+		$("[data-testid=auth-profile-grant-mode]").shouldBe(visible).click();
+		$("[data-testid=select-option-CLIENT_CREDENTIALS]").shouldBe(visible).click();
+		setReactInputValue("[data-testid=auth-profile-name]", "e2e-cc");
+		setReactInputValue("[data-testid=auth-profile-token-url]", tokenServer.tokenUrl());
+		setReactInputValue("[data-testid=auth-profile-client-id]", "e2e-cid");
+		setReactInputValue("[data-testid=auth-profile-client-secret]", "e2e-secret");
+		$("[data-testid=auth-profile-save]").shouldBe(visible).click();
+
+		// The saved row appears in the list (auto-selected active profile).
+		$("[data-testid=auth-profiles-list]").shouldBe(visible, Duration.ofSeconds(15)).shouldHave(text("e2e-cc"));
+	}
+
+	/** Points the server-URL input at the SSE stub and clicks Connect. */
+	private void connectTo(final E2eSseMcpStub stub) {
+		setReactInputValue("#sse-url-input", stub.sseUrl());
+		connectButton().shouldBe(visible).click();
 	}
 
 	// =====================================================================
@@ -561,7 +677,7 @@ class InspectorUiIT {
 			// (it pre-fills `lastTransportType`), but exercise the combobox switch
 			// anyway.
 			$("#transport-type-select").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("SSE")).click();
+			$("[data-testid=select-option-sse]").click();
 
 			// then
 			// URL field is the SSE/HTTP branch.
@@ -584,7 +700,7 @@ class InspectorUiIT {
 
 			// when
 			$("#transport-type-select").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("STDIO")).click();
+			$("[data-testid=select-option-stdio]").click();
 
 			// then
 			$("#command-input").shouldBe(visible);
@@ -613,6 +729,171 @@ class InspectorUiIT {
 			// The Restart/Reconnect testid disappears, the bare Connect button reappears.
 			$("[data-testid=connect-button]").shouldNotBe(visible, Duration.ofSeconds(10));
 			connectButton().shouldBe(visible);
+		}
+
+	}
+
+	// =====================================================================
+	// A2. Upstream death - the proxy's liveness probe must carry the loss of
+	// the upstream to the browser: the sidebar leaves the Connected branch
+	// and surfaces the connection error banner within the probe window.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Upstream death (SSE liveness)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class UpstreamDeath {
+
+		/**
+		 * The upstream MCP server this group kills mid-session. It is a separate context
+		 * so the inspector app (which owns the proxy under test) keeps serving the UI
+		 * while the upstream is gone.
+		 */
+		private ConfigurableApplicationContext upstreamApp;
+
+		/** Each test boots a fresh pair of apps - clean up after every method. */
+		@AfterEach
+		void tearDown() {
+			if (upstreamApp != null) {
+				try {
+					upstreamApp.close();
+				}
+				catch (Exception ignored) {
+					/* best-effort */
+				}
+				upstreamApp = null;
+			}
+			stopApp();
+		}
+
+		@Test
+		@Story("Connect")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Kill the upstream after a proxied SSE connect: the liveness probe closes the downstream stream and the sidebar must leave the Connected branch within the probe window.")
+		@DisplayName("upstreamDeathLeavesConnected - status leaves Connected within the probe window")
+		void upstreamDeath_leavesConnectedWithinProbeWindow() {
+			// given: inspector app with the fast liveness probe config from
+			// ProxySseLivenessIT (idleThreshold 3s + probeInterval 2s, so the proxy
+			// closes the downstream SSE stream roughly 5s after the upstream dies).
+			startApp(new Combo("sse"), "--spring.ai.mcp.inspector.upstream-liveness-probe-enabled=true",
+					"--spring.ai.mcp.inspector.timeouts.upstream-probe-interval=PT2S",
+					"--spring.ai.mcp.inspector.timeouts.upstream-probe-timeout=PT3S",
+					"--spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold=PT3S");
+
+			// The upstream is a second, independently killable app instance on its
+			// own port; the inspector app's own MCP server stays out of the picture.
+			upstreamApp = new SpringApplicationBuilder(DemoApplication.class).run("--server.port=0",
+					"--spring.ai.mcp.server.protocol=SSE", "--spring.ai.mcp.inspector.auth-enabled=false");
+			final int upstreamPort = ((WebServerApplicationContext) upstreamApp).getWebServer().getPort();
+
+			open("/mcp-inspector/index.html");
+			// Point the URL field at the upstream; Connection Type defaults to
+			// "Via Proxy", so the browser connects through the inspector proxy.
+			setReactInputValue("#sse-url-input", "http://localhost:" + upstreamPort + "/sse");
+			$("#sse-url-input").shouldHave(Condition.value("http://localhost:" + upstreamPort + "/sse"));
+			connectButton().shouldBe(visible, Duration.ofSeconds(15)).click();
+			// The connect-button testid only mounts while connectionStatus ===
+			// "connected"
+			// (see openAndConnect and UPSTREAM_DOM_MAP.md Section 2.6).
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+
+			// when: kill the upstream. Its web server stops, so the next probe POST
+			// is connection-refused - the same signal the owner's kill -9 produced.
+			upstreamApp.close();
+			upstreamApp = null;
+
+			// then: the sidebar must leave the Connected branch within the probe
+			// window (bound ~5s; the 15s Selenide budget mirrors ProxySseLivenessIT's
+			// headroom) and land in the error branch, not merely flip back to idle:
+			// the role=alert banner with the Retry button only renders when
+			// connectionError is set alongside the error status.
+			$("[data-testid=connect-button]").shouldNotBe(visible, Duration.ofSeconds(15));
+			$("[data-testid=retry-connect-button]").shouldBe(visible, Duration.ofSeconds(5));
+		}
+
+	}
+	// A3. Version badge (negotiated MCP protocol revision in the connect
+	// zone). The badge is fed by the client's own initialize handshake
+	// observed in useConnection (NOTICE.d/version-badge.txt), so it must
+	// render in every connection type and transport. Both live tests assert
+	// the real negotiated revision: the UI SDK (0.22.0) requests its LATEST
+	// 2025-11-25. The demo's Streamable HTTP flavour negotiates 2025-11-25
+	// (severity OK); the SSE flavour negotiates legacy 2024-11-05, so the
+	// live proxy test pins the downgrade notice with both revisions named
+	// (issue #79 AC #2). The incompatible branch stays covered by the unit
+	// suites (VersionBadge.test.tsx, protocolRevision.test.ts): the UI SDK
+	// refuses a handshake that negotiates a revision newer than its own, so
+	// no live server can drive that branch.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Version badge")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class VersionBadge {
+
+		/** Each Version badge test boots a fresh app: clean up after every method. */
+		@AfterEach
+		void tearDown() {
+			stopApp();
+		}
+
+		@Test
+		@Story("Connect")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("After a Via Proxy + SSE connect (the default demo combo) the sidebar shows the version badge with the negotiated protocol revision.")
+		@DisplayName("versionBadgeViaProxySse: badge renders with the negotiated revision after proxy connect")
+		void versionBadge_viaProxySse_rendersNegotiatedRevision() {
+			// given
+			startApp(new Combo("sse"));
+			openAndConnect();
+
+			// then
+			SelenideElement badge = $("[data-testid=version-badge]");
+			badge.shouldBe(visible, Duration.ofSeconds(10));
+			// The demo's SSE flavour negotiates the legacy 2024-11-05 revision
+			// (its server stack predates the 2025 revisions; the UI SDK requested
+			// its LATEST 2025-11-25). 2024-11-05 is registered in the
+			// known-revision matrix (mirroring the server-side ProtocolRevision,
+			// PR #129), so the badge reports DOWNGRADE and the mismatch notice
+			// names both revisions: the requested 2025-11-25 and the supported
+			// 2024-11-05 (issue #79 AC #2).
+			badge.shouldHave(Condition.attribute("data-severity", "DOWNGRADE"));
+			badge.shouldHave(text("2024-11-05"));
+			// The mismatch notice sits inside the badge's expandable details
+			// panel, which starts collapsed: expand it through the toggle
+			// anchor before pinning both revisions (issue #79 AC #2).
+			$("[data-testid=version-badge-toggle]").shouldBe(visible, Duration.ofSeconds(10)).click();
+			$("[data-testid=version-mismatch-notice]").shouldBe(visible, Duration.ofSeconds(10))
+				.shouldHave(text("2025-11-25"))
+				.shouldHave(text("2024-11-05"));
+		}
+
+		@Test
+		@Story("Connect")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("After a Direct + Streamable HTTP connect the badge also renders: the handshake capture is route- and transport-independent.")
+		@DisplayName("versionBadgeDirectStreamable: badge renders after direct streamable connect")
+		void versionBadge_directStreamable_rendersNegotiatedRevision() {
+			// given
+			startApp(new Combo("streamable"));
+			open("/mcp-inspector/index.html");
+
+			// when: Streamable HTTP transport, Direct connection type (no
+			// inspector proxy on the wire; the browser talks straight to the
+			// demo's /mcp endpoint).
+			$("#transport-type-select").shouldBe(visible).click();
+			$("[data-testid=select-option-streamable-http]").click();
+			$("#connection-type-select").shouldBe(visible).click();
+			$("[data-testid=select-option-direct]").click();
+			setReactInputValue("#sse-url-input", Configuration.baseUrl + "/mcp");
+			connectButton().shouldBe(visible).click();
+
+			// then: connected branch + badge with the negotiated revision.
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			SelenideElement badge = $("[data-testid=version-badge]");
+			badge.shouldBe(visible, Duration.ofSeconds(10));
+			badge.shouldHave(Condition.attribute("data-severity", "OK"));
+			badge.shouldHave(text("2025-11-25"));
 		}
 
 	}
@@ -707,15 +988,15 @@ class InspectorUiIT {
 				listTools.click();
 			}
 			// Wait for at least one tool row to render.
-			activePanel().$$(".cursor-pointer").shouldHave(CollectionCondition.sizeGreaterThan(0));
+			activePanel().$$("[data-testid^=tool-row-]").shouldHave(CollectionCondition.sizeGreaterThan(0));
 		}
 
 		@Test
 		@Story("Tool list")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("After listing tools, every one of the 22 demo tools is present in the tool list.")
-		@DisplayName("toolsListShowsAll22Tools — every demo tool appears in the list")
-		void toolsList_afterListTools_showsAll22Tools() {
+		@Description("After listing tools, every one of the 29 demo tools is present in the tool list.")
+		@DisplayName("toolsListShowsAll29Tools - every demo tool appears in the list")
+		void toolsList_afterListTools_showsAll29Tools() {
 			// given
 			String[] expected = ALL_DEMO_TOOLS;
 
@@ -737,7 +1018,8 @@ class InspectorUiIT {
 
 			// --- echo: server-declared annotations render as plain chips -------------
 			selectRow("echo");
-			SelenideElement badges = activePanel().$(".gap-1.mt-2").shouldBe(visible, Duration.ofSeconds(10));
+			SelenideElement badges = activePanel().$("[data-testid=tool-hint-badges]")
+				.shouldBe(visible, Duration.ofSeconds(10));
 			// Read-only chip is active (✓) with no (default) marker — annotations are
 			// explicit.
 			badges.$(byText("Read-only")).shouldHave(text("✓ Read-only"));
@@ -759,7 +1041,8 @@ class InspectorUiIT {
 			// facts; the test self-upgrades once the framework stops inventing
 			// declarations.
 			selectRow("slowEcho");
-			SelenideElement defaultBadges = activePanel().$(".gap-1.mt-2").shouldBe(visible, Duration.ofSeconds(10));
+			SelenideElement defaultBadges = activePanel().$("[data-testid=tool-hint-badges]")
+				.shouldBe(visible, Duration.ofSeconds(10));
 			// Read-only: spec-default false renders as ✗ either way; when the chip
 			// carries the '(default)' marker its tooltip must disclose that the value
 			// comes from the spec, not the server (title embeds newlines → DOTALL).
@@ -774,7 +1057,8 @@ class InspectorUiIT {
 			// --- sweep: every destructive=true claim is disclosed or accounted for ---
 			for (String name : ALL_DEMO_TOOLS) {
 				selectRow(name);
-				SelenideElement rowBadges = activePanel().$(".gap-1.mt-2").shouldBe(visible, Duration.ofSeconds(10));
+				SelenideElement rowBadges = activePanel().$("[data-testid=tool-hint-badges]")
+					.shouldBe(visible, Duration.ofSeconds(10));
 				SelenideElement destructive = rowBadges.$(byText("Destructive")).shouldBe(visible);
 				String chipText = destructive.getText();
 				if (chipText.contains("(default)")) {
@@ -810,8 +1094,8 @@ class InspectorUiIT {
 		@DisplayName("toolsSearchFiltersList — typing in the search input narrows the visible rows")
 		void toolsSearch_withQuery_filtersList() {
 			// given
-			activePanel().$("[aria-label=Search]").click();
-			SelenideElement searchInput = activePanel().$("input[name=search]");
+			activePanel().$("[data-testid=search-button]").click();
+			SelenideElement searchInput = activePanel().$("[data-testid=search-input]");
 
 			// when
 			// React's controlled input filters on every change event; Selenide's
@@ -825,10 +1109,10 @@ class InspectorUiIT {
 			// showing whatever tool a previous test left selected, so a panel-wide
 			// byText("echo") would match its <h3> header even when the list is
 			// correctly filtered.
-			activePanel().$$(".cursor-pointer .truncate")
+			activePanel().$$("[data-testid=row-name]")
 				.findBy(exactText("sum"))
 				.shouldBe(visible, Duration.ofSeconds(10));
-			activePanel().$$(".cursor-pointer .truncate")
+			activePanel().$$("[data-testid=row-name]")
 				.findBy(exactText("echo"))
 				.shouldNotBe(visible, Duration.ofSeconds(10));
 
@@ -836,7 +1120,7 @@ class InspectorUiIT {
 			// input state updates and the filter is cleared (plain setValue("") doesn't).
 			clearAllSearchInputs();
 			// After clearing, echo is back in the list.
-			activePanel().$$(".cursor-pointer .truncate")
+			activePanel().$$("[data-testid=row-name]")
 				.findBy(exactText("echo"))
 				.shouldBe(visible, Duration.ofSeconds(5));
 		}
@@ -863,6 +1147,26 @@ class InspectorUiIT {
 			// then
 			// ToolResults block prints the result somewhere — assert visible text "15".
 			activePanel().shouldHave(text("15"), Duration.ofSeconds(15));
+		}
+
+		@Test
+		@Story("Tool call validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Sum tool with empty required fields: submit button disabled, hint shown.")
+		@DisplayName("sumToolEmptyRequired: submit disabled, hint shown")
+		void sumToolEmptyRequired_submitDisabled_hintShown() {
+			// given
+			selectRow("sum");
+
+			// then
+			// Run Tool button should be disabled when required fields are empty
+			SelenideElement runButton = activePanel().$("[data-testid='run-tool-button']");
+			runButton.shouldBe(disabled);
+
+			// Blurring a required field should show a hint: focus then tab out
+			$("#a").shouldBe(visible).click();
+			$("#b").shouldBe(visible).click();
+			activePanel().shouldHave(text("This field is required"));
 		}
 
 		@Test
@@ -915,7 +1219,7 @@ class InspectorUiIT {
 			// when
 			// chooseColor(Color color) → Radix Select with SelectTrigger id=color.
 			$("#color").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("GREEN")).click();
+			$("[data-testid=select-option-GREEN]").click();
 			activePanel().$(byText("Run Tool")).click();
 
 			// then
@@ -954,7 +1258,7 @@ class InspectorUiIT {
 		@Test
 		@Story("Tool call")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("Running the errorTool surfaces an error state in the ToolResults block.")
+		@Description("Running the errorTool surfaces an error state in the ToolResults block, and the failure text appears exactly once both in the rendered pane and in the raw JSON-RPC response carried by the failed call's History entry (regression guard against a doubled error message).")
 		@DisplayName("callsErrorToolShowsErrorBadge — ToolResults surfaces an error state")
 		void callTool_errorTool_surfacesErrorState() {
 			// given
@@ -970,6 +1274,30 @@ class InspectorUiIT {
 			activePanel().shouldHave(
 					Condition.or("error indicator", text("Error"), text("isError"), text("intentional demo failure")),
 					Duration.ofSeconds(15));
+
+			// Wire-level check: expand the FAILED tools/call History entry (failed
+			// entries carry the history-item-error anchor) and count the message inside
+			// its Response payload. Asserting mere presence stays green while the SDK
+			// ships the text twice in content[0].text, so count the occurrences.
+			SelenideElement errorCall = historyColumn().$$("[data-testid=history-item-error]")
+				.findBy(text("tools/call"))
+				.shouldBe(visible, Duration.ofSeconds(15));
+			errorCall.$("[data-testid=history-entry-toggle]").click();
+			SelenideElement responseBlock = errorCall.$("[data-testid=history-entry-response]").shouldBe(visible);
+			responseBlock.shouldHave(text("intentional demo failure"), Duration.ofSeconds(10));
+			int wireOccurrences = countOccurrences(responseBlock.innerText(), "intentional demo failure");
+			Assertions.assertEquals(1, wireOccurrences,
+					"History Response must carry the failure text exactly once but carried it " + wireOccurrences
+							+ " times");
+
+			// Pane-level check: the Tool Result pane must render the thrown text EXACTLY
+			// ONCE as well, so a duplicated wire message cannot slip through as a "green"
+			// rendering either.
+			activePanel().shouldHave(text("intentional demo failure"), Duration.ofSeconds(15));
+			int paneOccurrences = countOccurrences(activePanel().innerText(), "intentional demo failure");
+			Assertions.assertEquals(1, paneOccurrences,
+					"Tool Result pane must render the failure text exactly once but rendered it " + paneOccurrences
+							+ " times");
 		}
 
 		@Test
@@ -1163,21 +1491,54 @@ class InspectorUiIT {
 		@Test
 		@Story("Resource read")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("Reading the demo-readme resource renders markdown content with a text/markdown mime type.")
-		@DisplayName("readsMarkdownResource — demo-readme content includes markdown text")
+		@Description("Reading the demo-readme resource renders the markdown preview with headings, emphasis, inline code, nested lists and links, and the View source toggle switches to the raw markdown and back.")
+		@DisplayName("readsMarkdownResource: demo-readme renders the markdown preview with a View source toggle")
 		void readResource_markdown_showsMarkdownMimeType() {
 			// given & when
 			selectRow("demo-readme");
 
-			// then
-			// We don't know the exact markdown body without reading the provider; assert
-			// the
-			// JsonView rendered *something* by checking the resource content panel
-			// materialized.
+			// then: the rendered preview is the default view for text/markdown
 			activePanel().$(byText("demo-readme")).shouldBe(visible);
-			// The body is wrapped in a JsonView; assert at least one rendered character
-			// (`text/markdown` mime appears in the JsonView output as a `mimeType` key).
+			// the mimeType badge stays visible in the resource content header
 			activePanel().shouldHave(text("text/markdown"), Duration.ofSeconds(15));
+			SelenideElement rendered = activePanel().$("[data-testid=markdown-rendered-view]")
+				.shouldBe(visible, Duration.ofSeconds(15));
+			// heading hierarchy from the demo markdown body
+			rendered.$("h1").shouldHave(text("MCP Inspector Demo"));
+			rendered.$("h2").shouldHave(text("Sections"));
+			rendered.$("h3").shouldHave(text("Nested lists and links"));
+			// bold and italic are styled, not raw asterisks
+			rendered.$("strong").shouldHave(text("markdown"));
+			rendered.$("em").shouldHave(text("Italic"));
+			String boldWeight = Selenide.executeJavaScript("return getComputedStyle("
+					+ "document.querySelector('[data-testid=markdown-rendered-view] strong')).fontWeight;");
+			Assertions.assertTrue(Integer.parseInt(boldWeight.trim()) >= 600,
+					"Bold text should have an emphasized font weight, got: " + boldWeight);
+			String italicStyle = Selenide.executeJavaScript("return getComputedStyle("
+					+ "document.querySelector('[data-testid=markdown-rendered-view] em')).fontStyle;");
+			Assertions.assertEquals("italic", italicStyle.trim(),
+					"Italic text should be rendered with the italic font style, got: " + italicStyle);
+			// inline code renders on a distinct background, not transparent
+			rendered.$("code").shouldHave(text("inline code"));
+			String codeBackground = Selenide.executeJavaScript("return getComputedStyle("
+					+ "document.querySelector('[data-testid=markdown-rendered-view] code')).backgroundColor;");
+			Assertions.assertNotEquals("rgba(0, 0, 0, 0)", codeBackground,
+					"Inline code should have a distinct background, got: " + codeBackground);
+			// nested list is indented through a nested ul
+			rendered.$("ul ul").shouldBe(visible);
+			String nestedPadding = Selenide.executeJavaScript("return getComputedStyle("
+					+ "document.querySelector('[data-testid=markdown-rendered-view] ul ul')).paddingLeft;");
+			Assertions.assertTrue(Double.parseDouble(nestedPadding.replace("px", "")) > 0,
+					"Nested list should be indented, got paddingLeft: " + nestedPadding);
+			// the demo link renders as a real anchor with its target URL
+			rendered.$("a[href='https://example.com/docs']").shouldHave(text("demo link"));
+			// the View source toggle switches to the raw markdown and back
+			activePanel().$("[data-testid=markdown-view-toggle]").shouldHave(text("View source")).click();
+			SelenideElement source = activePanel().$("[data-testid=markdown-source-view]")
+				.shouldBe(visible, Duration.ofSeconds(15));
+			source.shouldHave(text("### Nested lists and links"));
+			activePanel().$("[data-testid=markdown-view-toggle]").shouldHave(text("View rendered")).click();
+			activePanel().$("[data-testid=markdown-rendered-view]").shouldBe(visible, Duration.ofSeconds(15));
 		}
 
 		@Test
@@ -1193,10 +1554,11 @@ class InspectorUiIT {
 			// After the MediaContentView fix, image/* resources should render as <img>.
 			// This will FAIL against current behavior (JsonView shows base64 text) and
 			// PASS after the implementation.
-			activePanel().$("img[src^='data:image/png;base64,']").shouldBe(visible, Duration.ofSeconds(15));
+			activePanel().$("[data-testid=resource-image]").shouldBe(visible, Duration.ofSeconds(15));
 			// The image should have a non-zero natural width (proving it rendered).
 			Long naturalWidth = Selenide.executeJavaScript("return document.querySelector("
-					+ "'[role=tabpanel][data-state=active] img[src^=\"data:image/png\"]')" + "?.naturalWidth || 0;");
+					+ "'[data-testid^=tab-content-]:not([hidden]) [data-testid=resource-image]')"
+					+ "?.naturalWidth || 0;");
 			Assertions.assertTrue(naturalWidth != null && naturalWidth > 0,
 					"Image should have non-zero natural width, got: " + naturalWidth);
 		}
@@ -1213,11 +1575,11 @@ class InspectorUiIT {
 			// then
 			// Wait for the resource content to render (the <img> proves the
 			// ReadResourceResult was parsed and MediaContentView rendered it).
-			activePanel().$("img[src^='data:image/png;base64,']").shouldBe(visible, Duration.ofSeconds(15));
+			activePanel().$("[data-testid=resource-image]").shouldBe(visible, Duration.ofSeconds(15));
 			// The download link must have the correct href (data:image/png;base64,...)
 			// and download attribute matching the resource filename from the URI.
 			// The expected filename is "logo.png" (from "demo://logo.png").
-			SelenideElement downloadLink = activePanel().$("a[download='logo.png']");
+			SelenideElement downloadLink = activePanel().$("[data-testid=resource-download]");
 			downloadLink.shouldBe(visible, Duration.ofSeconds(5));
 			String href = downloadLink.getAttribute("href");
 			Assertions.assertNotNull(href, "Download link must have an href");
@@ -1238,7 +1600,7 @@ class InspectorUiIT {
 			// then
 			// First wait for the resource content to render (the <img> proves the
 			// ReadResourceResult was parsed and MediaContentView rendered it).
-			activePanel().$("img[src^='data:image/png;base64,']").shouldBe(visible, Duration.ofSeconds(15));
+			activePanel().$("[data-testid=resource-image]").shouldBe(visible, Duration.ofSeconds(15));
 			// The base64 blob content should NOT be visible as raw text in the panel.
 			// The TINY_PNG_BASE64 from DemoAdvancedResourcesProvider starts with this
 			// known prefix. This will FAIL against current behavior (base64 is visible
@@ -1291,8 +1653,9 @@ class InspectorUiIT {
 			// Template variable input is a `Combobox` — a Radix Popover whose trigger is
 			// <button role="combobox" aria-controls="${key}">. Clicking opens a popover
 			// with a CommandInput where we type the value.
-			activePanel().$("button[role=combobox][aria-controls=id]").shouldBe(visible).click();
-			SelenideElement commandInput = $("input[placeholder='Enter id']").shouldBe(visible, Duration.ofSeconds(5));
+			activePanel().$("button[data-testid=combobox-trigger-id]").shouldBe(visible).click();
+			SelenideElement commandInput = $("input[data-testid=combobox-input-id]").shouldBe(visible,
+					Duration.ofSeconds(5));
 			commandInput.setValue("7");
 			// Close the popover with Escape so the floating CommandInput doesn't
 			// intercept
@@ -1316,22 +1679,23 @@ class InspectorUiIT {
 			// panel).
 			// ListPane exposes a search icon button (aria-label=Search) that expands to
 			// an input.
-			SelenideElement searchBtn = activePanel().$("[aria-label=Search]");
+			SelenideElement searchBtn = activePanel().$("[data-testid=search-button]");
 
 			// when
 			searchBtn.shouldBe(visible).click();
-			activePanel().$("input[name=search]").shouldBe(visible).setValue("config");
+			activePanel().$("[data-testid=search-input]").shouldBe(visible).setValue("config");
 
 			// then
 			activePanel().shouldHave(text("demo-config"));
 			// demo-greeting should be filtered out of the resources pane.
-			activePanel().$("[aria-label=Search]").shouldNotHave(text("demo-greeting"));
+			activePanel().$("[data-testid=search-button]").shouldNotHave(text("demo-greeting"));
 		}
 
 	}
 
 	// =====================================================================
-	// E. PromptsTab — list, render greeting / multiTurn / optionalDescription.
+	// E. PromptsTab: list, render greeting / multiTurn / optionalDescription,
+	// error path (alwaysFails).
 	// =====================================================================
 
 	@Nested
@@ -1363,9 +1727,9 @@ class InspectorUiIT {
 		@Test
 		@Story("Prompt list")
 		@Severity(SeverityLevel.CRITICAL)
-		@Description("After listing prompts, greeting, multiTurn and optionalDescription all appear.")
-		@DisplayName("promptsListShowsThree — greeting, multiTurn, optionalDescription appear")
-		void promptsList_afterList_showsThreePrompts() {
+		@Description("After listing prompts, greeting, multiTurn, optionalDescription and alwaysFails all appear.")
+		@DisplayName("promptsListShowsFour: greeting, multiTurn, optionalDescription, alwaysFails appear")
+		void promptsList_afterList_showsFourPrompts() {
 			// given & when
 			// (prompts were listed in @BeforeEach goToPromptsTab)
 
@@ -1373,6 +1737,42 @@ class InspectorUiIT {
 			activePanel().shouldHave(text("greeting"), Duration.ofSeconds(10));
 			activePanel().shouldHave(text("multiTurn"));
 			activePanel().shouldHave(text("optionalDescription"));
+			activePanel().shouldHave(text("alwaysFails"));
+		}
+
+		@Test
+		@Story("Prompt selection")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("The bg-muted selection marker follows the clicked prompt row.")
+		@DisplayName("selectedPrompt marker follows the clicked prompt row")
+		void selectedPrompt_markerFollowsClick() {
+			// given & when: click the greeting row, then the multiTurn row
+			SelenideElement greetingRow = rowByName("greeting");
+			greetingRow.click();
+			greetingRow.shouldHave(cssClass("bg-muted"), Duration.ofSeconds(10));
+
+			// then: the marker sits on the newly clicked row only
+			SelenideElement multiTurnRow = rowByName("multiTurn");
+			multiTurnRow.click();
+			multiTurnRow.shouldHave(cssClass("bg-muted"), Duration.ofSeconds(10));
+			greetingRow.shouldNotHave(cssClass("bg-muted"));
+		}
+
+		/**
+		 * The {@code tool-row-<index>} row whose {@code row-name} span has the exact
+		 * given text. Uses the browser {@code closest()}, which supports the {@code ^=}
+		 * prefix match that Selenide's xpath-compiling {@code closest} cannot translate
+		 * (issue #378).
+		 */
+		private static SelenideElement rowByName(String name) {
+			org.openqa.selenium.WebElement row = Selenide.executeJavaScript(
+					"const names = document.querySelectorAll("
+							+ "'[data-testid^=tab-content-]:not([hidden]) [data-testid=row-name]');"
+							+ "for (const el of names) {" + "  if (el.textContent.trim() === arguments[0]) {"
+							+ "    return el.closest('[data-testid^=tool-row-]');" + "  }" + "}" + "return null;",
+					name);
+			Assertions.assertNotNull(row, "no row with name " + name + " in the active panel");
+			return $(row);
 		}
 
 		/**
@@ -1385,25 +1785,26 @@ class InspectorUiIT {
 		 *
 		 * <p>
 		 * Returns {@code true} when at least one Combobox trigger
-		 * ({@code button[role=combobox]}) is present in the active panel after selecting
-		 * the prompt — i.e., the upstream renderer received a non-empty
+		 * ({@code button[data-testid^=combobox-trigger-]}) is present in the active panel
+		 * after selecting the prompt — i.e., the upstream renderer received a non-empty
 		 * {@code prompt.arguments} array.
 		 */
 		private boolean promptArgsRendered() {
-			return activePanel().$$("button[role=combobox]").size() > 0;
+			return activePanel().$$("button[data-testid^=combobox-trigger-]").size() > 0;
 		}
 
 		/**
-		 * Type into the prompt argument Combobox identified by its {@code aria-controls}.
-		 * The {@code @McpArg(name=...)} value drives the combobox's {@code id} (=
-		 * aria-controls).
+		 * Type into the prompt argument Combobox identified by the argument name: the
+		 * {@code @McpArg(name=...)} value drives the {@code data-testid=combobox-*}
+		 * anchors (issue #378).
 		 */
 		private static void fillPromptArg(String argName, String value) {
-			activePanel().$("button[role=combobox][aria-controls='" + argName + "']").shouldBe(visible).click();
-			$("input[placeholder='Enter " + argName + "']").shouldBe(visible, Duration.ofSeconds(5)).setValue(value);
+			activePanel().$("button[data-testid=combobox-trigger-" + argName + "]").shouldBe(visible).click();
+			$("input[data-testid=combobox-input-" + argName + "]").shouldBe(visible, Duration.ofSeconds(5))
+				.setValue(value);
 			// Close the popover by pressing Escape — otherwise the next interaction may
 			// accidentally click an option in the floating list.
-			$("input[placeholder='Enter " + argName + "']").pressEscape();
+			$("input[data-testid=combobox-input-" + argName + "]").pressEscape();
 		}
 
 		@Test
@@ -1476,6 +1877,119 @@ class InspectorUiIT {
 			activePanel().shouldHave(text("hello"), Duration.ofSeconds(15));
 		}
 
+		/**
+		 * Regression for issue #276: a server-side prompts/get failure used to surface as
+		 * an unhandledrejection in the browser console because the App-level getPrompt
+		 * wrapper dropped the rejected promise. Now the failure renders as the
+		 * destructive error alert (RPC code + message) and the browser console stays
+		 * clean.
+		 */
+		@Test
+		@Story("Prompt error path")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("A server-side prompts/get failure renders the destructive error alert with the JSON-RPC code and raises no uncaught browser console entries.")
+		@DisplayName("getPromptServerErrorShowsAlert: RPC code in UI, no uncaught console errors")
+		void getPrompt_serverError_showsAlertWithoutUncaughtConsoleErrors() {
+			// given
+			selectRow("alwaysFails");
+			Assertions.assertTrue(promptArgsRendered(),
+					"prompts/list returned no argument schemas for `alwaysFails`; the test "
+							+ "cannot fill the `text` argument and fails here");
+			fillPromptArg("text", "anything");
+
+			// when
+			activePanel().$(byText("Get Prompt")).click();
+
+			// then: the destructive alert surfaces the RPC code and message...
+			activePanel().shouldHave(text("MCP error -32602"), Duration.ofSeconds(15));
+
+			// ...and the browser console has no uncaught (unhandledrejection)
+			// entries from the same request: an unhandledrejection from
+			// inspector code logs as SEVERE "Uncaught (in promise) ...".
+			WebDriver driver = com.codeborne.selenide.WebDriverRunner.getWebDriver();
+			LogEntries entries = driver.manage().logs().get(LogType.BROWSER);
+			List<String> uncaught = new ArrayList<>();
+			for (LogEntry entry : entries) {
+				if (entry.getLevel() == Level.SEVERE && entry.getMessage().contains("Uncaught")) {
+					uncaught.add(entry.getMessage());
+				}
+			}
+			if (!uncaught.isEmpty()) {
+				throw new AssertionError("prompts/get failure produced uncaught browser console entries:\n"
+						+ String.join("\n", uncaught));
+			}
+		}
+
+		/**
+		 * Regression for PR #359 review: the component suite mocks the Combobox, so the
+		 * whitespace-only required title behavior also needs a real browser story.
+		 * Whitespace-only input must keep the Get Prompt button disabled exactly like an
+		 * empty value does.
+		 */
+		@Test
+		@Story("Prompt validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("A whitespace-only required title keeps the Get Prompt button disabled.")
+		@DisplayName("getPromptWhitespaceOnlyTitle: Get Prompt stays disabled")
+		void getPrompt_whitespaceOnlyTitle_staysDisabled() {
+			// given
+			selectRow("optionalDescription");
+			Assertions.assertTrue(promptArgsRendered(),
+					"prompts/list returned no argument schemas for `optionalDescription`; the test "
+							+ "cannot fill the `title` argument and fails here");
+
+			// when: the required `title` argument gets a whitespace-only value
+			fillPromptArg("title", "   ");
+
+			// then
+			activePanel().$(byText("Get Prompt")).shouldBe(disabled);
+		}
+
+		/**
+		 * Regression for PR #359 review: the component suite mocks the Combobox, so the
+		 * cleared-optional-argument behavior also needs a real browser story. A
+		 * whitespace-only optional `detail` must be dropped from the prompts/get request
+		 * payload instead of being sent. The page fetch is wrapped before Get Prompt is
+		 * clicked; the captured body must not mention the argument at all. The demo
+		 * connects through the proxy, so bodies may sit inside a proxy envelope, and a
+		 * plain substring check works for both shapes.
+		 */
+		@Test
+		@Story("Prompt validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("A whitespace-only optional detail is omitted from the prompts/get request payload.")
+		@DisplayName("getPromptWhitespaceOnlyOptionalDetail: detail omitted from prompts/get request")
+		void getPrompt_whitespaceOnlyOptionalDetail_omittedFromRequest() {
+			// given
+			selectRow("optionalDescription");
+			Assertions.assertTrue(promptArgsRendered(),
+					"prompts/list returned no argument schemas for `optionalDescription`; the test "
+							+ "cannot fill the arguments and fails here");
+
+			// Capture every JSON-RPC body the page sends through fetch.
+			Selenide.executeJavaScript("" + "window.__promptsGetPayloads = window.__promptsGetPayloads || [];"
+					+ "if (!window.__promptsGetHooked) {" + "  window.__promptsGetHooked = true;"
+					+ "  const orig = window.fetch;" + "  window.fetch = function(input, init) {" + "    try {"
+					+ "      if (init && typeof init.body === 'string'"
+					+ "          && init.body.indexOf('prompts/get') !== -1) {"
+					+ "        window.__promptsGetPayloads.push(init.body);" + "      }" + "    } catch (e) {}"
+					+ "    return orig.apply(this, arguments);" + "  };" + "}");
+
+			// when
+			fillPromptArg("title", "hello");
+			// Whitespace-only `detail` behaves like an empty optional argument.
+			fillPromptArg("detail", "   ");
+			activePanel().$(byText("Get Prompt")).click();
+			activePanel().shouldHave(text("hello"), Duration.ofSeconds(15));
+
+			// then: the request that produced this render must not mention `detail`
+			String payload = Selenide.executeJavaScript("return (window.__promptsGetPayloads || []).length > 0"
+					+ " ? window.__promptsGetPayloads[window.__promptsGetPayloads.length - 1]" + " : null;");
+			Assertions.assertNotNull(payload, "no prompts/get request body was captured by the fetch hook");
+			Assertions.assertFalse(payload.contains("detail"),
+					"whitespace-only optional `detail` leaked into the prompts/get payload: " + payload);
+		}
+
 	}
 
 	// =====================================================================
@@ -1507,14 +2021,15 @@ class InspectorUiIT {
 			// given
 			clickTab("ping");
 			// History count baseline — `initialize` is always logged on connect.
-			int before = historyColumn().$$("li").size();
+			int before = historyColumn().$$("[data-testid=history-item]").size();
 
 			// when
 			activePanel().$(byText("Ping Server")).shouldBe(visible).click();
 
 			// then
 			// After a successful ping, the history pane gains one entry.
-			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThan(before), Duration.ofSeconds(15));
+			historyColumn().$$("[data-testid=history-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThan(before), Duration.ofSeconds(15));
 		}
 
 		@Test
@@ -1527,7 +2042,7 @@ class InspectorUiIT {
 			clickTab("ping");
 
 			// Reset history baseline.
-			SelenideElement historyClear = $$("h2").findBy(text("History")).closest("div").$(byText("Clear"));
+			SelenideElement historyClear = historyColumn().$("[data-testid=history-clear]");
 			if (historyClear.exists() && historyClear.isEnabled()) {
 				historyClear.click();
 			}
@@ -1536,7 +2051,7 @@ class InspectorUiIT {
 			for (int i = 0; i < 3; i++) {
 				activePanel().$(byText("Ping Server")).click();
 				// Give the request a moment to round-trip before firing the next one.
-				historyColumn().$$("li")
+				historyColumn().$$("[data-testid=history-item]")
 					.shouldHave(CollectionCondition.sizeGreaterThanOrEqual(i + 1), Duration.ofSeconds(10));
 			}
 		}
@@ -1580,6 +2095,25 @@ class InspectorUiIT {
 			$(byText("Quick OAuth Flow")).shouldBe(visible);
 		}
 
+		@Test
+		@DisplayName("Empty-state Connect button starts the shared connect flow (issue #269)")
+		void connect_fromEmptyState_startsSharedConnectFlow() {
+			// given
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+
+			// when
+			// Empty pre-connect state; the canvas exposes its own Connect CTA
+			// wired to the same connect action as the sidebar one.
+			$(byText("Connect to an MCP server to start inspecting")).shouldBe(visible);
+			$("[data-testid=empty-state-connect-button]").shouldBe(visible).click();
+
+			// then
+			// Restart/Reconnect button is only mounted when connectionStatus ===
+			// "connected".
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+		}
+
 	}
 
 	// =====================================================================
@@ -1618,7 +2152,8 @@ class InspectorUiIT {
 			}
 
 			// then
-			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThanOrEqual(1), Duration.ofSeconds(15));
+			historyColumn().$$("[data-testid=history-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThanOrEqual(1), Duration.ofSeconds(15));
 		}
 
 		@Test
@@ -1630,13 +2165,131 @@ class InspectorUiIT {
 			// given
 			clickTab("ping");
 			activePanel().$(byText("Ping Server")).click();
-			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(10));
+			historyColumn().$$("[data-testid=history-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(10));
 
 			// when
 			historyColumn().$(byText("Clear")).click();
 
 			// then
 			historyColumn().shouldHave(text("No history yet"), Duration.ofSeconds(5));
+		}
+
+	}
+
+	// =====================================================================
+	// H2. History persistence across reload (regression for #121)
+	// =====================================================================
+
+	@Nested
+	@DisplayName("History persistence across reload")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class HistoryPersistence {
+
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@Test
+		@Story("History persistence")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("History entries survive page reload for the same connection: connect, call echo, reload, assert history still shows the entry.")
+		@DisplayName("historyPersistsAcrossReload - echo call entry survives F5")
+		void history_afterReload_stillShowsEchoEntry() {
+			// given: a clean store, so leftovers from earlier tests cannot
+			// satisfy the assertions below. Cleared AFTER open(): no webdriver is
+			// bound to the thread before the first open() call.
+			open("/mcp-inspector/index.html");
+			Selenide.executeJavaScript("localStorage.clear();");
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+			connectButton().click();
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			clickTab("tools");
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$("[data-testid^=tool-row-]").shouldHave(CollectionCondition.sizeGreaterThan(0));
+			selectRow("echo");
+			$("#text").shouldBe(visible).setValue("hello world");
+			activePanel().$(byText("Run Tool")).click();
+			activePanel().shouldHave(text("hello world"), Duration.ofSeconds(15));
+
+			// assert: history entry appears in panel AND in localStorage
+			historyColumn().$$("[data-testid=history-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
+			// Pre-reload, assert THIS session's own bucket holds the entries (not
+			// just the whole store): the store was cleared right after open(), so
+			// every bucket in it belongs to this session; the bucket containing
+			// the echo tools/call (matched by the unique input text) must hold at
+			// least the tools/list + tools/call pair, i.e. the session history is
+			// intact in ONE bucket. The key is not derived from localStorage form
+			// keys: the clear above races with the app's persistence effects.
+			Object preStore = Selenide
+				.executeJavaScript("var s = JSON.parse(localStorage.getItem('mcp-inspector.history.v1'));"
+						+ "if (!s || !s.byConnection) return -1;" + "var best = 0;" + "for (var k in s.byConnection) {"
+						+ "  var b = s.byConnection[k];"
+						+ "  var has = b.some(function(e) { return e.request.indexOf('hello world') >= 0; });"
+						+ "  if (has && b.length > best) best = b.length;" + "}" + "return best;");
+			Assertions.assertTrue(((Number) preStore).intValue() >= 2,
+					"the session's own bucket must hold the tools/list and tools/call entries before reload");
+			Object store = Selenide.executeJavaScript("return localStorage.getItem('mcp-inspector.history.v1');");
+			Assertions.assertNotNull(store, "localStorage must contain mcp-inspector.history.v1 after tool call");
+			Assertions.assertTrue(store.toString().contains("tools/call"),
+					"localStorage history must contain a tools/call entry");
+
+			// when: reload the page and reconnect (URL restored from lastSseUrl)
+			Selenide.refresh();
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+			connectButton().click();
+
+			// then: history panel still shows the echo entry (tools/call), not just a
+			// count
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			historyColumn().shouldNotHave(text("No history yet"), Duration.ofSeconds(10));
+			historyColumn().$$("[data-testid=history-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
+			historyColumn().$$("[data-testid=history-item]")
+				.find(Condition.text("tools/call"))
+				.shouldBe(visible, Duration.ofSeconds(5));
+		}
+
+		@Test
+		@Story("History persistence")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("History is scoped per connection: a different server URL must not show the previous connection's history.")
+		@DisplayName("historyPerConnection - different URL shows no previous history")
+		void history_differentConnection_showsNoPreviousHistory() {
+			// given: connect and call echo to create history
+			openAndConnect();
+			clickTab("tools");
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$("[data-testid^=tool-row-]").shouldHave(CollectionCondition.sizeGreaterThan(0));
+			selectRow("echo");
+			$("#text").shouldBe(visible).setValue("hello world");
+			activePanel().$(byText("Run Tool")).click();
+			activePanel().shouldHave(text("hello world"), Duration.ofSeconds(15));
+			historyColumn().$$("[data-testid=history-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThanOrEqual(2), Duration.ofSeconds(10));
+
+			// when: disconnect and change URL (no reconnect: history must clear on
+			// connectionId change)
+			sidebar().$(byText("Disconnect")).shouldBe(visible).click();
+			connectButton().shouldBe(visible);
+			int port = ((WebServerApplicationContext) app).getWebServer().getPort();
+			setReactInputValue("#sse-url-input", "http://localhost:" + port + "/other");
+
+			// then: history panel shows 'No history yet' for the new connection
+			historyColumn().shouldHave(text("No history yet"), Duration.ofSeconds(10));
 		}
 
 	}
@@ -1737,13 +2390,13 @@ class InspectorUiIT {
 		void themeSwitcher_pickDark_addsDarkClassToHtml() {
 			// given & when
 			$("#theme-select").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("Dark")).click();
+			$("[data-testid=select-option-dark]").click();
 
 			// then
 			$("html").shouldHave(Condition.cssClass("dark"));
 
 			$("#theme-select").click();
-			$$("[role=option]").findBy(text("Light")).click();
+			$("[data-testid=select-option-light]").click();
 			$("html").shouldNotHave(Condition.cssClass("dark"));
 		}
 
@@ -1787,7 +2440,7 @@ class InspectorUiIT {
 			// prop as a DOM attribute — match on the trigger's id suffix.
 			for (String value : new String[] { "resources", "prompts", "tools", "apps", "ping", "sampling",
 					"elicitations", "roots", "auth", "metadata" }) {
-				$("[role=tab][id$='-trigger-" + value + "']").shouldBe(visible);
+				$("[data-testid=tab-trigger-" + value + "]").shouldBe(visible);
 			}
 		}
 
@@ -1832,7 +2485,7 @@ class InspectorUiIT {
 			// Set the transport-type Select to "Streamable HTTP" — UPSTREAM_DOM_MAP.md
 			// §2.1.
 			$("#transport-type-select").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("Streamable HTTP")).click();
+			$("[data-testid=select-option-streamable-http]").click();
 
 			// URL is auto-populated by index.html bootstrap (lastSseUrl localStorage key)
 			// to
@@ -1887,16 +2540,16 @@ class InspectorUiIT {
 
 			// when
 			$("#transport-type-select").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("Streamable HTTP")).click();
+			$("[data-testid=select-option-streamable-http]").click();
 
 			// then
 			// Connection Type select trigger is visible (UPSTREAM_DOM_MAP.md §2.1).
 			$("#connection-type-select").shouldBe(visible).click();
 			// Two and only two options: Via Proxy / Direct (per UPSTREAM_DOM_MAP.md).
-			$$("[role=option]").findBy(text("Via Proxy")).shouldBe(visible);
-			$$("[role=option]").findBy(text("Direct")).shouldBe(visible);
+			$("[data-testid=select-option-proxy]").shouldBe(visible);
+			$("[data-testid=select-option-direct]").shouldBe(visible);
 			// No "Stateless" or "Streamable" connection-type option exists.
-			$$("[role=option]").findBy(text("Stateless")).shouldNotBe(visible);
+			$("[data-testid=select-option-stateless]").shouldNotBe(visible);
 		}
 
 	}
@@ -2047,7 +2700,7 @@ class InspectorUiIT {
 			// when
 			// Switch transport to STDIO — UPSTREAM_DOM_MAP.md §2.1.
 			$("#transport-type-select").shouldBe(visible).click();
-			$$("[role=option]").findBy(text("STDIO")).click();
+			$("[data-testid=select-option-stdio]").click();
 
 			// Fill Command (the JRE binary) and Arguments (the jar plus stdio config).
 			$("#command-input").shouldBe(visible).setValue(System.getProperty("java.home") + "/bin/java");
@@ -2085,10 +2738,10 @@ class InspectorUiIT {
 	}
 
 	// =====================================================================
-	// M. AppsTab — assert empty state (no app tools registered by demo).
-	// Per the demo's capability matrix none of the demo tools carry
-	// _meta.ui.resourceUri, so the AppsTab empty-state copy is the expected
-	// outcome (UPSTREAM_DOM_MAP.md §9.2).
+	// M. AppsTab — fixture app list plus the open-app lifecycle flow:
+	// DemoUiAppsProvider registers three tools carrying _meta.ui.resourceUri,
+	// so the tab lists them, and "Open as App" -> "Open App" drives the real
+	// SEP-1865 sandbox handshake to the ready pill (issue #183).
 	// =====================================================================
 
 	@Nested
@@ -2110,31 +2763,166 @@ class InspectorUiIT {
 		@Test
 		@Story("Apps tab")
 		@Severity(SeverityLevel.MINOR)
-		@Description("With no app tools registered, the Apps tab renders the empty-state 'No MCP Apps available' message.")
-		@DisplayName("appsTabRendersAtLeastEmptyState — empty MCP Apps message visible")
-		void appsTab_noAppTools_rendersEmptyState() {
+		@Description("The demo registers three MCP Apps fixtures (DemoUiAppsProvider), so the Apps tab "
+				+ "lists them and shows the placeholder right pane until one is selected.")
+		@DisplayName("appsTabListsFixtureApps - fixture app tools listed, placeholder right pane")
+		void appsTab_fixtureApps_rendersAppList() {
 			// given & when
 			clickTab("apps");
 
 			// then
 			// Refresh Apps trigger must be visible — proves the list pane rendered.
 			activePanel().$(byText("Refresh Apps")).shouldBe(visible, Duration.ofSeconds(10));
-			// Demo registers 22 tools but none with _meta.ui.resourceUri, so the right
-			// pane shows the "No MCP Apps available..." copy. We match a stable substring
-			// to insulate the assertion from upstream wording tweaks like the trailing
-			// "_meta.ui.resourceUri" code span.
-			activePanel().shouldHave(text("No MCP Apps available"), Duration.ofSeconds(10));
+			// DemoUiAppsProvider registers three tools carrying _meta.ui.resourceUri, so
+			// the Apps tab lists them as MCP Apps. The empty-state copy ("No MCP Apps
+			// available") stays covered by the AppsTab jest suite, which renders the
+			// component with a tool list that has no UI metadata.
+			activePanel().shouldHave(text("dashboardApp"), Duration.ofSeconds(10));
+			activePanel().shouldHave(text("formApp"));
+			activePanel().shouldHave(text("malformedAppTool"));
+			// Right pane shows the placeholder until an app is selected.
+			activePanel().shouldHave(text("Select an app from the list to get started"));
+		}
+
+	}
+
+	@Nested
+	@DisplayName("App lifecycle")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class AppLifecycle {
+
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			openAndConnect();
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@Test
+		@Story("Apps tab")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("The rework closure path for issue #183: select formApp, Open as App, "
+				+ "Open App. The sandboxed app mounts, the guest answers the host handshake, "
+				+ "the lifecycle pill reaches ready, and the App Panel logs frames in both "
+				+ "directions (proxy-ready and initialized notifications up from the guest, "
+				+ "the ui/initialize request down to it).")
+		@DisplayName("appsTabOpenAppReachesReady - Open as App -> Open App renders app to ready")
+		void appsTab_openApp_reachesReadyWithBidirectionalTraffic() {
+			// given: the app is preselected from the Tools tab ("Open as App").
+			clickTab("tools");
+			activePanel().$(byText("List Tools")).shouldBe(visible, Duration.ofSeconds(10)).click();
+			selectRow("formApp");
+			activePanel().$("[data-testid=open-as-app-button]").shouldBe(visible, Duration.ofSeconds(10)).click();
+
+			// when: the input form is reviewed and the app is opened for real.
+			clickTab("apps");
+			activePanel().$(byText("Open App")).shouldBe(visible, Duration.ofSeconds(10)).click();
+
+			// then: the guest bridge completes the handshake, so the pill reaches ready
+			// instead of stalling on initializing after sandbox-proxy-ready.
+			activePanel().$("[data-testid=app-lifecycle-pill]").shouldHave(text("ready"), Duration.ofSeconds(20));
+			// Both directions are logged: guest->host frames (proxy-ready, the
+			// ui/initialize request and the initialized notification) and at least
+			// one host->guest frame (the initialize result / resource-ready), so
+			// the tap captures the chronological host<->guest conversation.
+			activePanel().shouldHave(text("ui/notifications/sandbox-proxy-ready"), Duration.ofSeconds(5));
+			activePanel().shouldHave(text("ui/initialize"));
+			activePanel().shouldHave(text("ui/notifications/initialized"));
+			// An arrow pin is enough for the host->guest direction: any host frame
+			// (initialize result or resource-ready) carries it.
+			activePanel().$("[data-testid=app-panel]").shouldHave(text("\u2192"));
 		}
 
 	}
 
 	// =====================================================================
-	// N. TasksTab — the demo server does NOT advertise the `tasks` capability
-	// (see TabsAvailability and the omission from `spring-ai-mcp-inspector-demo`
-	// server config), so the tasks tab trigger is rendered as disabled. We
-	// document the contract here and skip the active/cancelled scenarios via
-	// Assumptions when the capability is missing — flipping these tests on
-	// requires server-side `serverCapabilities.tasks` plumbing first.
+	// M2. Apps tab iframe width at 1280x800 (issue #409): with the App
+	// Panel open the fixture app iframe must keep a usable width. Before
+	// the fix the two-column grid (tool list + app card) plus the 280px
+	// traffic panel squeezed the sandboxed frame to ~142 CSS px at this
+	// viewport, clipping the fixture form text behind both scrollbars.
+	// The fix collapses the tool list while an app is open, so this story
+	// drives the real open flow (List Tools, select formApp, Open as App,
+	// Open App) and pins the minimum frame width at the target viewport.
+	// Separate @Nested class with its own boot: the app-open road is
+	// stateful and resizes the shared browser window.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Apps frame width (1280x800)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class AppsFrameWidth {
+
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			openAndConnect();
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@BeforeEach
+		void setTargetViewport() {
+			ResponsiveTestHelpers.setViewport(1280, 800);
+		}
+
+		@AfterEach
+		void restoreViewport() {
+			ResponsiveTestHelpers.setViewport(1366, 900);
+		}
+
+		@Test
+		@Story("Apps tab")
+		@Severity(SeverityLevel.MINOR)
+		@Description("At 1280x800 with the App Panel open the sandboxed app iframe keeps at least 400 CSS px of width: "
+				+ "the real open flow (List Tools, select formApp, Open as App, Open App) drives the handshake to ready, "
+				+ "and the frame width is measured live so the traffic panel cannot squeeze the app to clipped text.")
+		@DisplayName("appsTabOpenAppAt1280KeepsMinimumIframeWidth - real open flow pins frame width >= 400px")
+		void appsTab_openAppAt1280_keepsMinimumIframeWidth() {
+			// given: the app is preselected from the Tools tab ("Open as App").
+			clickTab("tools");
+			activePanel().$(byText("List Tools")).shouldBe(visible, Duration.ofSeconds(10)).click();
+			selectRow("formApp");
+			activePanel().$("[data-testid=open-as-app-button]").shouldBe(visible, Duration.ofSeconds(10)).click();
+
+			// when: the input form is reviewed and the app is opened for real.
+			clickTab("apps");
+			activePanel().$(byText("Open App")).shouldBe(visible, Duration.ofSeconds(10)).click();
+
+			// then: the guest bridge completes the handshake, so the pill reaches ready.
+			activePanel().$("[data-testid=app-lifecycle-pill]").shouldHave(text("ready"), Duration.ofSeconds(20));
+
+			// and: the sandboxed frame keeps a usable width: >= 400 CSS px. The
+			// outer iframe is cross-origin (opaque sandbox origin), so the width
+			// is read from the host DOM, not from inside the guest document.
+			double frameWidth = ((Number) Selenide
+				.executeJavaScript("return document.querySelector('[data-testid=app-frame-box] iframe')"
+						+ ".getBoundingClientRect().width;"))
+				.doubleValue();
+			Assertions.assertTrue(frameWidth >= 400.0,
+					"app iframe width at 1280x800 with the App Panel open, got: " + frameWidth);
+		}
+
+	}
+
+	// =====================================================================
+	// N. TasksTab. The SSE proxy connection used here does NOT inject
+	// `capabilities.tasks`: only StreamableHttpProxyController and the
+	// webflux ProxyHandler implement the injection (tasksInterceptionEnabled
+	// in core ProxySession). After the capability gating (issue #212) the
+	// Tasks trigger stays disabled on this connection, so both scenarios
+	// below SKIP in the webmvc job (pre-existing: the base skips them too);
+	// the Assumptions guard trips when tasksCapabilityAdvertised() no longer
+	// holds. The taskless branch has its own IT: TasksCapabilityGap below
+	// connects in Direct mode to the demo MCP server, which does not
+	// advertise tasks and has no proxy at all.
 	// =====================================================================
 
 	@Nested
@@ -2154,16 +2942,17 @@ class InspectorUiIT {
 		}
 
 		private boolean tasksCapabilityAdvertised() {
-			SelenideElement trigger = $("[role=tab][id$='-trigger-tasks']");
+			SelenideElement trigger = $("[data-testid=tab-trigger-tasks]");
 			if (!trigger.exists()) {
 				return false;
 			}
-			// App.tsx sets `disabled={!serverCapabilities?.tasks}` on the TabsTrigger —
-			// Radix reflects disabled state on data-disabled / aria-disabled and the
-			// underlying <button disabled> attribute.
-			String disabled = trigger.getAttribute("disabled");
-			String ariaDisabled = trigger.getAttribute("aria-disabled");
-			return !(disabled != null || "true".equals(ariaDisabled));
+			// After the capability gating (issue #212) the trigger is always
+			// enabled, so there is no disabled attribute to probe. The
+			// capability-gap body renders only when tasks is absent: after
+			// opening the Tasks tab, its absence means the capability is
+			// advertised (proxy-injected in this file, native otherwise).
+			clickTab("tasks");
+			return !$("[data-testid=tasks-capability-gap]").exists();
 		}
 
 		@Test
@@ -2174,8 +2963,8 @@ class InspectorUiIT {
 		void tasksTab_runSlowEchoAsTask_showsActiveAndCompleted() {
 			// given
 			Assumptions.assumeTrue(tasksCapabilityAdvertised(),
-					"demo server does not advertise the `tasks` capability — TasksTab trigger is "
-							+ "disabled (UPSTREAM_DOM_MAP.md §3). Skip until server-side capability is wired.");
+					"demo server does not advertise the `tasks` capability: the Tasks tab shows "
+							+ "the capability-gap body. Skip until server-side capability is wired.");
 
 			// when
 			// Run slowEcho as a task from the Tools tab (the "Run as task" checkbox is
@@ -2194,12 +2983,12 @@ class InspectorUiIT {
 			// Hop to Tasks tab and assert at least one row materialises (status icon next
 			// to the taskId).
 			clickTab("tasks");
-			activePanel().$$(".cursor-pointer")
+			activePanel().$$("[data-testid^=task-row-]")
 				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(20));
 			// Eventually the task transitions to completed (CheckCircle2 icon) — assert
 			// by
 			// selecting the row and waiting for the status text.
-			activePanel().$$(".cursor-pointer").first().click();
+			activePanel().$$("[data-testid^=task-row-]").first().click();
 			activePanel().shouldHave(Condition.or("completion signal", text("completed"), text("Completed")),
 					Duration.ofSeconds(30));
 		}
@@ -2227,7 +3016,7 @@ class InspectorUiIT {
 
 			clickTab("tasks");
 			// Pick the first task row (the one we just spawned).
-			activePanel().$$(".cursor-pointer")
+			activePanel().$$("[data-testid^=task-row-]")
 				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15))
 				.first()
 				.click();
@@ -2235,13 +3024,114 @@ class InspectorUiIT {
 			// Cancel button is a destructive Button with aria-label="Cancel task
 			// ${taskId}" —
 			// we match by the aria-label prefix.
-			SelenideElement cancelBtn = $("button[aria-label^='Cancel task ']").shouldBe(visible,
+			SelenideElement cancelBtn = $("button[data-testid=task-cancel-button]").shouldBe(visible,
 					Duration.ofSeconds(10));
 			cancelBtn.click();
 
 			// then
 			activePanel().shouldHave(Condition.or("cancellation signal", text("cancelled"), text("Cancelled")),
 					Duration.ofSeconds(15));
+		}
+
+	}
+
+	// =====================================================================
+	// N2. Tasks capability gap (issue #212, taskless branch). A DIRECT
+	// streamable-http connection to the demo's own MCP endpoint: the browser
+	// talks to the spring-ai MCP server, which does NOT advertise tasks and
+	// there is no proxy to inject them. The Tasks tab must stay reachable,
+	// show the capability-gap body with the exact issue #212 message, and no
+	// tasks/* request may surface as an error toast.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Tasks capability gap (direct, taskless)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class TasksCapabilityGap {
+
+		@BeforeAll
+		void bootAndConnectDirect() {
+			startApp(new Combo("streamable"));
+			open("/mcp-inspector/index.html");
+			// Sidebar must finish first render before we touch the selects.
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+			// Streamable HTTP transport + Direct connection type: the browser
+			// connects straight to the URL, bypassing the inspector proxy
+			// (otherwise the proxy would inject capabilities.tasks and defeat
+			// the taskless premise of this class).
+			$("#transport-type-select").shouldBe(visible).click();
+			$("[data-testid=select-option-streamable-http]").click();
+			$("#connection-type-select").shouldBe(visible).click();
+			$("[data-testid=select-option-direct]").shouldBe(visible).click();
+			// Absolute same-origin URL of the demo MCP server (startApp picked
+			// a random port; the MCP endpoint is /mcp on the same app).
+			setReactInputValue("#sse-url-input", Configuration.baseUrl + "/mcp");
+			connectButton().click();
+			// Restart/Reconnect is only mounted when connectionStatus === "connected".
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+		}
+
+		@AfterAll
+		void shutdown() {
+			// Drop the direct-mode localStorage leftovers (lastTransportType,
+			// lastConnectionType, lastSseUrl) so later @Nested classes keep
+			// their default connect flow. Must run while the page is loaded.
+			Selenide.executeJavaScript("localStorage.clear();");
+			stopApp();
+		}
+
+		@Test
+		@Story("Tasks tab")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("On a taskless server (direct connection) clicking the Tasks tab shows the capability-gap body with the exact issue #212 message and raises no error toast.")
+		@DisplayName("tasksGapClickShowsCapabilityGapBodyWithoutErrorToast")
+		void tasksGap_directConnect_click_showsGapBody_noErrorToast() {
+			clickTab("tasks");
+			$("[data-testid=tasks-capability-gap]").shouldBe(visible, Duration.ofSeconds(10))
+				.shouldHave(text(
+						"Server does not advertise the tasks capability; long-running task tracking is unavailable."));
+			// Give any leaked tasks/* round trip time to come back as a toast
+			// before asserting the AC's "no error toast".
+			Selenide.sleep(1500);
+			$("[data-testid=toast-stack]").shouldNotHave(text("Error"));
+			// The supported layout (List Tasks controls) must not render.
+			activePanel().shouldNotHave(text("List Tasks"));
+		}
+
+		@Test
+		@Story("Tasks tab")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("On a taskless server the #tasks deep link resolves to the Tasks tab with the capability-gap body, and opening the Apps tab raises no error toast either.")
+		@DisplayName("tasksGapDeepLinkResolvesAndAppsRaisesNoToast")
+		void tasksGap_directConnect_deepLink_showsGapBody_appsNoToast() {
+			// True deep link: a full page load with #tasks. localStorage
+			// restores lastTransportType, lastConnectionType and lastSseUrl
+			// from the direct connect in bootAndConnectDirect, and the app
+			// auto-restores the direct session on load. Wait for either
+			// outcome: the auto-restored connection (the Tasks tab content
+			// renders) or the first-time Connect button (click it), then the
+			// routing effect resolves the hash to the always-valid Tasks tab.
+			open("/mcp-inspector/index.html#tasks");
+			long deadline = System.currentTimeMillis() + 20000;
+			while (System.currentTimeMillis() < deadline) {
+				if ($("[data-testid=tab-content-tasks]").exists() || connectButton().exists()) {
+					break;
+				}
+				Selenide.sleep(300);
+			}
+			if (!$("[data-testid=tab-content-tasks]").exists()) {
+				connectButton().shouldBe(visible, Duration.ofSeconds(5)).click();
+				$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			}
+			$("[data-testid=tab-content-tasks]").shouldBe(visible, Duration.ofSeconds(15));
+			$("[data-testid=tasks-capability-gap]").shouldBe(visible, Duration.ofSeconds(10))
+				.shouldHave(text(
+						"Server does not advertise the tasks capability; long-running task tracking is unavailable."));
+			Selenide.sleep(1500);
+			$("[data-testid=toast-stack]").shouldNotHave(text("Error"));
+			// The AC names Apps too: opening it must not leak a tasks/* error.
+			clickTab("apps");
+			$("[data-testid=toast-stack]").shouldNotHave(text("Error"));
 		}
 
 	}
@@ -2273,7 +3163,7 @@ class InspectorUiIT {
 		/** Right-hand "Server Notifications" pane — sibling of historyColumn(). */
 		private static SelenideElement notificationsColumn() {
 			// History pane has border-r; notifications pane is the other flex-1 column.
-			return $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications"));
+			return $("[data-testid=notifications-pane]");
 		}
 
 		@Test
@@ -2290,7 +3180,7 @@ class InspectorUiIT {
 			SelenideElement loggingLevel = $("#logging-level-select");
 			if (loggingLevel.isDisplayed()) {
 				loggingLevel.click();
-				$$("[role=option]").findBy(text("info")).click();
+				$("[data-testid=select-option-info]").click();
 			}
 
 			// when
@@ -2320,7 +3210,7 @@ class InspectorUiIT {
 			// DEMO_CAPABILITIES.md).
 			SelenideElement column = notificationsColumn();
 			if (column.exists() && !column.text().contains("No notifications yet")) {
-				column.$$("li").shouldHave(CollectionCondition.sizeGreaterThan(0));
+				column.$$("[data-testid=notification-item]").shouldHave(CollectionCondition.sizeGreaterThan(0));
 			}
 		}
 
@@ -2356,13 +3246,14 @@ class InspectorUiIT {
 			// Fire a ping so we have a non-initialize entry to expand.
 			clickTab("ping");
 			activePanel().$(byText("Ping Server")).click();
-			historyColumn().$$("li").shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(10));
+			historyColumn().$$("[data-testid=history-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(10));
 
 			// when
 			// The expand toggle is a plain <span>▶</span> inside the row's header div;
 			// clicking the header (cursor-pointer) toggles. Click the most recent row.
-			SelenideElement firstRow = historyColumn().$$("li").first();
-			firstRow.$(".cursor-pointer").click();
+			SelenideElement firstRow = historyColumn().$$("[data-testid=history-item]").first();
+			firstRow.$("[data-testid=history-entry-toggle]").click();
 
 			// then
 			// Expanded panel contains "Request:" and (eventually) "Response:" headings.
@@ -2379,9 +3270,9 @@ class InspectorUiIT {
 			// given
 			// Server Notifications pane: the other .flex-1.overflow-y-auto.p-4 sibling
 			// (no border-r). UPSTREAM_DOM_MAP.md §18.
-			SelenideElement notifications = $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications"));
+			SelenideElement notifications = $("[data-testid=notifications-pane]");
 
-			int before = notifications.$$("li").size();
+			int before = notifications.$$("[data-testid=notification-item]").size();
 
 			// when
 			clickTab("tools");
@@ -2403,7 +3294,7 @@ class InspectorUiIT {
 			// entry. Otherwise the demo server didn't subscribe the client (logging
 			// capability
 			// gap) — flag as informational rather than fail.
-			int after = notifications.$$("li").size();
+			int after = notifications.$$("[data-testid=notification-item]").size();
 			// BUG-CANDIDATE: when after == before the demo server has not negotiated the
 			// logging subscription with the upstream client — log it but don't hard-fail.
 			if (after == before) {
@@ -2813,7 +3704,7 @@ class InspectorUiIT {
 
 			// Replace the URI with our test value. The Input renders inside the row;
 			// it's the first plain <input> inside the active panel after the alert.
-			SelenideElement rootUri = activePanel().$$("input[placeholder='file:// URI']").first().shouldBe(visible);
+			SelenideElement rootUri = activePanel().$$("[data-testid=root-uri-input]").first().shouldBe(visible);
 			rootUri.click();
 			rootUri.sendKeys(org.openqa.selenium.Keys.END);
 			int len = rootUri.getValue() == null ? 0 : rootUri.getValue().length();
@@ -2842,6 +3733,93 @@ class InspectorUiIT {
 			activePanel().shouldHave(Condition.or("roots-tool surfaced something",
 					text("file:///tmp/inspector-test-root"), text("does not advertise"), text("returned no roots")),
 					Duration.ofSeconds(20));
+		}
+
+		/**
+		 * Regression coverage for the Roots tab save-block promise (PR #355 review): the
+		 * promise was pinned only by jsdom specs, so it also needs a real browser story.
+		 * An invalid root URI must block Save Changes with the reason shown inline next
+		 * to the field and without sending notifications/roots/list_changed; fixing the
+		 * URI clears the alert and the save propagates. The page fetch is wrapped before
+		 * Save Changes is clicked; the demo connects through the proxy, so bodies may sit
+		 * inside a proxy envelope, and a plain substring check works for both shapes.
+		 */
+		@Test
+		@Story("Roots validation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("An invalid root URI blocks Save Changes: the reason shows inline next to the field and notifications/roots/list_changed stays unsent until the URI is fixed.")
+		@DisplayName("saveWithInvalidRootUri: inline alert shown and list_changed held back until the URI is fixed")
+		void saveWithInvalidRootUri_holdsNotification_untilUriFixed() {
+			// given
+			clickTab("roots");
+
+			// Capture every JSON-RPC body the page sends through fetch.
+			Selenide
+				.executeJavaScript("" + "window.__rootsListChangedPayloads = window.__rootsListChangedPayloads || [];"
+						+ "if (!window.__rootsListChangedHooked) {" + "  window.__rootsListChangedHooked = true;"
+						+ "  const orig = window.fetch;" + "  window.fetch = function(input, init) {" + "    try {"
+						+ "      if (init && typeof init.body === 'string'"
+						+ "          && init.body.indexOf('roots/list_changed') !== -1) {"
+						+ "        window.__rootsListChangedPayloads.push(init.body);" + "      }"
+						+ "    } catch (e) {}" + "    return orig.apply(this, arguments);" + "  };" + "}");
+
+			// Add Root creates an entry pre-filled with "file://". A root saved by a
+			// sibling story may already exist, so the new row is the last one.
+			activePanel().$(byText("Add Root")).shouldBe(visible, Duration.ofSeconds(10)).click();
+			int target = activePanel().$$("[data-testid=root-uri-input]").size() - 1;
+			SelenideElement rootUri = activePanel().$$("[data-testid=root-uri-input]").get(target).shouldBe(visible);
+			rootUri.click();
+			rootUri.sendKeys(org.openqa.selenium.Keys.END);
+			int len = rootUri.getValue() == null ? 0 : rootUri.getValue().length();
+			for (int i = 0; i < len + 2; i++) {
+				rootUri.sendKeys(org.openqa.selenium.Keys.BACK_SPACE);
+			}
+			rootUri.setValue("not a uri");
+
+			// when: save with an invalid URI
+			activePanel().$(byText("Save Changes")).shouldBe(visible).click();
+
+			// then: the reason shows inline next to the field (role=alert, linked
+			// through aria-describedby) and no roots/list_changed is sent.
+			SelenideElement alert = $("#root-uri-error-" + target).shouldBe(visible, Duration.ofSeconds(5));
+			Assertions.assertEquals("alert", alert.attr("role"), "the inline reason must be a role=alert element");
+			Assertions.assertEquals("true", rootUri.getAttribute("aria-invalid"),
+					"the offending field must be marked aria-invalid");
+			Number blockedSent = null;
+			for (int i = 0; i < 6 && (blockedSent == null || blockedSent.longValue() == 0); i++) {
+				blockedSent = Selenide.executeJavaScript("return (window.__rootsListChangedPayloads || []).length;");
+				if (blockedSent == null || blockedSent.longValue() == 0) {
+					Selenide.sleep(250);
+				}
+			}
+			Assertions.assertEquals(0L, blockedSent == null ? 0L : blockedSent.longValue(),
+					"a blocked save must not send notifications/roots/list_changed");
+
+			// when: fix the URI and save again
+			rootUri.click();
+			rootUri.sendKeys(org.openqa.selenium.Keys.END);
+			len = rootUri.getValue() == null ? 0 : rootUri.getValue().length();
+			for (int i = 0; i < len + 2; i++) {
+				rootUri.sendKeys(org.openqa.selenium.Keys.BACK_SPACE);
+			}
+			rootUri.setValue("file:///valid/path");
+			activePanel().$(byText("Save Changes")).shouldBe(visible).click();
+
+			// then: the alert is gone and the save propagates as list_changed.
+			$("#root-uri-error-" + target).shouldNot(Condition.exist);
+			Number sent = null;
+			for (int i = 0; i < 60 && (sent == null || sent.longValue() == 0); i++) {
+				sent = Selenide.executeJavaScript("return (window.__rootsListChangedPayloads || []).length;");
+				if (sent == null || sent.longValue() == 0) {
+					Selenide.sleep(250);
+				}
+			}
+			Assertions.assertNotNull(sent, "the fetch hook observed no request at all");
+			Assertions.assertTrue(sent.longValue() >= 1,
+					"saving a valid root URI must send notifications/roots/list_changed; captured=" + sent);
+			String payload = Selenide.executeJavaScript(
+					"var a = window.__rootsListChangedPayloads || []; return a.length > 0 ? a[a.length - 1] : null;");
+			Assertions.assertNotNull(payload, "no roots/list_changed request body was captured by the fetch hook");
 		}
 
 	}
@@ -2919,9 +3897,127 @@ class InspectorUiIT {
 			// then
 			// Server Notifications pane gains at least one entry within the
 			// DemoSubscribableResource tick interval (~5s default + initial 2s delay).
-			SelenideElement notifications = $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications"));
+			SelenideElement notifications = $("[data-testid=notifications-pane]");
 			// Wait up to 10s for the first scheduled tick to reach the panel.
-			notifications.$$("li").shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(12));
+			notifications.$$("[data-testid=notification-item]")
+				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(12));
+		}
+
+	}
+
+	// =====================================================================
+	// U2. Resource read re-read: Refresh and re-selecting a row must
+	// send resources/read again and re-render the preview (issue #288,
+	// local patch read-resource-stale-pane). Regression: the upstream
+	// client served an eternal resourceContentMap cache on cache hit, so
+	// the pane froze at the first-read demo-clock timestamp until a page
+	// reload. demo://clock returns Instant.now() on every read, which
+	// makes a re-read observable through the pane text.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Resource read re-read (demo://clock)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class ResourceReadReRead {
+
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			openAndConnect();
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		private void listAndSelectClock() {
+			clickTab("resources");
+			for (SelenideElement clear : activePanel().$$(byText("Clear"))) {
+				if (clear.exists() && clear.isEnabled()) {
+					clear.click();
+				}
+			}
+			SelenideElement listResources = activePanel().$(byText("List Resources"));
+			if (listResources.exists() && listResources.isEnabled()) {
+				listResources.click();
+			}
+			activePanel().shouldHave(text("demo-clock"), Duration.ofSeconds(15));
+			selectRow("demo-clock");
+		}
+
+		/** The ISO-8601 instant rendered by the demo-clock preview, or null. */
+		private String paneClockTimestamp() {
+			final Matcher matcher = Pattern.compile("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z?")
+				.matcher(activePanel().getText());
+			return matcher.find() ? matcher.group() : null;
+		}
+
+		private int historyResourcesReadCount() {
+			return historyColumn().$$("[data-testid=history-item]").filterBy(text("resources/read")).size();
+		}
+
+		@Test
+		@Story("Resource refresh re-read")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Clicking Refresh re-issues resources/read: the History pane gains an entry and the demo-clock preview advances to a new Instant.")
+		@DisplayName("refreshReIssuesResourcesRead: History grows and the clock advances on every Refresh")
+		void refresh_clickReIssuesResourcesRead_historyGrowsAndClockAdvances() {
+			// given
+			listAndSelectClock();
+			final String firstRead = paneClockTimestamp();
+			Assertions.assertNotNull(firstRead,
+					"demo-clock preview must render an ISO-8601 timestamp after the first read");
+			final int readsBeforeRefresh = historyResourcesReadCount();
+
+			// when
+			activePanel().$(byText("Refresh")).shouldBe(visible, Duration.ofSeconds(5)).click();
+
+			// then
+			// The re-read must land in History and the pane must advance:
+			// demo://clock returns Instant.now() with sub-second precision, so
+			// any later read renders a different string.
+			historyColumn().$$("[data-testid=history-item]")
+				.filterBy(text("resources/read"))
+				.shouldHave(CollectionCondition.sizeGreaterThan(readsBeforeRefresh), Duration.ofSeconds(15));
+			final long deadline = System.currentTimeMillis() + Duration.ofSeconds(15).toMillis();
+			String secondRead = paneClockTimestamp();
+			while ((secondRead == null || secondRead.equals(firstRead)) && System.currentTimeMillis() < deadline) {
+				Selenide.sleep(250);
+				secondRead = paneClockTimestamp();
+			}
+			Assertions.assertNotNull(secondRead,
+					"demo-clock preview must keep rendering an ISO-8601 timestamp after Refresh");
+			Assertions.assertNotEquals(firstRead, secondRead,
+					"Refresh must re-issue resources/read: the demo-clock timestamp must advance instead of freezing");
+		}
+
+		@Test
+		@Story("Resource re-select re-read")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Re-clicking an already-read row re-issues resources/read (chosen semantics: a cached row re-reads, never inert), so the demo-clock preview advances.")
+		@DisplayName("reselectReIssuesResourcesRead: clicking the same row again re-reads instead of serving the cache")
+		void reselectRow_clickReIssuesResourcesRead_clockAdvances() {
+			// given
+			listAndSelectClock();
+			final String firstRead = paneClockTimestamp();
+			Assertions.assertNotNull(firstRead,
+					"demo-clock preview must render an ISO-8601 timestamp after the first read");
+
+			// when
+			selectRow("demo-clock");
+
+			// then
+			final long deadline = System.currentTimeMillis() + Duration.ofSeconds(15).toMillis();
+			String secondRead = paneClockTimestamp();
+			while ((secondRead == null || secondRead.equals(firstRead)) && System.currentTimeMillis() < deadline) {
+				Selenide.sleep(250);
+				secondRead = paneClockTimestamp();
+			}
+			Assertions.assertNotNull(secondRead,
+					"demo-clock preview must keep rendering an ISO-8601 timestamp after re-select");
+			Assertions.assertNotEquals(firstRead, secondRead,
+					"Re-selecting a read row must re-issue resources/read (never inert semantics): the demo-clock timestamp must advance");
 		}
 
 	}
@@ -3060,13 +4156,13 @@ class InspectorUiIT {
 			// when
 			// The topic Combobox trigger is a <button role=combobox aria-controls=topic>.
 			// Click it to open the Popover containing the CommandInput.
-			SelenideElement trigger = activePanel().$("button[role=combobox][aria-controls=topic]");
+			SelenideElement trigger = activePanel().$("button[data-testid=combobox-trigger-topic]");
 			Assertions.assertTrue(trigger.exists(),
 					"prompts/list returned no argument schemas for multiTurn — completion popover unavailable");
 			trigger.shouldBe(visible).click();
 
 			// CommandInput placeholder is "Enter topic" (matches PromptsTab + Combobox).
-			SelenideElement commandInput = $("input[placeholder='Enter topic']").shouldBe(visible,
+			SelenideElement commandInput = $("input[data-testid=combobox-input-topic]").shouldBe(visible,
 					Duration.ofSeconds(5));
 			commandInput.setValue("s");
 
@@ -3075,48 +4171,56 @@ class InspectorUiIT {
 			// strict prefix filter — see DemoAdvancedPromptsProvider). The Combobox
 			// renders results as Command items inside the Popover; locate the
 			// "sports" entry and click it.
-			SelenideElement sportsOption = $$("[role=option], [cmdk-item]").findBy(text("sports"))
-				.shouldBe(visible, Duration.ofSeconds(10));
+			SelenideElement sportsOption = $("[data-testid=combobox-option-sports]").shouldBe(visible,
+					Duration.ofSeconds(10));
 			sportsOption.click();
 
 			// then
 			// After selection, the Combobox closes and the trigger reflects the value.
-			activePanel().$("button[role=combobox][aria-controls=topic]")
+			activePanel().$("button[data-testid=combobox-trigger-topic]")
 				.shouldHave(text("sports"), Duration.ofSeconds(5));
 		}
 
 	}
 
 	// =====================================================================
-	// X. Responsive tab bar — CI regression for the <sm wrap patch
-	// (upstream-client/src/App.tsx TabsList, NOTICE.d/tab-bar-wrap.txt). The shared
-	// suite browser is fixed at 1366x900 (setupBrowser), so each scenario
-	// resizes the live headless window to its target viewport and restores it
-	// afterwards.
+	// X. Responsive tab bar: CI regression for the tab-bar wrap patch at
+	// every width (upstream-client/src/App.tsx TabsList,
+	// NOTICE.d/tab-bar-wrap.txt). The shared suite browser is fixed at
+	// 1366x900 (setupBrowser), so each scenario resizes the live headless
+	// window to its target viewport and restores it afterwards.
 	//
-	// Tailwind's `sm` breakpoint is `min-width: 640px` (inclusive): computed
-	// flex-wrap at exactly 640px is already `nowrap` (verified in a real
-	// browser), so the wrap side of the boundary is exercised at 639px — the
-	// widest viewport that still wraps — and the flip back to the single
-	// upstream row is asserted at 640px as part of the desktop control.
+	// The wrap contract applies at ALL widths since #275. The original patch
+	// wrapped only below the Tailwind `sm` breakpoint (640px, inclusive);
+	// the desktop `sm:flex-nowrap` override kept a single 13-trigger row
+	// (~1320px) overflowing the 960px inspector column at 1280x800 with no
+	// horizontal page scroll and no affordance. 639px pins the widest
+	// strictly-below-sm viewport; 640px/1024px pin the former
+	// desktop-control widths under the new contract; 1280x800 pins the
+	// reported desktop viewport with a real click on the trailing Timeline
+	// trigger.
 	// =====================================================================
 
 	@Nested
-	@DisplayName("Responsive tab bar (375 / sm-boundary / desktop control)")
+	@DisplayName("Responsive tab bar (375 / 639 / 640+1024 / 1280x800)")
 	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 	class ResponsiveTabBar {
 
-		/** All 11 tab trigger values of the inspector bar (UPSTREAM_DOM_MAP §3). */
+		/**
+		 * All 13 tab trigger values of the inspector bar (11 upstream + local Timeline
+		 * #112 and Input Required #253).
+		 */
 		private static final List<String> ALL_TAB_VALUES = List.of("resources", "prompts", "tools", "tasks", "apps",
-				"ping", "sampling", "elicitations", "roots", "auth", "metadata");
+				"ping", "sampling", "elicitations", "roots", "auth", "metadata", "input-required", "timeline");
 
 		/**
-		 * The 10 always-enabled triggers. {@code tasks} is rendered disabled by design —
-		 * the demo does not advertise the tasks capability (see #63) — so it is only
-		 * presence-checked, never clicked.
+		 * The 11 always-enabled triggers. Since the issue #212 capability gating
+		 * {@code tasks} is always rendered and enabled too (without the capability the
+		 * panel shows the capability-gap body), so it is clicked like the rest; this
+		 * class connects through the proxy, which advertises capabilities.tasks.
 		 */
-		private static final List<String> ENABLED_TAB_VALUES = List.of("resources", "prompts", "tools", "apps", "ping",
-				"sampling", "elicitations", "roots", "auth", "metadata");
+		private static final List<String> ENABLED_TAB_VALUES = List.of("resources", "prompts", "tools", "tasks", "apps",
+				"ping", "sampling", "elicitations", "roots", "auth", "metadata");
 
 		@BeforeAll
 		void bootAndConnect() {
@@ -3140,33 +4244,26 @@ class InspectorUiIT {
 		}
 
 		/**
-		 * Computed {@code flex-wrap} of the TabsList — "wrap" below sm, "nowrap"
-		 * at/above.
+		 * Computed {@code flex-wrap} of the TabsList. The patch contract is "wrap" at
+		 * every width (#275); "nowrap" anywhere is a regression.
 		 */
 		private static String tabsListFlexWrap() {
-			return (String) Selenide
-				.executeJavaScript("return getComputedStyle(document.querySelector('[role=tablist]')).flexWrap;");
-		}
-
-		/** Computed height of the TabsList in px (single upstream row = h-9 = 36px). */
-		private static double tabsListHeight() {
-			return ((Number) Selenide
-				.executeJavaScript("return document.querySelector('[role=tablist]').getBoundingClientRect().height;"))
-				.doubleValue();
+			return (String) Selenide.executeJavaScript(
+					"return getComputedStyle(document.querySelector('[data-testid=tab-list]')).flexWrap;");
 		}
 
 		/** Right edge of the widest tab trigger, in CSS px, relative to the viewport. */
 		private static double widestTriggerRightEdge() {
-			return ((Number) Selenide
-				.executeJavaScript("return Math.max(...Array.from(document.querySelectorAll('[role=tab]'))"
-						+ ".map(t => t.getBoundingClientRect().right));"))
+			return ((Number) Selenide.executeJavaScript(
+					"return Math.max(...Array.from(document.querySelectorAll('[data-testid^=tab-trigger-]'))"
+							+ ".map(t => t.getBoundingClientRect().right));"))
 				.doubleValue();
 		}
 
 		@Test
 		@Story("Responsive tab bar")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("At a 375px viewport the TabsList wraps (computed flex-wrap: wrap), keeps all 11 tab triggers in the DOM and causes no horizontal document overflow. Clickability/visibility of every tab at 375px is intentionally NOT asserted — the 320px sidebar still clips the inspector column there (separate card t_aa9b879f).")
+		@Description("At a 375px viewport the TabsList wraps (computed flex-wrap: wrap), keeps all 13 tab triggers in the DOM and causes no horizontal document overflow. Clickability/visibility of every tab at 375px is intentionally NOT asserted — the 320px sidebar still clips the inspector column there (separate card t_aa9b879f).")
 		@DisplayName("tabsAt375pxWrapKeepAllTriggersNoHScroll — mobile wrap")
 		void tabs_at375px_wrapKeepAllTriggersAndNoHorizontalOverflow() {
 			// given
@@ -3175,7 +4272,7 @@ class InspectorUiIT {
 			// then
 			Assertions.assertEquals("wrap", tabsListFlexWrap(), "TabsList must wrap below the sm breakpoint");
 			for (String value : ALL_TAB_VALUES) {
-				Assertions.assertTrue($("[role=tab][id$='-trigger-" + value + "']").exists(),
+				Assertions.assertTrue($("[data-testid=tab-trigger-" + value + "]").exists(),
 						"tab trigger '" + value + "' must be present in the DOM at 375px");
 			}
 			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
@@ -3185,7 +4282,7 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tab bar")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("At the widest wrapping viewport (639px, just below the inclusive Tailwind sm breakpoint) the TabsList still wraps, all 11 triggers fit inside the viewport (right edge <= viewport width) and the 10 enabled ones are clickable by real input; the disabled tasks trigger is only presence-checked.")
+		@Description("At the widest wrapping viewport (639px, just below the inclusive Tailwind sm breakpoint) the TabsList still wraps, all 13 triggers fit inside the viewport (right edge <= viewport width) and the 11 enabled ones (tasks included) are clickable by real input.")
 		@DisplayName("tabsAt639pxWrapAllReachableClickableNoHScroll — sm boundary, wrap side")
 		void tabs_at639px_wrapAllTriggersReachableClickableNoHorizontalOverflow() {
 			// given
@@ -3200,8 +4297,6 @@ class InspectorUiIT {
 				clickTab(value); // real WebDriver click input; asserts the trigger
 									// becomes active
 			}
-			Assertions.assertTrue($("[role=tab][id$='-trigger-tasks']").exists(),
-					"disabled tasks trigger must be present at the sm boundary (#63)");
 			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
 					"document.documentElement must not overflow horizontally at 639px");
 		}
@@ -3209,18 +4304,45 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive tab bar")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("Control scenario: at 640px (Tailwind sm, min-width:640px — inclusive) and at 1024px the TabsList returns to the single upstream row — computed flex-wrap: nowrap and height ~36px (h-9) — so the wrap patch causes no desktop regression.")
-		@DisplayName("tabsAt640And1024ControlSingleRowNoWrap — desktop geometry intact")
-		void tabs_at1024px_controlSingleRowNoWrap() {
-			// when & then — the exact sm flip point plus a wider desktop viewport
+		@Description("Control scenario: the wrap contract holds at the former desktop-control widths too. At 640px (Tailwind sm, min-width:640px, inclusive) and at 1024px the TabsList still wraps (#275: the single upstream row overflowed desktop columns once the bar grew to 13 triggers), every trigger fits inside the viewport, the 11 enabled ones (tasks included) are clickable by real input and the document does not overflow horizontally.")
+		@DisplayName("tabsAt640And1024ControlWrapAllReachableNoHScroll: former desktop-control widths under the all-width wrap contract")
+		void tabs_at640And1024px_controlWrapAllTriggersReachableNoHorizontalOverflow() {
+			// when & then: the exact former sm flip point (640) plus a wider desktop
+			// width (1024)
 			for (int width : new int[] { 640, 1024 }) {
 				ResponsiveTestHelpers.setViewport(width, 800);
-				Assertions.assertEquals("nowrap", tabsListFlexWrap(),
-						"TabsList must be a single row at " + width + "px (sm:flex-nowrap restores upstream geometry)");
-				double height = tabsListHeight();
-				Assertions.assertTrue(height >= 32 && height <= 40,
-						"TabsList must be a single ~36px row at " + width + "px, was " + height + "px");
+				Assertions.assertEquals("wrap", tabsListFlexWrap(),
+						"TabsList must wrap at " + width + "px too (#275 removed sm:flex-nowrap)");
+				Assertions.assertTrue(widestTriggerRightEdge() <= width,
+						"every tab trigger must fit inside the " + width + "px viewport");
+				for (String value : ENABLED_TAB_VALUES) {
+					clickTab(value); // real WebDriver click input; asserts the trigger
+										// becomes active
+				}
+				Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+						"document.documentElement must not overflow horizontally at " + width + "px");
 			}
+		}
+
+		@Test
+		@Story("Responsive tab bar")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Regression for #275: at 1280x800 the pre-fix bar rendered as a single nowrap row ~1320px wide inside the 960px inspector column, so trailing triggers (Metadata, Timeline) sat past the right edge with no horizontal page scroll and no affordance (the only workaround was typing location.hash = '#timeline'). Now the bar wraps, every trigger is inside the viewport and the trailing Timeline trigger is clickable by real input.")
+		@DisplayName("tabsAt1280x800DesktopWrapTimelineReachableNoHScroll: #275 desktop regression")
+		void tabs_at1280x800_wrapTimelineReachableNoHorizontalOverflow() {
+			// given: the desktop viewport reported in #275
+			ResponsiveTestHelpers.setViewport(1280, 800);
+
+			// then: the all-width wrap contract holds on the reported desktop viewport
+			Assertions.assertEquals("wrap", tabsListFlexWrap(),
+					"TabsList must wrap at 1280x800 instead of overflowing the inspector column (#275)");
+			Assertions.assertTrue(widestTriggerRightEdge() <= 1280,
+					"every tab trigger must fit inside the 1280px viewport (right edge <= 1280)");
+			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 1280x800");
+			// and: the trailing Timeline trigger is reachable by real input (no hash
+			// workaround)
+			clickTab("timeline");
 		}
 
 	}
@@ -3385,7 +4507,7 @@ class InspectorUiIT {
 		 * overlap probe from the stable anchor.
 		 */
 		private static String panesOverlapJs() {
-			return "const panel = document.querySelector('[role=tabpanel][data-state=active]').getBoundingClientRect();"
+			return "const panel = document.querySelector('[data-testid^=tab-content-]:not([hidden])').getBoundingClientRect();"
 					+ "const history = document.querySelector(arguments[0]);"
 					+ "if (!history) { return 'history-not-found'; }" + "const h = history.getBoundingClientRect();"
 					+ "return !(h.left < panel.right && h.right > panel.left && h.top < panel.bottom"
@@ -3429,7 +4551,7 @@ class InspectorUiIT {
 		 * {@code border-r}; the notifications side is anchored by its header text.
 		 */
 		private static SelenideElement notificationsColumn() {
-			return $$(".flex-1.overflow-y-auto.p-4").findBy(text("Server Notifications"));
+			return $("[data-testid=notifications-pane]");
 		}
 
 		@Test
@@ -3530,7 +4652,7 @@ class InspectorUiIT {
 		@Test
 		@Story("Responsive history layout")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("375px regression of the <640px tab-bar wrap fix (PR #69): the TabsList still wraps, all 11 triggers are present, every one of the 10 enabled tabs is clicked by real input, and the document does not overflow horizontally after the compact history-layout patch.")
+		@Description("375px regression of the <640px tab-bar wrap fix (PR #69): the TabsList still wraps, all 11 triggers are present, every one of the 11 enabled tabs (tasks included) is clicked by real input, and the document does not overflow horizontally after the compact history-layout patch.")
 		@DisplayName("tabBarRegressionAt375: mobile wrap intact, all tabs clickable")
 		void tabBar_at375_wrapIntactAfterCompactPatch() {
 			// given
@@ -3540,17 +4662,140 @@ class InspectorUiIT {
 			Assertions.assertEquals("wrap", ResponsiveTabBar.tabsListFlexWrap(),
 					"TabsList must still wrap below the sm breakpoint");
 			for (String value : ResponsiveTabBar.ALL_TAB_VALUES) {
-				Assertions.assertTrue($("[role=tab][id$='-trigger-" + value + "']").exists(),
+				Assertions.assertTrue($("[data-testid=tab-trigger-" + value + "]").exists(),
 						"tab trigger '" + value + "' must be present in the DOM at 375px");
 			}
 
-			// and: every enabled tab is actually clickable by real input at this
-			// viewport (the disabled tasks trigger is only presence-checked, see #63).
+			// and: every enabled tab (tasks included since the issue #212 gating)
+			// is actually clickable by real input at this viewport.
 			for (String value : ResponsiveTabBar.ENABLED_TAB_VALUES) {
 				clickTab(value);
 			}
 			Assertions.assertTrue(noHorizontalDocumentOverflow(),
 					"document.documentElement must not overflow horizontally at 375px");
+		}
+
+	}
+
+	// =====================================================================
+	// X. OAuth2 client-credentials (real UI against a stub token server).
+	// Scenario 1 (D9A happy path): the proxy refreshes the CC token once
+	// on a 401 and the UI reaches Connected. Scenario 2 (D3): a second
+	// 401 surfaces the exact structured error banner.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("OAuth2 client-credentials (real UI → proxy → stub token server)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class OAuth2ClientCredentials {
+
+		/** D3 exact literals ({@code ProxyErrorMapper}). */
+		private static final String REASON_401 = "The MCP server rejected the request as unauthenticated.";
+
+		private static final String GUIDANCE_401 = "Verify the token/API key. OAuth2 profiles refresh and retry once automatically.";
+
+		@AfterEach
+		void tearDown() {
+			stopApp();
+		}
+
+		@Test
+		@Story("OAuth2 client-credentials 401 refresh + retry (D9A)")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Drives the real UI: create + select a CLIENT_CREDENTIALS profile, connect to an SSE stub whose first message POST answers 401 — the proxy refreshes the token once and the retried initialize succeeds, so the sidebar reaches Connected and the token server saw exactly two client_credentials exchanges (never a refresh_token grant).")
+		@DisplayName("ccProfile_401_refresh_retry_connected — one refresh + retry reaches Connected")
+		void ccProfile_401_refresh_retry_connected() throws Exception {
+			// given — a registered CC profile and an SSE upstream that rejects
+			// the first message POST.
+			try (final E2eTokenServer tokenServer = new E2eTokenServer();
+					final E2eSseMcpStub stub = new E2eSseMcpStub()) {
+				stub.rejectPosts(1);
+
+				// when — the user saves the profile and connects to the stub.
+				bootAndCreateProfile(tokenServer);
+				connectTo(stub);
+
+				// and - cheap assertions first: failing here means the retry
+				// mechanism didn't work as expected, and the 30s UI wait below
+				// would have masked the real cause. We await the async proxy
+				// flow (token refresh + retry) with a timeout instead of
+				// asserting synchronously, which would race the retry (issue #89).
+				awaitRequestCount(tokenServer, 2, Duration.ofSeconds(30));
+				Assertions.assertEquals(2, tokenServer.requestCount(), "token exchanges");
+				Assertions.assertFalse(tokenServer.anyRequestWithField("refresh_token"), "no refresh_token grant");
+				// The first two Authorization values prove the one-retry:
+				// 1. Bearer tok-1 on the initial POST (rejected 401)
+				// 2. Bearer tok-2 on the retry POST after refresh (accepted)
+				// Subsequent POSTs (e.g. tools/list, notifications/initialized)
+				// are normal MCP protocol frames and carry the same refreshed token.
+				Assertions.assertTrue(stub.authorizations().size() >= 2,
+						"expected at least 2 upstream Authorization values");
+				Assertions.assertEquals("Bearer " + E2eTokenServer.tokenValue(1), stub.authorizations().get(0),
+						"first Authorization: initial token");
+				Assertions.assertEquals("Bearer " + E2eTokenServer.tokenValue(2), stub.authorizations().get(1),
+						"second Authorization: refreshed token");
+				stub.authorizations()
+					.stream()
+					.skip(2)
+					.forEach((auth) -> Assertions.assertEquals("Bearer " + E2eTokenServer.tokenValue(2), auth,
+							"subsequent Authorization: must use refreshed token"));
+
+				// then - the retried round-trip reached Connected.
+				$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			}
+		}
+
+		@Test
+		@Story("OAuth2 client-credentials second 401 → D3 error banner")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Same setup, but the SSE upstream answers 401 forever: after one refresh + retry the second 401 surfaces the exact D3 unauthorized DTO (status/code/reason/guidance) in the explicit connection-error banner, and the token server saw exactly two exchanges (no retry loop).")
+		@DisplayName("ccProfile_second401_showsExplicitErrorBanner — second 401 renders the D3 banner")
+		void ccProfile_second401_showsExplicitErrorBanner() throws Exception {
+			// given — an SSE upstream that always rejects.
+			try (final E2eTokenServer tokenServer = new E2eTokenServer();
+					final E2eSseMcpStub stub = new E2eSseMcpStub()) {
+				stub.rejectPosts(Integer.MAX_VALUE);
+
+				// when — the user connects.
+				bootAndCreateProfile(tokenServer);
+				connectTo(stub);
+
+				// then — the explicit error banner renders the exact D3 contract.
+				$("[data-testid=connection-error-dto]").shouldBe(visible, Duration.ofSeconds(30))
+					.shouldHave(text("401 unauthorized"))
+					.shouldHave(text(REASON_401))
+					.shouldHave(text(GUIDANCE_401));
+
+				// and — exactly one refresh (registration + the single 401
+				// refresh), no retry loop, and the upstream saw two 401 POSTs.
+				Assertions.assertEquals(2, tokenServer.requestCount(), "token exchanges");
+				Assertions.assertFalse(tokenServer.anyRequestWithField("refresh_token"), "no refresh_token grant");
+				Assertions.assertEquals(
+						List.of("Bearer " + E2eTokenServer.tokenValue(1), "Bearer " + E2eTokenServer.tokenValue(2)),
+						stub.authorizations(), "Authorization per upstream message POST");
+			}
+		}
+
+		/**
+		 * Awaits the token server's request count to reach {@code expected} within the
+		 * given timeout, polling every 100ms. Fails with a clear message when the count
+		 * never reaches the expected value, so the caller can assert the exact count
+		 * without racing the async proxy flow (the token refresh + retry completes
+		 * asynchronously).
+		 * @param server the token server to poll
+		 * @param expected the expected request count
+		 * @param timeout the maximum wait duration
+		 */
+		private static void awaitRequestCount(final E2eTokenServer server, final int expected, final Duration timeout)
+				throws InterruptedException {
+			final long deadline = System.nanoTime() + timeout.toNanos();
+			while (server.requestCount() < expected) {
+				if (System.nanoTime() > deadline) {
+					Assertions.fail("timed out waiting for token server request count to reach " + expected + ", was "
+							+ server.requestCount() + " after " + timeout.toMillis() + "ms");
+				}
+				TimeUnit.MILLISECONDS.sleep(100);
+			}
 		}
 
 	}
@@ -3640,7 +4885,7 @@ class InspectorUiIT {
 			if (listTools.exists() && listTools.isEnabled()) {
 				listTools.click();
 			}
-			activePanel().$$(".cursor-pointer")
+			activePanel().$$("[data-testid^=tool-row-]")
 				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
 			selectRow("sum");
 			$("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofSeconds(10));
@@ -3864,7 +5109,7 @@ class InspectorUiIT {
 			Assertions.assertTrue(elementAtCenter(listTools),
 					"elementFromPoint at the List Tools centre must return the button itself at 375x667");
 			listTools.click();
-			activePanel().$$(".cursor-pointer")
+			activePanel().$$("[data-testid^=tool-row-]")
 				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
 
 			// ...and a real click on the first row selects it.
@@ -3896,7 +5141,7 @@ class InspectorUiIT {
 			if (listTools.exists() && listTools.isEnabled()) {
 				listTools.click();
 			}
-			activePanel().$$(".cursor-pointer")
+			activePanel().$$("[data-testid^=tool-row-]")
 				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
 
 			// then: the search button is not intercepted at 375px...
@@ -3933,16 +5178,16 @@ class InspectorUiIT {
 			if (listTools.exists() && listTools.isEnabled()) {
 				listTools.click();
 			}
-			activePanel().$$(".cursor-pointer")
+			activePanel().$$("[data-testid^=tool-row-]")
 				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
 			selectRow("sum");
 			$("[data-testid=tools-detail-pane]").shouldBe(visible, Duration.ofSeconds(10));
 			SelenideElement runTool = $("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofSeconds(10));
 
-			// then: the Run Tool button is not intercepted at 375px.
+			// then: the Run Tool button fits inside the viewport at 375px.
 			scrollIntoView(runTool);
-			Assertions.assertTrue(ResponsiveTestHelpers.elementAtCenter("run-tool-button"),
-					"elementFromPoint at the Run Tool centre must return the button itself at 375x667");
+			Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("run-tool-button"),
+					"The Run Tool button must be visible inside the viewport at 375x667");
 
 			// when: 7 + 8 through the DynamicJsonForm inputs (id=a / id=b), then a
 			// real click on Run Tool
@@ -3954,7 +5199,7 @@ class InspectorUiIT {
 			// result block reports a successful execution — an error or failed
 			// invocation must not satisfy the acceptance contract.
 			activePanel().shouldHave(text("15"), Duration.ofSeconds(15));
-			activePanel().$$("h4").findBy(text("Tool Result:")).shouldHave(text("Success"), Duration.ofSeconds(15));
+			activePanel().$("[data-testid=tool-result-heading]").shouldHave(text("Success"), Duration.ofSeconds(15));
 		}
 
 	}
@@ -4001,7 +5246,7 @@ class InspectorUiIT {
 			if (listTools.exists() && listTools.isEnabled()) {
 				listTools.click();
 			}
-			activePanel().$$(".cursor-pointer").shouldHave(CollectionCondition.sizeGreaterThan(0));
+			activePanel().$$("[data-testid^=tool-row-]").shouldHave(CollectionCondition.sizeGreaterThan(0));
 		}
 
 		@Test
@@ -4053,6 +5298,779 @@ class InspectorUiIT {
 			// URL field still shows the user-entered value
 			$("#sse-url-input").shouldBe(visible);
 			$("#sse-url-input").shouldHave(Condition.value("http://localhost:" + port + "/sse"));
+		}
+
+	}
+
+	// =====================================================================
+	// Mobile viewport (375x812) regression test: issue #230 companion.
+	// Two halves of the mobile contract, both asserted for real:
+	//
+	// 1. Pre-connect (fixed by the mobile pre-connect sidebar height
+	// patch, see NOTICE.d/mobile-preconnect-sidebar-height.txt): the
+	// below-sm 30vh cap is dropped until a client exists, so the URL
+	// input and the Connect button sit in normal flow. The scenario
+	// runs under a REAL device emulation (CDP Emulation.
+	// setDeviceMetricsOverride 375x812, DPR 3, mobile=true, plus an
+	// iPhone UA override), not a plain window resize: the card
+	// demands real-device emulation so a viewport that only a phone
+	// UA/DPR combination could break is actually exercised. Geometry
+	// is probed at scrollY=0 with elementFromPoint (Selenide's own
+	// shouldBe(visible) would scrollIntoView first and hide a clip).
+	//
+	// 2. Post-connect: the 30vh cap is back (the issue #58 / plan v10
+	// contract), History and Server Notifications stack vertically at
+	// 375px and the document does not overflow horizontally.
+	//
+	// History note (why the URL/Connect assertions live here): before
+	// the product fix both controls sat inside the sidebar's inner
+	// scroll area (clientHeight 113 vs scrollHeight 500 at 375x812),
+	// out of view at scrollY=0 under every emulation; a device-metrics
+	// override was verified NOT to change that geometry. Selenide
+	// scrolls elements into view before a visibility probe or click, so
+	// the old "URL/Connect visible" claim was a false guarantee; the
+	// assertions below probe elementFromPoint at scrollY=0 instead.
+	// =====================================================================
+
+	@Nested
+	@DisplayName("Mobile viewport 375x812 (history stack, no horizontal overflow)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class MobileViewport375x812 {
+
+		/** Each scenario boots a fresh app: clean up after every method. */
+		@AfterEach
+		void tearDown() {
+			stopApp();
+		}
+
+		/**
+		 * True when the History and Server Notifications sections are stacked vertically:
+		 * the top of Server Notifications >= the bottom of History. This is the <768px
+		 * (md breakpoint) stacked layout.
+		 */
+		private static boolean historyAboveNotifications() {
+			Object result = Selenide.executeJavaScript("const h = document.querySelector('[data-testid=history-pane]');"
+					+ "const n = document.querySelector('[data-testid=notifications-pane]');"
+					+ "if (!h || !n) { return 'pane-not-found: h=' + !!h + ', n=' + !!n; }"
+					+ "const hr = h.getBoundingClientRect();" + "const nr = n.getBoundingClientRect();"
+					+ "if (nr.top < hr.bottom) { return 'not-stacked: history=' + Math.round(hr.top) + '..' + Math.round(hr.bottom)"
+					+ "+ ', notifications=' + Math.round(nr.top) + '..' + Math.round(nr.bottom)"
+					+ "+ ', scrollY=' + window.scrollY + ', panes=' + all.length; }" + "return true;");
+			if (result instanceof String) {
+				Assertions.fail((String) result);
+			}
+			return Boolean.TRUE.equals(result);
+		}
+
+		/** The session's original user agent, captured before the override. */
+		private static String originalUserAgent;
+
+		/**
+		 * Applies a real mobile device emulation (not a window resize): CDP
+		 * {@code Emulation.setDeviceMetricsOverride} with the given width/height
+		 * (portrait 375x812 or landscape 812x375), deviceScaleFactor=3, mobile=true, plus
+		 * an iPhone-class user agent via {@code Emulation.setUserAgentOverride}. The
+		 * override stays active until {@link #clearDeviceEmulation()} clears it.
+		 */
+		private static void emulateIphoneViewport(final int width, final int height) {
+			WebDriver driver = WebDriverRunner.getWebDriver();
+			if (driver instanceof ChromeDriver chrome) {
+				originalUserAgent = (String) Selenide.executeJavaScript("return navigator.userAgent;");
+				Map<String, Object> metrics = new HashMap<>();
+				metrics.put("width", width);
+				metrics.put("height", height);
+				metrics.put("deviceScaleFactor", 3);
+				metrics.put("mobile", true);
+				chrome.executeCdpCommand("Emulation.setDeviceMetricsOverride", metrics);
+				Map<String, Object> ua = new HashMap<>();
+				ua.put("userAgent", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
+						+ "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1");
+				chrome.executeCdpCommand("Emulation.setUserAgentOverride", ua);
+			}
+			else {
+				// Non-Chrome drivers cannot run the CDP emulation: the scenario
+				// degrades to the compensated window resize so it still runs.
+				ResponsiveTestHelpers.setViewportExactly(width, height);
+			}
+		}
+
+		/**
+		 * Clears the device emulation applied by
+		 * {@link #emulateIphoneViewport(int, int)}. The UA override has no CDP clear
+		 * command, so it is restored by setting the session's original user agent back.
+		 */
+		private static void clearDeviceEmulation() {
+			WebDriver driver = WebDriverRunner.getWebDriver();
+			if (driver instanceof ChromeDriver chrome) {
+				chrome.executeCdpCommand("Emulation.clearDeviceMetricsOverride", Map.of());
+				if (originalUserAgent != null) {
+					Map<String, Object> ua = new HashMap<>();
+					ua.put("userAgent", originalUserAgent);
+					chrome.executeCdpCommand("Emulation.setUserAgentOverride", ua);
+					originalUserAgent = null;
+				}
+			}
+		}
+
+		/**
+		 * True when the element's bounding box lies fully inside the inner viewport (no
+		 * clip) AND {@code document.elementFromPoint} at its centre returns the element
+		 * or a descendant (nothing overlays it): the real tappability condition at the
+		 * current scroll position. Probed at the position the caller pinned (scrollY=0
+		 * for the initial frame, or a plain window.scrollTo for landscape reachability),
+		 * never after a Selenide scrollIntoView.
+		 */
+		private static boolean visibleAndUncovered(final SelenideElement element) {
+			Object result = Selenide.executeJavaScript("const el = arguments[0];"
+					+ "const r = el.getBoundingClientRect();"
+					+ "if (r.width === 0 || r.height === 0) { return 'zero-size'; }"
+					+ "if (r.top < -1 || r.bottom > window.innerHeight + 1 || r.left < -1"
+					+ "|| r.right > window.innerWidth + 1) { return 'clipped: ' + JSON.stringify(r) + ', inner '"
+					+ "+ window.innerWidth + 'x' + window.innerHeight; }"
+					+ "const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);"
+					+ "if (hit && (hit === el || el.contains(hit))) { return true; }"
+					+ "const d = (n) => n ? n.tagName + (n.id ? '#' + n.id : '') + '.'"
+					+ "  + String(n.className || '').slice(0, 60) + ' top=' + Math.round(n.getBoundingClientRect().top)"
+					+ "  + ' pe=' + getComputedStyle(n).pointerEvents : 'none';"
+					+ "return 'covered: ' + d(hit) + ' probeAt=' + Math.round(r.left + r.width / 2) + ','"
+					+ "  + Math.round(r.top + r.height / 2) + ' elTop=' + Math.round(r.top) + ' viewport='"
+					+ "  + window.innerWidth + 'x' + window.innerHeight;" + "return true;", element);
+			if (result instanceof String) {
+				Assertions.fail((String) result);
+			}
+			return Boolean.TRUE.equals(result);
+		}
+
+		/**
+		 * True when the element, wherever it sits in the document flow, becomes tappable
+		 * after a plain document scroll alone: one window.scrollTo pins the element near
+		 * the top of the viewport (no Selenide scrollIntoView, no inner pane drill-down),
+		 * two rAF let the scroll land, and the elementFromPoint probe at the element's
+		 * fresh centre returns the element or a descendant.
+		 */
+		private static boolean reachableByDocumentScroll(final SelenideElement element) {
+			Object hit = Selenide.executeAsyncJavaScript("const callback = arguments[arguments.length - 1];"
+					+ "const el = arguments[0];" + "const r0 = el.getBoundingClientRect();"
+					+ "window.scrollTo(0, Math.max(0, r0.top + window.scrollY - 8));"
+					+ "requestAnimationFrame(() => requestAnimationFrame(() => {"
+					+ "  const r = el.getBoundingClientRect();"
+					+ "  const probe = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);"
+					+ "  const describe = (n) => n ? n.tagName + (n.id ? '#' + n.id : '') + '.'"
+					+ "+ String(n.className || '').slice(0, 40) + ' @'"
+					+ "+ Math.round(n.getBoundingClientRect().top) : 'none';"
+					+ "  callback({probeAt: [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)],"
+					+ "    hit: describe(probe), hitInside: probe === el || el.contains(probe),"
+					+ "    rect: {top: Math.round(r.top), bottom: Math.round(r.bottom)},"
+					+ "    scrollY: Math.round(window.scrollY), viewport: window.innerWidth + 'x' + window.innerHeight});"
+					+ "}));", element);
+			if (hit instanceof Map<?, ?> probe && Boolean.TRUE.equals(probe.get("hitInside"))) {
+				return true;
+			}
+			Assertions.fail("not reachable by document scroll: " + hit);
+			return false;
+		}
+
+		/**
+		 * Waits until the toast stack (the fixed ol the toaster renders into) is empty
+		 * again. The demo app runs without auth profiles, so the UI shows an "Auth
+		 * Profile Error" toast right after load that auto-dismisses after a few seconds;
+		 * while it is up it legitimately overlays part of the viewport (top of the screen
+		 * below sm, bottom in the sm..lg band) and would fail the elementFromPoint
+		 * probes. First waits briefly for the stack to appear (the fetch can lose the
+		 * race with this check), then for it to drain.
+		 */
+		private static void awaitInitialToastsDismissed() {
+			long appearDeadline = System.currentTimeMillis() + 5_000;
+			while (System.currentTimeMillis() < appearDeadline && toastCount() == 0) {
+				Selenide.sleep(200);
+			}
+			long drainDeadline = System.currentTimeMillis() + 15_000;
+			while (System.currentTimeMillis() < drainDeadline && toastCount() > 0) {
+				Selenide.sleep(250);
+			}
+			Assertions.assertEquals(0, toastCount(), "initial toasts must auto-dismiss before the reachability probes");
+		}
+
+		private static int toastCount() {
+			Object count = Selenide.executeJavaScript(
+					"const stack = document.querySelector('[data-testid=toast-stack]'); return stack ? stack.children.length : 0;");
+			return count instanceof Number number ? number.intValue() : 0;
+		}
+
+		@Test
+		@Story("Mobile viewport")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Pre-connect at a real 375x812 device emulation (CDP device metrics DPR 3 mobile=true + iPhone UA, issue #230 AC): the URL input is not trapped in any inner scroll area (with the vh caps the whole form column sat inside an overflow-y-auto DIV), the URL input is fully inside the viewport at scrollY=0 with nothing overlaying its centre, and Connect, which sits below the fold of the auth-aware form the UI gained with the auth profile section, is reachable by document scroll alone: after a plain window.scrollTo the elementFromPoint probe at its fresh centre returns the button. A real click on Connect then connects (the connected Restart/Reconnect control mounts). Before the mobile pre-connect sidebar height patch both controls sat inside the sidebar's capped inner scroll area, out of view.")
+		@DisplayName("urlAndConnectReachable_preConnect_375x812: device emulation, URL and Connect reachable")
+		void urlAndConnectReachable_preConnect_375x812() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+			emulateIphoneViewport(375, 812);
+			try {
+				ResponsiveTestHelpers.scrollToTop();
+				Assertions.assertEquals(0, ResponsiveTestHelpers.scrollY(),
+						"pre-connect reachability must be asserted at scrollY=0");
+
+				// given: the sidebar rendered pre-connect and the transient
+				// "Auth Profile Error" toast (the demo runs without auth
+				// profiles) auto-dismissed, so it cannot overlay the probes.
+				connectButton().shouldBe(visible, Duration.ofSeconds(15));
+				awaitInitialToastsDismissed();
+				ResponsiveTestHelpers.scrollToTop();
+
+				// then: no vh cap is applied below lg pre-connect: no inner scroll
+				// area traps the URL input, it sits in normal flow fully inside the
+				// initial frame, and nothing overlays its centre: the AC of
+				// issue #230 (URL fully visible).
+				Assertions.assertTrue(noInnerScrollOnConfigPane(),
+						"URL input must not be trapped in an inner scroll area at 375x812 pre-connect");
+				Assertions.assertTrue(visibleAndUncovered($("#sse-url-input")),
+						"URL input must be fully visible and uncovered at 375x812 scrollY=0");
+				Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+						"document.documentElement must not overflow horizontally at 375px pre-connect");
+
+				// and: Connect sits below the fold of the grown form but is
+				// reachable by document scroll alone (no inner pane drill-down):
+				// the second AC of issue #230.
+				Assertions.assertTrue(reachableByDocumentScroll(connectButton()),
+						"Connect must be uncovered after document scroll at 375x812");
+
+				// when: a real click on the Connect button (Selenide scrolls the
+				// document itself to reach it)
+				connectButton().click();
+
+				// then: the connected branch mounts the Restart/Reconnect control:
+				// the click really connected.
+				$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			}
+			finally {
+				clearDeviceEmulation();
+			}
+		}
+
+		/**
+		 * True when the config-pane wrapper carries no clipped inner scroll area:
+		 * {@code scrollHeight} fits {@code clientHeight}. A vh cap class (h-[30vh] below
+		 * sm, sm:h-[50vh] in the sm..lg band) is exactly what makes scrollHeight exceed
+		 * clientHeight pre-connect, so this fails while any cap is still applied before
+		 * the first connect.
+		 */
+		private static boolean noInnerScrollOnConfigPane() {
+			Object result = Selenide.executeJavaScript("const url = document" + ".getElementById('sse-url-input');"
+					+ "if (!url) { return 'sse-url-input not found'; }" + "let node = url.parentElement;"
+					+ "while (node && node !== document.body) {" + "  const style = window.getComputedStyle(node);"
+					+ "  if ((style.overflowY === 'auto' || style.overflowY === 'scroll')"
+					+ "    && node.scrollHeight > node.clientHeight + 1) {"
+					+ "    return 'URL input trapped in inner scroll: ' + node.tagName + ' '"
+					+ "    + node.scrollHeight + ' > ' + node.clientHeight"
+					+ "    + ' (viewport ' + window.innerWidth + 'x' + window.innerHeight + ')'; }"
+					+ "  node = node.parentElement; }" + "return true;");
+			if (result instanceof String) {
+				Assertions.fail((String) result);
+			}
+			return Boolean.TRUE.equals(result);
+		}
+
+		@Test
+		@Story("Mobile viewport")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Pre-connect at a real 812x375 landscape phone emulation (CDP device metrics DPR 3 mobile=true + iPhone UA): the sm:h-[50vh] cap must not apply before the first connect either. The config-pane wrapper has no clipped inner scroll area (scrollHeight fits clientHeight, so the pane renders at natural height and the page, not the pane, scrolls), the URL input is fully visible and uncovered at scrollY=0, and Connect, which sits below the fold of a 375px-tall viewport, is reachable by document scroll alone: after a plain window.scrollTo the elementFromPoint probe at its centre returns the button, with no inner pane drill-down.")
+		@DisplayName("urlAndConnectReachable_preConnect_812x375_landscape: no sm: cap, Connect reachable by document scroll")
+		void urlAndConnectReachable_preConnect_812x375_landscape() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+			emulateIphoneViewport(812, 375);
+			try {
+				ResponsiveTestHelpers.scrollToTop();
+				Assertions.assertEquals(0, ResponsiveTestHelpers.scrollY(),
+						"landscape reachability must be asserted at scrollY=0");
+
+				// given: the sidebar rendered pre-connect and the transient
+				// "Auth Profile Error" toast (the demo runs without auth
+				// profiles) auto-dismissed: in the sm..lg band that toast docks to
+				// the bottom of the screen and would overlay the URL probe below.
+				connectButton().shouldBe(visible, Duration.ofSeconds(15));
+				awaitInitialToastsDismissed();
+				ResponsiveTestHelpers.scrollToTop();
+
+				// then: no vh cap is applied below lg pre-connect: no inner scroll
+				// area traps the URL input (with the sm:h-[50vh] cap the pane was
+				// clientHeight ~187 vs scrollHeight ~500 at this viewport) and the
+				// URL input sits in normal flow inside the initial frame.
+				Assertions.assertTrue(noInnerScrollOnConfigPane(),
+						"URL input must not be trapped in an inner scroll area at 812x375 pre-connect");
+				Assertions.assertTrue(visibleAndUncovered($("#sse-url-input")),
+						"URL input must be fully visible and uncovered at 812x375 scrollY=0");
+				Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+						"document.documentElement must not overflow horizontally at 812x375 pre-connect");
+
+				// and: Connect sits below the fold of a 375px-tall viewport but is
+				// reachable by document scroll alone: a plain window.scrollTo (not a
+				// Selenide scrollIntoView), one rAF for the scroll to land, then the
+				// elementFromPoint probe at the button's fresh centre must return the
+				// button itself.
+				Assertions.assertTrue(reachableByDocumentScroll(connectButton()),
+						"Connect must be uncovered after document scroll at 812x375 (no inner pane scroll)");
+			}
+			finally {
+				clearDeviceEmulation();
+			}
+		}
+
+		@Test
+		@Story("Mobile viewport")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At 375x812 the History and Server Notifications panes stack vertically (top of Notifications >= bottom of History) and the document has no horizontal overflow. Connect-form reachability at this viewport is covered by urlAndConnectReachable_preConnect_375x812; the 30vh connected-state cap of issue #58 stays in force here (the mobile pre-connect sidebar height patch drops the cap only before the first connect).")
+		@DisplayName("historyAndNotificationsStack_375x812: panes stack vertically, no horizontal overflow")
+		void historyAndNotificationsStack_375x812() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+
+			// Set the exact mobile viewport right after opening.
+			ResponsiveTestHelpers.setViewportExactly(375, 812);
+
+			// Wait for the sidebar to render at mobile viewport
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+
+			// Connect (History/Notifications pane mounts after connect).
+			// Selenide scrolls the button into the sidebar's inner scroll
+			// area before clicking: this is a layout drill-down, not a
+			// tap-reachability proof (that is the pre-connect scenario above).
+			connectButton().click();
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			ResponsiveTestHelpers.scrollToTop();
+
+			// 1) No horizontal document overflow
+			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 375px");
+
+			// 2) History and Server Notifications stack vertically
+			// (both panes are rendered after connect)
+			SelenideElement historyCol = $("[data-testid=history-pane]");
+			historyCol.shouldBe(visible);
+			SelenideElement notificationsCol = $("[data-testid=notifications-pane]");
+			notificationsCol.shouldBe(visible);
+			Assertions.assertTrue(historyAboveNotifications(),
+					"History section must be above Server Notifications at 375px (stacked, not side-by-side)");
+		}
+
+		/**
+		 * Number of columns of the Resources content grid, read from the computed
+		 * {@code gridTemplateColumns} of {@code [data-testid="resources-content-grid"]}:
+		 * one column below the Tailwind {@code md} breakpoint ({@code grid-cols-1}),
+		 * three at/above it ({@code md:grid-cols-3}).
+		 */
+		private static int resourcesGridColumns() {
+			Object result = Selenide
+				.executeJavaScript("const el = document.querySelector('[data-testid=\\'resources-content-grid\\']');"
+						+ "if (!el) { return 'grid-not-found'; }"
+						+ "const cols = getComputedStyle(el).gridTemplateColumns;"
+						+ "if (cols === 'none') { return 0; }" + "return cols.split(' ').length;");
+			if ("grid-not-found".equals(result)) {
+				Assertions.fail("resources-content-grid not found for columnCount probe");
+			}
+			return ((Number) result).intValue();
+		}
+
+		/**
+		 * Bounding boxes of the Resources content grid pane children as a list of maps
+		 * ({@code {left,top,right,bottom,width,height}}), in DOM order: resources list,
+		 * templates list, preview pane.
+		 */
+		@SuppressWarnings("unchecked")
+		private static List<Map<String, Number>> resourcesGridPaneRects() {
+			Object result = Selenide
+				.executeJavaScript("const grid = document.querySelector('[data-testid=\\'resources-content-grid\\']');"
+						+ "if (!grid) { return 'grid-not-found'; }" + "return Array.from(grid.children).map((el) => {"
+						+ "const r = el.getBoundingClientRect();"
+						+ "return {left: r.left, top: r.top, right: r.right, bottom: r.bottom,"
+						+ "width: r.width, height: r.height};" + "});");
+			if ("grid-not-found".equals(result)) {
+				Assertions.fail("resources-content-grid not found for pane rects probe");
+			}
+			return (List<Map<String, Number>>) result;
+		}
+
+		/**
+		 * True when the two pane boxes do not intersect (1px tolerance).
+		 */
+		private static boolean panesDisjoint(final Map<String, Number> a, final Map<String, Number> b) {
+			return a.get("right").doubleValue() <= b.get("left").doubleValue() + 1
+					|| b.get("right").doubleValue() <= a.get("left").doubleValue() + 1
+					|| a.get("bottom").doubleValue() <= b.get("top").doubleValue() + 1
+					|| b.get("bottom").doubleValue() <= a.get("top").doubleValue() + 1;
+		}
+
+		/**
+		 * {@code [left, top, right, bottom]} of the element bounding box, via
+		 * {@code getBoundingClientRect}.
+		 */
+		@SuppressWarnings("unchecked")
+		private static List<Number> rectBox(final SelenideElement element) {
+			return (List<Number>) Selenide.executeJavaScript("const el = arguments[0];"
+					+ "const r = el.getBoundingClientRect();" + "return [r.left, r.top, r.right, r.bottom];", element);
+		}
+
+		/**
+		 * Asserts the pane button keeps its card padding at the 375px viewport: the
+		 * button card spans the full viewport width and the {@code p-4} padding must
+		 * leave at least 12px between the button and the card (viewport) edges.
+		 */
+		private static void assertInsideCardWithPadding(final SelenideElement button) {
+			button.shouldBe(visible);
+			List<Number> box = rectBox(button);
+			Assertions.assertTrue(box.get(0).doubleValue() >= 11 && box.get(2).doubleValue() <= 364,
+					button.getText() + " button must keep card padding inside the 375px viewport, got " + box);
+		}
+
+		@Test
+		@Story("Mobile viewport")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("At 375x812 the three Resources content panes (resources list, templates list, preview) stack vertically in one column: the grid resolves to a single column, pane boxes are pairwise disjoint, every pane is at most 375px wide, the List Resources / List Templates buttons keep their card padding, the document has no horizontal overflow, and the preview pane renders below both list panes. Companion of the resources-mobile-stack patch (issue #296).")
+		@DisplayName("resourcesPanesStack_375x812: three panes in one column, controls not clipped")
+		void resourcesPanesStack_375x812() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+			// Set the exact mobile viewport right after opening.
+			ResponsiveTestHelpers.setViewportExactly(375, 812);
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+			connectButton().click();
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			ResponsiveTestHelpers.scrollToTop();
+
+			clickTab("resources");
+			activePanel().shouldHave(text("Resource Templates"), Duration.ofSeconds(10));
+
+			// then: the list buttons keep their card padding at the 375px
+			// viewport (full-width buttons inside the p-4 card, not stretched
+			// into the viewport edge).
+			assertInsideCardWithPadding(activePanel().$(byText("List Resources")));
+			assertInsideCardWithPadding(activePanel().$(byText("List Templates")));
+
+			// when: listing resources and templates populates the panes
+			activePanel().$(byText("List Resources")).shouldBe(Condition.enabled, Duration.ofSeconds(10)).click();
+			activePanel().shouldHave(text("demo-greeting"), Duration.ofSeconds(10));
+			activePanel().$(byText("List Templates")).shouldBe(Condition.enabled, Duration.ofSeconds(10)).click();
+			activePanel().shouldHave(text("demo-item"), Duration.ofSeconds(10));
+			ResponsiveTestHelpers.scrollToTop();
+
+			// then: single column, panes disjoint and unclipped.
+			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 375px");
+			Assertions.assertEquals(1, resourcesGridColumns(),
+					"resources-content-grid must be a single column at 375px (grid-cols-1)");
+			List<Map<String, Number>> rects = resourcesGridPaneRects();
+			Assertions.assertEquals(3, rects.size(), "resources-content-grid must render exactly three pane children");
+			for (Map<String, Number> rect : rects) {
+				Assertions.assertTrue(rect.get("left").doubleValue() >= -1 && rect.get("right").doubleValue() <= 376,
+						"every Resources pane must lie inside the 375px viewport, got " + rect);
+			}
+			for (int i = 0; i < rects.size(); i++) {
+				for (int j = i + 1; j < rects.size(); j++) {
+					Assertions.assertTrue(panesDisjoint(rects.get(i), rects.get(j)), "Resources panes " + i + " and "
+							+ j + " must not overlap at 375px, got " + rects.get(i) + " vs " + rects.get(j));
+				}
+			}
+			// and: the preview pane sits below both list panes in the stacked
+			// single column (it is the third grid child in DOM order).
+			Assertions.assertTrue(rects.get(2).get("top").doubleValue() >= rects.get(0).get("bottom").doubleValue() - 1,
+					"preview pane must render below the resources list pane at 375px, got " + rects);
+			Assertions.assertTrue(rects.get(2).get("top").doubleValue() >= rects.get(1).get("bottom").doubleValue() - 1,
+					"preview pane must render below the templates list pane at 375px, got " + rects);
+		}
+
+		@Test
+		@Story("Mobile viewport")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("The Resources content grid flips from one column (grid-cols-1) to three (md:grid-cols-3) exactly at the inclusive Tailwind md breakpoint: 1 column at 767px, 3 columns at 768px, and the desktop layout stays at three columns at 1280px.")
+		@DisplayName("md_767x800_and_768x800_resourcesGridFlip: grid-cols-1 -> md:grid-cols-3")
+		void md_767x800_and_768x800_resourcesGridFlip() {
+			startApp(new Combo("sse"));
+			open("/mcp-inspector/index.html");
+			// given: just below the md breakpoint
+			ResponsiveTestHelpers.setViewportExactly(767, 800);
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+			connectButton().click();
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			clickTab("resources");
+			activePanel().shouldHave(text("Resource Templates"), Duration.ofSeconds(10));
+
+			// then: the resources-content-grid is still a single column.
+			Assertions.assertEquals(1, resourcesGridColumns(),
+					"resources-content-grid must be a single column at 767px (grid-cols-1)");
+
+			// when: at exactly 768px (Tailwind md, min-width: 768px)
+			ResponsiveTestHelpers.setViewportExactly(768, 800);
+
+			// then: the grid flips to three columns (md:grid-cols-3).
+			Assertions.assertEquals(3, resourcesGridColumns(),
+					"resources-content-grid must flip to three columns at 768px (md:grid-cols-3)");
+
+			// when: a desktop width well past the breakpoint
+			ResponsiveTestHelpers.setViewportExactly(1280, 800);
+
+			// then: the desktop layout keeps exactly three columns at 1280px.
+			Assertions.assertEquals(3, resourcesGridColumns(),
+					"resources-content-grid must stay at three columns at 1280px (md:grid-cols-3)");
+		}
+
+	}
+
+	// =====================================================================
+	// Z. Connect CTA fixed region (issue #269)
+	// =====================================================================
+
+	/**
+	 * Live end-to-end coverage for the sidebar Connect CTA contract (issue #269, see
+	 * NOTICE.d/connect-cta.txt in the UI module): on a pristine desktop viewport (exactly
+	 * 1280x800) the primary Connect button is fully visible without scrolling the
+	 * sidebar, and manually expanding the auth profile editor (collapsed by default since
+	 * issue #268) does not push it below the fold. The CTA container is a fixed flex
+	 * region under the sidebar's scroll area (not a sticky overlay: a bar pinned over the
+	 * scroll area covers sections scrolled underneath it). Only the Connect/Reconnect
+	 * buttons live in the region: the status line, the structured error banner, the
+	 * server card and the logging level stay in the scroll area above, so a tall error
+	 * banner extends the scroll area instead of squeezing it (the failed-connect scenario
+	 * below asserts the server URL input stays reachable).
+	 *
+	 * <p>
+	 * Geometry is read via JavaScript probes only. Any Selenide probe or click that
+	 * scrolls the button into view would make the fold check vacuously true (the same
+	 * false-guarantee trap the {@link MobileViewport375x812} group documents), so the
+	 * waits below use {@code exist}, not {@code visible}, and the sidebar scroll position
+	 * is reset before probing.
+	 */
+	@Nested
+	@DisplayName("Connect CTA fixed region (pristine 1280x800, issue #269)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class ConnectCtaArea {
+
+		@BeforeAll
+		void boot() {
+			startApp(new Combo("sse"));
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		/**
+		 * Forces the sidebar's inner scroll area back to the top so the fold probes below
+		 * always run at a deterministic scroll position (an earlier interaction may have
+		 * scrolled it).
+		 */
+		private static void resetSidebarScroll() {
+			Selenide.executeJavaScript("var c = document.querySelector('[data-testid=sidebar-scroll-area]');"
+					+ "if (c) { c.scrollTop = 0; }");
+		}
+
+		@Test
+		@Feature("Sidebar")
+		@Story("Connect CTA fixed region")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("On a pristine load at exactly 1280x800 the sidebar Connect "
+				+ "button is fully visible without scrolling the sidebar")
+		void pristineLoad_connectCtaFullyVisibleAt1280x800() {
+			open("/mcp-inspector/index.html");
+			// The viewport helpers need the Selenide driver, which is bound by
+			// the first open(); resize afterwards.
+			ResponsiveTestHelpers.setViewportExactly(1280, 800);
+			// Existence (not visibility) on purpose: the fold claim is proven
+			// by the geometry probe, and a visibility wait could scroll the
+			// button into view and make the probe vacuously true.
+			$("[data-testid=sidebar-connect-button]").should(com.codeborne.selenide.Condition.exist,
+					Duration.ofSeconds(15));
+			resetSidebarScroll();
+			Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("sidebar-connect-button"),
+					"pristine load at 1280x800: Connect must be fully visible without scrolling, rect="
+							+ ResponsiveTestHelpers.paneRect("sidebar-connect-button"));
+		}
+
+		@Test
+		@Feature("Sidebar")
+		@Story("Connect CTA fixed region")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Expanding the auth profile editor at 1280x800 must not push "
+				+ "the Connect button below the fold")
+		void expandedAuthEditor_connectCtaStaysVisibleAt1280x800() {
+			open("/mcp-inspector/index.html");
+			ResponsiveTestHelpers.setViewportExactly(1280, 800);
+			$("[data-testid=auth-profile-editor-toggle]").shouldBe(visible, Duration.ofSeconds(15)).click();
+			// The editor section must render before we probe (race condition).
+			$("[data-testid=auth-profile-type]").should(com.codeborne.selenide.Condition.exist, Duration.ofSeconds(15));
+			resetSidebarScroll();
+			Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("sidebar-connect-button"),
+					"expanded auth editor at 1280x800: Connect must stay fully visible, rect="
+							+ ResponsiveTestHelpers.paneRect("sidebar-connect-button"));
+		}
+
+		@Test
+		@Feature("Sidebar")
+		@Story("Connect CTA fixed region")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("After a failed connect at exactly 1280x800 the structured "
+				+ "error banner renders in the sidebar scroll area, not in the fixed "
+				+ "CTA region: the scroll area keeps a usable height and the server " + "URL input stays fully visible")
+		void failedConnect_errorBannerKeepsScrollAreaUsableAt1280x800() throws Exception {
+			// given: an upstream that rejects every message POST. The proxy
+			// refreshes the token once, the retry gets a second 401 and the
+			// structured banner surfaces (the OAuth2ClientCredentials recipe,
+			// which also supplies the client-credentials profile the flow needs).
+			try (final E2eTokenServer tokenServer = new E2eTokenServer();
+					final E2eSseMcpStub stub = new E2eSseMcpStub()) {
+				stub.rejectPosts(Integer.MAX_VALUE);
+				bootAndCreateProfile(tokenServer);
+				ResponsiveTestHelpers.setViewportExactly(1280, 800);
+
+				// when: the user connects and the banner renders.
+				connectTo(stub);
+				$("[data-testid=connection-error-dto]").shouldBe(visible, Duration.ofSeconds(30));
+
+				// then: the banner lives in the sidebar scroll area, not inside
+				// the fixed connect region. A banner inside the fixed region
+				// would squeeze the scroll area instead of extending it.
+				resetSidebarScroll();
+				final Boolean bannerInRegion = Selenide
+					.executeJavaScript("var b = document.querySelector('[data-testid=connection-error-dto]');"
+							+ "return b !== null && b.closest('[data-testid=sidebar-connect-region]') !== null;");
+				Assertions.assertNotNull(bannerInRegion, "banner region probe ran");
+				Assertions.assertFalse(bannerInRegion,
+						"the connection error banner must not render inside the fixed connect region");
+
+				// and: the scroll area keeps a usable height and the server URL
+				// input stays fully visible, so the failed connect extends the
+				// scroll area instead of squeezing it out of the viewport.
+				final Number scrollAreaHeight = Selenide
+					.executeJavaScript("var c = document.querySelector('[data-testid=sidebar-scroll-area]');"
+							+ "return c ? Math.round(c.getBoundingClientRect().height) : -1;");
+				Assertions.assertNotNull(scrollAreaHeight, "scroll area probe ran");
+				Assertions.assertTrue(scrollAreaHeight.longValue() >= 400,
+						"scroll area must keep a usable height after a failed connect at 1280x800, got "
+								+ scrollAreaHeight + "px");
+				Assertions.assertTrue(ResponsiveTestHelpers.paneInsideViewport("sse-url-input"),
+						"failed connect at 1280x800: the server URL input must stay fully visible, rect="
+								+ ResponsiveTestHelpers.paneRect("sse-url-input"));
+			}
+		}
+
+	}
+
+	// =====================================================================
+	// N. Exception leak detector (issue #251)
+	// =====================================================================
+
+	/**
+	 * Live end-to-end coverage for the exception-leak detector UI (issue #251): the
+	 * {@code leakyInsert} demo tool (landed with the detector engine in #291) logs a
+	 * failure the way an infrastructure layer would and then rethrows, so the error tool
+	 * result carries the exact E11000 text the application log already contains. The flow
+	 * asserts every link of the chain: the Tool Results verbatim note with the upstream
+	 * link, the Timeline leak badge on the annotated error row, the expanded leak detail
+	 * correlated with the APP_LOG line, and the jump scrolling that APP_LOG row into
+	 * view.
+	 */
+	@Nested
+	@DisplayName("Exception leak detector")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class LeakDetection {
+
+		/**
+		 * Boot once per group: the single test walks the whole flow on one connection.
+		 */
+		@BeforeAll
+		void bootAndConnect() {
+			startApp(new Combo("sse"));
+			openAndConnect();
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@Test
+		@Story("Exception leak detector")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Runs leakyInsert(name=acme) through the UI against the real detector engine: "
+				+ "the Tool Results block grows a verbatim leak note with the spring-ai#7219 upstream "
+				+ "link, the View in Timeline jump switches to the Timeline tab, the failing "
+				+ "tools/call response row carries the exact-tier leak badge whose tooltip names the "
+				+ "match and the log line, the row click expands the leak detail (first log line "
+				+ "only, never the stack trace) beside the leaked E11000 error text, and the jump "
+				+ "link scrolls the correlated APP_LOG row into the viewport.")
+		@DisplayName("leakyInsertShowsLeakBadgeAndAppLogJump: verbatim note, Timeline badge, APP LOG jump")
+		void leakyInsert_showsVerbatimNote_timelineBadge_andAppLogJump() {
+			// given: the Tools tab lists the demo tools; leakyInsert takes one required
+			// string parameter that DynamicJsonForm renders as input#name.
+			clickTab("tools");
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			selectRow("leakyInsert");
+			$("#name").shouldBe(visible).setValue("acme");
+
+			// when: the tool runs; the server logs "leakyInsert failed for tenant acme"
+			// and rethrows, so the SDK packs the E11000 text into an error
+			// CallToolResult.
+			activePanel().$(byText("Run Tool")).click();
+
+			// then: the Tool Results block renders the verbatim leak note. The note
+			// arrives via the leakAnnotations broker fed by the /api/timeline poll
+			// (3 s), so it can trail the result by a few seconds.
+			$("[data-testid=tool-result-leak-note]").shouldBe(visible, Duration.ofSeconds(45));
+			$("[data-testid=tool-result-leak-verbatim]").shouldHave(text("received this text verbatim"));
+			$("[data-testid=tool-result-leak-upstream]").shouldHave(text("spring-ai#7219"));
+
+			// and: the View in Timeline link switches the app to the Timeline tab.
+			$("[data-testid=tool-result-leak-jump]").shouldBe(visible).click();
+			$("[data-testid=tab-content-timeline]").shouldBe(visible, Duration.ofSeconds(15));
+
+			// and: the failing tools/call response row carries the leak badge (exact
+			// tier); its tooltip discloses the match kind and the correlated log line.
+			SelenideElement badge = $("[data-testid=timeline-leak-badge-exact]").shouldBe(visible,
+					Duration.ofSeconds(30));
+			badge.shouldHave(text("leak"));
+			badge.shouldHave(attributeMatching("title", ".*match: exact, verbatim.*"));
+			badge.shouldHave(attributeMatching("title", ".*leakyInsert failed for tenant acme.*"));
+
+			// and: a click on the row itself expands the detail (the badge click is a
+			// jump, see TimelineTab). The leak message block carries the engine-capped
+			// first log line only, never the stack trace; the leaked E11000 text sits in
+			// the neighboring tool error block. The row carries
+			// data-testid=timeline-row (issue #378).
+			SelenideElement annotatedRow = badge.closest("[data-testid=timeline-row]");
+			annotatedRow.click();
+			$("[data-testid=timeline-leak-log-message]").shouldBe(visible, Duration.ofSeconds(15))
+				.shouldHave(text("leakyInsert failed for tenant acme"));
+			$("[data-testid=timeline-leak-log-message]").shouldNotHave(text("E11000"));
+			activePanel().shouldHave(text("Exception leak (match: exact, verbatim)"));
+			$("[data-testid=timeline-tool-error-message]").shouldBe(visible)
+				.shouldHave(text("E11000 duplicate key error"));
+
+			// and: the jump link scrolls the correlated APP_LOG row into the viewport.
+			// Match the row by its type label span ("APP LOG") plus the log line, so the
+			// expanded annotated response row (which also carries the log line in its
+			// leak detail) can never satisfy the check by accident.
+			$("[data-testid=timeline-leak-jump-link]").shouldBe(visible).click();
+			Selenide.sleep(1_500); // scrollIntoView animates with behavior "smooth"
+			org.openqa.selenium.JavascriptExecutor js = (org.openqa.selenium.JavascriptExecutor) WebDriverRunner
+				.getWebDriver();
+			Boolean logRowInView = (Boolean) js.executeScript("""
+					var rows = document.querySelectorAll('[data-testid=timeline-row]');
+					for (var i = 0; i < rows.length; i++) {
+						var row = rows[i];
+						if (row.textContent.indexOf('APP LOG') >= 0
+								&& row.textContent.indexOf('leakyInsert failed for tenant acme') >= 0) {
+							var rect = row.getBoundingClientRect();
+							return rect.top >= 0 && rect.bottom <= window.innerHeight;
+						}
+					}
+					return false;
+					""");
+			Assertions.assertTrue(Boolean.TRUE.equals(logRowInView),
+					"correlated APP_LOG row must be scrolled into the viewport after the jump");
 		}
 
 	}

@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="referrer" content="no-referrer">
+<title>Sandbox Proxy</title>
+<style>
+  body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #fff; }
+  iframe { border: none; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div id="container"></div>
+<script>
+(function() {
+  'use strict';
+
+  // Origin model deviation (SEP-1865 draft, "Sandbox proxy", item 1 requires
+  // host and sandbox on different origins): this page is served by the same
+  // origin as the host. Separation cannot be implemented with the vendored
+  // @mcp-ui/client, which creates the outer iframe with a hardcoded
+  // sandbox="allow-scripts allow-same-origin allow-forms" and would need a
+  // separate deployment origin we do not control. The same-origin deviation
+  // is contained: the inner view iframe never gets allow-same-origin (see
+  // VIEW_IFRAME_SANDBOX), messages whose event.origin is not this page's own
+  // origin are dropped (see the message handler), and frame-ancestors 'self'
+  // in the served CSP stops any other origin from framing this page.
+
+  var container = document.getElementById('container');
+  var innerIframe = null;
+  var readySent = false;
+
+  // Notify the host that the proxy page is ready
+  function sendProxyReady() {
+    if (readySent) return;
+    readySent = true;
+    window.parent.postMessage(
+      { jsonrpc: '2.0', method: 'ui/notifications/sandbox-proxy-ready' },
+      location.origin
+    );
+  }
+
+  // [spring-ai-mcp-inspector PATCH] Strict CSP host-source grammar for
+  // App-supplied domains: an optional https://, http://, wss:// or ws:// scheme,
+  // a dotted host name (optionally behind a leading *. wildcard label),
+  // localhost, or an IP literal, an optional port (:8443 or :*), and an optional
+  // path. The path character set deliberately excludes the policy separators
+  // ';', ',' and "'": a value like example.com/;frame-ancestors (no whitespace)
+  // must never pass, it would split the serialized policy and inject a directive
+  // (owner review PR #199, round 2, BLOCK 1). Everything else is rejected
+  // (scheme sources like javascript:/data:, quoted keywords like 'unsafe-eval',
+  // values with whitespace). Mirrors the Java-side
+  // SandboxCspSerializer.isAllowedSourceExpression.
+  var HOST_SOURCE = /^(?:(?:https|http|wss|ws):\/\/)?(?:(?:\*\.)?(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}|localhost|(?:\d{1,3}\.){3}\d{1,3}|\[[0-9a-fA-F:]+\])(?::(?:\d{1,5}|\*))?(?:\/[\w\-.~/!$&()*+=:@%]*)?$/;
+
+  function isAllowedSourceExpression(value) {
+    return typeof value === 'string' && value.length > 0 && HOST_SOURCE.test(value);
+  }
+
+  function sanitized(domains) {
+    return Array.isArray(domains) ? domains.filter(isAllowedSourceExpression) : [];
+  }
+
+  // Serialize a McpUiResourceCsp JSON object to a CSP header string. Domain
+  // values are validated as strict host-source expressions first: an invalid
+  // value never enters the policy (it is dropped, not concatenated).
+  function serializeCsp(cspObj) {
+    if (!cspObj || typeof cspObj !== 'object') {
+      return "default-src 'none'; connect-src 'none'; img-src 'none'; script-src 'unsafe-inline' 'none'; style-src 'unsafe-inline' 'none'; font-src 'none'; media-src 'none'; frame-src 'none'; base-uri 'self'; object-src 'none'; form-action 'none'";
+    }
+    var parts = ["default-src 'none'"];
+    var cd = sanitized(cspObj.connectDomains);
+    if (cd.length > 0) {
+      parts.push("connect-src " + cd.join(" "));
+    } else {
+      parts.push("connect-src 'none'");
+    }
+    var rd = sanitized(cspObj.resourceDomains);
+    if (rd.length > 0) {
+      var rdJoined = rd.join(" ");
+      parts.push("img-src " + rdJoined);
+      parts.push("script-src 'unsafe-inline' " + rdJoined);
+      parts.push("style-src 'unsafe-inline' " + rdJoined);
+      parts.push("font-src " + rdJoined);
+      parts.push("media-src " + rdJoined);
+    } else {
+      parts.push("img-src 'none'");
+      parts.push("script-src 'unsafe-inline' 'none'");
+      parts.push("style-src 'unsafe-inline' 'none'");
+      parts.push("font-src 'none'");
+      parts.push("media-src 'none'");
+    }
+    var fd = sanitized(cspObj.frameDomains);
+    if (fd.length > 0) {
+      parts.push("frame-src " + fd.join(" "));
+    } else {
+      parts.push("frame-src 'none'");
+    }
+    var bud = sanitized(cspObj.baseUriDomains);
+    if (bud.length > 0) {
+      parts.push("base-uri " + bud.join(" "));
+    } else {
+      parts.push("base-uri 'self'");
+    }
+    // SEP-1865 draft, "Sandbox proxy", item 5: object-src 'none' everywhere.
+    parts.push("object-src 'none'");
+    parts.push("form-action 'none'");
+    return parts.join("; ");
+  }
+
+  // Hardcoded sandbox token set for the inner view iframe. The framing page
+  // must never control this attribute: a parent-supplied value (for example
+  // "allow-scripts allow-same-origin") would land the srcdoc guest on the
+  // host origin and defeat the isolation boundary. The legit host
+  // (@mcp-ui/client AppFrame) sends only {html, csp}; the spec-draft
+  // "sandbox" param is deliberately ignored.
+  var VIEW_IFRAME_SANDBOX = 'allow-scripts';
+
+  // Create the inner view iframe with the given HTML, replacing any previous
+  // one: without this, every sandbox-resource-ready appends another iframe and
+  // the stale guest stays mounted (and keeps its script alive) underneath.
+  function createViewIframe(html, csp) {
+    if (innerIframe && innerIframe.parentNode) {
+      innerIframe.parentNode.removeChild(innerIframe);
+      innerIframe = null;
+    }
+    var iframe = document.createElement('iframe');
+
+    // Set sandbox attribute; allow-same-origin is never granted
+    iframe.setAttribute('sandbox', VIEW_IFRAME_SANDBOX);
+
+    // Parse the csp param (JSON object or string) and serialize it to the CSP
+    // meta tag. Same 4 KB cap the server stacks enforce on the csp query
+    // parameter (SandboxCspSerializer.CSP_PARAM_MAX_LENGTH = 4096): the page
+    // cannot answer 400 to a postMessage, so an oversized csp falls back to the
+    // page baseline instead of entering a multi-kilobyte inline meta policy.
+    var CSP_PARAM_MAX_LENGTH = 4096;
+    var cspStr;
+    if (typeof csp === 'string' && csp.length > 0 && csp.length <= CSP_PARAM_MAX_LENGTH) {
+      try {
+        cspStr = serializeCsp(JSON.parse(csp));
+      } catch (_) {
+        cspStr = serializeCsp(null);
+      }
+    } else if (typeof csp === 'object' && csp !== null
+        && JSON.stringify(csp).length <= CSP_PARAM_MAX_LENGTH) {
+      cspStr = serializeCsp(csp);
+    } else {
+      cspStr = serializeCsp(null);
+    }
+    html = '<meta http-equiv="Content-Security-Policy" content="' +
+      cspStr.replace(/"/g, '&quot;') + '">' + html;
+
+    iframe.srcdoc = html;
+    iframe.style.width = '100%';
+    iframe.style.height = '100%';
+    container.appendChild(iframe);
+    innerIframe = iframe;
+  }
+
+  // Relay a message from host to inner iframe. The target origin stays '*':
+  // the inner view iframe is sandboxed without allow-same-origin, so it is
+  // opaque-origin and a tuple origin like location.origin would NEVER match it,
+  // silently dropping every host->guest frame.
+  function forwardToView(event) {
+    if (!innerIframe || !innerIframe.contentWindow) return;
+    innerIframe.contentWindow.postMessage(event.data, '*');
+  }
+
+  // Handle incoming messages
+  window.addEventListener('message', function(event) {
+    // Determine message source
+    var isFromHost = (event.source === window.parent);
+    var isFromView = innerIframe && (event.source === innerIframe.contentWindow);
+
+    if (!isFromHost && !isFromView) return; // Unknown source, drop
+
+    // Host messages must additionally come from this page's own origin.
+    // The inner view iframe is sandboxed without allow-same-origin, so it is
+    // opaque-origin and never matches. A cross-origin page that somehow gets
+    // window.parent as its source frame is dropped silently.
+    if (isFromHost && event.origin !== location.origin) return;
+
+    var data = event.data;
+    if (!data || typeof data !== 'object') return;
+
+    // View -> Host relay. The host is the page that framed us; under the
+    // same-origin deployment model (see the deviation note above) that parent is
+    // this page's own origin, so location.origin is the exact target.
+    if (isFromView) {
+      window.parent.postMessage(data, location.origin);
+      return;
+    }
+
+    // Host -> View messages
+    var method = data.method;
+
+    // sandbox-resource-ready: create the inner view iframe
+    if (method === 'ui/notifications/sandbox-resource-ready') {
+      var params = data.params || {};
+      var html = params.html;
+      if (!html) return;
+      createViewIframe(html, params.csp);
+      return;
+    }
+
+    // Everything else: forward to inner iframe
+    forwardToView(event);
+  });
+
+  // Send ready notification as soon as the page loads
+  if (document.readyState === 'complete') {
+    sendProxyReady();
+  } else {
+    window.addEventListener('load', sendProxyReady);
+  }
+})();
+</script>
+</body>
+</html>

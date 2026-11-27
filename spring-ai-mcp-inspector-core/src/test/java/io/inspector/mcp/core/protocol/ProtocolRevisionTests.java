@@ -58,6 +58,18 @@ class ProtocolRevisionTests {
 			assertThat(result.summary()).contains("2026-07-28").contains("2025-11-25").contains("unavailable");
 		}
 
+		@Test
+		@Story("2025-11-25 requested, legacy 2024-11-05 negotiated")
+		@Description("A current client against a legacy pre-baseline server: the older negotiated "
+				+ "revision still offers every method the client requested")
+		void check_requestedNewerThanLegacyNegotiated_reportsDowngrade() {
+			final CompatibilityResult result = ProtocolRevision.check(REV_2025_11_25, "2024-11-05");
+
+			assertThat(result.severity()).isEqualTo(Severity.DOWNGRADE);
+			assertThat(result.affectedMethods()).isEmpty();
+			assertThat(result.summary()).contains(REV_2025_11_25).contains("2024-11-05").contains("unavailable");
+		}
+
 	}
 
 	@Nested
@@ -74,6 +86,18 @@ class ProtocolRevisionTests {
 			assertThat(result.severity()).isEqualTo(Severity.INCOMPATIBLE);
 			assertThat(result.affectedMethods()).containsExactlyInAnyOrder(ALL_REMOVED_2026_07_28);
 			assertThat(result.summary()).contains("2025-11-25").contains("2026-07-28").contains("MethodNotFound");
+		}
+
+		@Test
+		@Story("Legacy 2024-11-05 requested, 2026-07-28 negotiated")
+		@Description("A legacy client against a current stateless server: every method removed by the "
+				+ "newer revisions is affected")
+		void check_legacyRequestedNewerNegotiated_reportsIncompatible() {
+			final CompatibilityResult result = ProtocolRevision.check("2024-11-05", REV_2026_07_28);
+
+			assertThat(result.severity()).isEqualTo(Severity.INCOMPATIBLE);
+			assertThat(result.affectedMethods()).containsExactlyInAnyOrder(ALL_REMOVED_2026_07_28);
+			assertThat(result.summary()).contains("2024-11-05").contains(REV_2026_07_28).contains("MethodNotFound");
 		}
 
 	}
@@ -95,6 +119,11 @@ class ProtocolRevisionTests {
 
 			assertThat(older.severity()).isEqualTo(Severity.OK);
 			assertThat(older.affectedMethods()).isEmpty();
+
+			final CompatibilityResult legacy = ProtocolRevision.check("2024-11-05", "2024-11-05");
+
+			assertThat(legacy.severity()).isEqualTo(Severity.OK);
+			assertThat(legacy.affectedMethods()).isEmpty();
 		}
 
 	}

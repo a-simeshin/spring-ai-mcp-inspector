@@ -120,6 +120,8 @@ const SelectItem = React.forwardRef<
 >(({ className, children, ...props }, ref) => (
   <SelectPrimitive.Item
     ref={ref}
+    /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): select-option-<value> anchor, was [role=option]. */
+    data-testid={props.value !== undefined ? `select-option-${props.value}` : undefined}
     className={cn(
       "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className,

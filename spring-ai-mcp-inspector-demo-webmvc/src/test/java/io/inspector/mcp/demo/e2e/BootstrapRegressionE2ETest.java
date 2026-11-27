@@ -202,7 +202,7 @@ class BootstrapRegressionE2ETest {
 		// InspectorUiIT.Tools#toolsListShowsAll16Tools — duplicating it
 		// here adds no new regression coverage for the bootstrap shape.
 		// Bootstrap regression net = "React mounts without exception".
-		SelenideElement sidebar = $(".bg-card.border-r").shouldBe(visible, Duration.ofSeconds(15));
+		SelenideElement sidebar = $("[data-testid=sidebar]").shouldBe(visible, Duration.ofSeconds(15));
 		sidebar.$(byText("Connect")).shouldBe(visible, Duration.ofSeconds(15));
 	}
 

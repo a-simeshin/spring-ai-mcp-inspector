@@ -18,6 +18,7 @@ package io.inspector.mcp.webmvc.controller;
 
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -28,11 +29,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
@@ -57,6 +60,7 @@ import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
+import io.inspector.mcp.core.client.InitializeResultCapturingTransport;
 import io.inspector.mcp.core.client.InspectorClientHandlers;
 import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
 import io.inspector.mcp.core.client.PendingServerRequests;
@@ -66,15 +70,19 @@ import io.inspector.mcp.core.dto.ConnectRequest;
 import io.inspector.mcp.core.dto.JsonRpcRelay;
 import io.inspector.mcp.core.dto.RootDto;
 import io.inspector.mcp.core.dto.RootsDto;
+import io.inspector.mcp.core.dto.SkillsExtensionSupport;
 import io.inspector.mcp.core.introspect.McpBeanIntrospector;
 import io.inspector.mcp.core.introspect.check.JsonSchemaCompatibilityChecker;
 import io.inspector.mcp.core.introspect.model.IntrospectionReport;
 import io.inspector.mcp.core.introspect.model.McpElementInfo;
 import io.inspector.mcp.core.introspect.model.SchemaWarning;
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
 import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthInitiateResponse;
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
+import io.inspector.mcp.core.proxy.ProxySession;
+import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.shutdown.ShutdownDrain;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
@@ -150,6 +158,13 @@ public class InspectorRestController implements ApplicationContextAware {
 
 	private final ConcurrentMap<String, SessionState> sessions = new ConcurrentHashMap<>();
 
+	/**
+	 * Proxy sessions opened by the SSE/stdio/streamable proxy controllers. The UI's
+	 * default connection mode goes through the proxy, so keep-alive lookups fall back to
+	 * these sessions when no REST session matches.
+	 */
+	private final ProxySessionRegistry proxySessions;
+
 	/** The context this bean belongs to; {@code null} when built outside a container. */
 	private ApplicationContext applicationContext;
 
@@ -161,6 +176,34 @@ public class InspectorRestController implements ApplicationContextAware {
 			final InspectorSseEmitterRegistry emitterRegistry, final InspectorServerPortHolder portHolder,
 			final JsonMapper objectMapper, final InspectorOAuthClient oauthClient,
 			@Value("${spring.application.name:mcp-server}") final String serverName) {
+		this(properties, transportDetector, loopbackFactory, authTokenProvider, emitterRegistry, portHolder,
+				objectMapper, oauthClient, serverName, null);
+	}
+
+	/**
+	 * Full constructor that also resolves keep-alive trackers for proxy sessions. Marked
+	 * {@code @Autowired} because the class is registered via {@code @Import} and carries
+	 * two constructors: without a single autowiring candidate Spring falls back to the
+	 * no-arg constructor, which does not exist, and application startup fails.
+	 * @param properties the inspector properties
+	 * @param transportDetector the transport detector
+	 * @param loopbackFactory the loopback MCP client factory
+	 * @param authTokenProvider the inspector auth token provider
+	 * @param emitterRegistry the SSE emitter registry
+	 * @param portHolder the server port holder
+	 * @param objectMapper the JSON object mapper
+	 * @param oauthClient the OAuth client
+	 * @param serverName the server name
+	 * @param proxySessions the proxy session registry, may be {@code null} when proxy
+	 * keep-alive tracking is not wired
+	 */
+	@Autowired
+	public InspectorRestController(final McpInspectorProperties properties, final TransportDetector transportDetector,
+			final LoopbackMcpClientFactory loopbackFactory, final InspectorAuthTokenProvider authTokenProvider,
+			final InspectorSseEmitterRegistry emitterRegistry, final InspectorServerPortHolder portHolder,
+			final JsonMapper objectMapper, final InspectorOAuthClient oauthClient,
+			@Value("${spring.application.name:mcp-server}") final String serverName,
+			final ProxySessionRegistry proxySessions) {
 		this.properties = properties;
 		this.transportDetector = transportDetector;
 		this.loopbackFactory = loopbackFactory;
@@ -170,6 +213,7 @@ public class InspectorRestController implements ApplicationContextAware {
 		this.objectMapper = objectMapper;
 		this.oauthClient = (oauthClient != null) ? oauthClient : new InspectorOAuthClient();
 		this.serverName = serverName;
+		this.proxySessions = proxySessions;
 	}
 
 	@GetMapping(path = "/config", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -221,14 +265,18 @@ public class InspectorRestController implements ApplicationContextAware {
 		// can route incoming server requests to the right SSE channel.
 		final String sessionId = UUID.randomUUID().toString();
 		final SessionStateHolder holder = new SessionStateHolder();
+		final KeepAliveTracker keepAliveTracker = new KeepAliveTracker();
+		keepAliveTracker.setListener(
+				(at) -> this.emitterRegistry.broadcast(sessionId, "mcp:keepalive-ping", Map.of("at", at.toString())));
 		final InspectorClientHandlers handlers = new InspectorClientHandlers(
 				(req) -> handleSamplingRequest(sessionId, holder, req),
 				(req) -> handleElicitationRequest(sessionId, holder, req),
 				(req) -> handleUrlElicitationRequest(sessionId, holder, req));
 
 		final McpSyncClient client;
+		final AtomicReference<InitializeResultCapturingTransport> initializeCapture = new AtomicReference<>();
 		try {
-			client = buildLoopbackClient(detected, handlers);
+			client = buildLoopbackClient(detected, handlers, initializeCapture, keepAliveTracker);
 		}
 		catch (final Exception ex) {
 			LOG.warn("Failed to build loopback MCP client for {}", type, ex);
@@ -255,7 +303,21 @@ public class InspectorRestController implements ApplicationContextAware {
 				.body(Map.of("error", "initialize() failed: " + ex.getMessage()));
 		}
 
-		final SessionState state = new SessionState(client);
+		final SessionState state = new SessionState(client, keepAliveTracker);
+		// SEP-2640: detect the skills extension from the raw initialize frame so the
+		// session model (and the UI's Skills tab gate) can see it. The canonical
+		// declaration lives in capabilities.extensions, which the SDK's typed
+		// ServerCapabilities drops, so detection reads the frame captured at the
+		// transport seam. Parsing tolerates absent or malformed declarations and never
+		// fails the connection.
+		try {
+			final InitializeResultCapturingTransport capture = initializeCapture.get();
+			final Map<String, Object> rawInitializeResult = (capture != null) ? capture.rawInitializeResult() : null;
+			state.skillsExtension(SkillsExtensionSupport.fromRawInitializeResult(rawInitializeResult));
+		}
+		catch (final Exception ex) {
+			LOG.debug("skills extension detection failed: {}", ex.toString());
+		}
 		holder.state = state;
 		this.sessions.put(sessionId, state);
 		if (this.closed) {
@@ -270,7 +332,11 @@ public class InspectorRestController implements ApplicationContextAware {
 			return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
 				.body(Map.of("error", "inspector is shutting down"));
 		}
-		return ResponseEntity.ok(Map.of("sessionId", sessionId));
+		final Map<String, Object> body = new LinkedHashMap<>();
+		body.put("sessionId", sessionId);
+		final SkillsExtensionSupport skills = state.skillsExtension();
+		body.put("skillsExtension", Map.of("supported", skills.supported(), "directoryRead", skills.directoryRead()));
+		return ResponseEntity.ok(body);
 	}
 
 	@PostMapping(path = "/jsonrpc", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -303,6 +369,39 @@ public class InspectorRestController implements ApplicationContextAware {
 	@GetMapping(path = "/events")
 	public SseEmitter events(@RequestParam("sessionId") final String sessionId) {
 		return this.emitterRegistry.register(sessionId);
+	}
+
+	/**
+	 * Returns the keep-alive state for the given session. The UI subscribes via SSE for
+	 * live updates and polls this endpoint for the initial snapshot.
+	 * @param sessionId the inspector session identifier
+	 * @return 200 with the current {@link KeepAliveTracker.State} as JSON, or 404 when
+	 * the session is unknown
+	 */
+	@GetMapping(path = "/keepalive", produces = MediaType.APPLICATION_JSON_VALUE)
+	public ResponseEntity<?> keepalive(@RequestParam("sessionId") final String sessionId) {
+		final SessionState state = this.sessions.get(sessionId);
+		KeepAliveTracker tracker = (state != null) ? state.keepAliveTracker() : null;
+		if (tracker == null && this.proxySessions != null) {
+			// No REST session: the id may belong to a UI connection relayed through
+			// the SSE/stdio/streamable proxy, the UI's default connection mode.
+			final ProxySession proxySession = this.proxySessions.get(sessionId);
+			tracker = (proxySession != null) ? proxySession.keepAliveTracker() : null;
+		}
+		if (state == null && tracker == null) {
+			return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", "Unknown sessionId: " + sessionId));
+		}
+		if (tracker == null) {
+			return ResponseEntity.ok(Map.of("observed", false));
+		}
+		final KeepAliveTracker.State snapshot = tracker.snapshot(Instant.now());
+		final Map<String, Object> body = new LinkedHashMap<>();
+		body.put("observed", snapshot.lastPingAt() != null);
+		body.put("lastPingAt", (snapshot.lastPingAt() != null) ? snapshot.lastPingAt().toString() : null);
+		body.put("recentPings", snapshot.recentPings().stream().map(Instant::toString).toList());
+		body.put("estimatedIntervalMillis", snapshot.estimatedIntervalMillis());
+		body.put("isStale", snapshot.isStale());
+		return ResponseEntity.ok(body);
 	}
 
 	@DeleteMapping(path = "/session/{id}")
@@ -497,12 +596,17 @@ public class InspectorRestController implements ApplicationContextAware {
 
 	/* ---------------- helpers ---------------- */
 
-	private McpSyncClient buildLoopbackClient(final DetectedTransport t, final InspectorClientHandlers handlers) {
+	private McpSyncClient buildLoopbackClient(final DetectedTransport t, final InspectorClientHandlers handlers,
+			final AtomicReference<InitializeResultCapturingTransport> initializeCapture,
+			final KeepAliveTracker keepAliveTracker) {
 		final int port = this.portHolder.port();
 		return switch (t.type()) {
-			case SSE -> this.loopbackFactory.forSse("127.0.0.1", port, t.endpoint(), handlers);
-			case STREAMABLE -> this.loopbackFactory.forStreamable("127.0.0.1", port, t.endpoint(), handlers);
-			case STATELESS -> this.loopbackFactory.forStateless("127.0.0.1", port, t.endpoint(), handlers);
+			case SSE -> this.loopbackFactory.forSse("127.0.0.1", port, t.endpoint(), handlers, initializeCapture,
+					keepAliveTracker);
+			case STREAMABLE -> this.loopbackFactory.forStreamable("127.0.0.1", port, t.endpoint(), handlers,
+					initializeCapture, keepAliveTracker);
+			case STATELESS ->
+				this.loopbackFactory.forStateless("127.0.0.1", port, t.endpoint(), handlers, initializeCapture);
 			case STDIO_NO_HTTP, UNKNOWN -> null;
 		};
 	}

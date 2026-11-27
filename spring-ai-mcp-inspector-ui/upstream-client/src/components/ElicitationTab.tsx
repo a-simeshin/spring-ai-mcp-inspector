@@ -32,6 +32,12 @@ export type PendingElicitationRequest = {
   id: number;
   request: ElicitationRequestData;
   originatingTab?: string;
+  /** [spring-ai-mcp-inspector PATCH] Issue #298: the tools/call this card is */
+  /** correlated with, recorded at arrival while that call was still waiting. */
+  toolCallId?: number;
+  /** [spring-ai-mcp-inspector PATCH] Issue #298: the correlated tools/call */
+  /** has settled, so the user's answer can no longer be delivered. */
+  expired?: boolean;
 };
 
 export type Props = {

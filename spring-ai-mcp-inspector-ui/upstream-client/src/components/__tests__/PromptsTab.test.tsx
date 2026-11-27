@@ -1,0 +1,465 @@
+// [spring-ai-mcp-inspector PATCH] Client-side required/type validation for
+// prompt forms. The Get Prompt button is derived-disabled on every render
+// via validatePromptArgs(), and submit is blocked by validateAll().
+// fieldErrors state is only for showing hints after blur/submit.
+// [spring-ai-mcp-inspector PATCH] Component tests for PromptsTab validation
+// (see NOTICE.d/param-validation.txt) and for the selected prompt row
+// marker (see NOTICE.d/prompt-selected-row.txt).
+import { render, screen, fireEvent, act } from "@testing-library/react";
+import "@testing-library/jest-dom";
+import { describe, it, jest } from "@jest/globals";
+import { useState } from "react";
+import PromptsTab, { Prompt } from "../PromptsTab";
+import { Tabs } from "../ui/tabs";
+
+// Mock Combobox to render a simple input for testing
+jest.mock("@/components/ui/combobox", () => ({
+  Combobox: ({
+    value,
+    onChange,
+    onInputChange,
+    onBlur,
+    id,
+    placeholder,
+    "aria-invalid": ariaInvalid,
+    "aria-describedby": ariaDescribedby,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+    onInputChange: (value: string) => void;
+    onBlur?: () => void;
+    id?: string;
+    placeholder?: string;
+    "aria-invalid"?: boolean;
+    "aria-describedby"?: string;
+  }) => (
+    <input
+      data-testid={`combobox-${id}`}
+      value={value}
+      onChange={(e) => {
+        onChange(e.target.value);
+        onInputChange(e.target.value);
+      }}
+      onBlur={onBlur}
+      placeholder={placeholder}
+      aria-invalid={ariaInvalid}
+      aria-describedby={ariaDescribedby}
+    />
+  ),
+}));
+
+describe("PromptsTab", () => {
+  const mockPrompts: Prompt[] = [
+    {
+      name: "greeting",
+      description: "Generates a greeting",
+      arguments: [
+        { name: "name", description: "Name to greet", required: true },
+        { name: "suffix", description: "Optional suffix", required: false },
+      ],
+    },
+    {
+      name: "echo",
+      description: "Echoes the input",
+      arguments: [],
+    },
+  ];
+
+  const defaultProps = {
+    prompts: mockPrompts,
+    listPrompts: jest.fn(),
+    clearPrompts: jest.fn(),
+    getPrompt: jest.fn(),
+    selectedPrompt: null,
+    setSelectedPrompt: jest.fn(),
+    handleCompletion: jest.fn(async () => []),
+    completionsSupported: true,
+    promptContent: "",
+    nextCursor: "",
+    error: null,
+  };
+
+  const renderPromptsTab = (props = {}) => {
+    return render(
+      <Tabs defaultValue="prompts">
+        <PromptsTab {...defaultProps} {...props} />
+      </Tabs>,
+    );
+  };
+
+  it("should disable Get Prompt on untouched form with required argument", () => {
+    renderPromptsTab({ selectedPrompt: mockPrompts[0] });
+
+    const getPromptButton = screen.getByRole("button", {
+      name: /get prompt/i,
+    });
+    expect(getPromptButton).toBeDisabled();
+  });
+
+  it("should enable Get Prompt after filling required argument", async () => {
+    const mockGetPrompt = jest.fn();
+    renderPromptsTab({
+      selectedPrompt: mockPrompts[0],
+      getPrompt: mockGetPrompt,
+    });
+
+    const getPromptButton = screen.getByRole("button", {
+      name: /get prompt/i,
+    });
+    expect(getPromptButton).toBeDisabled();
+
+    // Fill the required argument via the mocked combobox input
+    const nameInput = screen.getByTestId("combobox-name");
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "World" } });
+    });
+
+    expect(getPromptButton).not.toBeDisabled();
+
+    await act(async () => {
+      fireEvent.click(getPromptButton);
+    });
+
+    expect(mockGetPrompt).toHaveBeenCalledWith(
+      mockPrompts[0].name,
+      { name: "World" },
+    );
+  });
+
+  it("should keep Get Prompt disabled when only optional argument is filled", async () => {
+    renderPromptsTab({ selectedPrompt: mockPrompts[0] });
+
+    const getPromptButton = screen.getByRole("button", {
+      name: /get prompt/i,
+    });
+    expect(getPromptButton).toBeDisabled();
+
+    // Fill only the optional argument (suffix)
+    const suffixInput = screen.getByTestId("combobox-suffix");
+    await act(async () => {
+      fireEvent.change(suffixInput, { target: { value: "!!" } });
+    });
+
+    expect(getPromptButton).toBeDisabled();
+  });
+
+  it("should enable Get Prompt for prompts without required arguments", () => {
+    const mockGetPrompt = jest.fn();
+    renderPromptsTab({
+      selectedPrompt: mockPrompts[1],
+      getPrompt: mockGetPrompt,
+    });
+
+    const getPromptButton = screen.getByRole("button", {
+      name: /get prompt/i,
+    });
+    expect(getPromptButton).not.toBeDisabled();
+  });
+
+  it("should disable Get Prompt when required argument is cleared", async () => {
+    renderPromptsTab({ selectedPrompt: mockPrompts[0] });
+
+    const getPromptButton = screen.getByRole("button", {
+      name: /get prompt/i,
+    });
+    expect(getPromptButton).toBeDisabled();
+
+    const nameInput = screen.getByTestId("combobox-name");
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "World" } });
+    });
+
+    expect(getPromptButton).not.toBeDisabled();
+
+    // Clear the field
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "" } });
+    });
+
+    expect(getPromptButton).toBeDisabled();
+  });
+
+  it("should disable Get Prompt when required argument is whitespace only", async () => {
+    renderPromptsTab({ selectedPrompt: mockPrompts[0] });
+
+    const getPromptButton = screen.getByRole("button", {
+      name: /get prompt/i,
+    });
+
+    const nameInput = screen.getByTestId("combobox-name");
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "   " } });
+    });
+
+    expect(getPromptButton).toBeDisabled();
+  });
+
+  it("should not send a cleared optional argument in the payload", async () => {
+    const mockGetPrompt = jest.fn();
+    renderPromptsTab({
+      selectedPrompt: mockPrompts[0],
+      getPrompt: mockGetPrompt,
+    });
+
+    const nameInput = screen.getByTestId("combobox-name");
+    const suffixInput = screen.getByTestId("combobox-suffix");
+
+    // Type into the optional argument, then clear it: the stale "" left in
+    // state must not reach the prompts/get payload.
+    await act(async () => {
+      fireEvent.change(suffixInput, { target: { value: "!!" } });
+    });
+    await act(async () => {
+      fireEvent.change(suffixInput, { target: { value: "" } });
+    });
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "World" } });
+    });
+
+    const getPromptButton = screen.getByRole("button", {
+      name: /get prompt/i,
+    });
+    await act(async () => {
+      fireEvent.click(getPromptButton);
+    });
+
+    expect(mockGetPrompt).toHaveBeenCalledWith(mockPrompts[0].name, {
+      name: "World",
+    });
+  });
+
+  it("should not send a whitespace-only optional argument in the payload", async () => {
+    const mockGetPrompt = jest.fn();
+    renderPromptsTab({
+      selectedPrompt: mockPrompts[0],
+      getPrompt: mockGetPrompt,
+    });
+
+    const suffixInput = screen.getByTestId("combobox-suffix");
+    await act(async () => {
+      fireEvent.change(suffixInput, { target: { value: "   " } });
+    });
+    const nameInput = screen.getByTestId("combobox-name");
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "World" } });
+    });
+
+    const getPromptButton = screen.getByRole("button", {
+      name: /get prompt/i,
+    });
+    await act(async () => {
+      fireEvent.click(getPromptButton);
+    });
+
+    expect(mockGetPrompt).toHaveBeenCalledWith(mockPrompts[0].name, {
+      name: "World",
+    });
+  });
+
+  it("should send a filled optional argument in the payload", async () => {
+    const mockGetPrompt = jest.fn();
+    renderPromptsTab({
+      selectedPrompt: mockPrompts[0],
+      getPrompt: mockGetPrompt,
+    });
+
+    const nameInput = screen.getByTestId("combobox-name");
+    const suffixInput = screen.getByTestId("combobox-suffix");
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "World" } });
+    });
+    await act(async () => {
+      fireEvent.change(suffixInput, { target: { value: "!!" } });
+    });
+
+    const getPromptButton = screen.getByRole("button", {
+      name: /get prompt/i,
+    });
+    await act(async () => {
+      fireEvent.click(getPromptButton);
+    });
+
+    expect(mockGetPrompt).toHaveBeenCalledWith(mockPrompts[0].name, {
+      name: "World",
+      suffix: "!!",
+    });
+
+    // Submitting must not disturb the form: both fields keep showing what
+    // the user typed (form state untouched, see
+    // NOTICE.d/prompt-optional-args-filter.txt).
+    expect(nameInput).toHaveValue("World");
+    expect(suffixInput).toHaveValue("!!");
+  });
+
+  it("should show required field error on blur when required argument is empty", async () => {
+    renderPromptsTab({ selectedPrompt: mockPrompts[0] });
+
+    // Focus on the required name field
+    const nameInput = screen.getByTestId("combobox-name");
+    await act(async () => {
+      fireEvent.focus(nameInput);
+    });
+
+    // Blur without filling - should trigger validation error
+    await act(async () => {
+      fireEvent.blur(nameInput);
+    });
+
+    // Verify error message appears
+    expect(screen.getByText("This field is required")).toBeInTheDocument();
+  });
+
+  it("should show required field error on blur when required argument is whitespace only", async () => {
+    renderPromptsTab({ selectedPrompt: mockPrompts[0] });
+
+    // A whitespace-only value must behave exactly like an empty one: fill
+    // the required name field with spaces, then blur to trigger validation.
+    const nameInput = screen.getByTestId("combobox-name");
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "   " } });
+    });
+
+    await act(async () => {
+      fireEvent.blur(nameInput);
+    });
+
+    // The per-field hint appears and the combobox is marked invalid.
+    expect(screen.getByText("This field is required")).toBeInTheDocument();
+    expect(nameInput).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("should set aria-invalid and aria-describedby on combobox after blur", async () => {
+    renderPromptsTab({ selectedPrompt: mockPrompts[0] });
+
+    const nameInput = screen.getByTestId("combobox-name");
+
+    // Blur empty required field
+    await act(async () => {
+      fireEvent.blur(nameInput);
+    });
+
+    // Verify aria-invalid is set to true
+    expect(nameInput).toHaveAttribute("aria-invalid", "true");
+
+    // Verify aria-describedby points to the error element
+    const describedBy = nameInput.getAttribute("aria-describedby");
+    expect(describedBy).toBe("name-error");
+
+    // Verify the error element exists with the expected id
+    const errorEl = screen.getByRole("alert");
+    expect(errorEl).toHaveAttribute("id", "name-error");
+    expect(errorEl).toHaveTextContent("This field is required");
+  });
+
+  it("should clear field error on blur when required argument is filled", async () => {
+    renderPromptsTab({ selectedPrompt: mockPrompts[0] });
+
+    const nameInput = screen.getByTestId("combobox-name");
+
+    // Blur empty first to trigger error
+    await act(async () => {
+      fireEvent.blur(nameInput);
+    });
+
+    // Verify error is shown
+    expect(screen.getByText("This field is required")).toBeInTheDocument();
+
+    // Fill the field
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: "World" } });
+    });
+
+    // Blur again - error should clear since field is now filled
+    await act(async () => {
+      fireEvent.blur(nameInput);
+    });
+
+    // Verify error message is gone
+    expect(
+      screen.queryByText("This field is required"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("should highlight the clicked prompt row as selected", async () => {
+    // Stateful harness: clicking a row drives real selectedPrompt state,
+    // so the isSelected wiring into ListPane is exercised end to end.
+    const Harness = () => {
+      const [selected, setSelected] = useState<Prompt | null>(null);
+      return (
+        <Tabs defaultValue="prompts">
+          <PromptsTab
+            {...defaultProps}
+            selectedPrompt={selected}
+            setSelectedPrompt={setSelected}
+          />
+        </Tabs>
+      );
+    };
+    render(<Harness />);
+
+    const greetingRow = screen
+      .getByText("greeting")
+      .closest("[data-testid^='tool-row-']") as HTMLElement;
+    await act(async () => {
+      fireEvent.click(greetingRow);
+    });
+
+    // The clicked row carries the selection marker
+    expect(greetingRow).toHaveClass("bg-muted");
+    // The other prompt row does not
+    const echoRow = screen
+      .getByText("echo")
+      .closest("[data-testid^='tool-row-']") as HTMLElement;
+    expect(echoRow).not.toHaveClass("bg-muted");
+  });
+
+  it("should keep the selected row highlighted when re-listing returns fresh prompt objects", async () => {
+    // Live-app contract (App.tsx): a re-list replaces the prompt collection
+    // with fresh objects from the server response (setPrompts(response.prompts))
+    // while selectedPrompt state survives the re-list. The isSelected wiring
+    // must therefore match by name, not by reference, or every re-list would
+    // silently drop the marker from the row the user picked.
+    const Harness = () => {
+      const [prompts, setPrompts] = useState<Prompt[]>(mockPrompts);
+      const [selected, setSelected] = useState<Prompt | null>(null);
+      return (
+        <Tabs defaultValue="prompts">
+          <PromptsTab
+            {...defaultProps}
+            prompts={prompts}
+            selectedPrompt={selected}
+            setSelectedPrompt={setSelected}
+            nextCursor="page-2"
+            listPrompts={() => {
+              // Same names, fresh objects, as the server response does
+              setPrompts(mockPrompts.map((p) => ({ ...p })));
+            }}
+          />
+        </Tabs>
+      );
+    };
+    render(<Harness />);
+
+    // Row testids are stable: same names, same order, keyed by index
+    const greetingRow = screen.getByTestId("tool-row-0");
+    const echoRow = screen.getByTestId("tool-row-1");
+    await act(async () => {
+      fireEvent.click(greetingRow);
+    });
+    expect(greetingRow).toHaveClass("bg-muted");
+    expect(echoRow).not.toHaveClass("bg-muted");
+
+    // Re-list via the pane button, as the app's List button does
+    const listButton = screen.getByRole("button", {
+      name: /list more prompts/i,
+    });
+    await act(async () => {
+      fireEvent.click(listButton);
+    });
+
+    // The collection now holds fresh objects: the marker must stay on the
+    // selected row and stay off the others
+    expect(screen.getByTestId("tool-row-0")).toHaveClass("bg-muted");
+    expect(screen.getByTestId("tool-row-1")).not.toHaveClass("bg-muted");
+  });
+});

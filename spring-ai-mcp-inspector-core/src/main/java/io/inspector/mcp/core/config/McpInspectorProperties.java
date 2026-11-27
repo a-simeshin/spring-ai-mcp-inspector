@@ -23,6 +23,8 @@ import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.NestedConfigurationProperty;
 
+import io.inspector.mcp.core.proxy.ProxyConnectionBudgets;
+
 /**
  * Configuration properties for the Spring AI MCP Inspector.
  *
@@ -90,6 +92,17 @@ public class McpInspectorProperties {
 	/** Timeline configuration. */
 	@NestedConfigurationProperty
 	private Timeline timeline = new Timeline();
+
+	/**
+	 * Proxy relay behaviour. Bound under {@code spring.ai.mcp.inspector.proxy}.
+	 */
+	private Proxy proxy = new Proxy();
+
+	/**
+	 * Whether upstream liveness probing is enabled for proxied sessions (any transport).
+	 * Defaults to {@code true}.
+	 */
+	private boolean upstreamLivenessProbeEnabled = true;
 
 	public boolean isEnabled() {
 		return this.enabled;
@@ -193,6 +206,22 @@ public class McpInspectorProperties {
 		this.timeline = (timeline != null) ? timeline : new Timeline();
 	}
 
+	public Proxy getProxy() {
+		return this.proxy;
+	}
+
+	public void setProxy(final Proxy proxy) {
+		this.proxy = (proxy != null) ? proxy : new Proxy();
+	}
+
+	public boolean isUpstreamLivenessProbeEnabled() {
+		return this.upstreamLivenessProbeEnabled;
+	}
+
+	public void setUpstreamLivenessProbeEnabled(final boolean upstreamLivenessProbeEnabled) {
+		this.upstreamLivenessProbeEnabled = upstreamLivenessProbeEnabled;
+	}
+
 	/**
 	 * Context-shutdown behaviour. Bound under {@code spring.ai.mcp.inspector.shutdown}.
 	 */
@@ -227,6 +256,41 @@ public class McpInspectorProperties {
 	}
 
 	/**
+	 * Proxy relay tuning. Bound under {@code spring.ai.mcp.inspector.proxy}.
+	 */
+	public static class Proxy {
+
+		/**
+		 * How many spare keep-alive connections the proxy opens to the upstream at
+		 * session open, using concurrent JSON-RPC pings, before the handshake gate
+		 * releases the browser's frames. {@code 0} disables the warm-up.
+		 *
+		 * <p>
+		 * Defaults to {@code 10}. Measured on issue #325: on a WebFlux MCP server a
+		 * synchronous tool blocks its event loop for the tool's whole duration, and the
+		 * server's TCP acceptor shares those loops, so upstream POST connects arriving
+		 * after the first tool started are accepted only as loops free up, one accept
+		 * wave per tool duration. Frames trickled that way then ride one keep-alive
+		 * connection, pinning the burst to a single event loop (the strictly serial
+		 * ladder the concurrent-call IT caught). Ten 2-second calls measured 8.2s locally
+		 * and 14-20s on a two-core runner; warming connections ahead of the burst lets
+		 * every call reuse a loop-spread pooled connection with no new accepts and drops
+		 * the same burst to about 6s. The count should cover the typical parallel tool
+		 * fan-out of one browser session.
+		 */
+		private int upstreamWarmConnections = 10;
+
+		public int getUpstreamWarmConnections() {
+			return this.upstreamWarmConnections;
+		}
+
+		public void setUpstreamWarmConnections(final int upstreamWarmConnections) {
+			this.upstreamWarmConnections = upstreamWarmConnections;
+		}
+
+	}
+
+	/**
 	 * Tunable timeouts for the proxy backend. All values accept Spring's relaxed
 	 * {@link Duration} syntax — e.g. {@code 30s}, {@code 2m}, {@code 500ms} — and fall
 	 * back to upstream-compatible defaults when unset.
@@ -235,6 +299,22 @@ public class McpInspectorProperties {
 	 * Bound under {@code spring.ai.mcp.inspector.timeouts}.
 	 */
 	public static class Timeouts {
+
+		/**
+		 * Interval between upstream liveness probes for proxied sessions. Default 10s.
+		 */
+		private Duration upstreamProbeInterval = Duration.ofSeconds(10);
+
+		/**
+		 * How long a probe answer stays filtered from the browser stream. Default 5s.
+		 */
+		private Duration upstreamProbeTimeout = Duration.ofSeconds(5);
+
+		/**
+		 * How long a proxied session may relay no traffic in either direction before the
+		 * first probe is sent. Default 15s.
+		 */
+		private Duration upstreamProbeIdleThreshold = Duration.ofSeconds(15);
 
 		/**
 		 * Inactivity budget for a proxied SSE / streamable-HTTP browser session (servlet
@@ -248,6 +328,15 @@ public class McpInspectorProperties {
 		 * an upstream streamable-HTTP server before returning {@code 504}. Default 30s.
 		 */
 		private Duration streamableRequest = Duration.ofSeconds(30);
+
+		/**
+		 * Wall-clock budget for a single outbound SSE transport call (the handshake
+		 * {@code GET} response and the acceptance of a message {@code POST}). The SDK
+		 * never times out a silent upstream on its own, so without this a relayed frame
+		 * to a dead-but-connected server would pin the browser stream open until the
+		 * session timeout. Default 10s.
+		 */
+		private Duration sseRequest = Duration.ofSeconds(10);
 
 		/** Connect timeout for the outbound {@code /fetch} HTTP client. Default 10s. */
 		private Duration fetchConnect = Duration.ofSeconds(10);
@@ -269,6 +358,35 @@ public class McpInspectorProperties {
 		 */
 		private Duration sessionReaper = Duration.ofMinutes(30);
 
+		/**
+		 * Wall-clock budget for the SSE preflight probe the proxy sends before the real
+		 * SSE handshake connect. Generous servers that take a moment to answer the probe
+		 * still connect; only a probe that never answers fails. Default 10s.
+		 */
+		private Duration ssePreflight = Duration.ofSeconds(10);
+
+		/**
+		 * Per-phase budget applied to the proxy session bring-up: the
+		 * {@link io.inspector.mcp.core.proxy.McpProxy} start and the first JSON-RPC
+		 * {@code initialize} handshake. Default 30s, matching upstream
+		 * {@code modelcontextprotocol/inspector} PR #2362.
+		 *
+		 * <p>
+		 * The two phase timers start nearly together ({@code start} is subscribed
+		 * asynchronously), so the phases can overlap; the budget is not a shared total
+		 * deadline. Overridable per connect attempt via the {@code connectionTimeout}
+		 * query parameter (whole seconds, 1..600) on the proxy endpoints.
+		 *
+		 * <p>
+		 * For a new streamable session this budget, not {@link #streamableRequest},
+		 * bounds the wait for the first POST (the {@code initialize} handshake);
+		 * {@code streamableRequest} keeps bounding the later frames of an existing
+		 * session. Configured values are range-checked like the parameter: a null or
+		 * non-positive duration, or one above the shared 600 s cap, is rejected when
+		 * bound.
+		 */
+		private Duration connection = Duration.ofSeconds(30);
+
 		public Duration getSseSession() {
 			return this.sseSession;
 		}
@@ -283,6 +401,14 @@ public class McpInspectorProperties {
 
 		public void setStreamableRequest(final Duration streamableRequest) {
 			this.streamableRequest = streamableRequest;
+		}
+
+		public Duration getSseRequest() {
+			return this.sseRequest;
+		}
+
+		public void setSseRequest(final Duration sseRequest) {
+			this.sseRequest = sseRequest;
 		}
 
 		public Duration getFetchConnect() {
@@ -317,6 +443,51 @@ public class McpInspectorProperties {
 			this.sessionReaper = sessionReaper;
 		}
 
+		public Duration getSsePreflight() {
+			return this.ssePreflight;
+		}
+
+		public void setSsePreflight(final Duration ssePreflight) {
+			this.ssePreflight = ssePreflight;
+		}
+
+		public Duration getConnection() {
+			return this.connection;
+		}
+
+		public void setConnection(final Duration connection) {
+			if (connection == null || connection.isNegative() || connection.isZero()
+					|| connection.compareTo(Duration.ofSeconds(ProxyConnectionBudgets.MAX_SECONDS)) > 0) {
+				throw new IllegalArgumentException("timeouts.connection must be a positive duration of at most "
+						+ ProxyConnectionBudgets.MAX_SECONDS + " seconds, got " + connection);
+			}
+			this.connection = connection;
+		}
+
+		public Duration getUpstreamProbeInterval() {
+			return this.upstreamProbeInterval;
+		}
+
+		public void setUpstreamProbeInterval(final Duration upstreamProbeInterval) {
+			this.upstreamProbeInterval = upstreamProbeInterval;
+		}
+
+		public Duration getUpstreamProbeTimeout() {
+			return this.upstreamProbeTimeout;
+		}
+
+		public void setUpstreamProbeTimeout(final Duration upstreamProbeTimeout) {
+			this.upstreamProbeTimeout = upstreamProbeTimeout;
+		}
+
+		public Duration getUpstreamProbeIdleThreshold() {
+			return this.upstreamProbeIdleThreshold;
+		}
+
+		public void setUpstreamProbeIdleThreshold(final Duration upstreamProbeIdleThreshold) {
+			this.upstreamProbeIdleThreshold = upstreamProbeIdleThreshold;
+		}
+
 	}
 
 	/**
@@ -339,6 +510,16 @@ public class McpInspectorProperties {
 		 * recorder entirely; only has an effect while {@link #enabled} is {@code true}.
 		 */
 		private boolean trafficEnabled = true;
+
+		/**
+		 * Whether client-side MCP traffic capture is enabled. When true, a
+		 * McpClientTrafficRecorder bean, a ClientConnectionRegistry bean and a
+		 * RecordingTransportPostProcessor are created, wrapping every
+		 * NamedClientMcpTransport bean with a recording decorator that captures outgoing
+		 * client traffic into the timeline. Defaults to false (opt-in). Only has an
+		 * effect while enabled is true.
+		 */
+		private boolean clientCaptureEnabled = false;
 
 		/**
 		 * Whether Logback appender bridge is enabled. Defaults to {@code true} when
@@ -369,6 +550,13 @@ public class McpInspectorProperties {
 		 */
 		private boolean appenderDiscardingPolicy = true;
 
+		/**
+		 * The exception-leak detector. When enabled (the default), the timeline query
+		 * endpoints annotate error tool results with a {@code _leak} marker when the
+		 * error text matches a windowed application-log exception (issue #251).
+		 */
+		private LeakDetector leakDetector = new LeakDetector();
+
 		public boolean isEnabled() {
 			return this.enabled;
 		}
@@ -383,6 +571,14 @@ public class McpInspectorProperties {
 
 		public void setTrafficEnabled(final boolean trafficEnabled) {
 			this.trafficEnabled = trafficEnabled;
+		}
+
+		public boolean isClientCaptureEnabled() {
+			return this.clientCaptureEnabled;
+		}
+
+		public void setClientCaptureEnabled(final boolean clientCaptureEnabled) {
+			this.clientCaptureEnabled = clientCaptureEnabled;
 		}
 
 		public boolean isLogsEnabled() {
@@ -423,6 +619,37 @@ public class McpInspectorProperties {
 
 		public void setAppenderDiscardingPolicy(final boolean appenderDiscardingPolicy) {
 			this.appenderDiscardingPolicy = appenderDiscardingPolicy;
+		}
+
+		public LeakDetector getLeakDetector() {
+			return this.leakDetector;
+		}
+
+		public void setLeakDetector(final LeakDetector leakDetector) {
+			this.leakDetector = leakDetector;
+		}
+
+		/**
+		 * Exception-leak detector configuration. Bound under
+		 * {@code spring.ai.mcp.inspector.timeline.leak-detector}.
+		 */
+		public static class LeakDetector {
+
+			/**
+			 * Whether the exception-leak detector is enabled. Default {@code true}: the
+			 * detector is active whenever the timeline itself is enabled, and disabling
+			 * it only skips the {@code _leak} annotation, never the timeline itself.
+			 */
+			private boolean enabled = true;
+
+			public boolean isEnabled() {
+				return this.enabled;
+			}
+
+			public void setEnabled(final boolean enabled) {
+				this.enabled = enabled;
+			}
+
 		}
 
 	}

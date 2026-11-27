@@ -11,6 +11,7 @@ package io.inspector.mcp.demo.prompts;
 
 import java.util.List;
 
+import io.modelcontextprotocol.spec.McpError;
 import io.modelcontextprotocol.spec.McpSchema.GetPromptResult;
 import io.modelcontextprotocol.spec.McpSchema.PromptMessage;
 import io.modelcontextprotocol.spec.McpSchema.Role;
@@ -68,6 +69,18 @@ public class DemoAdvancedPromptsProvider {
 		String body = (detail == null || detail.isBlank()) ? title : title + " — " + detail;
 		return new GetPromptResult("Description for " + title,
 				List.of(new PromptMessage(Role.ASSISTANT, new TextContent(body))));
+	}
+
+	/**
+	 * Prompt that always fails with the invalid-params JSON-RPC error ({@code -32602}).
+	 * Lets the inspector exercise the destructive error alert and the "prompts/get
+	 * rejection is handled" guarantee (no uncaught unhandledrejection in the browser
+	 * console) without a custom server.
+	 */
+	@McpPrompt(name = "alwaysFails", description = "Always returns an MCP error (-32602), for error-path demos")
+	public GetPromptResult alwaysFails(
+			@McpArg(name = "text", description = "Any text; the call always fails", required = true) String text) {
+		throw McpError.builder(-32602).message("alwaysFails: text must not be null").build();
 	}
 
 	/**

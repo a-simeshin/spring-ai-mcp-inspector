@@ -170,15 +170,30 @@ const ResourcesTab = ({
   const handleReadTemplateResource = () => {
     if (selectedTemplate) {
       const uri = fillTemplate(selectedTemplate.uriTemplate, templateValues);
-      readResource(uri);
+      // [spring-ai-mcp-inspector PATCH]: sync the selection before the
+      // read, mirroring the row-click order. App.readResource guards the
+      // cached pane commit by the live selected uri (#344); reading
+      // first would make that guard judge by the previous selection and
+      // skip the pane commit for a cached template read.
       // We don't have the full Resource object here, so we create a partial one
       setSelectedResource({ uri, name: uri } as Resource);
+      readResource(uri);
     }
   };
 
   return (
     <TabsContent value="resources">
-      <div className="grid grid-cols-3 gap-4">
+      {/* [spring-ai-mcp-inspector PATCH] Resources content grid (#296):
+          upstream hard-codes three side-by-side columns, which squeeze
+          the list, templates and preview panes to ~110px slivers at a
+          375px phone. Stack the panes into one full-width column below
+          the `md` (768px) breakpoint; the desktop three-column grid is
+          unchanged at and above it. The testid anchors Selenide
+          geometry assertions. */}
+      <div
+        className="grid grid-cols-1 gap-4 md:grid-cols-3"
+        data-testid="resources-content-grid"
+      >
         <ListPane
           items={resources}
           listItems={listResources}
@@ -194,13 +209,14 @@ const ResourcesTab = ({
             readResource(resource.uri);
             setSelectedTemplate(null);
           }}
+          /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): both list renderers below carry a row-name anchor on the name span, was .cursor-pointer .truncate. */
           renderItem={(resource) => (
             <div className="flex items-center w-full">
               <IconDisplay icons={(resource as WithIcons).icons} size="sm" />
               {!(resource as WithIcons).icons && (
                 <FileText className="w-4 h-4 mr-2 flex-shrink-0 text-gray-500" />
               )}
-              <span className="flex-1 truncate" title={resource.uri.toString()}>
+              <span data-testid="row-name" className="flex-1 truncate" title={resource.uri.toString()}>
                 {resource.name}
               </span>
               <ChevronRight className="w-4 h-4 flex-shrink-0 text-gray-400" />
@@ -233,7 +249,7 @@ const ResourcesTab = ({
               {!(template as WithIcons).icons && (
                 <FileText className="w-4 h-4 mr-2 flex-shrink-0 text-gray-500" />
               )}
-              <span className="flex-1 truncate" title={template.uriTemplate}>
+              <span data-testid="row-name" className="flex-1 truncate" title={template.uriTemplate}>
                 {template.name}
               </span>
               <ChevronRight className="w-4 h-4 flex-shrink-0 text-gray-400" />

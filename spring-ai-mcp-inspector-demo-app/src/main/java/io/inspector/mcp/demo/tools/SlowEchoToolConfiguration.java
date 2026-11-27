@@ -17,8 +17,12 @@ package io.inspector.mcp.demo.tools;
 
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -55,6 +59,21 @@ public class SlowEchoToolConfiguration {
 			}
 			""";
 
+	/** Currently executing {@code slowEcho} calls (server-side overlap witness). */
+	private static final AtomicInteger IN_FLIGHT = new AtomicInteger();
+
+	/** Peak of {@link #IN_FLIGHT} since the last {@link #resetInFlightWitness()} call. */
+	private static final AtomicInteger MAX_IN_FLIGHT = new AtomicInteger();
+
+	/**
+	 * {@code slowEcho} executions observed on a non-blocking thread ({@code
+	 * Schedulers#isInNonBlockingThread()}, i.e. a Netty event loop). On the reactive
+	 * stack a tool body running there blocks the loop the request came in on, which is
+	 * the issue #377 defect: {@code immediateExecution} must stay servlet-only so the SDK
+	 * keeps offloading sync tool bodies to boundedElastic.
+	 */
+	private static final AtomicInteger LOOP_THREAD_EXECUTIONS = new AtomicInteger();
+
 	private final ObjectMapper objectMapper = new ObjectMapper();
 
 	@Bean
@@ -72,28 +91,75 @@ public class SlowEchoToolConfiguration {
 
 			@Override
 			public String call(String toolInput) {
-				try {
-					Thread.sleep(2000L);
-				}
-				catch (InterruptedException e) {
-					Thread.currentThread().interrupt();
-					throw new RuntimeException("slowEcho interrupted", e);
+				IN_FLIGHT.incrementAndGet();
+				MAX_IN_FLIGHT.accumulateAndGet(IN_FLIGHT.get(), Math::max);
+				if (Schedulers.isInNonBlockingThread()) {
+					LOOP_THREAD_EXECUTIONS.incrementAndGet();
 				}
 				try {
-					JsonNode node = SlowEchoToolConfiguration.this.objectMapper.readTree(toolInput);
-					// Mirrors the historical annotation-based behavior: the text
-					// parameter cannot be bound without the -parameters compile flag,
-					// so concurrent/stress ITs invoke slowEcho with empty arguments and
-					// rely on the server-side sleep only. Missing text is not an error:
-					// return null exactly like the unbound @McpTool method used to.
-					return node.has("text") ? node.get("text").asText() : null;
+					try {
+						Thread.sleep(2000L);
+					}
+					catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+						throw new RuntimeException("slowEcho interrupted", e);
+					}
+					try {
+						JsonNode node = SlowEchoToolConfiguration.this.objectMapper.readTree(toolInput);
+						// Mirrors the historical annotation-based behavior: the text
+						// parameter cannot be bound without the -parameters compile flag,
+						// so concurrent/stress ITs invoke slowEcho with empty arguments
+						// and
+						// rely on the server-side sleep only. Missing text is not an
+						// error:
+						// return null exactly like the unbound @McpTool method used to.
+						return node.has("text") ? node.get("text").asText() : null;
+					}
+					catch (tools.jackson.core.JacksonException e) {
+						// Unparseable input still must not break the sleep-based
+						// contract.
+						return null;
+					}
 				}
-				catch (tools.jackson.core.JacksonException e) {
-					// Unparseable input still must not break the sleep-based contract.
-					return null;
+				finally {
+					IN_FLIGHT.decrementAndGet();
 				}
 			}
 		};
+
+	}
+
+	/**
+	 * Resets the in-flight witness before a measured burst (concurrent-call IT, issue
+	 * #325).
+	 */
+	public static void resetInFlightWitness() {
+		IN_FLIGHT.set(0);
+		MAX_IN_FLIGHT.set(0);
+		LOOP_THREAD_EXECUTIONS.set(0);
+	}
+
+	/**
+	 * Returns how many {@code slowEcho} executions since the last
+	 * {@link #resetInFlightWitness()} call ran on a non-blocking thread (a Netty event
+	 * loop, per {@code Schedulers#isInNonBlockingThread()}). The concurrent-call IT
+	 * asserts this stays zero on every stack: tool bodies belong on worker threads, not
+	 * on the loop that also drives the transport (issue #377).
+	 * @return the number of event-loop-thread executions observed
+	 */
+	public static int loopThreadExecutionsWitness() {
+		return LOOP_THREAD_EXECUTIONS.get();
+	}
+
+	/**
+	 * Returns the peak number of {@code slowEcho} executions observed at once since the
+	 * last {@link #resetInFlightWitness()} call. A session that serializes tool calls
+	 * never exceeds {@code 1}; wall time on a small CI runner cannot make that
+	 * distinction, this server-side counter can (issue #325).
+	 * @return the observed peak in-flight count
+	 */
+	public static int maxInFlightWitness() {
+		return MAX_IN_FLIGHT.get();
 	}
 
 }

@@ -1,3 +1,4 @@
+/* [spring-ai-mcp-inspector PATCH] AppsTab: wired onAppTraffic / onLifecycleChange callbacks to AppRenderer and added side panel (AppTrafficPanel). Issue #409: while an app is open the tool list collapses (single-column grid, same contract as maximize), so the 280px traffic panel no longer squeezes the app iframe to ~140px at a 1280px viewport. */
 import { useEffect, useState, useCallback, useRef } from "react";
 import { TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -17,8 +18,15 @@ import {
   CompatibilityCallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { getToolUiResourceUri } from "@modelcontextprotocol/ext-apps/app-bridge";
+import {
+  type AppTrafficEntry,
+  type AppLifecycleState,
+} from "@/lib/app-traffic";
+// [spring-ai-mcp-inspector PATCH] ui-app-detection: shared non-throwing
+// guard for _meta.ui.resourceUri (issue #183).
+import { hasUIMetadata } from "@/utils/uiMetadataGuard";
 import AppRenderer from "./AppRenderer";
+import AppTrafficPanel from "./AppTrafficPanel";
 import ListPane from "./ListPane";
 import IconDisplay, { WithIcons } from "./IconDisplay";
 import { Label } from "@/components/ui/label";
@@ -55,7 +63,7 @@ interface AppsTabProps {
     id: number;
     toolName: string;
     params: Record<string, unknown>;
-    result: CompatibilityCallToolResult;
+    result?: CompatibilityCallToolResult;
   } | null;
   onPrefilledToolCallConsumed?: (callId: number) => void;
   error: string | null;
@@ -63,10 +71,10 @@ interface AppsTabProps {
   onNotification?: (notification: ServerNotification) => void;
 }
 
-// Type guard to check if a tool has UI metadata
-const hasUIMetadata = (tool: Tool): boolean => {
-  return !!getToolUiResourceUri(tool);
-};
+// [spring-ai-mcp-inspector PATCH] ui-app-detection: re-exported for
+// ToolsTab "Open as App" button (issue #183). Implementation lives in
+// src/utils/uiMetadataGuard.ts.
+export { hasUIMetadata };
 
 const cloneToolParams = (
   source: Record<string, unknown>,
@@ -105,6 +113,98 @@ const AppsTab = ({
   const openAppRunIdRef = useRef(0);
   const prefillingParamsRef = useRef<Record<string, unknown> | null>(null);
   const consumedPrefilledCallIdRef = useRef<number | null>(null);
+
+  const [trafficEntries, setTrafficEntries] = useState<AppTrafficEntry[]>([]);
+  const [lifecycleState, setLifecycleState] =
+    useState<AppLifecycleState>("idle");
+  const pendingEntriesRef = useRef<AppTrafficEntry[]>([]);
+  const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const droppedCountRef = useRef(0);
+
+  const flushEntries = useCallback(() => {
+    const pending = pendingEntriesRef.current;
+    pendingEntriesRef.current = [];
+    const dropped = droppedCountRef.current;
+    droppedCountRef.current = 0;
+    if (dropped > 0) {
+      // Singleton dropped-entries marker per flush window
+      pending.push({
+        seq: -1,
+        timestamp: new Date().toISOString(),
+        direction: "guest->host",
+        kind: "notification",
+        method: "ui/traffic/dropped",
+        params: { droppedCount: dropped },
+        phase: "sandbox",
+      } as AppTrafficEntry);
+    }
+    if (pending.length > 0) {
+      setTrafficEntries((prev) => {
+        const combined = [...prev, ...pending];
+        if (combined.length > 500) {
+          return combined.slice(combined.length - 500);
+        }
+        return combined;
+      });
+    }
+    throttleTimerRef.current = null;
+  }, []);
+
+  const handleAppTraffic = useCallback(
+    (entry: AppTrafficEntry) => {
+      // Bound ingress: drop if already at 500 pending
+      if (pendingEntriesRef.current.length >= 500) {
+        droppedCountRef.current += 1;
+        return;
+      }
+      // Truncate oversize entries (> 64 KB params/result JSON)
+      const clamped = { ...entry };
+      if (clamped.params) {
+        const paramsStr = JSON.stringify(clamped.params);
+        if (paramsStr.length > 65536) {
+          clamped.params = {
+            truncated: true,
+            bytes: paramsStr.length,
+          };
+        }
+      }
+      if (clamped.result) {
+        const resultStr = JSON.stringify(clamped.result);
+        if (resultStr.length > 65536) {
+          clamped.result = {
+            truncated: true,
+            bytes: resultStr.length,
+          };
+        }
+      }
+      // [spring-ai-mcp-inspector PATCH] ui-app-detection: collapse
+      // consecutive tool-input-partial entries (design spec section 4):
+      // keep only the latest partial of a burst instead of one entry per
+      // chunk.
+      const last = pendingEntriesRef.current[
+        pendingEntriesRef.current.length - 1
+      ];
+      if (
+        clamped.method === "ui/notifications/tool-input-partial" &&
+        last?.method === "ui/notifications/tool-input-partial"
+      ) {
+        pendingEntriesRef.current[pendingEntriesRef.current.length - 1] =
+          clamped;
+        return;
+      }
+      pendingEntriesRef.current.push(clamped);
+      if (!throttleTimerRef.current) {
+        throttleTimerRef.current = setTimeout(flushEntries, 50);
+      }
+    },
+    [flushEntries],
+  );
+
+  const handleClearTraffic = useCallback(() => {
+    setTrafficEntries([]);
+    pendingEntriesRef.current = [];
+    droppedCountRef.current = 0;
+  }, []);
 
   const buildInitialParams = useCallback((tool: Tool) => {
     const initialParams = Object.entries(tool.inputSchema.properties ?? []).map(
@@ -196,8 +296,20 @@ const AppsTab = ({
     prefillingParamsRef.current = hydratedParams;
     setSelectedTool(matchingTool);
     setSubmittedParams(hydratedParams);
-    setSubmittedToolResult(prefilledToolCall.result);
-    setIsAppOpen(true);
+    // [spring-ai-mcp-inspector PATCH] ui-app-detection: result is optional
+    // (undefined = preselect without run, from ToolsTab "Open as App").
+    setSubmittedToolResult(prefilledToolCall.result ?? null);
+    // Only auto-open the app when the prefilled call already carries a
+    // tool result (i.e. it was run from the Tools tab). A preselect
+    // without result (ToolsTab "Open as App") must leave the input form
+    // visible so the user reviews parameters and clicks "Open App".
+    // [spring-ai-mcp-inspector PATCH] ui-app-detection: close the renderer
+    // when a preselect arrives without result while one is already open.
+    if (prefilledToolCall.result !== undefined) {
+      setIsAppOpen(true);
+    } else {
+      setIsAppOpen(false);
+    }
     setIsMaximized(false);
     consumedPrefilledCallIdRef.current = prefilledToolCall.id;
     onPrefilledToolCallConsumed?.(prefilledToolCall.id);
@@ -246,6 +358,10 @@ const AppsTab = ({
     setIsOpeningApp(false);
     setIsAppOpen(false);
     setSubmittedToolResult(null);
+    setTrafficEntries([]);
+    setLifecycleState("idle");
+    pendingEntriesRef.current = [];
+    droppedCountRef.current = 0;
   }, []);
 
   const handleOpenApp = useCallback(async () => {
@@ -288,18 +404,22 @@ const AppsTab = ({
     setIsMaximized(false);
     setSubmittedParams(undefined);
     setSubmittedToolResult(null);
+    setTrafficEntries([]);
+    setLifecycleState("idle");
+    pendingEntriesRef.current = [];
+    droppedCountRef.current = 0;
   }, []);
 
   return (
     <TabsContent value="apps" className="space-y-4">
       <div
         className={
-          isMaximized
+          isMaximized || isAppOpen
             ? "grid grid-cols-1 gap-4"
             : "grid grid-cols-1 md:grid-cols-2 gap-4"
         }
       >
-        {!isMaximized && (
+        {!isMaximized && !isAppOpen && (
           <ListPane
             items={appTools}
             listItems={handleRefresh}
@@ -379,16 +499,10 @@ const AppsTab = ({
             )}
 
             {selectedTool ? (
-              (() => {
-                const hasFields =
-                  selectedTool.inputSchema.properties &&
-                  Object.keys(selectedTool.inputSchema.properties).length > 0;
-
-                return (
+              <div className="space-y-4">
+                {!isAppOpen ? (
                   <div className="space-y-4">
-                    {!isAppOpen ? (
-                      <div className="space-y-4">
-                        {selectedTool.description && (
+                    {selectedTool.description && (
                           <p className="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap">
                             {selectedTool.description}
                           </p>
@@ -627,32 +741,43 @@ const AppsTab = ({
                       </div>
                     ) : (
                       <div className="space-y-4">
-                        {hasFields && (
-                          <div className="flex justify-end">
-                            <Button
-                              onClick={handleCloseApp}
-                              variant="outline"
-                              size="sm"
-                            >
-                              Back to Input
-                            </Button>
+                        {/* [spring-ai-mcp-inspector PATCH] ui-app-detection:
+                            always offer a way back, even for tools with
+                            empty inputSchema.properties. */}
+                        <div className="flex justify-end">
+                          <Button
+                            onClick={handleCloseApp}
+                            variant="outline"
+                            size="sm"
+                          >
+                            Back to Input
+                          </Button>
+                        </div>
+                        <div className="flex h-[600px]">
+                          <div className="flex-1 min-w-0">
+                            <AppRenderer
+                              sandboxPath={sandboxPath}
+                              tool={selectedTool}
+                              tools={tools}
+                              mcpClient={mcpClient}
+                              toolInput={submittedParams}
+                              toolResult={submittedToolResult}
+                              onNotification={onNotification}
+                              onAppTraffic={handleAppTraffic}
+                              onLifecycleChange={setLifecycleState}
+                            />
                           </div>
-                        )}
-                        <div className="h-[600px]">
-                          <AppRenderer
-                            sandboxPath={sandboxPath}
-                            tool={selectedTool}
-                            mcpClient={mcpClient}
-                            toolInput={submittedParams}
-                            toolResult={submittedToolResult}
-                            onNotification={onNotification}
-                          />
+                          <div className="w-[280px] shrink-0">
+                            <AppTrafficPanel
+                              entries={trafficEntries}
+                              lifecycleState={lifecycleState}
+                              onClear={handleClearTraffic}
+                            />
+                          </div>
                         </div>
                       </div>
                     )}
                   </div>
-                );
-              })()
             ) : (
               <div className="flex flex-col items-center justify-center py-12 text-muted-foreground space-y-4">
                 <AlertCircle className="w-12 h-12 opacity-20" />

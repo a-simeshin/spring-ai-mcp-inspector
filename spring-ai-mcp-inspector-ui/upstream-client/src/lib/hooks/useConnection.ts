@@ -50,14 +50,14 @@ import { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { useEffect, useRef, useState } from "react";
 import { useToast } from "@/lib/hooks/useToast";
 import { ConnectionStatus, CLIENT_IDENTITY } from "../constants";
-import { isConnectionAuthError } from "../connectionAuthErrors";
+import { isConnectionAuthError } from "../connectionErrors";
 import {
   ConnectFailedError,
   CONNECT_FAILED_ERROR_CODE,
   connectionFailureFromError,
   parseConnectFailureResponse,
   type ConnectFailure,
-} from "../connectErrors";
+} from "../connectionErrors";
 import { Notification } from "../notificationTypes";
 import {
   auth,
@@ -85,6 +85,24 @@ import { InspectorConfig } from "../configurationTypes";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CustomHeaders } from "../types/customHeaders";
 import { resolveRefsInMessage } from "@/utils/schemaUtils";
+import { noteOutgoingRequestId } from "@/lib/leakAnnotations";
+// [spring-ai-mcp-inspector PATCH] D3 structured error contract (issue #54):
+// the backend proxy emits `ProxyErrorDto` bodies on streamable 401/403 and
+// named SSE `error` events on the SSE path; parsed here for the error banner.
+import {
+  ProxyErrorDto,
+  parseProxyErrorDto,
+  parseTerminalReconnectMillis,
+} from "../connectionErrors";
+// [spring-ai-mcp-inspector PATCH] Persistent history (#121).
+import {
+  appendHistory,
+  clearHistory,
+  loadHistory,
+} from "../persistentHistory";
+// [spring-ai-mcp-inspector PATCH] Initialize snapshot type for the
+// VersionBadge (src/lib/protocolRevision.ts).
+import type { InitializeSnapshot } from "../protocolRevision";
 
 interface UseConnectionOptions {
   transportType: "stdio" | "sse" | "streamable-http";
@@ -97,6 +115,10 @@ interface UseConnectionOptions {
   oauthClientId?: string;
   oauthClientSecret?: string;
   oauthScope?: string;
+  // [spring-ai-mcp-inspector PATCH] Active named auth profile (issue #54, D2):
+  // appended as `?profileId=` to the proxy transport URL so the backend
+  // applies the owner-scoped profile to every proxied request.
+  activeProfileId?: string | null;
   config: InspectorConfig;
   connectionType?: "direct" | "proxy";
   onNotification?: (notification: Notification) => void;
@@ -110,7 +132,65 @@ interface UseConnectionOptions {
   defaultLoggingLevel?: LoggingLevel;
   serverImplementation?: Implementation;
   metadata?: Record<string, string>;
+  // [spring-ai-mcp-inspector PATCH] Persistent history connection id (#121).
+  connectionId?: string;
+  // [spring-ai-mcp-inspector PATCH] Optional per-connection timeout in seconds.
+  // When set, forwarded as the `connectionTimeout` query parameter to the proxy
+  // so the backend can apply a per-phase budget instead of its hard-coded default.
+  // Empty/undefined = proxy default (30s). For stdio the budget covers
+  // process spawn + initialize; for SSE/HTTP it covers connect + initialize.
+  connectionTimeout?: string;
 }
+
+/**
+ * [spring-ai-mcp-inspector PATCH] Merge HeadersInit sources into a plain
+ * record, later sources overriding earlier keys on name collision (issue #54).
+ * The SDK hands the proxied streamable/SSE fetch a real `Headers` instance
+ * (content-type: application/json, accept, session/protocol headers); spreading
+ * it as `{...init.headers}` silently yields an empty object, so a naive merge
+ * would drop every SDK header. Normalizing each source first keeps the SDK
+ * headers and lets our auth + proxy headers win on collision.
+ *
+ * Collision matching is case-insensitive (issue #299): `Headers` normalizes
+ * names to lowercase while our record sources keep the original spelling, so
+ * a case-sensitive merge emitted two names differing only in case
+ * (x-mcp-proxy-auth + X-MCP-Proxy-Auth) and the browser joined the pair into
+ * "Bearer t, Bearer t", which the proxy rejects with 401. The later source
+ * replaces both the value and the name spelling.
+ */
+const mergeRequestHeaders = (
+  ...sources: Array<HeadersInit | undefined>
+): Record<string, string> => {
+  const merged: Record<string, string> = {};
+  const nameByLowercase = new Map<string, string>();
+  const putHeader = (name: string, value: string): void => {
+    const previousName = nameByLowercase.get(name.toLowerCase());
+    if (previousName !== undefined && previousName !== name) {
+      delete merged[previousName];
+    }
+    nameByLowercase.set(name.toLowerCase(), name);
+    merged[name] = value;
+  };
+  for (const source of sources) {
+    if (!source) {
+      continue;
+    }
+    if (typeof Headers !== "undefined" && source instanceof Headers) {
+      source.forEach((value, key) => {
+        putHeader(key, value);
+      });
+    } else if (Array.isArray(source)) {
+      for (const [key, value] of source) {
+        putHeader(key, value);
+      }
+    } else {
+      for (const [key, value] of Object.entries(source)) {
+        putHeader(key, value);
+      }
+    }
+  }
+  return merged;
+};
 
 export function useConnection({
   transportType,
@@ -122,6 +202,7 @@ export function useConnection({
   oauthClientId,
   oauthClientSecret,
   oauthScope,
+  activeProfileId,
   config,
   connectionType = "proxy",
   onNotification,
@@ -130,6 +211,9 @@ export function useConnection({
   getRoots,
   defaultLoggingLevel,
   metadata = {},
+  // [spring-ai-mcp-inspector PATCH] Persistent history (#121).
+  connectionId = "ephemeral",
+  connectionTimeout,
 }: UseConnectionOptions) {
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
@@ -139,20 +223,51 @@ export function useConnection({
   const { toast } = useToast();
   const [serverCapabilities, setServerCapabilities] =
     useState<ServerCapabilities | null>(null);
+
+  // [spring-ai-mcp-inspector PATCH] Live ref so listTasks/cancelTask read the
+  // current capabilities at call time, not a stale closure. disconnect() sets
+  // this to null, which stops any in-flight polling loop. See issue #212.
+  const serverCapabilitiesRef = useRef<ServerCapabilities | null>(null);
+  useEffect(() => {
+    serverCapabilitiesRef.current = serverCapabilities;
+  }, [serverCapabilities]);
   const [mcpClient, setMcpClient] = useState<Client | null>(null);
   const [clientTransport, setClientTransport] = useState<Transport | null>(
     null,
   );
   const [requestHistory, setRequestHistory] = useState<
-    { request: string; response?: string }[]
+    { request: string; response?: string; isError?: boolean }[]
   >([]);
   const [completionsSupported, setCompletionsSupported] = useState(false);
   const [mcpSessionId, setMcpSessionId] = useState<string | null>(null);
+
+  // [spring-ai-mcp-inspector PATCH] Session id the inspector's proxy assigned to
+  // this UI connection (SSE/stdio endpoint URL or the streamable mcp-session-id
+  // response header). The keep-alive endpoints resolve THIS id; the upstream
+  // mcpSessionId captured in direct mode belongs to the target server and is
+  // unknown to the inspector (#235).
+  const [proxySessionId, setProxySessionId] = useState<string | null>(null);
   const [mcpProtocolVersion, setMcpProtocolVersion] = useState<string | null>(
     null,
   );
+  // [spring-ai-mcp-inspector PATCH] Initialize handshake observed on the wire
+  // (requested + negotiated protocol revision, server info, capabilities),
+  // captured from the client's own request layer. Feeds the VersionBadge in
+  // the connect zone.
+  const [initializeSnapshot, setInitializeSnapshot] =
+    useState<InitializeSnapshot | null>(null);
   const [serverImplementation, setServerImplementation] =
     useState<Implementation | null>(null);
+
+  // [spring-ai-mcp-inspector PATCH] D3 structured authorization error surfaced
+  // by the proxy (SSE named `error` event / streamable 401/403 body). Named
+  // authError, not connectionError: that one carries the transport failure from
+  // issue #56, and a server that answered 401 is a server that was reached.
+  const [authError, setAuthError] = useState<ProxyErrorDto | null>(null);
+  /** Tracks whether the current response was already parsed as a D3 DTO by
+   * streamableFetchWithDtoParse, so the fallback ConnectFailedError throw is
+   * skipped (avoids the double 401 banner — issue #54, owner review round 2). */
+  const authDtoConsumedRef = useRef(false);
 
   type ReceiverTaskRecord = {
     task: Task;
@@ -165,6 +280,15 @@ export function useConnection({
   // Tasks created locally in response to *incoming* task-augmented requests
   // (e.g. `sampling/createMessage` and `elicitation/create` with `params.task`).
   const receiverTasksRef = useRef<Map<string, ReceiverTaskRecord>>(new Map());
+
+  // Guards against concurrent connect attempts (double-clicks).
+  const connectingRef = useRef(false);
+
+  // Monotonically increasing generation counter for connect attempts.
+  // Each connect() call increments the counter; stale completions (from
+  // a previous attempt still resolving) check this ref and skip their
+  // state updates when a newer generation has already started.
+  const connectAttemptRef = useRef(0);
 
   useEffect(() => {
     if (!oauthClientId) {
@@ -199,14 +323,40 @@ export function useConnection({
     saveScopeToSessionStorage(sseUrl, oauthScope);
   }, [oauthScope, sseUrl]);
 
+  // [spring-ai-mcp-inspector PATCH] Load persistent history on connection change (#121).
+  useEffect(() => {
+    setRequestHistory(loadHistory(connectionId));
+  }, [connectionId]);
+
   const pushHistory = (request: object, response?: object) => {
-    setRequestHistory((prev) => [
-      ...prev,
-      {
-        request: JSON.stringify(request),
-        response: response !== undefined ? JSON.stringify(response) : undefined,
-      },
-    ]);
+    // [spring-ai-mcp-inspector PATCH] history-error-styling: persist isError flag
+    // in history entries so the UI can render failed calls distinctly (#195).
+    const isError = (() => {
+      if (response === undefined) return false;
+      if ("error" in response) return true;
+      if (
+        "isError" in response &&
+        (response as { isError?: boolean }).isError === true
+      )
+        return true;
+      return false;
+    })();
+    const entry = {
+      request: JSON.stringify(request),
+      response: response !== undefined ? JSON.stringify(response) : undefined,
+      isError,
+    };
+    setRequestHistory((prev) => [...prev, entry]);
+    // [spring-ai-mcp-inspector PATCH] Persist to localStorage (#121). The
+    // isError flag travels with the stored entry (owner review on PR #218,
+    // 2026-11-13): keeping it in-memory only made failed calls come back
+    // styled as successful after a reload, losing the #195 error styling.
+    appendHistory(connectionId, {
+      request: entry.request,
+      response: entry.response,
+      at: Date.now(),
+      isError: entry.isError,
+    });
   };
 
   const makeRequest = async <T extends AnySchema>(
@@ -433,13 +583,13 @@ export function useConnection({
         });
         return result === "AUTHORIZED";
       } catch (authError) {
-        // Show user-friendly error message for OAuth failures
-        toast({
-          title: "OAuth Authentication Failed",
-          description:
-            authError instanceof Error ? authError.message : String(authError),
-          variant: "destructive",
-        });
+        // [spring-ai-mcp-inspector PATCH] OAuth failure notification is
+        // handled by the Sidebar effect on connectionError (Sidebar.tsx:147),
+        // which is set by the caller after handleAuthError returns false.
+        // This is the single authoritative notification path; remove the
+        // duplicate toast here so one OAuth failure does not produce two
+        // toasts. Refs #157.
+        void authError;
         return false;
       }
     }
@@ -447,9 +597,16 @@ export function useConnection({
     return false;
   };
 
-  const captureResponseHeaders = (response: Response): void => {
+  const captureResponseHeaders = (response: Response, generation: number): void => {
     const sessionId = response.headers.get("mcp-session-id");
     const protocolVersion = response.headers.get("mcp-protocol-version");
+    // [spring-ai-mcp-inspector PATCH] Skip stale response header capture:
+    // if a newer connect attempt has already started, ignore these headers
+    // so a stale handshake cannot overwrite the new session's session-id or
+    // protocol-version with its own values. Refs #157.
+    if (generation !== connectAttemptRef.current) {
+      return;
+    }
     if (sessionId && sessionId !== mcpSessionId) {
       setMcpSessionId(sessionId);
     }
@@ -458,11 +615,213 @@ export function useConnection({
     }
   };
 
-  const connect = async (_e?: unknown, retryCount: number = 0) => {
-    // Clear any previous failure so a new attempt starts fresh.
-    setConnectionError(null);
+  // [spring-ai-mcp-inspector PATCH] The SDK POSTs proxied frames to the endpoint
+  // URL the proxy announced (...?sessionId=<proxy session id>), so the id is
+  // tapped out of the request URL here rather than guessed from headers.
+  const captureProxySessionIdFromUrl = (
+    url: string | URL | globalThis.Request,
+  ): void => {
+    try {
+      const resolved =
+        typeof url === "string"
+          ? new URL(url, window.location.href)
+          : url instanceof URL
+            ? url
+            : new URL(url.url, window.location.href);
+      const sid = resolved.searchParams.get("sessionId");
+      if (sid) {
+        setProxySessionId((prev) => (prev === sid ? prev : sid));
+      }
+    } catch {
+      // Malformed URL: nothing to capture.
+    }
+  };
 
-    const clientCapabilities = {
+  const captureProxySessionIdFromResponse = (response: Response): void => {
+    const sid = response.headers.get("mcp-session-id");
+    if (sid) {
+      setProxySessionId((prev) => (prev === sid ? prev : sid));
+    }
+  };
+
+  // [spring-ai-mcp-inspector PATCH] D3: the backend emits the structured error
+  // DTO as a NAMED SSE `error` event. The SDK's EventSource (eventsource pkg)
+  // only dispatches named events to addEventListener listeners, so the DTO
+  // would be silently dropped. Tee the handshake stream and scan it ourselves.
+  // [spring-ai-mcp-inspector PATCH] block2: the scan also watches for the
+  // terminal SSE `retry` field the proxy sends when the upstream is dead; the
+  // observer then calls onTerminalReconnect so the transport (and its
+  // EventSource) is closed instead of retrying every ~3s against a dead target.
+  const observeSseErrorStream = async (
+    stream: ReadableStream<Uint8Array>,
+    onTerminalReconnect?: () => void,
+  ) => {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let currentEvent = "";
+    let currentData: string[] = [];
+    const flushEvent = () => {
+      if (currentEvent === "error" && currentData.length > 0) {
+        const dto = parseProxyErrorDto(currentData.join("\n"));
+        if (dto) {
+          setAuthError(dto);
+        }
+      }
+      currentEvent = "";
+      currentData = [];
+    };
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) {
+              currentEvent = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              currentData.push(line.slice(5).trimStart());
+            } else if (
+              onTerminalReconnect &&
+              parseTerminalReconnectMillis(line) !== null
+            ) {
+              onTerminalReconnect();
+            }
+          }
+          flushEvent();
+        }
+      }
+      if (buffer.trim()) {
+        for (const line of buffer.split("\n")) {
+          if (line.startsWith("event:")) {
+            currentEvent = line.slice(6).trim();
+          } else if (line.startsWith("data:")) {
+            currentData.push(line.slice(5).trimStart());
+          } else if (
+            onTerminalReconnect &&
+            parseTerminalReconnectMillis(line) !== null
+          ) {
+            onTerminalReconnect();
+          }
+        }
+        flushEvent();
+      }
+    } catch {
+      // Observation is best-effort; the transport still surfaces the failure.
+    }
+  };
+  /** Wraps the SSE EventSource fetch: observe named `error` events and the
+   * terminal `retry` of a dead upstream, pass the stream through. */
+  const sseFetchWithErrorObservation = (
+    url: string | URL | globalThis.Request,
+    init?: RequestInit,
+    onTerminalReconnect?: () => void,
+  ): Promise<Response> =>
+    fetch(url, init).then((response) => {
+      if (response.body) {
+        const [transportStream, observationStream] = response.body.tee();
+        void observeSseErrorStream(observationStream, onTerminalReconnect);
+        return new Response(transportStream, response);
+      }
+      return response;
+    });
+  /**
+   * Wraps the streamable transport fetch: a 401/403 response body carries the
+   * D3 DTO (any other status is the legacy contract, no DTO per D3).
+   */
+  const streamableFetchWithDtoParse = (
+    url: string | URL | globalThis.Request,
+    init?: RequestInit,
+  ): Promise<Response> =>
+    fetch(url, init).then((response) => {
+      if (response.ok || (response.status !== 401 && response.status !== 403)) {
+        return response;
+      }
+      return response.text().then((text) => {
+        const dto = parseProxyErrorDto(text);
+        if (dto) {
+          setAuthError(dto);
+          authDtoConsumedRef.current = true;
+        }
+        return new Response(text, response);
+      });
+    });
+
+  const connect = async (
+    _e?: unknown,
+    retryCount: number = 0,
+    profileIdOverride?: string | null,
+  ) => {
+    // Guard against double-clicks from the UI (not recursive calls from OAuth retry).
+    if (retryCount === 0 && connectingRef.current) {
+      return;
+    }
+    if (retryCount === 0) {
+      connectingRef.current = true;
+    }
+
+    // Bump the generation counter so earlier (stale) connect attempts that
+    // resolve later will skip their state updates.
+    const generation = ++connectAttemptRef.current;
+
+    // Full cleanup of stale state before connecting fresh.
+    // [spring-ai-mcp-inspector PATCH] Reconnect after silent SSE drop:
+    // close the old client/transport and clear stale session ID so the
+    // new handshake starts from a clean slate.  Without this, the stale
+    // mcp-session-id header causes -32001 on every reconnect attempt.
+    // Refs #157.
+    if (transportType === "streamable-http") {
+      await (clientTransport as StreamableHTTPClientTransport)?.terminateSession().catch(() => {});
+    }
+    await mcpClient?.close().catch(() => {});
+
+    // [spring-ai-mcp-inspector PATCH] Guard against reset/retry race: if a
+    // newer connect attempt (e.g. from resetSessionAndConnect) has already
+    // started while we were waiting for terminateSession/close, skip the
+    // shared cleanup so we don't clobber the new session's state. Refs #157.
+    if (generation !== connectAttemptRef.current) {
+      // [spring-ai-mcp-inspector PATCH] Don't clear connectingRef here:
+      // it belongs to the current generation. A stale attempt clearing it
+      // would let a newer attempt's guard be bypassed. Refs #157.
+      return;
+    }
+
+    receiverTasksRef.current.forEach((record) => {
+      if (record.cleanupTimeoutId) {
+        clearTimeout(record.cleanupTimeoutId);
+      }
+      record.rejectPayload(new McpError(ErrorCode.InternalError, "Connection reset"));
+    });
+    receiverTasksRef.current.clear();
+
+    setMcpClient(null);
+    setClientTransport(null);
+    setMcpSessionId(null);
+    setMcpProtocolVersion(null);
+    setCompletionsSupported(false);
+    // Also clear the previous session's server info, so a failed attempt
+    // (including the proxy health and proxy auth early returns below) leaves
+    // no stale serverImplementation/serverCapabilities behind in React state.
+    setServerCapabilities(null);
+    setServerImplementation(null);
+
+    // Clear any previous failure so a new attempt starts fresh (the
+    // transport banner from issue #56 and the authorization banner
+    // from issue #54).
+    setConnectionError(null);
+    setAuthError(null);
+    // [spring-ai-mcp-inspector PATCH] Set intermediate status so the UI
+    // shows the reconnect is in progress, not still "connected" from the
+    // stale session. Refs #157.
+    setConnectionStatus("disconnected");
+
+    try {
+      const clientCapabilities = {
       capabilities: {
         sampling: {},
         elicitation: {
@@ -496,11 +855,18 @@ export function useConnection({
       clientCapabilities,
     );
 
+
     // Only check proxy health for proxy connections
     if (connectionType === "proxy") {
       try {
         await checkProxyHealth();
       } catch {
+        // [spring-ai-mcp-inspector PATCH] Guard against stale handshake: if a
+        // newer connect attempt has already started, skip this error so the
+        // stale handshake cannot overwrite the active session. Refs #157.
+        if (generation !== connectAttemptRef.current) {
+          return;
+        }
         setConnectionStatus("error-connecting-to-proxy");
         return;
       }
@@ -581,10 +947,18 @@ export function useConnection({
 
       // Create appropriate transport
       let transportOptions:
-        | StreamableHTTPClientTransportOptions
-        | SSEClientTransportOptions;
+        StreamableHTTPClientTransportOptions | SSEClientTransportOptions;
 
       let serverUrl: URL;
+
+      // [spring-ai-mcp-inspector PATCH] block2: filled in below once the
+      // transport is built. The SSE fetch wrapper (created before the transport
+      // exists) triggers it when the proxy sends the terminal SSE `retry` of a
+      // dead upstream; closing the transport also closes the EventSource, so
+      // the browser stops reconnecting.
+      const terminalReconnectCloser: { close: () => void } = {
+        close: () => {},
+      };
 
       // Determine connection URL based on the connection type
       if (connectionType === "direct" && transportType !== "stdio") {
@@ -592,9 +966,14 @@ export function useConnection({
         serverUrl = new URL(toAbsoluteServerUrl(sseUrl));
 
         const requestHeaders = { ...headers };
-        if (mcpSessionId) {
-          requestHeaders["mcp-session-id"] = mcpSessionId;
-        }
+        // Don't reuse a stale session ID from a previous connection.  After
+        // cleanup at the start of connect(), the session ID is always null
+        // for a fresh connect.  The closure variable mcpSessionId may still
+        // hold a stale value from a silently dropped session, which would
+        // cause the server to reject the handshake with -32001.  The server
+        // assigns a new session ID in its response headers, captured by
+        // captureResponseHeaders below.
+        // [spring-ai-mcp-inspector PATCH] Refs #157: stale closure value.
         switch (transportType) {
           case "sse":
             requestHeaders["Accept"] = "text/event-stream";
@@ -611,7 +990,7 @@ export function useConnection({
                 });
 
                 // Capture protocol-related headers from response
-                captureResponseHeaders(response);
+                captureResponseHeaders(response, generation);
                 return response;
               },
               requestInit: {
@@ -636,7 +1015,7 @@ export function useConnection({
                 });
 
                 // Capture protocol-related headers from response
-                captureResponseHeaders(response);
+                captureResponseHeaders(response, generation);
 
                 return response;
               },
@@ -688,8 +1067,28 @@ export function useConnection({
                 ) =>
                   fetch(url, {
                     ...init,
-                    headers: { ...headers, ...proxyHeaders },
+                    headers: mergeRequestHeaders(
+                      init?.headers,
+                      headers,
+                      proxyHeaders,
+                    ),
                   }),
+              },
+              // [spring-ai-mcp-inspector PATCH] tap the proxy session id from the
+              // POST endpoint URL (see captureProxySessionIdFromUrl)
+              fetch: async (
+                url: string | URL | globalThis.Request,
+                init?: RequestInit,
+              ) => {
+                captureProxySessionIdFromUrl(url);
+                return fetch(url, {
+                  ...init,
+                  headers: mergeRequestHeaders(
+                    init?.headers,
+                    headers,
+                    proxyHeaders,
+                  ),
+                });
               },
               requestInit: {
                 headers: { ...headers, ...proxyHeaders },
@@ -712,15 +1111,38 @@ export function useConnection({
             }
             transportOptions = {
               authProvider: serverAuthProvider,
+              // [spring-ai-mcp-inspector PATCH] Tee the handshake stream so the
+              // named SSE `error` event (D3 DTO) is observed (issue #54).
               eventSourceInit: {
-                fetch: (
-                  url: string | URL | globalThis.Request,
-                  init?: RequestInit,
-                ) =>
-                  fetch(url, {
-                    ...init,
-                    headers: { ...headers, ...proxyHeaders },
-                  }),
+                fetch: (url, init) =>
+                  sseFetchWithErrorObservation(
+                    url,
+                    {
+                      ...init,
+                      headers: mergeRequestHeaders(
+                        init?.headers,
+                        headers,
+                        proxyHeaders,
+                      ),
+                    },
+                    () => terminalReconnectCloser.close(),
+                  ),
+              },
+              // [spring-ai-mcp-inspector PATCH] tap the proxy session id from the
+              // POST endpoint URL (see captureProxySessionIdFromUrl)
+              fetch: async (
+                url: string | URL | globalThis.Request,
+                init?: RequestInit,
+              ) => {
+                captureProxySessionIdFromUrl(url);
+                return fetch(url, {
+                  ...init,
+                  headers: mergeRequestHeaders(
+                    init?.headers,
+                    headers,
+                    proxyHeaders,
+                  ),
+                });
               },
               requestInit: {
                 headers: { ...headers, ...proxyHeaders },
@@ -734,25 +1156,43 @@ export function useConnection({
             mcpProxyServerUrl.searchParams.append("url", sseUrl);
             transportOptions = {
               authProvider: serverAuthProvider,
-              // [spring-ai-mcp-inspector PATCH] Surface the proxy's structured
-              // MCP_CONNECT_FAILED error (non-2xx JSON on POST /mcp) as a
-              // ConnectFailedError instead of letting the SDK swallow the body
-              // into an opaque HTTP-status error. HTTP 401 from the fork
-              // server's own auth filter (missing/mismatched X-MCP-Inspector-Auth
-              // header) is caught here and thrown as unauthorized so the UI
-              // renders the dedicated auth banner instead of falling through to
-              // the generic connection-error alert.
+              // [spring-ai-mcp-inspector PATCH] One wrapper, two contracts, in this
+              // order. streamableFetchWithDtoParse reads the proxy's structured
+              // authorization DTO out of a 401/403/3xx from a LIVE server (issue #54)
+              // and records it without throwing. When the DTO was already consumed
+              // (authDtoConsumedRef is true), the fallback ConnectFailedError throw is
+              // skipped to avoid the double 401 banner (owner review round 2, issue #54).
+              // What survives that and is still not ok may carry the
+              // MCP_CONNECT_FAILED contract (issue #56), which means the server was
+              // never reached; it throws, because the SDK would otherwise collapse the
+              // body into an opaque status error.
+              // HTTP 401 from the fork server's own auth filter (missing/mismatched
+              // X-MCP-Inspector-Auth header) is caught here and thrown as
+              // unauthorized so the UI renders the dedicated auth banner instead of
+              // falling through to the generic connection-error alert (issue #54).
               fetch: async (
                 url: string | URL | globalThis.Request,
                 init?: RequestInit,
               ) => {
-                const response = await fetch(url, init);
+                authDtoConsumedRef.current = false;
+                const response = await streamableFetchWithDtoParse(url, {
+                  ...init,
+                  headers: mergeRequestHeaders(
+                    init?.headers,
+                    headers,
+                    proxyHeaders,
+                  ),
+                });
+                // [spring-ai-mcp-inspector PATCH] POST /mcp answers a fresh
+                // session with the mcp-session-id response header; that id (not
+                // the upstream server's) resolves on the keep-alive endpoints.
+                captureProxySessionIdFromResponse(response);
                 if (!response.ok) {
                   const failure = await parseConnectFailureResponse(response);
                   if (failure) {
                     throw new ConnectFailedError(failure);
                   }
-                  if (response.status === 401) {
+                  if (response.status === 401 && !authDtoConsumedRef.current) {
                     throw new ConnectFailedError({
                       code: CONNECT_FAILED_ERROR_CODE,
                       reason: "unauthorized",
@@ -773,7 +1213,11 @@ export function useConnection({
                 ) =>
                   fetch(url, {
                     ...init,
-                    headers: { ...headers, ...proxyHeaders },
+                    headers: mergeRequestHeaders(
+                      init?.headers,
+                      headers,
+                      proxyHeaders,
+                    ),
                   }),
               },
               requestInit: {
@@ -790,7 +1234,27 @@ export function useConnection({
             break;
         }
         serverUrl = mcpProxyServerUrl as URL;
+        // [spring-ai-mcp-inspector PATCH] Active named auth profile (issue #54,
+        // D2): the proxy applies the owner-scoped profile server-side. The
+        // profileIdOverride lets a freshly authorized OAuth2 callback connect
+        // with the just-returned profileId on the very first attempt, before the
+        // state update has re-rendered the hook (issue #54, D9B).
+        const effectiveProfileId =
+          profileIdOverride !== undefined ? profileIdOverride : activeProfileId;
+        if (effectiveProfileId) {
+          serverUrl.searchParams.append("profileId", effectiveProfileId);
+        }
         serverUrl.searchParams.append("transportType", transportType);
+        // [spring-ai-mcp-inspector PATCH] Forward the optional connection timeout
+        // (seconds) to the proxy. Empty/undefined -> proxy applies its default (30s).
+        // For stdio the proxy applies this budget to spawn + initialize; for
+        // SSE/HTTP to connect + initialize.
+        if (connectionTimeout && connectionTimeout.trim() !== "") {
+          serverUrl.searchParams.append(
+            "connectionTimeout",
+            connectionTimeout.trim(),
+          );
+        }
       }
 
       if (onNotification) {
@@ -830,7 +1294,126 @@ export function useConnection({
               })
             : new SSEClientTransport(serverUrl, transportOptions);
 
-        await client.connect(transport as Transport);
+        // [spring-ai-mcp-inspector PATCH] block2: the terminal SSE `retry` of a
+        // dead upstream (observed on the teed stream above) closes the
+        // transport, stopping the EventSource reconnect loop. Assigned before
+        // client.connect so a dead upstream on the very first connect is
+        // covered too.
+        terminalReconnectCloser.close = () => {
+          void transport.close();
+          // [spring-ai-mcp-inspector PATCH] block2: closing the transport
+          // preempts the EventSource error the block1 onerror wrapper
+          // relies on, so drive the same error transition here: the
+          // sidebar leaves Connected and shows the Retry banner instead
+          // of silently hanging on a dead upstream. A stale attempt (a
+          // newer connect already started) must not clobber the active
+          // session's state. Refs #157.
+          if (generation !== connectAttemptRef.current) {
+            return;
+          }
+          setConnectionError(
+            connectionFailureFromError(
+              new Error(
+                "The proxy closed the session because the upstream server is no longer reachable.",
+              ),
+            ),
+          );
+          setConnectionStatus("error");
+          setServerImplementation(null);
+        };
+
+        /* [spring-ai-mcp-inspector PATCH] Capture the initialize handshake by
+           observing the client's own JSON-RPC request layer. Client#connect
+           always performs the handshake through this.request, in every
+           connection type (direct and via proxy) and on every transport (SSE,
+           Streamable HTTP, STDIO), so this is the one capture point that cannot
+           miss. Response headers are not a reliable source: SSE never returns
+           mcp-session-id, and the inspector REST session registry is not on the
+           wire in direct mode. The snapshot feeds the VersionBadge.
+           The interception is scoped to the handshake call below and the
+           original method reference is restored afterwards, so nothing outside
+           connect() observes a wrapper. */
+        // Holder object: TS control-flow analysis cannot see the closure
+        // assignment inside the wrapper, so a plain let would narrow to its
+        // initial value at the read site.
+        const observedInitializeRef: {
+          current: {
+            requestedVersion: string | null;
+            negotiatedVersion: string | null;
+            serverInfo: { name?: string; version?: string } | null;
+            capabilities: Record<string, unknown> | null;
+          } | null;
+        } = { current: null };
+        const clientWithCapture = client as unknown as {
+          request: (
+            request: { method?: string; params?: { protocolVersion?: string } },
+            ...rest: never[]
+          ) => Promise<unknown>;
+        };
+        interface InitializeCaptureState {
+          original: (
+            request: { method?: string; params?: { protocolVersion?: string } },
+            ...rest: never[]
+          ) => Promise<unknown>;
+          depth: number;
+        }
+        const holder = clientWithCapture as unknown as {
+          __initializeCapture?: InitializeCaptureState;
+        };
+        const originalRequest = clientWithCapture.request;
+        if (typeof originalRequest === "function") {
+          // Re-entrancy guard: concurrent connect() calls are real (e.g.
+          // resetSessionAndConnect while a previous handshake is still
+          // pending). Wrapping twice captures the first wrapper as the
+          // "original" and an out-of-order restore then loses the exact
+          // original method reference forever, leaking a wrapper chain onto
+          // the client. Count depth instead: the first enter wraps, the
+          // last exit restores.
+          if (!holder.__initializeCapture) {
+            const state: InitializeCaptureState = {
+              original: originalRequest,
+              depth: 1,
+            };
+            holder.__initializeCapture = state;
+            clientWithCapture.request = async (request, ...rest) => {
+              const result = await state.original.apply(clientWithCapture, [
+                request,
+                ...rest,
+              ]);
+              if (request.method === "initialize" && result != null) {
+                const initializeResult = result as {
+                  protocolVersion?: string;
+                  serverInfo?: { name?: string; version?: string };
+                  capabilities?: Record<string, unknown>;
+                };
+                observedInitializeRef.current = {
+                  requestedVersion: request.params?.protocolVersion ?? null,
+                  negotiatedVersion: initializeResult.protocolVersion ?? null,
+                  serverInfo: initializeResult.serverInfo ?? null,
+                  capabilities: initializeResult.capabilities ?? null,
+                };
+              }
+              return result;
+            };
+          } else {
+            holder.__initializeCapture.depth += 1;
+          }
+        }
+
+        // [spring-ai-mcp-inspector PATCH] The interception stays scoped to the
+        // handshake window: the finally restores the exact original method
+        // reference so nothing downstream observes a wrapper, even if
+        // connect() throws. With concurrent connects the wrapper is shared
+        // and only the last exiting connect restores.
+        try {
+          await client.connect(transport as Transport);
+        } finally {
+          const state = holder.__initializeCapture;
+          if (state && --state.depth === 0) {
+            clientWithCapture.request = state.original;
+            delete holder.__initializeCapture;
+          }
+        }
 
         const protocolOnMessage = transport.onmessage;
         if (protocolOnMessage) {
@@ -840,11 +1423,68 @@ export function useConnection({
           };
         }
 
+        // [spring-ai-mcp-inspector PATCH] Guard against stale handshake: if a
+        // newer connect attempt has already started, skip setting the transport
+        // and server info so the old handshake cannot overwrite the active
+        // session's state. Refs #157.
+        if (generation !== connectAttemptRef.current) {
+          void client.close().catch(() => {});
+          return;
+        }
+
+        // [spring-ai-mcp-inspector PATCH] Leave the Connected state when the
+        // transport dies mid-session (see NOTICE.d/transport-death-leaves-connected.txt).
+        // The proxy closes the downstream SSE stream once the upstream liveness
+        // probe fails; on the wire that arrives as an EventSource error (the
+        // eventsource polyfill emits `error` and schedules a reconnect), which
+        // the SDK surfaces through transport.onerror. Nothing else updates
+        // connectionStatus after "connected", so without this wrapper the
+        // sidebar keeps showing Connected for a dead upstream. The wrapper
+        // delegates to the protocol handler first so the SDK's own error path
+        // keeps running; user-initiated disconnects are unaffected, because
+        // close() aborts the eventsource and the abort error is swallowed.
+        const protocolOnError = transport.onerror;
+        transport.onerror = (error: Error) => {
+          protocolOnError?.(error);
+          setConnectionError(connectionFailureFromError(error));
+          setConnectionStatus("error");
+          setServerImplementation(null);
+        };
+
+        // [spring-ai-mcp-inspector PATCH] Exception-leak join (#251): observe
+        // outgoing JSON-RPC frames so the Tool Result pane can join its
+        // displayed response with the annotated timeline event by request id
+        // (see leakAnnotations.ts); send-side twin of the onmessage wrapper
+        // above.
+        if (transport.send) {
+          const protocolSend = transport.send.bind(transport);
+          transport.send = async (
+            message: Parameters<Transport["send"]>[0],
+          ) => {
+            noteOutgoingRequestId(message);
+            return protocolSend(message);
+          };
+        }
+
         setClientTransport(transport);
 
         capabilities = client.getServerCapabilities();
         const serverInfo = client.getServerVersion();
         setServerImplementation(serverInfo || null);
+        // [spring-ai-mcp-inspector PATCH] Publish the observed handshake for
+        // the VersionBadge. On a transport-level resume (client.connect
+        // returns early when the transport already has a session id) no
+        // initialize frame passes, and the badge honestly shows unknown.
+        setInitializeSnapshot(
+          observedInitializeRef.current && {
+            clientRequestedVersion: observedInitializeRef.current.requestedVersion,
+            negotiatedVersion: observedInitializeRef.current.negotiatedVersion,
+            serverName: observedInitializeRef.current.serverInfo?.name ?? null,
+            serverVersion:
+              observedInitializeRef.current.serverInfo?.version ?? null,
+            capabilities: observedInitializeRef.current.capabilities,
+          },
+        );
         const initializeRequest = {
           method: "initialize",
         };
@@ -861,6 +1501,14 @@ export function useConnection({
           error,
         );
 
+        // [spring-ai-mcp-inspector PATCH] If a newer connect attempt has
+        // already started, ignore this stale error so it cannot overwrite the
+        // active session's connection status or error. Refs #157.
+        if (generation !== connectAttemptRef.current) {
+          void client.close().catch(() => {});
+          return;
+        }
+
         // Check if it's a proxy auth error
         if (isProxyAuthError(error)) {
           toast({
@@ -874,8 +1522,19 @@ export function useConnection({
         }
 
         const shouldRetry = await handleAuthError(error);
+        // [spring-ai-mcp-inspector PATCH] handleAuthError awaits OAuth scope
+        // discovery and the auth() flow, so the generation may have moved on
+        // while we were waiting: re-check before any state write (retry,
+        // auth-error banner, generic error) so a stale attempt's auth failure
+        // cannot overwrite the newer session's status or error state.
+        // Refs #157.
+        if (generation !== connectAttemptRef.current) {
+          void client.close().catch(() => {});
+          return;
+        }
         if (shouldRetry) {
-          return connect(undefined, retryCount + 1);
+          await connect(undefined, retryCount + 1);
+          return;
         }
         if (isConnectionAuthError(error)) {
           // [spring-ai-mcp-inspector PATCH] OAuth already failed
@@ -886,6 +1545,7 @@ export function useConnection({
           // See NOTICE.d/connect-401-banner.txt.
           setConnectionError(connectionFailureFromError(error));
           setConnectionStatus("error");
+          setServerImplementation(null);
           return;
         }
         // [spring-ai-mcp-inspector PATCH] Surface connection failures in the
@@ -897,8 +1557,24 @@ export function useConnection({
         // about. Before this patch the rethrow reached the outer catch, which
         // set the same "error" status; only the toast is dropped, since the
         // alert now carries the reason in place.
+        // [spring-ai-mcp-inspector PATCH] Also clear serverImplementation
+        // (this attempt may have set it at the setServerImplementation call
+        // above before the late failure). serverCapabilities needs no clear
+        // here: it is set only AFTER this try block, and the start-of-connect
+        // clear already removed the previous session's value, so it is always
+        // null at this point; the outer catch below still clears it for
+        // failures after the handshake.
         setConnectionError(connectionFailureFromError(error));
         setConnectionStatus("error");
+        setServerImplementation(null);
+        return;
+      }
+      // [spring-ai-mcp-inspector PATCH] Guard against stale handshake: if a
+      // newer connect attempt has already started, skip setting capabilities
+      // and completions so the old handshake cannot overwrite the active
+      // session's state. Refs #157.
+      if (generation !== connectAttemptRef.current) {
+        void client.close().catch(() => {});
         return;
       }
       setServerCapabilities(capabilities ?? null);
@@ -909,8 +1585,7 @@ export function useConnection({
       const makeTaskId = () => {
         // Prefer UUID when available; otherwise fall back to a reasonably unique id.
         const cryptoAny = globalThis.crypto as unknown as
-          | { randomUUID?: () => string }
-          | undefined;
+          { randomUUID?: () => string } | undefined;
         return (
           cryptoAny?.randomUUID?.() ??
           `task_${Date.now()}_${Math.random().toString(16).slice(2)}`
@@ -1084,6 +1759,10 @@ export function useConnection({
               const payload = await new Promise((resolve, reject) => {
                 onPendingRequest(request, resolve, reject);
               });
+              // If the receiver task was cleared during cleanup, skip mutation.
+              if (!receiverTasksRef.current.has(record.task.taskId)) {
+                return;
+              }
               record.resolvePayload(payload as ClientResult);
               const updated: Task = {
                 ...record.task,
@@ -1097,6 +1776,10 @@ export function useConnection({
               await upsertReceiverTask(updated);
             } catch (e) {
               record.rejectPayload(e);
+              // If the receiver task was cleared during cleanup, skip mutation.
+              if (!receiverTasksRef.current.has(record.task.taskId)) {
+                return;
+              }
               const updated: Task = {
                 ...record.task,
                 status: "failed",
@@ -1148,6 +1831,10 @@ export function useConnection({
               const payload = await new Promise((resolve) => {
                 onElicitationRequest(request, resolve);
               });
+              // If the receiver task was cleared during cleanup, skip mutation.
+              if (!receiverTasksRef.current.has(record.task.taskId)) {
+                return;
+              }
               record.resolvePayload(payload as ClientResult);
               const updated: Task = {
                 ...record.task,
@@ -1161,6 +1848,10 @@ export function useConnection({
               await upsertReceiverTask(updated);
             } catch (e) {
               record.rejectPayload(e);
+              // If the receiver task was cleared during cleanup, skip mutation.
+              if (!receiverTasksRef.current.has(record.task.taskId)) {
+                return;
+              }
               const updated: Task = {
                 ...record.task,
                 status: "failed",
@@ -1186,6 +1877,13 @@ export function useConnection({
       if (capabilities?.logging && defaultLoggingLevel) {
         lastRequest = "logging/setLevel";
         await client.setLoggingLevel(defaultLoggingLevel);
+        // [spring-ai-mcp-inspector PATCH] Check generation before mutating
+        // state after await, so a stale attempt cannot append history to
+        // the new session. Refs #157.
+        if (generation !== connectAttemptRef.current) {
+          void client.close().catch(() => {});
+          return;
+        }
         pushHistory(
           {
             method: "logging/setLevel",
@@ -1198,9 +1896,22 @@ export function useConnection({
         lastRequest = "";
       }
 
+      // If a newer connect attempt has already started, ignore this
+      // stale completion so it cannot overwrite the active session.
+      if (generation !== connectAttemptRef.current) {
+        void client.close().catch(() => {});
+        return;
+      }
+
       setMcpClient(client);
       setConnectionStatus("connected");
     } catch (e) {
+      // If a newer connect attempt has already started, ignore this
+      // stale completion so it cannot overwrite the active session.
+      if (generation !== connectAttemptRef.current) {
+        void client.close().catch(() => {});
+        return;
+      }
       if (
         lastRequest === "logging/setLevel" &&
         e instanceof McpError &&
@@ -1216,6 +1927,16 @@ export function useConnection({
         // connectionFailureFromError so the toast shows a single clean
         // message without duplicated "Error:" prefixes (the raw ${e}
         // interpolation calls Error.toString() which prepends "Error: ").
+        // [spring-ai-mcp-inspector PATCH] Authoritative toast split: the
+        // inner catch above sets connectionError, and the Sidebar effect on
+        // connectionError shows the toast + alert for handshake failures
+        // (it always returns, so those errors never reach this outer
+        // catch). This outer catch only sees post-handshake failures
+        // (notification setup, completions, logging/setLevel), where
+        // connectionError is NOT set; without this toast the user sees
+        // nothing (status=error, err=null, no toast). Base had a toast
+        // here; keep it as the single notification for this path.
+        // Refs #157.
         toast({
           title: "Connection error",
           description: `Connection failed: ${connectionFailureFromError(e).message}`,
@@ -1223,11 +1944,38 @@ export function useConnection({
         });
       }
       console.error(e);
+      // [spring-ai-mcp-inspector PATCH] Also clear the server info (whatever
+      // this attempt set or what survived from a previous session) so none of
+      // it lingers in state after a failed attempt.
       setConnectionStatus("error");
+      setServerImplementation(null);
+      setServerCapabilities(null);
+    }
+
+    } finally {
+      // [spring-ai-mcp-inspector PATCH] Only the attempt that still owns the
+      // current generation may release the guard: a stale attempt finishing
+      // here must not clear connectingRef while a newer attempt is
+      // mid-handshake, or a third connect() would slip past the double-click
+      // guard (NOTICE.d: "Stale attempts no longer release connectingRef").
+      // The recursive OAuth retry runs with retryCount > 0 and, when it
+      // completes, IS the current generation, so it must release too:
+      // gating on retryCount === 0 left the guard latched after every
+      // OAuth retry (the outer attempt had become stale), silently
+      // swallowing all later connect() calls until a page reload.
+      // Refs #157.
+      if (generation === connectAttemptRef.current) {
+        connectingRef.current = false;
+      }
     }
   };
 
   const cancelTask = async (taskId: string) => {
+    // [spring-ai-mcp-inspector PATCH] Gate tasks/cancel on the operation-level
+    // sub-capability (spec: tasks.cancel controls tasks/cancel). See issue #212.
+    if (!serverCapabilitiesRef.current?.tasks?.cancel) {
+      return;
+    }
     return makeRequest(
       {
         method: "tasks/cancel",
@@ -1238,6 +1986,11 @@ export function useConnection({
   };
 
   const listTasks = async (cursor?: string) => {
+    // [spring-ai-mcp-inspector PATCH] Gate tasks/list on the operation-level
+    // sub-capability (spec: tasks.list controls tasks/list). See issue #212.
+    if (!serverCapabilitiesRef.current?.tasks?.list) {
+      return;
+    }
     return makeRequest(
       {
         method: "tasks/list",
@@ -1248,41 +2001,140 @@ export function useConnection({
   };
 
   const disconnect = async () => {
+    // [spring-ai-mcp-inspector PATCH] Clear both error banners on disconnect:
+    // connectionError and the D3 authError (issue #54).
+    setConnectionError(null);
+    setAuthError(null);
     // Clear any receiver-side tasks + cleanup timers
     receiverTasksRef.current.forEach((record) => {
       if (record.cleanupTimeoutId) {
         clearTimeout(record.cleanupTimeoutId);
       }
+      record.rejectPayload(new McpError(ErrorCode.InternalError, "Connection reset"));
     });
     receiverTasksRef.current.clear();
 
+    // [spring-ai-mcp-inspector PATCH] Synchronously invalidate capabilities
+    // and connection ref before the awaited close, so no tasks/list or
+    // tasks/get request is emitted from stale work during disconnect.
+    // The polling guard in App.tsx reads serverCapabilitiesRef.current.tasks,
+    // and the active-tab effect reads serverCapabilities.tasks.list: both
+    // must see null before terminateSession/close yields. See issue #212.
+    serverCapabilitiesRef.current = null;
+    setServerCapabilities(null);
+    setMcpClient(null);
+
     if (transportType === "streamable-http")
-      await (
-        clientTransport as StreamableHTTPClientTransport
-      ).terminateSession();
-    await mcpClient?.close();
+      try {
+        await (
+          clientTransport as StreamableHTTPClientTransport
+        ).terminateSession();
+      } catch {
+        // 404/410/5xx from DELETE means the session is already gone,
+        // which is not a failure for this code path.
+      }
+    try {
+      await mcpClient?.close();
+    } catch {
+      // close() may throw if the transport is already in a broken state.
+    }
     const authProvider = new InspectorOAuthClientProvider(sseUrl);
     authProvider.clear();
     setMcpClient(null);
     setClientTransport(null);
     setConnectionStatus("disconnected");
+    // [spring-ai-mcp-inspector PATCH] Clear the session-scoped server info on
+    // disconnect. connectionError is deliberately NOT cleared here: the banner
+    // reset at the top of disconnect() already ran synchronously, and the
+    // sidebar Reconnect button calls onDisconnect(); onConnect() without
+    // awaiting, so a second clear after these awaits would land after a
+    // fast-failing new connect and wipe that attempt's failure.
     setCompletionsSupported(false);
     setServerCapabilities(null);
+    setServerImplementation(null);
     setMcpSessionId(null);
+    // [spring-ai-mcp-inspector PATCH] reset the proxy session id with the
+    // rest of the per-connection state
+    setProxySessionId(null);
     setMcpProtocolVersion(null);
+    // [spring-ai-mcp-inspector PATCH] Drop the observed handshake with the
+    // session it belonged to.
+    setInitializeSnapshot(null);
   };
 
   const clearRequestHistory = () => {
     setRequestHistory([]);
     setServerImplementation(null);
+    // [spring-ai-mcp-inspector PATCH] Clear persistent history (#121).
+    clearHistory(connectionId);
+  };
+
+  /**
+   * Force-tear-down any lingering session state and immediately retry the
+   * connection.  Unlike a normal Retry (which calls connect() anew), this
+   * fires-and-forgets the old transport close so it never hangs on a stuck
+   * handshake, clears the state synchronously, and bypasses the connectingRef
+   * guard so it always attempts a fresh connect even if a previous attempt is
+   * wedged.  Designed for the "Reset session" / "Force reconnect" button shown
+   * on timeout errors.
+   */
+  const resetSessionAndConnect = async () => {
+    // Fire-and-forget: close old transport without waiting for a stuck close.
+    mcpClient?.close().catch(() => {});
+    if (transportType === "streamable-http") {
+      (clientTransport as StreamableHTTPClientTransport)
+        ?.terminateSession()
+        .catch(() => {});
+    }
+
+    // Clear receiver tasks and state immediately.
+    // [spring-ai-mcp-inspector PATCH] Do NOT call authProvider.clear() here:
+    // Reset is for a stale MCP session, not the OAuth grant.  Clearing tokens
+    // forces full re-authorization with client re-registration on every Reset.
+    // authProvider.clear() stays in disconnect() only. Refs #157.
+    receiverTasksRef.current.forEach((record) => {
+      if (record.cleanupTimeoutId) {
+        clearTimeout(record.cleanupTimeoutId);
+      }
+      record.rejectPayload(new McpError(ErrorCode.InternalError, "Connection reset"));
+    });
+    receiverTasksRef.current.clear();
+    // [spring-ai-mcp-inspector PATCH] authProvider.clear() removed (see comment above).
+
+    setMcpClient(null);
+    setClientTransport(null);
+    setMcpSessionId(null);
+    setMcpProtocolVersion(null);
+    setCompletionsSupported(false);
+    setServerCapabilities(null);
+    setServerImplementation(null);
+    setConnectionError(null);
+
+    // Bump generation so any in-flight connect attempt is treated as stale.
+    ++connectAttemptRef.current;
+
+    // Bypass the connectingRef guard so we always attempt a fresh connect.
+    connectingRef.current = false;
+
+    // Now connect fresh.
+    await connect();
   };
 
   return {
     connectionStatus,
+    // [spring-ai-mcp-inspector PATCH] Transport failure (issue #56); the
+    // authorization DTO travels separately as authError (issue #54).
     connectionError,
+    authError,
     serverCapabilities,
     serverImplementation,
     mcpClient,
+    mcpSessionId,
+    // [spring-ai-mcp-inspector PATCH] proxy-side session id for keep-alive
+    proxySessionId,
+    // [spring-ai-mcp-inspector PATCH] Observed initialize handshake for the
+    // VersionBadge in the connect zone (src/lib/protocolRevision.ts).
+    initializeSnapshot,
     requestHistory,
     clearRequestHistory,
     makeRequest,
@@ -1293,5 +2145,6 @@ export function useConnection({
     completionsSupported,
     connect,
     disconnect,
+    resetSessionAndConnect,
   };
 }

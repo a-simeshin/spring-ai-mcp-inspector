@@ -21,6 +21,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -32,6 +33,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema;
@@ -63,6 +65,7 @@ import io.inspector.mcp.core.bootstrap.BootstrapHtmlRenderer;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrap;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapAssembler;
 import io.inspector.mcp.core.client.ExternalStdioClientFactory;
+import io.inspector.mcp.core.client.InitializeResultCapturingTransport;
 import io.inspector.mcp.core.client.InspectorClientHandlers;
 import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
 import io.inspector.mcp.core.client.PendingServerRequests;
@@ -72,11 +75,13 @@ import io.inspector.mcp.core.dto.ConnectRequest;
 import io.inspector.mcp.core.dto.JsonRpcRelay;
 import io.inspector.mcp.core.dto.RootDto;
 import io.inspector.mcp.core.dto.RootsDto;
+import io.inspector.mcp.core.dto.SkillsExtensionSupport;
 import io.inspector.mcp.core.introspect.McpBeanIntrospector;
 import io.inspector.mcp.core.introspect.check.JsonSchemaCompatibilityChecker;
 import io.inspector.mcp.core.introspect.model.IntrospectionReport;
 import io.inspector.mcp.core.introspect.model.McpElementInfo;
 import io.inspector.mcp.core.introspect.model.SchemaWarning;
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
 import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthInitiateResponse;
@@ -113,6 +118,12 @@ public class InspectorHandler implements ApplicationContextAware {
 	private static final Duration SESSION_CLOSE_BUDGET = Duration.ofSeconds(11);
 
 	/**
+	 * Budget for retrying a contended session-sink emit, see {@link #emitSessionEvent}.
+	 * Same bound as the proxy session emits (ProxySession.EMIT_SPIN_BUDGET).
+	 */
+	private static final Duration EMIT_SPIN_BUDGET = Duration.ofSeconds(1);
+
+	/**
 	 * Shared CSPRNG for OAuth {@code state} generation. {@link SecureRandom} is
 	 * thread-safe and expensive to seed, so a single instance is reused.
 	 */
@@ -145,6 +156,12 @@ public class InspectorHandler implements ApplicationContextAware {
 	private final BootstrapHtmlRenderer bootstrapHtmlRenderer;
 
 	private final ConcurrentMap<String, SessionContext> sessions = new ConcurrentHashMap<>();
+
+	/**
+	 * Keep-alive sinks and trackers for proxy sessions (the UI's default connection
+	 * mode); {@code null} when proxy keep-alive streaming is not wired.
+	 */
+	private final KeepAliveEventRegistry keepAliveEvents;
 
 	/** The context this bean belongs to; {@code null} when built outside a container. */
 	private ApplicationContext applicationContext;
@@ -181,6 +198,29 @@ public class InspectorHandler implements ApplicationContextAware {
 			final JsonMapper objectMapper, final InspectorOAuthClient oauthClient,
 			final McpInspectorProperties properties, final InspectorBootstrapAssembler bootstrapAssembler,
 			final BootstrapHtmlRenderer bootstrapHtmlRenderer) {
+		this(transportDetector, loopbackFactory, externalStdioFactory, tokenProvider, objectMapper, oauthClient,
+				properties, bootstrapAssembler, bootstrapHtmlRenderer, null);
+	}
+
+	/**
+	 * Full constructor that also resolves keep-alive state for proxy sessions.
+	 * @param transportDetector the transport detector
+	 * @param loopbackFactory the loopback MCP client factory
+	 * @param externalStdioFactory the external stdio client factory
+	 * @param tokenProvider the inspector auth token provider
+	 * @param objectMapper the JSON object mapper
+	 * @param oauthClient the OAuth client
+	 * @param properties the inspector properties
+	 * @param bootstrapAssembler the bootstrap assembler
+	 * @param bootstrapHtmlRenderer the bootstrap HTML renderer
+	 * @param keepAliveEvents the registry holding proxy-session keep-alive sinks and
+	 * trackers; {@code null} keeps the REST-session-only behaviour
+	 */
+	public InspectorHandler(final TransportDetector transportDetector, final LoopbackMcpClientFactory loopbackFactory,
+			final ExternalStdioClientFactory externalStdioFactory, final InspectorAuthTokenProvider tokenProvider,
+			final JsonMapper objectMapper, final InspectorOAuthClient oauthClient,
+			final McpInspectorProperties properties, final InspectorBootstrapAssembler bootstrapAssembler,
+			final BootstrapHtmlRenderer bootstrapHtmlRenderer, final KeepAliveEventRegistry keepAliveEvents) {
 		this.transportDetector = transportDetector;
 		this.loopbackFactory = loopbackFactory;
 		this.externalStdioFactory = externalStdioFactory;
@@ -190,6 +230,7 @@ public class InspectorHandler implements ApplicationContextAware {
 		this.properties = properties;
 		this.bootstrapAssembler = bootstrapAssembler;
 		this.bootstrapHtmlRenderer = bootstrapHtmlRenderer;
+		this.keepAliveEvents = keepAliveEvents;
 	}
 
 	private McpInspectorProperties.Timeouts resolveTimeouts() {
@@ -355,7 +396,16 @@ public class InspectorHandler implements ApplicationContextAware {
 		}
 		final SessionContext ctx = this.sessions.get(sessionId);
 		if (ctx == null) {
-			return ServerResponse.notFound().build();
+			// Not a REST session: stream the proxy session's keep-alive sink when
+			// one is registered (the UI's default connection mode).
+			final Sinks.Many<ServerSentEvent<String>> proxySink = (this.keepAliveEvents != null)
+					? this.keepAliveEvents.sink(sessionId) : null;
+			if (proxySink == null) {
+				return ServerResponse.notFound().build();
+			}
+			return ServerResponse.ok()
+				.contentType(MediaType.TEXT_EVENT_STREAM)
+				.body(BodyInserters.fromServerSentEvents(proxySink.asFlux()));
 		}
 		return ServerResponse.ok()
 			.contentType(MediaType.TEXT_EVENT_STREAM)
@@ -448,6 +498,49 @@ public class InspectorHandler implements ApplicationContextAware {
 		return ServerResponse.ok()
 			.contentType(MediaType.APPLICATION_JSON)
 			.bodyValue(new RootsDto(new ArrayList<>(ctx.roots())));
+	}
+
+	/**
+	 * Serializes a keep-alive ping timestamp into the unified {@code {"at": ...}} payload
+	 * shape shared with the WebMVC stack.
+	 * @param at the ping timestamp in ISO-8601 form
+	 * @return the JSON payload
+	 */
+	private String keepAlivePayload(final String at) {
+		return "{\"at\":\"" + at + "\"}";
+	}
+
+	/**
+	 * Returns the keep-alive state for the given session. The UI subscribes via SSE for
+	 * live {@code mcp:keepalive-ping} events and polls this endpoint for the initial
+	 * snapshot.
+	 * @param request the incoming request; must carry {@code sessionId}
+	 * @return 200 with the current {@link KeepAliveTracker.State} as JSON, or 404 when
+	 * the session is unknown
+	 */
+	public Mono<ServerResponse> keepalive(final ServerRequest request) {
+		final String sessionId = resolveSessionId(request);
+		final SessionContext ctx = (sessionId != null) ? this.sessions.get(sessionId) : null;
+		KeepAliveTracker tracker = (ctx != null) ? ctx.keepAliveTracker() : null;
+		if (tracker == null && sessionId != null && this.keepAliveEvents != null) {
+			// No REST session: the id may belong to a UI connection relayed through
+			// the SSE/stdio/streamable proxy, the UI's default connection mode.
+			tracker = this.keepAliveEvents.tracker(sessionId);
+		}
+		if (ctx == null && tracker == null) {
+			return ServerResponse.status(404).bodyValue(Map.of("error", "unknown session: " + sessionId));
+		}
+		if (tracker == null) {
+			return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(Map.of("observed", false));
+		}
+		final KeepAliveTracker.State snapshot = tracker.snapshot(Instant.now());
+		final Map<String, Object> body = new LinkedHashMap<>();
+		body.put("observed", snapshot.lastPingAt() != null);
+		body.put("lastPingAt", (snapshot.lastPingAt() != null) ? snapshot.lastPingAt().toString() : null);
+		body.put("recentPings", snapshot.recentPings().stream().map(Instant::toString).toList());
+		body.put("estimatedIntervalMillis", snapshot.estimatedIntervalMillis());
+		body.put("isStale", snapshot.isStale());
+		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(body);
 	}
 
 	/**
@@ -596,20 +689,44 @@ public class InspectorHandler implements ApplicationContextAware {
 	private Map<String, Object> openSession(final ConnectRequest body) {
 		final String sessionId = UUID.randomUUID().toString();
 		final SessionContextHolder holder = new SessionContextHolder();
+		final KeepAliveTracker keepAliveTracker = new KeepAliveTracker();
 		final InspectorClientHandlers handlers = new InspectorClientHandlers(
 				(req) -> handleSamplingRequest(sessionId, holder, req),
 				(req) -> handleElicitationRequest(sessionId, holder, req),
 				(req) -> handleUrlElicitationRequest(sessionId, holder, req));
 
-		final McpSyncClient client = (body != null && body.externalCommand() != null
-				&& !body.externalCommand().isBlank())
-						? this.externalStdioFactory.forCommand(splitCommand(body.externalCommand()), Map.of())
-						: buildLoopbackClient(handlers);
+		final McpSyncClient client;
+		final AtomicReference<InitializeResultCapturingTransport> initializeCapture = new AtomicReference<>();
+		if (body != null && body.externalCommand() != null && !body.externalCommand().isBlank()) {
+			client = this.externalStdioFactory.forCommand(splitCommand(body.externalCommand()), Map.of(),
+					initializeCapture);
+		}
+		else {
+			client = buildLoopbackClient(handlers, initializeCapture, keepAliveTracker);
+		}
 
 		client.initialize();
 
 		final Sinks.Many<ServerSentEvent<String>> sink = Sinks.many().multicast().onBackpressureBuffer(256, false);
-		final SessionContext ctx = new SessionContext(client, sink);
+		final SessionContext ctx = new SessionContext(client, sink, keepAliveTracker);
+		// SEP-2640: detect the skills extension from the raw initialize frame so the
+		// session model (and the UI's Skills tab gate) can see it. The canonical
+		// declaration lives in capabilities.extensions, which the SDK's typed
+		// ServerCapabilities drops, so detection reads the frame captured at the
+		// transport seam. Parsing tolerates absent or malformed declarations and never
+		// fails the connection.
+		try {
+			final InitializeResultCapturingTransport capture = initializeCapture.get();
+			final Map<String, Object> rawInitializeResult = (capture != null) ? capture.rawInitializeResult() : null;
+			ctx.skillsExtension(SkillsExtensionSupport.fromRawInitializeResult(rawInitializeResult));
+		}
+		catch (final Exception ex) {
+			LOG.debug("skills extension detection failed: {}", ex.toString());
+		}
+		keepAliveTracker.setListener((at) -> sink.tryEmitNext(ServerSentEvent.<String>builder()
+			.event("mcp:keepalive-ping")
+			.data(keepAlivePayload(at.toString()))
+			.build()));
 		holder.ctx = ctx;
 		this.sessions.put(sessionId, ctx);
 		if (this.closed) {
@@ -629,10 +746,14 @@ public class InspectorHandler implements ApplicationContextAware {
 		result.put("sessionId", sessionId);
 		result.put("serverName", (info != null) ? info.name() : null);
 		result.put("serverVersion", (info != null) ? info.version() : null);
+		final SkillsExtensionSupport skills = ctx.skillsExtension();
+		result.put("skillsExtension", Map.of("supported", skills.supported(), "directoryRead", skills.directoryRead()));
 		return result;
 	}
 
-	private McpSyncClient buildLoopbackClient(final InspectorClientHandlers handlers) {
+	private McpSyncClient buildLoopbackClient(final InspectorClientHandlers handlers,
+			final AtomicReference<InitializeResultCapturingTransport> initializeCapture,
+			final KeepAliveTracker keepAliveTracker) {
 		final DetectedTransport transport = this.transportDetector.detect();
 		final int port = this.listeningPort.get();
 		if (port <= 0) {
@@ -640,9 +761,12 @@ public class InspectorHandler implements ApplicationContextAware {
 		}
 		final String host = "127.0.0.1";
 		return switch (transport.type()) {
-			case SSE -> this.loopbackFactory.forSse(host, port, transport.endpoint(), handlers);
-			case STREAMABLE -> this.loopbackFactory.forStreamable(host, port, transport.endpoint(), handlers);
-			case STATELESS -> this.loopbackFactory.forStateless(host, port, transport.endpoint(), handlers);
+			case SSE -> this.loopbackFactory.forSse(host, port, transport.endpoint(), handlers, initializeCapture,
+					keepAliveTracker);
+			case STREAMABLE -> this.loopbackFactory.forStreamable(host, port, transport.endpoint(), handlers,
+					initializeCapture, keepAliveTracker);
+			case STATELESS ->
+				this.loopbackFactory.forStateless(host, port, transport.endpoint(), handlers, initializeCapture);
 			case STDIO_NO_HTTP -> throw new IllegalStateException(
 					"loopback connect not supported for STDIO_NO_HTTP transport — use externalCommand");
 			case UNKNOWN -> throw new IllegalStateException(
@@ -750,11 +874,42 @@ public class InspectorHandler implements ApplicationContextAware {
 	private void broadcast(final SessionContext ctx, final String eventName, final Object payload) {
 		try {
 			final String json = this.objectMapper.writeValueAsString(payload);
-			ctx.sink().tryEmitNext(ServerSentEvent.<String>builder().event(eventName).data(json).build());
+			emitSessionEvent(ctx.sink(), eventName,
+					ServerSentEvent.<String>builder().event(eventName).data(json).build());
 		}
 		catch (final Exception ex) {
 			LOG.debug("Failed to emit SSE event {}: {}", eventName, ex.toString());
 		}
+	}
+
+	/**
+	 * Emits a server-initiated SSE frame onto a session sink, retrying while the emit is
+	 * contended. {@code FAIL_NON_SERIALIZED} means another thread currently owns the
+	 * sink's CAS: the frame was NOT emitted, so retrying is safe (no duplication).
+	 * Server-initiated requests (elicitation, sampling, roots-list-changed) can overlap
+	 * on one session, and a raw single {@link Sinks.Many#tryEmitNext(Object)} silently
+	 * drops the losing frame, which strands {@code awaitServerResponse} until its
+	 * timeout. The contended critical section is a buffer offer (the SSE stream off-loads
+	 * the actual send), so the spin resolves in microseconds; the bound only stops a
+	 * pathological holder from pinning the emitting thread. Every other result is
+	 * terminal (session closed) and is reported the way the raw emit used to be.
+	 * @param sink the per-session SSE sink to emit to
+	 * @param eventName the SSE event name, for diagnostics
+	 * @param event the frame to emit
+	 * @return {@code true} if the sink accepted the frame
+	 */
+	static boolean emitSessionEvent(final Sinks.Many<ServerSentEvent<String>> sink, final String eventName,
+			final ServerSentEvent<String> event) {
+		Sinks.EmitResult result = sink.tryEmitNext(event);
+		final long deadline = System.nanoTime() + EMIT_SPIN_BUDGET.toNanos();
+		while (result == Sinks.EmitResult.FAIL_NON_SERIALIZED && System.nanoTime() < deadline) {
+			Thread.onSpinWait();
+			result = sink.tryEmitNext(event);
+		}
+		if (!result.isSuccess()) {
+			LOG.debug("Failed to emit SSE event {}: {}", eventName, result.name());
+		}
+		return result.isSuccess();
 	}
 
 	private static String resolveSessionId(final ServerRequest request) {

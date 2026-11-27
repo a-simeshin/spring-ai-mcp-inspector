@@ -1,3 +1,5 @@
+// [spring-ai-mcp-inspector PATCH] Connection timeout field tests (connection-timeout.txt).
+import React from "react";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { describe, it, beforeEach, jest } from "@jest/globals";
@@ -71,6 +73,8 @@ describe("Sidebar", () => {
     onSaveConnection: jest.fn() as (name: string) => SavedConnection,
     onDeleteConnection: jest.fn(),
     onSelectConnection: jest.fn(),
+    connectionTimeout: "",
+    setConnectionTimeout: jest.fn(),
   };
 
   const renderSidebar = (props = {}) => {
@@ -115,6 +119,110 @@ describe("Sidebar", () => {
 
       fireEvent.blur(commandInput);
       expect(setCommand).toHaveBeenLastCalledWith("node");
+    });
+  });
+
+  describe("Connection timeout", () => {
+    const TIMEOUT_ERROR_TEXT =
+      "Must be a whole number of seconds between 1 and 600";
+
+    it("renders the connection timeout input field", () => {
+      renderSidebar();
+      const input = screen.getByLabelText("Connection timeout (s)");
+      expect(input).toBeInTheDocument();
+      expect(input).toHaveAttribute("type", "number");
+      expect(input).toHaveAttribute("min", "1");
+      expect(input).toHaveAttribute("max", "600");
+      expect(input).toHaveAttribute("step", "1");
+    });
+
+    it("shows placeholder with default value", () => {
+      renderSidebar();
+      const input = screen.getByLabelText("Connection timeout (s)");
+      expect(input).toHaveAttribute("placeholder", "30 (default)");
+    });
+
+    it("calls setConnectionTimeout on input change", () => {
+      const setConnectionTimeout = jest.fn();
+      renderSidebar({ setConnectionTimeout });
+      const input = screen.getByLabelText("Connection timeout (s)");
+      fireEvent.change(input, { target: { value: "45" } });
+      expect(setConnectionTimeout).toHaveBeenCalledWith("45");
+    });
+
+    // [spring-ai-mcp-inspector PATCH] issue #269 rework + #335 rebase owner
+    // decision (2026-11-19): the timeout validator and its validation state
+    // live in App (shared connect handler). Sidebar only renders the field,
+    // delegates blur validation via the validateConnectionTimeout prop and
+    // mirrors the timeoutError prop for the highlight, the inline error and
+    // the Connect disable condition. The value matrix moved to
+    // App.connectionTimeoutPersistence.test.tsx.
+    it("delegates blur validation to the shared App handler", () => {
+      const validateConnectionTimeout = jest.fn();
+      renderSidebar({ validateConnectionTimeout });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      fireEvent.blur(screen.getByLabelText("Connection timeout (s)"));
+      expect(validateConnectionTimeout).toHaveBeenCalledTimes(1);
+    });
+
+    it("surfaces the timeoutError prop as the inline field error", () => {
+      renderSidebar({ timeoutError: TIMEOUT_ERROR_TEXT });
+      expect(screen.getByRole("alert")).toHaveTextContent(TIMEOUT_ERROR_TEXT);
+      expect(screen.getByLabelText("Connection timeout (s)")).toHaveClass(
+        "border-red-500",
+      );
+    });
+
+    it("disables Connect while timeoutError is set in proxy mode", () => {
+      renderSidebar({ timeoutError: TIMEOUT_ERROR_TEXT });
+      expect(
+        screen.getByRole("button", { name: /^connect$/i }),
+      ).toBeDisabled();
+    });
+
+    it("keeps Connect enabled in direct mode even when timeoutError is set", () => {
+      const onConnect = jest.fn();
+      renderSidebar({
+        connectionType: "direct",
+        timeoutError: TIMEOUT_ERROR_TEXT,
+        onConnect,
+      });
+      const connectButton = screen.getByRole("button", { name: /^connect$/i });
+      expect(connectButton).toBeEnabled();
+      fireEvent.click(connectButton);
+      expect(onConnect).toHaveBeenCalledTimes(1);
+    });
+
+    it("renders for all transport types", () => {
+      const transports = ["stdio", "sse", "streamable-http"] as const;
+      for (const transportType of transports) {
+        const { unmount } = renderSidebar({ transportType });
+        expect(
+          screen.getByLabelText("Connection timeout (s)"),
+        ).toBeInTheDocument();
+        unmount();
+      }
+    });
+
+    it("hides the field for direct connections", () => {
+      renderSidebar({ connectionType: "direct" });
+      expect(
+        screen.queryByLabelText("Connection timeout (s)"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("connects in direct mode with a stale invalid persisted timeout", () => {
+      const onConnect = jest.fn();
+      renderSidebar({
+        connectionType: "direct",
+        connectionTimeout: "700",
+        onConnect,
+      });
+      const connectButton = screen.getByRole("button", { name: /^connect$/i });
+      expect(connectButton).toBeEnabled();
+      fireEvent.click(connectButton);
+      expect(onConnect).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
   });
 

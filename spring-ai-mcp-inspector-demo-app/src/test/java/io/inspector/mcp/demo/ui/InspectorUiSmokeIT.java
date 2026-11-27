@@ -201,7 +201,7 @@ class InspectorUiSmokeIT {
 
 	/** Sidebar wrapper — the {@code bg-card border-r border-border} flex column. */
 	private static SelenideElement sidebar() {
-		return $(".bg-card.border-r");
+		return $("[data-testid=sidebar]");
 	}
 
 	@Test

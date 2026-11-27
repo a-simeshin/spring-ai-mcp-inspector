@@ -19,8 +19,12 @@ package io.inspector.mcp.core.proxy;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema.JSONRPCMessage;
@@ -97,6 +101,15 @@ public final class ProxySession {
 	 */
 	private static final Duration UPSTREAM_CLOSE_TIMEOUT = Duration.ofSeconds(5);
 
+	/**
+	 * Bound on the {@code FAIL_NON_SERIALIZED} retry spin in
+	 * {@link #emitFromBrowser(JsonNode)}. The contended critical section is a CAS (the
+	 * browserToTarget subscriber off-loads the actual send), so the spin resolves in
+	 * microseconds; the bound only stops a pathological holder from pinning a
+	 * non-blocking thread.
+	 */
+	private static final Duration EMIT_SPIN_BUDGET = Duration.ofSeconds(1);
+
 	/** Web-app session identifier. Random UUID by default. */
 	private final String sessionId;
 
@@ -118,6 +131,9 @@ public final class ProxySession {
 	/** Optional MCP session id captured from the upstream transport's response. */
 	private volatile String upstreamSessionId;
 
+	/** Upstream target URI resolved at open time, for D5-redacted error DTO urls. */
+	private volatile URI targetUri;
+
 	/**
 	 * True once this session's initialize response was augmented with a proxy-injected
 	 * {@code capabilities.tasks} capability. Only such sessions get their
@@ -127,6 +143,75 @@ public final class ProxySession {
 	 * task registry. See the proxy controllers' interception paths.
 	 */
 	private volatile boolean tasksInterceptionEnabled;
+
+	/**
+	 * Owning browser-session id of the bound auth profile; {@code null} when the session
+	 * carries no profile.
+	 */
+	private volatile String ownerId;
+
+	/**
+	 * Bound auth-profile id; {@code null} when the session carries no profile.
+	 */
+	private volatile String profileId;
+
+	/**
+	 * Live {@code Authorization} header value read by the upstream transport's request
+	 * customizer; updated by the OAuth2 one-retry path after a token refresh so the
+	 * retried call carries the fresh token without rebuilding the transport.
+	 */
+	private final AtomicReference<String> authorizationRef;
+
+	/**
+	 * Set once the legacy-session WARN has been logged for this session; guards against
+	 * log flooding when the same unbound session is accessed repeatedly.
+	 */
+	private final AtomicBoolean legacyAccessWarned = new AtomicBoolean();
+
+	/**
+	 * Atomically marks the legacy-session WARN as logged for this session.
+	 * @return {@code true} on the first call (caller should log), {@code false} on
+	 * repeats
+	 */
+	public boolean markLegacyAccessWarned() {
+		return this.legacyAccessWarned.compareAndSet(false, true);
+	}
+
+	/**
+	 * Binds the session to an owner-scoped auth profile (D8). Called by the proxy
+	 * controllers before the proxy pumps start; the registry uses the binding to clear
+	 * the profile when the session closes.
+	 * @param ownerId the owning browser-session id
+	 * @param profileId the bound profile id
+	 */
+	public void bindProfile(final String ownerId, final String profileId) {
+		this.ownerId = ownerId;
+		this.profileId = profileId;
+	}
+
+	/**
+	 * Returns the owning browser-session id of the bound auth profile.
+	 * @return the owner id, or {@code null} when no profile is bound
+	 */
+	public String ownerId() {
+		return this.ownerId;
+	}
+
+	/**
+	 * Returns the bound auth-profile id.
+	 * @return the bound profile id, or {@code null} when no profile is bound
+	 */
+	public String profileId() {
+		return this.profileId;
+	}
+
+	/**
+	 * Returns the live authorization header reference updated on token refresh.
+	 * @return the reference (never {@code null})
+	 */
+	public AtomicReference<String> authorizationRef() {
+		return this.authorizationRef;
+	}
 
 	/** Updated on every frame routed in either direction. */
 	private volatile Instant lastActivity;
@@ -154,13 +239,83 @@ public final class ProxySession {
 	 * probe uses it when the first relayed POST fails.
 	 */
 	private volatile URI resolvedTarget;
+||||||| 059b36d4
+
+	 * IDs of active liveness-probe requests that must not be forwarded to the browser.
+	 */
+	private final Set<String> probeIds = ConcurrentHashMap.newKeySet();
+
+	/** Monotonic counter for generating unique probe request IDs. */
+	private static final AtomicLong PROBE_ID_SEQ = new AtomicLong(0);
+
+	private final io.inspector.mcp.core.keepalive.KeepAliveTracker keepAliveTracker;
 
 	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
 			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser) {
+		this(sessionId, targetTransport, browserToTarget, targetToBrowser, new AtomicReference<>(), null);
+	}
+
+	/**
+	 * Creates a session whose live {@code Authorization} reference is shared with the
+	 * upstream transport's request customizer (D9): the OAuth2 one-retry path refreshes
+	 * the token through the same reference the transport reads, so a retried call carries
+	 * the fresh token without rebuilding the transport.
+	 * @param sessionId the proxy session identifier
+	 * @param targetTransport the upstream client transport
+	 * @param browserToTarget the browser→target sink
+	 * @param targetToBrowser the target→browser sink
+	 * @param authorizationRef the shared live authorization reference (never
+	 * {@code null})
+	 */
+	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
+			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser,
+			final AtomicReference<String> authorizationRef) {
+		this(sessionId, targetTransport, browserToTarget, targetToBrowser, authorizationRef, null);
+	}
+
+	/**
+	 * Full constructor carrying the keep-alive tracker tapping the target transport.
+	 * @param sessionId the proxy-side session identifier
+	 * @param targetTransport the transport toward the target MCP server; when a tracker
+	 * is given this is expected to be a ping-detecting decoration so inbound pings reach
+	 * the tracker
+	 * @param browserToTarget inbound frames from the browser
+	 * @param targetToBrowser frames from the target server
+	 * @param keepAliveTracker per-session keep-alive tracker; may be {@code null} when
+	 * this session is not keep-alive tracked
+	 */
+	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
+			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser,
+			final io.inspector.mcp.core.keepalive.KeepAliveTracker keepAliveTracker) {
+		this(sessionId, targetTransport, browserToTarget, targetToBrowser, null, keepAliveTracker);
+	}
+
+	/**
+	 * Full constructor: shares the live {@code Authorization} reference with the upstream
+	 * transport's request customizer (D9): the OAuth2 one-retry path refreshes the token
+	 * through the same reference the transport reads, so a retried call carries the fresh
+	 * token without rebuilding the transport; when a tracker is given the target
+	 * transport is expected to be a ping-detecting decoration so inbound pings reach the
+	 * tracker.
+	 * @param sessionId the proxy session identifier
+	 * @param targetTransport the upstream client transport
+	 * @param browserToTarget the browser→target sink
+	 * @param targetToBrowser the target→browser sink
+	 * @param authorizationRef the shared live authorization reference (never
+	 * {@code null})
+	 * @param keepAliveTracker per-session keep-alive tracker; may be {@code null} when
+	 * this session is not keep-alive tracked
+	 */
+	public ProxySession(final String sessionId, final McpClientTransport targetTransport,
+			final Sinks.Many<JsonNode> browserToTarget, final Sinks.Many<JsonNode> targetToBrowser,
+			final AtomicReference<String> authorizationRef,
+			final io.inspector.mcp.core.keepalive.KeepAliveTracker keepAliveTracker) {
 		this.sessionId = sessionId;
 		this.targetTransport = targetTransport;
 		this.browserToTarget = browserToTarget;
 		this.targetToBrowser = targetToBrowser;
+		this.authorizationRef = (authorizationRef != null) ? authorizationRef : new AtomicReference<>();
+		this.keepAliveTracker = keepAliveTracker;
 		this.lastActivity = Instant.now();
 		// suppressCancel: one subscriber going away (a browser tab closing its SSE
 		// stream) must not cancel — and so terminate — the future every other
@@ -192,6 +347,15 @@ public final class ProxySession {
 
 	public McpClientTransport targetTransport() {
 		return this.targetTransport;
+	}
+
+	/**
+	 * The keep-alive tracker tapped into this session's target transport, when keep-alive
+	 * tracking is enabled for this session.
+	 * @return the tracker, or {@code null} when the session is not tracked
+	 */
+	public io.inspector.mcp.core.keepalive.KeepAliveTracker keepAliveTracker() {
+		return this.keepAliveTracker;
 	}
 
 	public Sinks.Many<JsonNode> browserToTarget() {
@@ -229,6 +393,14 @@ public final class ProxySession {
 		this.tasksInterceptionEnabled = true;
 	}
 
+	public URI targetUri() {
+		return this.targetUri;
+	}
+
+	public void targetUri(final URI value) {
+		this.targetUri = value;
+	}
+
 	public Instant lastActivity() {
 		return this.lastActivity;
 	}
@@ -236,6 +408,68 @@ public final class ProxySession {
 	/** Records that a frame was just relayed; called by the proxy controllers. */
 	public void touch() {
 		this.lastActivity = Instant.now();
+	}
+
+	/**
+	 * Pushes a browser-originated frame into the {@code browserToTarget} sink, safe to
+	 * call from any number of threads at once.
+	 *
+	 * <p>
+	 * Concurrent {@code POST}s on one session are legal MCP traffic (the browser fires
+	 * parallel {@code tools/call} requests), but the raw
+	 * {@link Sinks.Many#tryEmitNext(Object)} returns {@code FAIL_NON_SERIALIZED} the
+	 * moment another thread owns the sink's CAS, which used to surface to the browser as
+	 * an HTTP 500. This method retries that concurrency signal instead of failing.
+	 * @param frame the JSON-RPC frame the browser posted (never {@code null})
+	 * @return {@code true} when the frame was accepted; {@code false} on a terminal
+	 * (non-concurrency) emit failure such as a cancelled or completed sink
+	 */
+	public boolean emitFromBrowser(final JsonNode frame) {
+		// FAIL_NON_SERIALIZED means another thread currently owns the sink's CAS: the
+		// frame was NOT emitted, so retrying is safe (no duplication). The contended
+		// critical section is a queue offer (the relay pump off-loads the actual
+		// upstream send), so the spin resolves in nanoseconds; the deadline only stops
+		// a pathological holder from pinning a non-blocking Netty event-loop thread.
+		// Every other result is terminal: a cancelled or completed sink (session
+		// closed) reports the frame as rejected, and the caller answers 5xx/404.
+		Sinks.EmitResult result = this.browserToTarget.tryEmitNext(frame);
+		final long deadline = System.nanoTime() + EMIT_SPIN_BUDGET.toNanos();
+		while (result == Sinks.EmitResult.FAIL_NON_SERIALIZED && System.nanoTime() < deadline) {
+			Thread.onSpinWait();
+			result = this.browserToTarget.tryEmitNext(frame);
+		}
+		if (!result.isSuccess()) {
+			LOG.debug("proxy[{}] browser frame rejected: {}", this.sessionId, result.name());
+		}
+		return result.isSuccess();
+	}
+
+	/**
+	 * Pushes a target-originated frame into the {@code targetToBrowser} sink, safe to
+	 * call from any number of threads at once.
+	 *
+	 * <p>
+	 * Symmetric inbound twin of {@link #emitFromBrowser(JsonNode)}: responses to
+	 * concurrent requests arrive from the upstream transport on different threads, and a
+	 * raw {@link Sinks.Many#tryEmitNext(Object)} that loses the sink's CAS returns
+	 * {@code FAIL_NON_SERIALIZED} (which used to DROP the frame, leaving the matched
+	 * per-request awaiter to run into the streamable-request timeout. The frame was not
+	 * emitted on that result, so retrying is safe (no duplication).
+	 * @param frame the JSON-RPC frame received from the upstream (never {@code null})
+	 * @return {@code true} when the frame was accepted; {@code false} on a terminal
+	 * (non-concurrency) emit failure such as a cancelled or completed sink
+	 */
+	public boolean emitFromTarget(final JsonNode frame) {
+		Sinks.EmitResult result = this.targetToBrowser.tryEmitNext(frame);
+		final long deadline = System.nanoTime() + EMIT_SPIN_BUDGET.toNanos();
+		while (result == Sinks.EmitResult.FAIL_NON_SERIALIZED && System.nanoTime() < deadline) {
+			Thread.onSpinWait();
+			result = this.targetToBrowser.tryEmitNext(frame);
+		}
+		if (!result.isSuccess()) {
+			LOG.debug("proxy[{}] target frame rejected: {}", this.sessionId, result.name());
+		}
+		return result.isSuccess();
 	}
 
 	public boolean isClosed() {
@@ -290,6 +524,63 @@ public final class ProxySession {
 		return this.closeSignal;
 	}
 
+	/**
+	 * Registers a probe request ID so that the proxy's inbound handler can recognise the
+	 * matching response and skip forwarding it to the browser.
+	 * @param id the JSON-RPC request id of the probe
+	 */
+	public void registerProbeId(final String id) {
+		this.probeIds.add(id);
+	}
+
+	/**
+	 * Returns {@code true} if the given JSON-RPC id belongs to an internal liveness probe
+	 * whose response must not be forwarded to the browser.
+	 * @param id the JSON-RPC request/response id to check
+	 * @return {@code true} if this is a probe id
+	 */
+	public boolean isProbeId(final String id) {
+		return this.probeIds.contains(id);
+	}
+
+	/**
+	 * Removes a previously registered probe ID from the set. Called after the matching
+	 * probe response has been filtered out, preventing unbounded growth of the set.
+	 * @param id the probe id to remove
+	 */
+	public void removeProbeId(final String id) {
+		this.probeIds.remove(id);
+	}
+
+	/**
+	 * Removes all registered probe IDs from the set. Called when the session closes or
+	 * when a probe times out, preventing unbounded growth of the set.
+	 */
+	public void clearProbeIds() {
+		this.probeIds.clear();
+	}
+
+	/**
+	 * Number of probe IDs currently awaiting an answer. Exposed for leak assertions in
+	 * tests.
+	 * @return the size of the probe-id set
+	 */
+	public int probeIdCount() {
+		return this.probeIds.size();
+	}
+
+	/**
+	 * Generates the next unique probe request ID. The ID is automatically registered so
+	 * its response will be filtered from the browser stream.
+	 * @return a unique string probe ID (mcpi-probe-N)
+	 */
+	public String nextProbeId() {
+		// Use string IDs with a prefix to avoid collision with normal MCP request IDs
+		final String id = "mcpi-probe-" + PROBE_ID_SEQ.incrementAndGet();
+		this.probeIds.add(id);
+		return id;
+	}
+
 	public void failUpstream(final Throwable error) {
 		if (!this.upstreamTerminated.compareAndSet(false, true)) {
 			return;
@@ -315,6 +606,8 @@ public final class ProxySession {
 		if (!this.closed.compareAndSet(false, true)) {
 			return;
 		}
+		// Clear any pending probe IDs so they do not leak past this session.
+		this.probeIds.clear();
 		// First, and lock-free: this is what actually ends the browser-facing streams.
 		this.closeFuture.complete(null);
 		try {

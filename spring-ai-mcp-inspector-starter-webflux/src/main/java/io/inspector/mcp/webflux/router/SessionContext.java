@@ -27,6 +27,8 @@ import reactor.core.publisher.Sinks;
 
 import io.inspector.mcp.core.client.PendingServerRequests;
 import io.inspector.mcp.core.dto.RootDto;
+import io.inspector.mcp.core.dto.SkillsExtensionSupport;
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
 
 /**
@@ -45,11 +47,19 @@ final class SessionContext {
 
 	private final McpSyncClient client;
 
+	private final KeepAliveTracker keepAliveTracker;
+
 	private final Sinks.Many<ServerSentEvent<String>> sink;
 
 	private final List<RootDto> roots = new CopyOnWriteArrayList<>();
 
 	private final PendingServerRequests pendingServerRequests = new PendingServerRequests();
+
+	/**
+	 * SEP-2640 skills-extension detection from the session's initialize result. Set once
+	 * after {@code connect()} and read by the UI session model.
+	 */
+	private volatile SkillsExtensionSupport skillsExtension = SkillsExtensionSupport.ABSENT;
 
 	private volatile String oauthState;
 
@@ -62,12 +72,27 @@ final class SessionContext {
 	private volatile OAuthTokenResponse oauthToken;
 
 	SessionContext(final McpSyncClient client, final Sinks.Many<ServerSentEvent<String>> sink) {
+		this(client, sink, null);
+	}
+
+	SessionContext(final McpSyncClient client, final Sinks.Many<ServerSentEvent<String>> sink,
+			final KeepAliveTracker keepAliveTracker) {
 		this.client = client;
 		this.sink = sink;
+		this.keepAliveTracker = keepAliveTracker;
 	}
 
 	McpSyncClient client() {
 		return this.client;
+	}
+
+	/**
+	 * Returns the per-session keep-alive tracker, or {@code null} when the session was
+	 * built without ping detection.
+	 * @return the tracker, or {@code null}
+	 */
+	KeepAliveTracker keepAliveTracker() {
+		return this.keepAliveTracker;
 	}
 
 	Sinks.Many<ServerSentEvent<String>> sink() {
@@ -80,6 +105,14 @@ final class SessionContext {
 
 	PendingServerRequests pendingServerRequests() {
 		return this.pendingServerRequests;
+	}
+
+	SkillsExtensionSupport skillsExtension() {
+		return this.skillsExtension;
+	}
+
+	void skillsExtension(final SkillsExtensionSupport value) {
+		this.skillsExtension = (value != null) ? value : SkillsExtensionSupport.ABSENT;
 	}
 
 	void replaceRoots(final List<RootDto> next) {

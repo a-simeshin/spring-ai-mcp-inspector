@@ -44,7 +44,9 @@ import java.util.TreeMap;
  * </ul>
  * <p>
  * Supported revisions and their method deltas are registered in a static table
- * ({@link #KNOWN_REVISIONS}) that is easy to extend with new spec revisions.
+ * ({@link #KNOWN_REVISIONS}) that is easy to extend with new spec revisions. Surface
+ * status is documented in {@code docs/mcp-surface-status.md}; {@link #KNOWN_REVISIONS}
+ * remains the single source of truth for supported revisions.
  *
  * @author Artem Simeshin
  */
@@ -60,6 +62,11 @@ public final class ProtocolRevision {
 
 	static {
 		final NavigableMap<String, Set<String>> revisions = new TreeMap<>();
+		// 2024-11-05: last legacy revision before the baseline, additive relative
+		// to its predecessor, removes nothing. Registered so a live
+		// old-server/new-client downgrade (a current client negotiating with a
+		// legacy 2024-11-05 server) is reported as DOWNGRADE, not UNKNOWN.
+		revisions.put("2024-11-05", Set.of());
 		// 2025-11-25: baseline revision, nothing removed.
 		revisions.put("2025-11-25", Set.of());
 		// 2026-07-28: stateless protocol; removes handshake, ping, logging,

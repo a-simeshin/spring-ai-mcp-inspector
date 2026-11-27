@@ -1,0 +1,16 @@
+spring-ai-mcp-inspector-ui/upstream-client/src/App.tsx, spring-ai-mcp-inspector-ui/upstream-client/src/components/InputRequiredTab.tsx, spring-ai-mcp-inspector-ui/upstream-client/src/components/InputRequiredChain.tsx, spring-ai-mcp-inspector-ui/upstream-client/src/components/TimelineTab.tsx, spring-ai-mcp-inspector-ui/upstream-client/src/lib/timelineChains.ts, spring-ai-mcp-inspector-ui/upstream-client/src/lib/__tests__/timelineChains.test.ts, spring-ai-mcp-inspector-ui/upstream-client/src/components/__tests__/InputRequiredTab.test.tsx, spring-ai-mcp-inspector-ui/upstream-client/src/components/__tests__/TimelineTab.test.tsx, spring-ai-mcp-inspector-ui/upstream-client/src/__tests__/App.inputRequiredPanel.test.tsx:
+SEP-2322 (spec revision 2026-07-28) input_required UI on top of the client
+layer from NOTICE.d/input-required-roundtrip.txt: an InputRequired panel
+(sibling of the legacy ElicitationTab, which is untouched) renders the pending
+inputRequests emitted by onInputRequired with per-type controls (string input,
+enum select, number field, boolean checkbox, raw JSON fallback), a round
+indicator, and Submit/Cancel; Submit gathers inputResponses and re-sends the
+ORIGINAL tools/call through resendToolCall with the requestState echoed
+byte-exact, Cancel abandons the chain. Timeline correlation: new lib/
+timelineChains.ts threads the server-recorded request/response pairs into one
+chain per round-trip (join edge: an input_required response carrying state S
+links to the next tools/call request echoing S in the same session), and
+TimelineTab renders each chain as one collapsed, expandable row (rounds count,
+awaiting-input / final-result / error state) plus an "input required" badge on
+standalone frames. Multi-round chains stay on one correlation id; the final
+result lands on the tools tab, so there is no dead-end truncated result.

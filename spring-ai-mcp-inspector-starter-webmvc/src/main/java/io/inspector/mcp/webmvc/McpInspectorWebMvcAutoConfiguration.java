@@ -39,7 +39,14 @@ import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.auth.AuthProfilePrefillProvider;
+import io.inspector.mcp.core.auth.AuthProfileProperties;
+import io.inspector.mcp.core.auth.AuthProfileStore;
 import io.inspector.mcp.core.auth.InspectorAuthTokenProvider;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
+import io.inspector.mcp.core.auth.OwnerTokenCodec;
+import io.inspector.mcp.core.auth.TokenEvictor;
 import io.inspector.mcp.core.bootstrap.BootstrapHtmlRenderer;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapAssembler;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapCustomizer;
@@ -50,10 +57,16 @@ import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.proxy.McpProxy;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.proxy.ProxyUpstreamProber;
 import io.inspector.mcp.core.shutdown.McpServerTransportDrain;
+import io.inspector.mcp.core.timeline.ClientConnectionRegistry;
+import io.inspector.mcp.core.timeline.ExceptionLeakDetector;
 import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 import io.inspector.mcp.core.timeline.TimelineService;
 import io.inspector.mcp.core.transport.TransportDetector;
+import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
+import io.inspector.mcp.webmvc.controller.AuthProfileController;
+import io.inspector.mcp.webmvc.controller.ClientConnectionsController;
 import io.inspector.mcp.webmvc.controller.InspectorConfigController;
 import io.inspector.mcp.webmvc.controller.InspectorIndexController;
 import io.inspector.mcp.webmvc.controller.InspectorRestController;
@@ -63,6 +76,7 @@ import io.inspector.mcp.webmvc.proxy.ProxyAuthFilter;
 import io.inspector.mcp.webmvc.proxy.ProxyConfigController;
 import io.inspector.mcp.webmvc.proxy.ProxyFetchController;
 import io.inspector.mcp.webmvc.proxy.ProxyHealthController;
+import io.inspector.mcp.webmvc.proxy.SandboxProxyController;
 import io.inspector.mcp.webmvc.proxy.SseProxyController;
 import io.inspector.mcp.webmvc.proxy.StreamableHttpProxyController;
 import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
@@ -89,11 +103,12 @@ import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 @ConditionalOnProperty(prefix = "spring.ai.mcp.inspector", name = "enabled", havingValue = "true",
 		matchIfMissing = true)
-@EnableConfigurationProperties(McpInspectorProperties.class)
+@EnableConfigurationProperties({ McpInspectorProperties.class, AuthProfileProperties.class })
 @EnableScheduling
 @Import({ InspectorRestController.class, InspectorIndexController.class, InspectorConfigController.class,
-		SseProxyController.class, StreamableHttpProxyController.class, ProxyConfigController.class,
-		ProxyHealthController.class, ProxyFetchController.class })
+		AuthProfileController.class, SseProxyController.class, StreamableHttpProxyController.class,
+		ProxyConfigController.class, ProxyHealthController.class, ProxyFetchController.class,
+		SandboxProxyController.class })
 public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	private final McpInspectorProperties properties;
@@ -138,6 +153,56 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Bean
 	@ConditionalOnMissingBean
+	public OwnerTokenCodec mcpInspectorOwnerTokenCodec() {
+		return new OwnerTokenCodec();
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public ServletSessionOwnerResolver mcpInspectorServletSessionOwnerResolver(final OwnerTokenCodec ownerTokenCodec) {
+		return new ServletSessionOwnerResolver(ownerTokenCodec);
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public AuthProfileStore mcpInspectorAuthProfileStore() {
+		return new AuthProfileStore();
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public OAuth2ClientCredentialsTokenManager mcpInspectorTokenManager(final AuthProfileStore authProfileStore,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
+		final OAuth2ClientCredentialsTokenManager manager = new OAuth2ClientCredentialsTokenManager();
+		// D9A: the manager is wired as the store's TokenEvictor so every removal path
+		// (delete/clear/clearBySession/removeExpired/update) drops the cached token AND
+		// the stored credentials together with the profile. Composite: both the CC
+		// manager and the auth-code exchanger evict tokens on profile removal.
+		final TokenEvictor compositeEvictor = (profileId) -> {
+			manager.evict(profileId);
+			authCodeExchanger.evict(profileId);
+		};
+		authProfileStore.setTokenEvictor(compositeEvictor);
+		// Generation guard: async token exchanges detect stale profile mutations.
+		manager.setGenerationGuard(authProfileStore::currentGeneration);
+		authCodeExchanger.setGenerationGuard(authProfileStore::currentGeneration);
+		return manager;
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public OAuth2AuthCodeTokenExchanger mcpInspectorAuthCodeTokenExchanger() {
+		return new OAuth2AuthCodeTokenExchanger();
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	public AuthProfilePrefillProvider mcpInspectorAuthProfilePrefillProvider(final AuthProfileProperties properties) {
+		return new AuthProfilePrefillProvider(properties);
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
 	public InspectorAuthTokenProvider mcpInspectorAuthTokenProvider() {
 		return new InspectorAuthTokenProvider(this.properties);
 	}
@@ -176,8 +241,9 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Bean
 	public FilterRegistrationBean<InspectorAuthFilter> mcpInspectorAuthFilterRegistration(
-			final InspectorAuthTokenProvider tokenProvider) {
-		final InspectorAuthFilter filter = new InspectorAuthFilter(this.properties, tokenProvider);
+			final InspectorAuthTokenProvider tokenProvider, final ServletSessionOwnerResolver sessionOwnerResolver) {
+		final InspectorAuthFilter filter = new InspectorAuthFilter(this.properties, tokenProvider,
+				sessionOwnerResolver);
 		final FilterRegistrationBean<InspectorAuthFilter> registration = new FilterRegistrationBean<>(filter);
 		registration.addUrlPatterns(this.properties.getPath() + "/api/*");
 		registration.setName("mcpInspectorAuthFilter");
@@ -187,9 +253,14 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxySessionRegistry mcpInspectorProxySessionRegistry() {
+	public ProxySessionRegistry mcpInspectorProxySessionRegistry(final AuthProfileStore authProfileStore,
+			final OAuth2AuthCodeTokenExchanger authCodeTokenExchanger) {
 		final ProxySessionRegistry registry = new ProxySessionRegistry();
 		registry.setInactivityBudget(this.properties.getTimeouts().getSessionReaper());
+		// D4: session teardown clears the bound profile; the reaper sweeps expired
+		// profiles.
+		registry.setAuthProfileStore(authProfileStore);
+		registry.setAuthCodeExchanger(authCodeTokenExchanger);
 		return registry;
 	}
 
@@ -216,27 +287,61 @@ public class McpInspectorWebMvcAutoConfiguration implements WebMvcConfigurer {
 
 	/**
 	 * REST endpoint for querying timeline events, active only when the timeline subsystem
-	 * is enabled via {@code spring.ai.mcp.inspector.timeline.enabled=true}.
+	 * is enabled via {@code spring.ai.mcp.inspector.timeline.enabled=true}. The
+	 * exception-leak detector is optional: when its bean is absent (detector disabled)
+	 * the endpoint serves events without {@code _leak} annotations.
 	 * @param timelineService the shared timeline service
+	 * @param leakDetector the optional exception-leak detector
 	 * @return the timeline controller
 	 */
 	@Bean
 	@ConditionalOnBean(TimelineService.class)
-	public TimelineController mcpInspectorTimelineController(final TimelineService timelineService) {
-		return new TimelineController(timelineService);
+	public TimelineController mcpInspectorTimelineController(final TimelineService timelineService,
+			final ObjectProvider<ExceptionLeakDetector> leakDetector) {
+		return new TimelineController(timelineService, leakDetector.getIfAvailable());
+	}
+
+	/**
+	 * REST endpoint exposing the client connection registry snapshot, active only when
+	 * client capture is enabled via
+	 * {@code spring.ai.mcp.inspector.timeline.client-capture-enabled=true} (the same
+	 * condition that gates the {@link ClientConnectionRegistry} bean in the core
+	 * auto-configuration). Mirrors the WebFlux {@code ClientConnectionsHandler}.
+	 * @param connectionRegistry the client connection registry
+	 * @return the client connections controller
+	 */
+	@Bean
+	@ConditionalOnBean(ClientConnectionRegistry.class)
+	public ClientConnectionsController mcpInspectorClientConnectionsController(
+			final ClientConnectionRegistry connectionRegistry) {
+		return new ClientConnectionsController(connectionRegistry);
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public ProxyTransportFactory mcpInspectorProxyTransportFactory(final JsonMapper objectMapper) {
-		return new ProxyTransportFactory(objectMapper);
+	public ProxyTransportFactory mcpInspectorProxyTransportFactory(final JsonMapper objectMapper,
+			final McpInspectorProperties properties) {
+		return new ProxyTransportFactory(objectMapper, properties.getTimeouts().getSseRequest(),
+				properties.getTimeouts().getSsePreflight());
 	}
 
 	@Bean
 	@ConditionalOnMissingBean
-	public McpProxy mcpInspectorMcpProxy(final JsonMapper objectMapper,
-			final ObjectProvider<McpTrafficRecorder> trafficRecorder) {
-		return new McpProxy(objectMapper, trafficRecorder.getIfAvailable());
+	public McpProxy mcpInspectorMcpProxy(final JsonMapper objectMapper, final AuthProfileStore authProfileStore,
+			final OAuth2ClientCredentialsTokenManager tokenManager,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger,
+			final ObjectProvider<McpTrafficRecorder> trafficRecorder, final McpInspectorProperties properties) {
+		return new McpProxy(objectMapper, authProfileStore, tokenManager, authCodeExchanger,
+				trafficRecorder.getIfAvailable(), properties.getProxy().getUpstreamWarmConnections());
+	}
+
+	@Bean
+	@ConditionalOnMissingBean
+	@ConditionalOnProperty(prefix = "spring.ai.mcp.inspector", name = "upstream-liveness-probe-enabled",
+			havingValue = "true", matchIfMissing = true)
+	public ProxyUpstreamProber mcpInspectorProxyUpstreamProber(final ProxySessionRegistry registry,
+			final McpInspectorProperties properties) {
+		return new ProxyUpstreamProber(registry, properties.getTimeouts());
 	}
 
 	@Bean

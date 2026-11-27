@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Play,
   ChevronDown,
@@ -11,6 +11,7 @@ import {
   RotateCcw,
   Settings,
   HelpCircle,
+  RefreshCw,
   RefreshCwOff,
   Copy,
   CheckCheck,
@@ -35,8 +36,10 @@ import { InspectorConfig } from "@/lib/configurationTypes";
 import { ConnectionStatus } from "@/lib/constants";
 import {
   humanReadableReason,
+  humanReadablePhase,
+  formatBudgetBreakdown,
   type ConnectFailure,
-} from "@/lib/connectErrors";
+} from "@/lib/connectionErrors";
 import useTheme from "../lib/hooks/useTheme";
 // Vendored: upstream imports version from monorepo root package.json
 // (../../../package.json). In our vendored layout we point at the client's
@@ -56,10 +59,24 @@ import type { SavedConnection } from "@/lib/types/savedConnection";
 import { Bookmark, Trash2, Plus } from "lucide-react";
 // [spring-ai-mcp-inspector PATCH] validateServerUrl for client-side URL format validation (see NOTICE.d/url-validation.txt).
 import { validateRedirectUrl, validateServerUrl } from "@/utils/urlValidation";
+// [spring-ai-mcp-inspector PATCH] Named auth profiles + D3 error banner
+// (issue #54).
+import AuthProfiles from "./AuthProfiles";
+import { AuthProfileSummary } from "@/lib/auth-profiles";
+import { ProxyErrorDto } from "@/lib/connectionErrors";
+// [spring-ai-mcp-inspector PATCH] Version badge in the connect zone showing
+// the negotiated protocol revision (see NOTICE.d/version-badge.txt).
+import VersionBadge from "./VersionBadge";
+import type { InitializeSnapshot } from "@/lib/protocolRevision";
 
 interface SidebarProps {
   connectionStatus: ConnectionStatus;
   connectionError: ConnectFailure | null;
+  // [spring-ai-mcp-inspector PATCH] Keep-alive observability props
+  // (#235, t_3925eae7).
+  keepAliveLastPingAt?: string | null;
+  keepAliveIsStale?: boolean;
+  keepAliveObserved?: boolean;
   transportType: "stdio" | "sse" | "streamable-http";
   setTransportType: (type: "stdio" | "sse" | "streamable-http") => void;
   command: string;
@@ -79,8 +96,24 @@ interface SidebarProps {
   setOauthClientSecret: (secret: string) => void;
   oauthScope: string;
   setOauthScope: (scope: string) => void;
+  // [spring-ai-mcp-inspector PATCH] Named auth profiles (issue #54).
+  profiles?: AuthProfileSummary[];
+  onProfilesChange?: (profiles: AuthProfileSummary[]) => void;
+  activeProfileId?: string | null;
+  onActiveProfileChange?: (profileId: string | null) => void;
+  /** D3 structured error DTO surfaced by the proxy (issue #54). */
+  // D3 authorization DTO (issue #54): the server answered and refused.
+  // Distinct from connectionError, which means the server was never reached.
+  authError?: ProxyErrorDto | null;
+  // [spring-ai-mcp-inspector PATCH] issue #269 rework: URL validation state
+  // is owned by App so the empty-state canvas CTA shares this exact state.
+  urlError: string | null;
+  setUrlError: (error: string | null) => void;
+  urlTouched: boolean;
+  setUrlTouched: (touched: boolean) => void;
   onConnect: () => void;
-  onDisconnect: () => void;
+  onDisconnect: () => Promise<void>;
+  onResetSession: () => void;
   logLevel: LoggingLevel;
   sendLogLevelRequest: (level: LoggingLevel) => void;
   loggingSupported: boolean;
@@ -88,20 +121,117 @@ interface SidebarProps {
   setConfig: (config: InspectorConfig) => void;
   connectionType: "direct" | "proxy";
   setConnectionType: (type: "direct" | "proxy") => void;
+  // [spring-ai-mcp-inspector PATCH] Optional connection timeout in seconds.
+  // Empty string = proxy default (30s). Applies to all transport types;
+  // for stdio the budget covers spawn + initialize.
+  connectionTimeout: string;
+  setConnectionTimeout: (value: string) => void;
+  // [spring-ai-mcp-inspector PATCH] Connection timeout validation state is
+  // owned by App (shared connect handler); surfaced here for the field
+  // highlight and the Connect disable condition.
+  timeoutError: string | null;
+  validateConnectionTimeout: () => void;
   serverImplementation?:
     | (WithIcons & { name?: string; version?: string; websiteUrl?: string })
     | null;
+  // [spring-ai-mcp-inspector PATCH] Observed initialize handshake for the
+  // VersionBadge (see NOTICE.d/version-badge.txt).
+  initializeSnapshot?: InitializeSnapshot | null;
   // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
   savedConnections: SavedConnection[];
   activeConnectionId?: string;
   onSaveConnection: (name: string) => SavedConnection | undefined;
   onDeleteConnection: (id: string) => void;
   onSelectConnection: (connection: SavedConnection) => void;
+  // [spring-ai-mcp-inspector PATCH] Stale auth-profile bindings (issue #267):
+  // saved connections bound to a profile name the server no longer has.
+  // Rendered as a warning banner, not a toast, with one-click fix actions.
+  staleAuthProfileBindings?: SavedConnection[];
+  onUnlinkAuthProfile?: (connectionId: string) => void;
+  onOpenAuthSettings?: () => void;
+}
+
+// [spring-ai-mcp-inspector PATCH] Keep-alive indicator component for the
+// Connection pane. Shows "Last keep-alive: Xs ago" with a ticking counter,
+// or a neutral "no keep-alive observed" state. Shows a warning banner when
+// the connection appears stale (#235, t_3925eae7).
+function KeepAliveIndicator({
+  lastPingAt,
+  isStale,
+  observed,
+}: {
+  lastPingAt?: string | null;
+  isStale?: boolean;
+  observed?: boolean;
+}) {
+  const [secondsAgo, setSecondsAgo] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!lastPingAt) {
+      setSecondsAgo(null);
+      return;
+    }
+    const update = () => {
+      const pingTime = new Date(lastPingAt).getTime();
+      const now = Date.now();
+      const diff = Math.max(0, Math.floor((now - pingTime) / 1000));
+      setSecondsAgo(diff);
+    };
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [lastPingAt]);
+
+  // [spring-ai-mcp-inspector PATCH] The banner renders in both branches: the
+  // server flags staleness also when not a single ping arrived for 90s since
+  // connect (#235), so a silent drop must not hide behind "no keep-alive
+  // observed".
+  const staleBanner = isStale ? (
+    <div
+      data-testid="keep-alive-stale-banner"
+      className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded text-xs text-yellow-800 dark:text-yellow-200"
+    >
+      <div className="flex items-start gap-1">
+        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+        <div>
+          <strong>Connection may be dead.</strong> No keep-alive pings
+          received for longer than 2x the estimated interval (or 90s when no
+          interval is known yet). This usually happens when a load balancer or
+          proxy (e.g. ALB, nginx) closes idle connections (typically after
+          60s).
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  if (!observed) {
+    return (
+      <div
+        data-testid="keep-alive-indicator"
+        className="text-xs text-gray-500 dark:text-gray-400 text-center mb-2"
+      >
+        no keep-alive observed
+        {staleBanner}
+      </div>
+    );
+  }
+
+  return (
+    <div data-testid="keep-alive-indicator" className="mb-2">
+      <div className="text-xs text-gray-600 dark:text-gray-300 text-center">
+        Last keep-alive: {secondsAgo !== null ? `${secondsAgo}s ago` : "..."}
+      </div>
+      {staleBanner}
+    </div>
+  );
 }
 
 const Sidebar = ({
   connectionStatus,
   connectionError,
+  keepAliveLastPingAt,
+  keepAliveIsStale,
+  keepAliveObserved,
   transportType,
   setTransportType,
   command,
@@ -120,8 +250,18 @@ const Sidebar = ({
   setOauthClientSecret,
   oauthScope,
   setOauthScope,
+  profiles,
+  onProfilesChange,
+  activeProfileId,
+  onActiveProfileChange,
+  authError,
+  urlError,
+  setUrlError,
+  urlTouched,
+  setUrlTouched,
   onConnect,
   onDisconnect,
+  onResetSession,
   logLevel,
   sendLogLevelRequest,
   loggingSupported,
@@ -129,12 +269,21 @@ const Sidebar = ({
   setConfig,
   connectionType,
   setConnectionType,
+  connectionTimeout,
+  setConnectionTimeout,
+  timeoutError,
+  validateConnectionTimeout,
   serverImplementation,
+  // [spring-ai-mcp-inspector PATCH] VersionBadge handshake snapshot.
+  initializeSnapshot,
   savedConnections,
   activeConnectionId,
   onSaveConnection,
   onDeleteConnection,
   onSelectConnection,
+  staleAuthProfileBindings,
+  onUnlinkAuthProfile,
+  onOpenAuthSettings,
 }: SidebarProps) => {
   const [theme, setTheme] = useTheme();
   const [showEnvVars, setShowEnvVars] = useState(false);
@@ -144,14 +293,40 @@ const Sidebar = ({
   const [showClientSecret, setShowClientSecret] = useState(false);
   const [copiedServerEntry, setCopiedServerEntry] = useState(false);
   const [copiedServerFile, setCopiedServerFile] = useState(false);
-  // [spring-ai-mcp-inspector PATCH] URL validation state: error message and touched flag.
-  const [urlError, setUrlError] = useState<string | null>(null);
-  const [urlTouched, setUrlTouched] = useState(false);
+  // [spring-ai-mcp-inspector PATCH] issue #269 rework: urlError/urlTouched
+  // moved up to App and arrive as props so the empty-state canvas CTA
+  // validates and disables under the same condition; connection timeout
+  // validation lives in App too, so timeoutError arrives as a prop.
   const { toast } = useToast();
   // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
   const [showSavedConnections, setShowSavedConnections] = useState(true);
   const [saveName, setSaveName] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+
+  // [spring-ai-mcp-inspector PATCH] Show a toast notification when a
+  // connection error occurs, and dismiss it when the error clears
+  // (on retry or successful connect). The toast ensures the error is
+  // immediately visible without scrolling, complementing the inline alert.
+  // See NOTICE.d/connect-error-toast.txt.
+  const dismissToastRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (connectionError) {
+      if (dismissToastRef.current) {
+        dismissToastRef.current();
+      }
+      const { dismiss } = toast({
+        title: "Connection Failed",
+        description: `${humanReadableReason(connectionError.reason)}${connectionError.message ? `: ${connectionError.message}` : ""}`,
+        variant: "destructive",
+      });
+      dismissToastRef.current = dismiss;
+    } else {
+      if (dismissToastRef.current) {
+        dismissToastRef.current();
+        dismissToastRef.current = null;
+      }
+    }
+  }, [connectionError, toast]);
 
   const connectionTypeTip =
     "Connect to server directly (requires CORS config on server) or via MCP Inspector Proxy";
@@ -179,7 +354,7 @@ const Sidebar = ({
         setUrlError(result.errorMessage);
       }
     },
-    [setSseUrl, urlTouched],
+    [setSseUrl, urlTouched, setUrlError],
   );
 
   const handleUrlBlur = useCallback(
@@ -188,7 +363,7 @@ const Sidebar = ({
       const result = validateServerUrl(value);
       setUrlError(result.isValid ? null : result.errorMessage);
     },
-    [],
+    [setUrlTouched, setUrlError],
   );
 
   // Shared utility function to generate server config
@@ -293,7 +468,8 @@ const Sidebar = ({
   }, [generateMCPServerFile, toast, reportError]);
 
   return (
-    <div className="bg-card border-r border-border flex flex-col h-full">
+    // [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): stable sidebar anchor, was selected by Tailwind classes .bg-card.border-r.
+    <div data-testid="sidebar" className="bg-card border-r border-border flex flex-col h-full">
       <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-border">
         <div className="flex items-center">
           <h1 className="ml-2 text-lg font-semibold">
@@ -302,7 +478,13 @@ const Sidebar = ({
         </div>
       </div>
 
-      <div className="p-4 flex-1 overflow-auto">
+      {/* [spring-ai-mcp-inspector PATCH] Issue #269: stable anchor for the
+          sidebar scroll area: the fold checks reset its scrollTop and
+          probe its height (see NOTICE.d/connect-cta.txt). */}
+      <div
+        className="p-4 flex-1 overflow-auto"
+        data-testid="sidebar-scroll-area"
+      >
         <div className="space-y-4">
           <div className="space-y-2">
             <label
@@ -327,6 +509,51 @@ const Sidebar = ({
               </SelectContent>
             </Select>
           </div>
+
+          {/* [spring-ai-mcp-inspector PATCH] Stale auth-profile bindings
+              (issue #267): a saved connection references a profile name the
+              server no longer serves (restarted in-memory store, or a backend
+              without the auth-profile API). Names are rendered as React text
+              nodes, so any markup inside a stored name is escaped. */}
+          {staleAuthProfileBindings && staleAuthProfileBindings.length > 0 && (
+            <div className="space-y-2">
+              {staleAuthProfileBindings.map((conn) => (
+                <div
+                  key={conn.id}
+                  className="bg-amber-50 dark:bg-amber-950 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 rounded-lg p-3"
+                  data-testid={`stale-auth-binding-${conn.id}`}
+                  role="status"
+                >
+                  <p className="text-xs">
+                    Connection <span className="font-medium">{conn.name}</span>{" "}
+                    is bound to auth profile{" "}
+                    <span className="font-medium">{conn.authProfileName}</span>,
+                    which is missing on this server.
+                  </p>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => onUnlinkAuthProfile?.(conn.id)}
+                      data-testid={`stale-auth-binding-unlink-${conn.id}`}
+                    >
+                      Unlink profile
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={() => onOpenAuthSettings?.()}
+                      data-testid="stale-auth-binding-open-settings"
+                    >
+                      Open Auth Settings
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* [spring-ai-mcp-inspector PATCH] Saved connections (#121). */}
           <div className="space-y-2">
@@ -489,6 +716,177 @@ const Sidebar = ({
               </div>
             )}
           </div>
+          {/* [spring-ai-mcp-inspector PATCH] Render connection failure
+              alerts at the TOP of the config pane, above the URL/command
+              inputs, so they are immediately visible without scrolling
+              (see NOTICE.d/connect-error-alert.txt,
+              NOTICE.d/connect-error-toast.txt and
+              NOTICE.d/connect-timeout-banner.txt). Shows structured
+              per-phase timeout info when available. */}
+          {connectionError && (() => {
+            if (connectionError.reason === "unauthorized") {
+              return (
+                <div
+                  role="alert"
+                  data-testid="connect-error-alert"
+                  className="bg-amber-50 dark:bg-amber-950 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 rounded-lg p-3 mb-4"
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <Lock className="w-4 h-4 flex-shrink-0" />
+                    <span className="text-sm font-medium">
+                      Authentication Required
+                    </span>
+                  </div>
+                  <p className="text-xs mb-2">
+                    The inspector server requires authentication via the{" "}
+                    <code className="text-xs bg-amber-100 dark:bg-amber-900 px-1 rounded">
+                      X-MCP-Inspector-Auth
+                    </code>{" "}
+                    header. The auth token is generated at server start.
+                    <br />
+                    Find it in the server log or configuration, then add it as a
+                    custom header in the Configuration panel below.
+                    {connectionError.message && (
+                      <>
+                        <br />
+                        {connectionError.message}
+                      </>
+                    )}
+                  </p>
+                  <Button
+                    data-testid="retry-connect-button"
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={onConnect}
+                  >
+                    <RotateCcw className="w-4 h-4 mr-2" />
+                    Retry
+                  </Button>
+                </div>
+              );
+            }
+            if (
+              connectionError.reason === "timeout" &&
+              connectionError.phase
+            ) {
+              return (
+                <div
+                  role="alert"
+                  data-testid="connect-error-alert"
+                  className="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200 rounded-lg p-3 mb-4"
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                    <span className="text-sm font-medium">
+                      Connection timed out
+                    </span>
+                  </div>
+                  <p className="text-xs mb-2">
+                    <span className="font-medium">
+                      {humanReadablePhase(connectionError.phase)}
+                    </span>
+                    {" \u2014 "}
+                    {connectionError.elapsedMs != null &&
+                    connectionError.budgetMs != null
+                      ? formatBudgetBreakdown(
+                          connectionError.elapsedMs,
+                          connectionError.budgetMs,
+                        )
+                      : ""}
+                    {connectionError.message && (
+                      <>
+                        <br />
+                        {connectionError.message}
+                      </>
+                    )}
+                  </p>
+                  {/* [spring-ai-mcp-inspector PATCH] No "Increase Connection
+                      timeout" hint here: the connection-timeout input ships
+                      in PR #241, so on this base there is no field to focus
+                      and the hint would be a silent no-op (review finding F3
+                      on #243). Re-add the focus hint together with that
+                      field. */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      data-testid="retry-connect-button"
+                      size="sm"
+                      variant="outline"
+                      onClick={onConnect}
+                    >
+                      <RotateCcw className="w-4 h-4 mr-2" />
+                      Retry
+                    </Button>
+                    <Button
+                      data-testid="reset-session-button"
+                      size="sm"
+                      variant="default"
+                      onClick={onResetSession}
+                    >
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Reset session
+                    </Button>
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <div
+                role="alert"
+                data-testid="connect-error-alert"
+                className="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200 rounded-lg p-3 mb-4"
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span className="text-sm font-medium">
+                    Failed to connect to the MCP server
+                  </span>
+                </div>
+                <p className="text-xs mb-2">
+                  {humanReadableReason(connectionError.reason)}
+                  {connectionError.message && (
+                    <>
+                      <br />
+                      {connectionError.message}
+                    </>
+                  )}
+                </p>
+                {connectionError.reason === "timeout" ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      data-testid="retry-connect-button"
+                      size="sm"
+                      variant="outline"
+                      onClick={onConnect}
+                    >
+                      <RotateCcw className="w-4 h-4 mr-2" />
+                      Retry
+                    </Button>
+                    <Button
+                      data-testid="reset-session-button"
+                      size="sm"
+                      variant="default"
+                      onClick={onResetSession}
+                    >
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      Reset session
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    data-testid="retry-connect-button"
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={onConnect}
+                  >
+                    <RotateCcw className="w-4 h-4 mr-2" />
+                    Retry
+                  </Button>
+                )}
+              </div>
+            );
+          })()}
 
           {transportType === "stdio" ? (
             <>
@@ -533,6 +931,7 @@ const Sidebar = ({
                     <TooltipTrigger asChild>
                       <Input
                         id="sse-url-input"
+                        data-testid="sse-url-input"
                         placeholder="URL"
                         value={sseUrl}
                         onChange={(e) => handleUrlChange(e.target.value)}
@@ -545,6 +944,7 @@ const Sidebar = ({
                 ) : (
                   <Input
                     id="sse-url-input"
+                    data-testid="sse-url-input"
                     placeholder="URL"
                     value={sseUrl}
                     onChange={(e) => handleUrlChange(e.target.value)}
@@ -589,6 +989,37 @@ const Sidebar = ({
                 <TooltipContent>{connectionTypeTip}</TooltipContent>
               </Tooltip>
             </>
+          )}
+
+          {/* [spring-ai-mcp-inspector PATCH] Connection timeout field.
+               Proxy connections only: the budget is applied by the proxy
+               (stdio: spawn+initialize, SSE/HTTP: connect+initialize) and
+               direct connections never build a proxy URL, so the field is
+               hidden for them. Empty = proxy default (30s). Validation:
+               whole seconds 1..600, matching ProxyConnectionBudgets. */}
+          {connectionType === "proxy" && (
+          <div className="space-y-2">
+            <label className="text-sm font-medium" htmlFor="connection-timeout-input">
+              Connection timeout (s)
+            </label>
+            <Input
+              id="connection-timeout-input"
+              type="number"
+              min="1"
+              max="600"
+              step="1"
+              placeholder="30 (default)"
+              value={connectionTimeout}
+              onChange={(e) => setConnectionTimeout(e.target.value)}
+              onBlur={validateConnectionTimeout}
+              className={`font-mono ${timeoutError ? "border-red-500 focus-visible:ring-red-500" : ""}`}
+            />
+            {timeoutError && (
+              <p className="text-xs text-red-500 mt-1" role="alert">
+                {timeoutError}
+              </p>
+            )}
+          </div>
           )}
 
           {transportType === "stdio" && (
@@ -755,6 +1186,22 @@ const Sidebar = ({
               <TooltipContent>Copy Servers File</TooltipContent>
             </Tooltip>
           </div>
+
+          {/* [spring-ai-mcp-inspector PATCH] Named auth profiles panel
+              (issue #54): editor/selector for the four profile kinds, list /
+              rename / delete, prefill selection, auth-code PKCE flow. */}
+          {profiles && onProfilesChange && onActiveProfileChange && (
+            <div className="space-y-2 p-3 rounded border">
+              <AuthProfiles
+                config={config}
+                profiles={profiles}
+                onProfilesChange={onProfilesChange}
+                activeProfileId={activeProfileId ?? null}
+                onActiveProfileChange={onActiveProfileChange}
+                transportType={transportType}
+              />
+            </div>
+          )}
 
           <div className="space-y-2">
             <Button
@@ -949,127 +1396,10 @@ const Sidebar = ({
             )}
           </div>
 
-          {/* [spring-ai-mcp-inspector PATCH] Surface connect failures with a
-              human-readable reason and a Retry button instead of only
-              logging them (see NOTICE.d/connect-error-alert.txt). */}
-          {connectionError && (() => {
-            if (connectionError.reason === "unauthorized") {
-              return (
-                <div
-                  role="alert"
-                  className="bg-amber-50 dark:bg-amber-950 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 rounded-lg p-3 mb-4"
-                >
-                  <div className="flex items-center gap-2 mb-1">
-                    <Lock className="w-4 h-4 flex-shrink-0" />
-                    <span className="text-sm font-medium">
-                      Authentication Required
-                    </span>
-                  </div>
-                  <p className="text-xs mb-2">
-                    The inspector server requires authentication via the{" "}
-                    <code className="text-xs bg-amber-100 dark:bg-amber-900 px-1 rounded">
-                      X-MCP-Inspector-Auth
-                    </code>{" "}
-                    header. The auth token is generated at server start.
-                    <br />
-                    Find it in the server log or configuration, then add it as a
-                    custom header in the Configuration panel below.
-                    {connectionError.message && (
-                      <>
-                        <br />
-                        {connectionError.message}
-                      </>
-                    )}
-                  </p>
-                  <Button
-                    data-testid="retry-connect-button"
-                    size="sm"
-                    variant="outline"
-                    className="w-full"
-                    onClick={onConnect}
-                  >
-                    <RotateCcw className="w-4 h-4 mr-2" />
-                    Retry
-                  </Button>
-                </div>
-              );
-            }
-            return (
-              <div
-                role="alert"
-                className="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200 rounded-lg p-3 mb-4"
-              >
-                <div className="flex items-center gap-2 mb-1">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                  <span className="text-sm font-medium">
-                    Failed to connect to the MCP server
-                  </span>
-                </div>
-                <p className="text-xs mb-2">
-                  {humanReadableReason(connectionError.reason)}
-                  {connectionError.message && (
-                    <>
-                      <br />
-                      {connectionError.message}
-                    </>
-                  )}
-                </p>
-                <Button
-                  data-testid="retry-connect-button"
-                  size="sm"
-                  variant="outline"
-                  className="w-full"
-                  onClick={onConnect}
-                >
-                  <RotateCcw className="w-4 h-4 mr-2" />
-                  Retry
-                </Button>
-              </div>
-            );
-          })()}
+          {/* Connection error alert is rendered at the top of the config
+              pane below (see NOTICE.d/connect-error-alert.txt). */}
 
           <div className="space-y-2">
-            {connectionStatus === "connected" && (
-              <div className="grid grid-cols-2 gap-4">
-                <Button
-                  data-testid="connect-button"
-                  onClick={() => {
-                    onDisconnect();
-                    onConnect();
-                  }}
-                >
-                  <RotateCcw className="w-4 h-4 mr-2" />
-                  {transportType === "stdio" ? "Restart" : "Reconnect"}
-                </Button>
-                <Button onClick={onDisconnect}>
-                  <RefreshCwOff className="w-4 h-4 mr-2" />
-                  Disconnect
-                </Button>
-              </div>
-            )}
-            {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). Block onConnect when invalid. */}
-            {connectionStatus !== "connected" && (
-              <Button
-                className="w-full"
-                onClick={() => {
-                  // Mark URL as touched on first connect attempt
-                  if (transportType !== "stdio") {
-                    setUrlTouched(true);
-                    const result = validateServerUrl(sseUrl);
-                    if (!result.isValid) {
-                      setUrlError(result.errorMessage);
-                      return;
-                    }
-                  }
-                  onConnect();
-                }}
-                disabled={transportType !== "stdio" && !!urlError}
-              >
-                <Play className="w-4 h-4 mr-2" />
-                Connect
-              </Button>
-            )}
-
             <div className="flex items-center justify-center space-x-2 mb-4">
               <div
                 className={`w-2 h-2 rounded-full ${(() => {
@@ -1115,6 +1445,48 @@ const Sidebar = ({
                 })()}
               </span>
             </div>
+            {/* [spring-ai-mcp-inspector PATCH] Version badge: negotiated MCP
+                protocol revision with compatibility notice, sourced from the
+                client's own initialize handshake (works direct and via
+                proxy, SSE and Streamable HTTP). */}
+            {connectionStatus === "connected" && (
+              <VersionBadge snapshot={initializeSnapshot ?? null} />
+            )}
+
+            {/* [spring-ai-mcp-inspector PATCH] D3 structured error banner
+                (issue #54): exact code/reason/guidance/url from the proxy's
+                `ProxyErrorDto` (SSE named `error` event / streamable body). */}
+            {authError && (
+              <div
+                role="alert"
+                data-testid="connection-error-dto"
+                className="mb-4 rounded border border-red-300 bg-red-50 dark:bg-red-950 dark:border-red-800 p-3 text-xs space-y-1"
+              >
+                <div className="font-semibold text-red-700 dark:text-red-300">
+                  {authError.status} {authError.code}
+                </div>
+                <div className="text-red-700 dark:text-red-300">
+                  {authError.reason}
+                </div>
+                <div className="text-red-600 dark:text-red-400">
+                  {authError.guidance}
+                </div>
+                {authError.url && (
+                  <div className="break-all font-mono text-red-600 dark:text-red-400">
+                    URL: {authError.url}
+                  </div>
+                )}
+              </div>
+            )}
+            {/* [spring-ai-mcp-inspector PATCH] Keep-alive observability
+                indicator and stale-connection warning banner (#235, t_3925eae7). */}
+            {connectionStatus === "connected" && (
+              <KeepAliveIndicator
+                lastPingAt={keepAliveLastPingAt}
+                isStale={keepAliveIsStale}
+                observed={keepAliveObserved}
+              />
+            )}
 
             {connectionStatus === "connected" &&
               serverImplementation &&
@@ -1212,6 +1584,59 @@ const Sidebar = ({
             )}
           </div>
         </div>
+      </div>
+
+      {/* [spring-ai-mcp-inspector PATCH] Issue #269: render the connect CTA
+          buttons in a fixed region under the sidebar scroll area (a flex
+          sibling of the scroll container, not sticky). A sticky overlay
+          pinned over the scroll area intercepted clicks on sections
+          scrolled underneath it (auth/config toggles under the bar in
+          CI). As a flex region the Connect button stays inside the
+          viewport at any section expansion and never covers content.
+          Only the buttons live here: the status line, the connection
+          error banner, the server card and the logging level stay in
+          the scroll area above, so a tall error banner cannot squeeze
+          the scroll area. The region gets a dedicated testid for the
+          fold-visibility checks (InspectorUiIT#ConnectCtaArea). */}
+      <div
+        className="px-4 pb-4 pt-2 space-y-2"
+        data-testid="sidebar-connect-region"
+      >
+        {connectionStatus === "connected" && (
+          <div className="grid grid-cols-2 gap-4">
+            <Button
+              data-testid="connect-button"
+              onClick={async () => {
+                await onDisconnect();
+                onConnect();
+              }}
+            >
+              <RotateCcw className="w-4 h-4 mr-2" />
+              {transportType === "stdio" ? "Restart" : "Reconnect"}
+            </Button>
+            <Button onClick={onDisconnect}>
+              <RefreshCwOff className="w-4 h-4 mr-2" />
+              Disconnect
+            </Button>
+          </div>
+        )}
+        {/* [spring-ai-mcp-inspector PATCH] Disable Connect when URL is invalid (non-STDIO transports). Block onConnect when invalid. */}
+            {/* [spring-ai-mcp-inspector PATCH] Also block Connect when connection timeout is invalid (proxy connections only: direct never forwards the timeout, so a stale invalid persisted value must not silently lock Connect). */}
+        {connectionStatus !== "connected" && (
+          <Button
+            className="w-full"
+            data-testid="sidebar-connect-button"
+            onClick={onConnect}
+            disabled={
+              (transportType !== "stdio" && !!urlError) ||
+              (connectionType === "proxy" && !!timeoutError)
+            }
+          >
+            <Play className="w-4 h-4 mr-2" />
+            Connect
+          </Button>
+        )}
+
       </div>
       <div className="p-4 border-t">
         <div className="flex items-center justify-between">

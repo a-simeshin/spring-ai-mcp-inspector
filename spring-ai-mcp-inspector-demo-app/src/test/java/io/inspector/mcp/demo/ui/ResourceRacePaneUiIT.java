@@ -1,0 +1,459 @@
+/*
+ * Copyright 2026 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ */
+package io.inspector.mcp.demo.ui;
+
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.Duration;
+import java.time.Instant;
+
+import com.codeborne.selenide.Configuration;
+import com.codeborne.selenide.Selenide;
+import com.codeborne.selenide.SelenideElement;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.bonigarcia.wdm.WebDriverManager;
+import io.inspector.mcp.demo.e2e.E2ePreconditions;
+import io.inspector.mcp.demo.proxy.ProxyAppHarness;
+import io.inspector.mcp.demo.resources.DemoSlowResourcesProvider;
+import io.qameta.allure.Description;
+import io.qameta.allure.Epic;
+import io.qameta.allure.Feature;
+import io.qameta.allure.Severity;
+import io.qameta.allure.SeverityLevel;
+import io.qameta.allure.Story;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.openqa.selenium.chrome.ChromeOptions;
+import org.springframework.context.ConfigurableApplicationContext;
+
+import static com.codeborne.selenide.Condition.exactText;
+import static com.codeborne.selenide.Condition.text;
+import static com.codeborne.selenide.Condition.visible;
+import static com.codeborne.selenide.Selectors.byText;
+import static com.codeborne.selenide.Selenide.$;
+import static com.codeborne.selenide.Selenide.$$;
+import static com.codeborne.selenide.Selenide.open;
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * Browser E2E for the Resources-preview-pane race (issue #344), run once per web stack
+ * (this class ships in the demo-app test-jar and both stack modules pick it up through
+ * Failsafe's {@code dependenciesToScan}).
+ *
+ * <p>
+ * The demo server exposes a delayed resource ({@code demo://slow-greeting}, about six
+ * seconds of server-side delay) and an immediate one ({@code demo://fast-greeting}).
+ * Selecting the slow row and then the fast row means the slow reply can only land after
+ * the fast one is already rendered, which is exactly the interleaving that used to
+ * overwrite the preview with the stale payload.
+ *
+ * Stack scope: the race is asserted on both stacks. The reactive proxy used to relay
+ * browser frames serially, because the upstream send was subscribed on the thread that
+ * emitted the browser frame, the Netty event loop of the incoming POST, and the blocking
+ * upstream send serialized the frames of one session, so the interleaving was
+ * unobservable on that wire (issue #356). The upstream send moved off the emitting thread
+ * (issue #358), the interleaving is observable on webflux too, and the test runs ungated
+ * on both legs.
+ *
+ * The test arms the delayed read first ({@link DemoSlowResourcesProvider#armSlowGate()}):
+ * the slow reply stays off the wire until the fast reply of the same attempt is confirmed
+ * on the timeline and the gate is released, so the slow reply lands strictly after the
+ * fast one by construction, independent of scheduler and runner contention (issue #385: a
+ * retry budget over a scheduler-dependent wire order burned out on loaded runners without
+ * ever observing the interleaving). A stack that serializes the two reads cannot produce
+ * the reply pair at all and fails loudly on the fast-reply wait instead. Under the same
+ * contention a browser-bound SSE frame is rarely lost outright (the proxy timeline
+ * records the fast reply while the browser promise never resolves, so the pane never
+ * renders it), which the launch loop below absorbs; the reply-order and stale-preview
+ * assertions themselves are never retried. The test:
+ * <ul>
+ * <li>asserts the preview shows the fast reply after the selection switch;</li>
+ * <li>waits on the proxy timeline until both replies have actually landed (so the
+ * negative assertion is deterministic, not timed);</li>
+ * <li>asserts on the timeline that the slow reply overtook the fast one, proving the race
+ * really happened rather than the slow read never returning;</li>
+ * <li>asserts the preview still shows the fast reply and never the slow one.</li>
+ * </ul>
+ *
+ * <p>
+ * SSE is used as the transport deliberately: the streamable-http proxy handshake is still
+ * unreliable from the upstream client (see {@code InspectorUiIT.Connect}'s comment), and
+ * the preview logic under test is transport-agnostic.
+ */
+@Epic("MCP Inspector UI")
+@Feature("Resources pane stale-preview race")
+class ResourceRacePaneUiIT {
+
+	private static final ObjectMapper MAPPER = new ObjectMapper();
+
+	private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+
+	private static final Duration BUDGET = Duration.ofSeconds(30);
+
+	/**
+	 * Bounded number of application launches for the fast-confirmation phase: under
+	 * runner contention a browser-bound SSE frame is rarely lost (the proxy timeline
+	 * records the fast reply while the browser promise never resolves, so the pane never
+	 * renders it), and only a fresh application reliably retires the dead browser stream.
+	 * The relaunch covers delivery loss only: the reply-order and stale-preview
+	 * assertions below run once and are never retried (issue #385).
+	 */
+	private static final int MAX_LAUNCHES = 3;
+
+	private ConfigurableApplicationContext app;
+
+	// ---------------------------------------------------------------------
+	// Browser setup / teardown (same recipe as InspectorUiSmokeIT).
+	// ---------------------------------------------------------------------
+
+	@BeforeAll
+	static void setupBrowser() {
+		String binary = detectChromeBinary();
+		E2ePreconditions.requireChromeOrSkip(binary);
+
+		WebDriverManager wdm = WebDriverManager.chromedriver();
+		String majorVersion = parseMajorVersionFromPath(binary);
+		if (majorVersion != null) {
+			wdm.browserVersion(majorVersion);
+		}
+		wdm.setup();
+
+		Configuration.browser = "chrome";
+		Configuration.headless = true;
+		Configuration.browserSize = "1366x900";
+		Configuration.timeout = 20_000;
+		Configuration.pageLoadTimeout = 60_000;
+
+		ChromeOptions options = new ChromeOptions();
+		options.addArguments("--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--remote-allow-origins=*");
+		Configuration.browserBinary = binary;
+		options.setBinary(binary);
+		Configuration.browserCapabilities = options;
+		options.setCapability("goog:loggingPrefs", java.util.Map.of("performance", "ALL", "browser", "ALL"));
+	}
+
+	/**
+	 * Resolves a Chrome binary with the same priority list as
+	 * {@code InspectorUiSmokeIT#detectChromeBinary()}: {@code webdriver.chrome.binary}
+	 * property, {@code CHROME_BINARY} env, macOS production Chrome, Puppeteer cache,
+	 * Linux fallbacks. {@code null} means skip, not fail.
+	 */
+	private static String detectChromeBinary() {
+		String candidate = System.getProperty("webdriver.chrome.binary");
+		if (candidate != null && !candidate.isBlank() && Files.isExecutable(Paths.get(candidate))) {
+			return candidate;
+		}
+		candidate = System.getenv("CHROME_BINARY");
+		if (candidate != null && !candidate.isBlank() && Files.isExecutable(Paths.get(candidate))) {
+			return candidate;
+		}
+
+		Path macProd = Paths.get("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+		if (Files.isExecutable(macProd)) {
+			return macProd.toString();
+		}
+
+		String userHome = System.getProperty("user.home");
+		Path puppeteerRoot = Paths.get(userHome, ".cache", "puppeteer", "chrome");
+		if (Files.isDirectory(puppeteerRoot)) {
+			try (DirectoryStream<Path> stream = Files.newDirectoryStream(puppeteerRoot, "linux-*")) {
+				for (Path versionDir : stream) {
+					Path bin = versionDir.resolve("chrome-linux64/chrome");
+					if (Files.isExecutable(bin)) {
+						return bin.toString();
+					}
+				}
+			}
+			catch (java.io.IOException ignored) {
+				/* best-effort */
+			}
+		}
+
+		for (String linuxPath : new String[] { "/usr/bin/google-chrome", "/usr/bin/chromium",
+				"/usr/bin/chromium-browser" }) {
+			Path p = Paths.get(linuxPath);
+			if (Files.isExecutable(p)) {
+				return p.toString();
+			}
+		}
+
+		return null;
+	}
+
+	private static String parseMajorVersionFromPath(String binaryPath) {
+		if (binaryPath == null) {
+			return null;
+		}
+		java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?:mac_arm|mac|linux|win64|win32)-(\\d+)\\.")
+			.matcher(binaryPath);
+		if (m.find()) {
+			return m.group(1);
+		}
+		return majorVersionFromBinary(binaryPath);
+	}
+
+	/**
+	 * Distro packages such as {@code /usr/bin/chromium-browser} carry no version
+	 * directory, so the path regex above cannot pin the driver major for them. Ask the
+	 * binary itself: a ChromeDriver from the latest release refuses to drive an older
+	 * browser, and an unpinned WebDriverManager download always resolves to the latest
+	 * release instead.
+	 */
+	private static String majorVersionFromBinary(String binaryPath) {
+		try {
+			Process process = new ProcessBuilder(binaryPath, "--version").redirectErrorStream(true).start();
+			if (!process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
+				process.destroyForcibly();
+				return null;
+			}
+			String output;
+			try (java.util.Scanner scanner = new java.util.Scanner(process.getInputStream()).useDelimiter("\\A")) {
+				output = scanner.hasNext() ? scanner.next() : "";
+			}
+			java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)\\.").matcher(output);
+			return m.find() ? m.group(1) : null;
+		}
+		catch (InterruptedException ex) {
+			Thread.currentThread().interrupt();
+			return null;
+		}
+		catch (Exception ex) {
+			return null;
+		}
+	}
+
+	@AfterEach
+	void stopApp() {
+		try {
+			Selenide.closeWebDriver();
+		}
+		catch (Exception ignored) {
+			/* best-effort */
+		}
+		if (app != null) {
+			try {
+				app.close();
+			}
+			catch (Exception ignored) {
+				/* best-effort */
+			}
+			app = null;
+		}
+	}
+
+	// ---------------------------------------------------------------------
+	// Tests.
+	// ---------------------------------------------------------------------
+
+	@Test
+	@DisplayName("slowReplyMustNotOvertakeFastSelection: the late reply of a superseded "
+			+ "resources/read never overwrites the preview")
+	@Story("Stale resources/read reply must not overwrite the preview of the current selection")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Selects the delayed demo://slow-greeting resource, immediately selects the "
+			+ "immediate demo://fast-greeting one, and asserts the preview shows the fast reply, "
+			+ "keeps showing it after the delayed reply lands, and never shows the slow payload. "
+			+ "The delayed read is armed to hold its reply until the fast reply is confirmed on "
+			+ "the proxy timeline, so the slow reply really arrives after the fast one by "
+			+ "construction and the negative assertion is deterministic (issues #344, #385 "
+			+ "regressions). A stack that serializes the two reads cannot produce the reply "
+			+ "pair and fails on the fast-reply wait. A browser-side loss of the fast SSE "
+			+ "frame under runner contention is absorbed by relaunching the demo "
+			+ "application; the reply-order and stale-preview assertions are never retried.")
+	void slowReplyMustNotOvertakeFastSelection() throws Exception {
+		// The race needs two resources/read requests in flight on one session; both
+		// proxy stacks relay such interleaved frames since the upstream send moved off
+		// the emitting thread (issue #358), so no leg is gated.
+		// given: boot, connect, open the Resources pane, list the demo resources, and
+		// confirm the fast pane update. The launch loop absorbs the rare browser-side
+		// SSE frame loss under runner contention (issue #385): a lost frame leaves the
+		// pane empty with the fast reply already on the proxy timeline, and only a
+		// fresh application retires the dead browser stream.
+		Instant attemptStart = null;
+		for (int launch = 1; launch <= MAX_LAUNCHES; launch++) {
+			if (launch > 1) {
+				stopApp();
+			}
+			app = ProxyAppHarness.start("SSE", false, null);
+			Configuration.baseUrl = "http://localhost:" + ProxyAppHarness.port(app);
+			openAndConnect();
+
+			clickTab("resources");
+			// resources/list is not automatic after connect; List Resources is
+			// idempotent once the list is non-empty (InspectorUiIT, same recipe).
+			activePanel().$(byText("List Resources")).shouldBe(visible, Duration.ofSeconds(10)).click();
+
+			// when: select the slow resource, then immediately the fast one. The
+			// delayed read is armed to hold its reply until this attempt's fast reply is
+			// confirmed, so the reply order on the wire is a property of the harness, not
+			// of the scheduler (issue #385: under runner contention the fast reply used
+			// to
+			// land after the slow one and the old retry budget over that wire order
+			// burned out). A stack that serializes the two reads cannot produce the reply
+			// pair and fails loudly on the fast-reply wait.
+			DemoSlowResourcesProvider.armSlowGate();
+			attemptStart = Instant.now();
+			selectRow(DemoSlowResourcesProvider.SLOW_NAME);
+			selectRow(DemoSlowResourcesProvider.FAST_NAME);
+			try {
+				activePanel().shouldHave(text(DemoSlowResourcesProvider.FAST_CONTENT), Duration.ofSeconds(10));
+				break;
+			}
+			catch (AssertionError lostFrame) {
+				if (launch == MAX_LAUNCHES) {
+					throw lostFrame;
+				}
+				System.out.println("[ResourceRacePaneUiIT] fast reply not rendered for launch " + launch
+						+ " (likely a lost browser SSE frame); relaunching the demo application");
+			}
+		}
+
+		Instant fastReplyAt = awaitReplySince(DemoSlowResourcesProvider.FAST_URI,
+				DemoSlowResourcesProvider.FAST_CONTENT, attemptStart);
+		DemoSlowResourcesProvider.releaseSlowGate();
+		Instant slowReplyAt = awaitReplySince(DemoSlowResourcesProvider.SLOW_URI,
+				DemoSlowResourcesProvider.SLOW_CONTENT, attemptStart);
+
+		// then: the race really happened, the slow reply overtook the fast one on the
+		// wire (this is the interleaving the guard must be immune to)
+		assertThat(slowReplyAt).as("the slow reply strictly after the fast one on the wire").isAfter(fastReplyAt);
+
+		// then: the preview still shows the current selection and never the stale
+		// slow payload (regression guard for issue #344)
+		activePanel().shouldHave(text(DemoSlowResourcesProvider.FAST_CONTENT), Duration.ofSeconds(10));
+		activePanel().shouldNotHave(text(DemoSlowResourcesProvider.SLOW_CONTENT));
+
+		// and: no raw JSON-RPC toast leaked (issue #212 regression class)
+		assertNoRawToast();
+	}
+
+	// ---------------------------------------------------------------------
+	// DOM helpers (kept in step with InspectorUiIT / InputRequiredRoundTripUiIT).
+	// ---------------------------------------------------------------------
+
+	private static SelenideElement sidebar() {
+		return $(".bg-card.border-r");
+	}
+
+	private static SelenideElement activePanel() {
+		return $("[role=tabpanel][data-state=active]");
+	}
+
+	private static void openAndConnect() {
+		open("/mcp-inspector/index.html");
+		sidebar().$(byText("Connect")).shouldBe(visible, Duration.ofSeconds(15)).click();
+		$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+	}
+
+	/**
+	 * Clicks the Radix tab trigger by value suffix and asserts both the trigger and the
+	 * panel turned active (same recipe as InspectorUiIT#clickTab).
+	 */
+	private static void clickTab(String value) {
+		$("[role=tablist]").shouldBe(visible, Duration.ofSeconds(15));
+		$("[role=tab][id$='-trigger-" + value + "']").shouldBe(visible, Duration.ofSeconds(10)).click();
+		$("[role=tab][data-state=active][id$='-trigger-" + value + "']").shouldBe(visible, Duration.ofSeconds(5));
+		$("[role=tabpanel][data-state=active][id$='-content-" + value + "']").shouldBe(visible, Duration.ofSeconds(5));
+	}
+
+	/**
+	 * Selects a row from the active ListPane by its exact visible name (exact match:
+	 * substring matching would resolve the fast resource to the slow one and vice versa,
+	 * same recipe as InputRequiredRoundTripUiIT#selectRow).
+	 */
+	private static void selectRow(String name) {
+		activePanel().$$(".cursor-pointer .truncate")
+			.findBy(exactText(name))
+			.shouldBe(visible, Duration.ofSeconds(10))
+			.click();
+	}
+
+	/**
+	 * Issue #212 regression class: error paths must surface as clean UI errors, never as
+	 * raw JSON-RPC toasts.
+	 */
+	private static void assertNoRawToast() {
+		$$("[data-sonner-toast]").shouldBe(com.codeborne.selenide.CollectionCondition.empty);
+	}
+
+	// ---------------------------------------------------------------------
+	// Wire-level readback: /api/timeline must show the slow resources/read
+	// reply arriving after the fast one (proof the race actually happened).
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Polls the proxy timeline until the latest {@code resources/read} reply carrying the
+	 * given resource's payload has landed, and returns its timestamp. Only replies at or
+	 * after {@code since} count, so earlier replies stay out of the comparison. Fails if
+	 * the reply never arrives: the assertions after this wait are only meaningful once
+	 * the superseded reply really returned.
+	 */
+	private Instant awaitReplySince(String uri, String expectedContent, Instant since) throws Exception {
+		Instant deadline = Instant.now().plus(BUDGET);
+		Instant found = null;
+		while (found == null && Instant.now().isBefore(deadline)) {
+			found = timelineReplyTimestamp(uri, expectedContent, since);
+			if (found == null) {
+				Thread.sleep(250);
+			}
+		}
+		assertThat(found).as("resources/read reply for %s with its payload on the timeline", uri).isNotNull();
+		return found;
+	}
+
+	/**
+	 * Reads the proxy timeline and returns the timestamp of the latest
+	 * {@code resources/read} reply whose result carries the given resource URI and
+	 * payload text and whose timestamp is not before {@code since}, or {@code null} if
+	 * there is none: the latest match wins, so a fresh attempt is judged by its own reply
+	 * pair, not by an earlier attempt's.
+	 */
+	private Instant timelineReplyTimestamp(String uri, String expectedContent, Instant since) throws Exception {
+		HttpRequest request = HttpRequest.newBuilder()
+			.uri(URI.create(Configuration.baseUrl + "/mcp-inspector/api/timeline?limit=500"))
+			.GET()
+			.build();
+		HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString());
+		assertThat(response.statusCode()).as("timeline API status").isEqualTo(200);
+
+		JsonNode events = MAPPER.readTree(response.body());
+		assertThat(events.isArray()).as("timeline API returns an array").isTrue();
+
+		Instant latest = null;
+		for (JsonNode event : events) {
+			if (!"MCP_JSONRPC_RESPONSE".equals(event.path("type").asText())) {
+				continue;
+			}
+			JsonNode contents = event.path("payload").path("result").path("contents");
+			if (!contents.isArray() || contents.isEmpty()) {
+				continue;
+			}
+			JsonNode first = contents.get(0);
+			if (!uri.equals(first.path("uri").asText()) || !expectedContent.equals(first.path("text").asText())) {
+				continue;
+			}
+			Instant at = Instant.parse(event.path("timestamp").asText());
+			if (!at.isBefore(since) && (latest == null || at.isAfter(latest))) {
+				latest = at;
+			}
+		}
+		return latest;
+	}
+
+}

@@ -25,6 +25,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import io.inspector.mcp.core.timeline.ExceptionLeakDetector;
 import io.inspector.mcp.core.timeline.TimelineEvent;
 import io.inspector.mcp.core.timeline.TimelineEventType;
 import io.inspector.mcp.core.timeline.TimelineQuery;
@@ -45,8 +46,17 @@ public class TimelineController {
 
 	private final TimelineService timelineService;
 
-	public TimelineController(final TimelineService timelineService) {
+	private final ExceptionLeakDetector leakDetector;
+
+	/**
+	 * Creates the controller.
+	 * @param timelineService the shared timeline service
+	 * @param leakDetector the exception-leak detector, or {@code null} to serve events
+	 * without {@code _leak} annotations (detector disabled)
+	 */
+	public TimelineController(final TimelineService timelineService, final ExceptionLeakDetector leakDetector) {
 		this.timelineService = timelineService;
+		this.leakDetector = leakDetector;
 	}
 
 	/**
@@ -77,7 +87,8 @@ public class TimelineController {
 			.eventTypes(eventTypes)
 			.limit(limit)
 			.build();
-		return this.timelineService.query(query);
+		final List<TimelineEvent> events = this.timelineService.query(query);
+		return (this.leakDetector != null) ? this.leakDetector.enrich(events) : events;
 	}
 
 	/**

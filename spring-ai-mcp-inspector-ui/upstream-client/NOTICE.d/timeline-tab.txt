@@ -7,3 +7,17 @@ Reads _protocolNegotiation enrichment from McpTrafficRecorder and renders a
 severity-colored badge plus an expanded detail block with summary, affectedMethods,
 and a footer link to issue #129. OK severity is silent-positive (badge only, no
 expanded block). Badge text and colors follow the decision record (t_9315a78c).
+Updated: CallToolResult error highlighting (#184). Detects MCP_JSONRPC_RESPONSE
+frames whose result.isError is true and renders the row in red (text-red-400 /
+border-l-red-500 / bg-red-950/30) with a "tool error" badge. The badge tooltip
+and the expanded row both surface the first text content block from the result
+payload so the developer sees the server-side error message the LLM received.
+Successful rows (isError=false or absent) render unchanged.
+Updated: exception-leak badge (#251). Detects the `_leak` enrichment the
+server-side ExceptionLeakDetector attaches to error tool-result responses and
+renders a clickable "leak: exact | normalized | partial" badge next to the tool
+error badge (three visually distinct styles per match tier, data-testid per
+type). The badge click scrolls the correlated APP_LOG row into view (row refs by
+event id); the expanded row gains a leak detail block with the matched log
+metadata, a line-clamped log message, and a jump link. Tooltip text is capped at
+200 chars. Absent or malformed `_leak` renders nothing.

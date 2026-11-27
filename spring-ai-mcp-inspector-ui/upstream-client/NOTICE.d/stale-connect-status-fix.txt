@@ -1,0 +1,28 @@
+src/lib/hooks/useConnection.ts: state hygiene on connect failure and
+disconnect. Before this fix, a failed Connect attempt (e.g. invalid URL
+http://127.0.0.1:9999/mcp) left serverImplementation and
+serverCapabilities from the previous successful session in React state,
+on every failure path: the early returns that never reach a catch (the
+proxy health check, the proxy auth branch) and the catch paths. The
+current sidebar hides this (the status label is driven by
+connectionStatus and the server box is gated on
+connectionStatus === "connected"), so there is no visible bug on
+develop/2.x today; the stale state is a correctness hazard for any view
+that reads serverImplementation after a failed attempt. Fix: clear
+serverImplementation and serverCapabilities at the start of connect()
+(stale state gone before the attempt, which also covers the proxy
+health and proxy auth early returns), clear serverImplementation in the
+inner catch branches (a late failure can set it mid attempt;
+serverCapabilities is set only after the inner try block, so the
+start-of-connect clear is what keeps it null there), clear both in the
+outer catch (failures after the handshake), and clear
+serverImplementation in disconnect(). connectionError is NOT re-cleared
+after the awaits in disconnect(): the banner reset at the top of
+disconnect() (issue #54 patch, already on the base) runs synchronously
+before the sidebar Reconnect button calls onConnect(), while a
+post-await clear would race it and could wipe a fast-failing
+reconnect's error. Covered by regression tests in useConnection.test.tsx:
+each of the seven clear lines is individually guarded (removing any one
+makes the suite fail), and both Reconnect interleavings (failure lands
+last; failure lands first, the disconnect tail lands last) keep the
+failure visible.

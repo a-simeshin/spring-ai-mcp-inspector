@@ -1,0 +1,8 @@
+playwright.config.ts - header comment marking the vendored Playwright config
+as dormant. @playwright/test is not installed (see package.json) and the
+config targets the upstream Vite dev server on :6274, which this project's
+build does not ship; browser regression coverage lives in the Selenide
+integration tests of the demo modules instead (see docs/critical-paths.md).
+Comment-only patch, kept so a re-vendor does not silently drop the
+explanation of why this config is unused. No behavior change: the config is
+never executed by this project's build or CI.

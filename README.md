@@ -34,7 +34,15 @@ Spring AI's MCP server starters give you a running MCP endpoint, but no UI to ta
 - Spring Boot 4.1+
 - Spring AI 2.0+ (`org.springframework.ai:spring-ai-bom`)
 
-Boot 3.5 / Spring AI 1.1 are served by the `1.x` line, maintained on `develop/1.x`.
+The `1.x` line (Boot 3.5 / Spring AI 1.1) is no longer supported: `1.2.0` is its
+final release. Its baseline has reached end of open source support: Spring Framework
+6.2 and Spring Boot 3.5 on 2026-06-30, and Spring AI 1.1 has had no release since
+`1.1.8` (2026-06-12). `2.x` is the only maintained line.
+
+| Line | Stack | Status |
+|------|-------|--------|
+| `2.x` (this branch) | Boot 4.x, Spring AI 2.x | active |
+| `1.x` | Boot 3.5, Spring AI 1.1 | not supported, final release `1.2.0` |
 
 ## Compatibility
 
@@ -46,16 +54,85 @@ The table below records the exact stack a given inspector release was verified w
 | `1.0.0`                   | `3.5.15`    | `1.1.8`   | `0.18.3`     | `0.21.2`                 |
 | `2.0.0`                   | `4.1.0`     | `2.0.0`   | `2.0.0`      | `0.22.0`                 |
 | `2.1.0`                   | `4.1.0`     | `2.0.0`   | `2.0.0`      | `0.22.0`                 |
+| `2.2.0`                   | `4.1.0`     | `2.0.1`   | `2.0.1`      | `0.22.0`                 |
+| `2.3.0`                   | `4.1.0`     | `2.0.1`   | `2.0.1`      | `0.22.0`                 |
+| `2.4.0`                   | `4.1.0`     | `2.0.1`   | `2.0.1`      | `0.22.0`                 |
+| `2.5.0`                   | `4.1.0`     | `2.0.1`   | `2.0.1`      | `0.22.0`                 |
 
-### Upgrading from `2.0.0`
+### Upgrading from `2.4.0`
 
-Nothing to change in your code or configuration. One runtime behaviour is different:
-the inspector now closes the MCP server's transport provider when the context starts
-closing, instead of leaving it to bean destruction. That is what stops a graceful
-shutdown from waiting out its whole timeout — and it means an MCP tool call still
-streaming when shutdown begins is cut short rather than being given the full window.
-Set `spring.ai.mcp.inspector.shutdown.close-mcp-server-transports: false` to keep the
-old behaviour; see [Graceful shutdown](#graceful-shutdown) for the trade-off.
+No code change is required. The changes are a new additive core API and
+UI-level behaviour:
+
+- Captured tool calls can be exported as compilable JUnit 5 regression
+  tests (#415): a new `io.inspector.mcp.core.export` package generates a
+  MockMvc (servlet stack) or WebTestClient (reactive stack) skeleton that
+  replays the captured request and compares the response with the
+  recorded etalon.
+- The empty canvas and the sidebar share one URL-validating Connect
+  action (#335), the sidebar connect CTA moved into a fixed region so it
+  cannot cover scrolled content (#334), a stale auth-profile binding no
+  longer fires a raw 404 toast on load (#323), the Auth Profiles editor
+  starts collapsed without pristine-load validation errors (#332), and
+  the version badge toggle is keyboard operable (#420).
+
+### Upgrading from `2.3.0`
+
+No code change is required. The runtime changes are opt-in or UI-level:
+
+- Outgoing MCP client traffic lands in the timeline only with
+  `spring.ai.mcp.inspector.timeline.client-capture-enabled=true` (default
+  `false`); when enabled, server-initiated exchanges also name the
+  `@Mcp*` handler that consumed them and startup warns about silent
+  wiring mistakes (#406, #407).
+- `tasks/*` RPC calls are gated on the capabilities the server advertises:
+  on a server without tasks support the Tasks tab renders a self-explained
+  capability-gap body instead of a raw `-32601` error toast (#405).
+- The legacy protocol revision `2024-11-05` is part of the known-revision
+  matrix, so a live downgrade from `2025-11-25` renders the amber
+  downgrade notice instead of UNKNOWN (#416).
+
+### Upgrading from `2.2.0`
+
+No code change is required. Three runtime behaviours are new:
+
+- Concurrent `tools/call` frames on one session now overlap instead of
+  serializing: the proxy opens spare keep-alive connections to the upstream
+  at session open
+  (`spring.ai.mcp.inspector.proxy.upstream-warm-connections`, default `10`)
+  and pings them concurrently before the handshake gate releases the
+  browser's frames. Set the property to `0` to keep the old behavior.
+- Custom header names the JDK HTTP client refuses (restricted names such as
+  `host` or `connection`, or names containing a colon) now fail the connect
+  immediately with one non-retryable `invalid_request` error that lists
+  every offender and never echoes the header value (#188).
+- A non-numeric `tasks/list` cursor returns a JSON-RPC `-32602` invalid
+  params error instead of a silent empty page (#320).
+
+### Upgrading from `2.1.0`
+
+No code change is required. Three runtime behaviours are new:
+
+- Connect and initialize on streamable-http now run under a per-phase budget,
+  `spring.ai.mcp.inspector.timeouts.connection` (default 30 s), instead of the
+  whole streamable-request budget. A server that needs longer to initialize
+  now returns a structured 504 `MCP_CONNECT_FAILED` (reason `timeout`, with
+  `phase`, `elapsedMs` and `budgetMs` in the payload) instead of silently
+  using the full window. Raise the property, or pass `?connectionTimeout=`
+  (1..600 s), for slow servers.
+- Idle proxy SSE sessions are now probed for upstream liveness
+  (`spring.ai.mcp.inspector.upstream-liveness-probe-enabled`, default `true`):
+  after `timeouts.upstream-probe-idle-threshold` (default 15 s) of silence the
+  proxy pings the upstream every `timeouts.upstream-probe-interval` (default
+  10 s) and closes the downstream SSE with a structured payload when the
+  upstream is dead. Set the property to `false` to keep the old behaviour.
+- When the upstream server does not advertise task capabilities, the proxy now
+  injects them and answers `tasks/get`, `tasks/list` and `tasks/cancel`
+  locally, so tasks keep working against servers without native support and
+  sessions that only poll tasks are no longer reaped as idle.
+
+The timeline recorder stays opt-in:
+`spring.ai.mcp.inspector.timeline.enabled` (default `false`).
 
 ## Quickstart
 
@@ -67,7 +144,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webmvc</artifactId>
-    <version>2.1.0</version>
+    <version>2.5.0</version>
 </dependency>
 ```
 
@@ -77,7 +154,7 @@ Add the starter alongside your existing `spring-ai-starter-mcp-server-webmvc` de
 <dependency>
     <groupId>io.github.a-simeshin</groupId>
     <artifactId>spring-ai-mcp-inspector-starter-webflux</artifactId>
-    <version>2.1.0</version>
+    <version>2.5.0</version>
 </dependency>
 ```
 
@@ -252,6 +329,8 @@ All settings live under the `spring.ai.mcp.inspector` namespace:
 | `spring.ai.mcp.inspector.auth-enabled` | `true` | When `true`, requests to the proxy endpoint require the bearer token below. |
 | `spring.ai.mcp.inspector.auth-token` | _(generated)_ | Bearer token. If unset, a random token is generated at boot and injected into the SPA bootstrap automatically. |
 | `spring.ai.mcp.inspector.allowed-origins` | _(empty)_ | Origins allowed to call the inspector API and proxy cross-origin. Empty means no CORS mapping is registered at all, so only same-origin browser calls work — set it only when the UI is served from a different host than the app. Accepts a YAML list. |
+| `spring.ai.mcp.inspector.auth-profiles.profiles[0].name` |   | Pre-defined auth profile name (see examples below). |
+| `spring.ai.mcp.inspector.auth-profiles.profiles[0].type` |   | Profile type: `BEARER`, `API_KEY`, `OAUTH2` or `CUSTOM_HEADERS`. |
 
 Custom path example:
 
@@ -265,6 +344,51 @@ spring:
 
 Inspector now lives at `/admin/inspector/`; the proxy is at `/admin/inspector-api`.
 
+### Client connection capture
+
+Applications that embed an outbound MCP client (for example a Spring AI
+`spring-ai-starter-mcp-client` named connection) can have that client's traffic
+inspected alongside the server. The feature is off by default:
+
+```yaml
+spring:
+  ai:
+    mcp:
+      inspector:
+        timeline:
+          client-capture-enabled: true
+```
+
+When enabled, the inspector wraps every `NamedClientMcpTransport` bean and:
+
+- serves live connection snapshots (name, transport type, sanitized target, state,
+  counters) at `${path}/api/client-connections`, rendered in the **Clients** tab;
+- records the client's JSON-RPC requests, responses and notifications into the
+  Timeline with `side=client` provenance, a distinct client badge and a client/server
+  filter;
+- correlates server-initiated requests (sampling, elicitation, logging, progress) with
+  the `@McpSampling` / `@McpElicitation` / `@McpLogging` / `@McpProgress` handler beans
+  that consume them (`consumedBy`), and flags unhandled clients as desync diagnostics.
+
+The bundled demo app is a working example: it connects one client named
+`demo-loopback` to its own MCP server endpoint, so the inspector UI always shows a live
+client connection out of the box. Because the client beans are created before the web
+server port exists, the demo sets `spring.ai.mcp.client.initialized=false` and
+initializes the client from an `ApplicationReadyEvent` listener:
+
+```yaml
+spring:
+  ai:
+    mcp:
+      client:
+        initialized: false
+        streamable-http:
+          connections:
+            demo-loopback:
+              url: http://127.0.0.1:${server.port:8080}
+              endpoint: /mcp
+```
+
 ### Proxy timeouts
 
 The proxy backend ships with upstream-compatible defaults. Override them under
@@ -274,10 +398,16 @@ fast). All values use Spring's relaxed `Duration` syntax — e.g. `30s`, `2m`, `
 | Property | Default | Description |
 |----------|---------|-------------|
 | `spring.ai.mcp.inspector.timeouts.sse-session` | `30m` | Inactivity budget for a proxied SSE / streamable-HTTP browser session (servlet stack only). |
+| `spring.ai.mcp.inspector.timeouts.sse-request` | `30s` | Per-request SSE backchannel timeout before returning `504`. |
 | `spring.ai.mcp.inspector.timeouts.streamable-request` | `30s` | Per-request wait for a streamable-HTTP JSON-RPC response before returning `504`. |
 | `spring.ai.mcp.inspector.timeouts.fetch-connect` | `10s` | Connect timeout for the outbound `/fetch` HTTP client. |
 | `spring.ai.mcp.inspector.timeouts.fetch-request` | `30s` | Per-request timeout for outbound `/fetch` calls. |
 | `spring.ai.mcp.inspector.timeouts.server-request` | `120s` | How long a server→UI request (sampling / elicitation / roots) waits for the browser to answer. |
+| `spring.ai.mcp.inspector.timeouts.upstream-probe-interval` | `10s` | Interval between liveness probes: every idle proxied session is pinged on this cadence. |
+| `spring.ai.mcp.inspector.timeouts.upstream-probe-idle-threshold` | `15s` | How long a session may see no relayed traffic (browser request or upstream response) before the first probe is sent. |
+| `spring.ai.mcp.inspector.timeouts.upstream-probe-timeout` | `5s` | How long a probe's JSON-RPC answer stays filtered from the browser stream. The probe POST itself carries no deadline: a live upstream that accepts it but never answers (e.g. before `initialize`) keeps its session. Worst-case upstream-death detection is idle-threshold + interval. |
+| `spring.ai.mcp.inspector.timeouts.connection` | `30s` | Per-phase budget applied to the proxy session bring-up (transport connect for SSE/stdio, the `McpProxy` start pump) and to the first JSON-RPC `initialize` handshake. The phase timers start nearly together because `start` is subscribed asynchronously, so the phases can overlap; the budget is not a shared total deadline. For streamable HTTP the DNS/TCP/TLS work happens inside the first `initialize` POST, so it is budgeted as the `initialize` phase. Overridable per connect attempt via the `connectionTimeout` query parameter: whole seconds, 1 to 600, on `POST /mcp-inspector-api/mcp`, `GET /mcp-inspector-api/sse` and `GET /mcp-inspector-api/stdio`; an absent parameter falls back to the configured default; any other value (non-numeric, decimal, 0, negative, above 600) is answered with `400` and the structured `MCP_CONNECT_FAILED` error body on both stacks. Configured values are range-checked the same way: a null, non-positive or above-600s duration fails application startup. The budget (the parameter, or this configured value when the parameter is absent), not `timeouts.streamable-request`, bounds the `initialize` wait of a new session's first `POST /mcp`; `timeouts.streamable-request` keeps bounding the later frames of an existing session. |
+| `spring.ai.mcp.inspector.proxy.upstream-warm-connections` | `10` | Spare keep-alive connections the proxy opens to the upstream at session open with concurrent JSON-RPC pings, before the handshake gate releases the browser's frames. A WebFlux MCP server runs its TCP acceptor on an event loop that a synchronous tool can block for the tool's whole duration, so a burst of upstream POSTs whose connects arrive mid-tool is accepted one tool-duration per wave, and trickled frames collapse onto one keep-alive connection (a strictly serial ladder). Warmed connections let the burst reuse loop-spread pooled connections with no new accepts; `0` disables the warm-up. |
 
 ```yaml
 spring:
@@ -288,6 +418,32 @@ spring:
           streamable-request: 60s
           server-request: 5m
 ```
+
+### Upstream liveness probe
+
+Idle proxied sessions are pinged with a JSON-RPC `ping` so a dead upstream closes the
+downstream stream (the amber `disconnected-remote` banner) instead of hanging until the
+next user action. Probe traffic is internal: its responses never reach the browser and do
+not reset the session's activity clock. Only transport-level failures (connection refused,
+DNS, timeout) tear a session down; a live upstream that rejects the ping (e.g. with an
+HTTP 4xx before `initialize`) keeps its session. Disable with:
+
+```yaml
+spring:
+  ai:
+    mcp:
+      inspector:
+        upstream-liveness-probe-enabled: false
+```
+
+Known limitation: a half-open stream is not detected. If the upstream accepts the ping
+POST but its SSE stream is silently dead, the accepted POST counts as a live transport and
+the session stays open. Failing a session on a missing probe answer was tried and removed:
+a spec-compliant MCP SDK server parks every request, ping included, until `initialize`,
+so its probes stay unanswered while the session is perfectly healthy. A possible follow-up
+(not implemented) is an answer deadline applied only to sessions that have already answered
+at least one probe, which would catch half-open streams while keeping uninitialized
+sessions safe.
 
 ### Upstream connection stalls
 
@@ -470,6 +626,232 @@ The demo is split in three so that each web stack gets a classpath of its own:
 with both starters visible, Spring Boot silently runs the "reactive" setup on
 Tomcat-reactive. `-demo-app` holds the application and the stack-agnostic tests;
 the two stack modules add exactly one starter each.
+
+## Auth profiles
+
+The inspector supports named, owner-scoped auth profiles. Each profile belongs to one
+owner, identified by the signed `MCP_INSPECTOR_SESSION` cookie. The cookie is minted
+by the proxy filter on the first authenticated request and is transparent to the UI:
+the browser sends it automatically on every subsequent call.
+
+### Auth-profile REST API (six endpoints)
+
+All endpoints live under `{spring.ai.mcp.inspector.path}/auth-profile` (default:
+`/mcp-inspector-api/auth-profile`). Every endpoint is owner-scoped: the owner is
+resolved from the `MCP_INSPECTOR_SESSION` cookie.
+
+| Method | Path | Description |
+| -------| -----| ------------|
+| `GET` | `/auth-profile` | List all profiles for the current owner. |
+| `POST` | `/auth-profile` | Register a new profile. For `AUTHORIZATION_CODE` profiles returns a pending state with one-time CSRF state and `authorizationUrl`. |
+| `GET` | `/auth-profile/{profileId}` | Get a single profile summary (secrets never listed). |
+| `PUT` | `/auth-profile/{profileId}` | Update an existing profile. |
+| `DELETE` | `/auth-profile/{profileId}` | Delete a profile and evict its cached tokens. |
+| `POST` | `/auth-profile/{profileId}/exchange` | Complete an authorization-code flow (exchange the one-time code for tokens). |
+
+### Owner model
+
+Every session is bound to the owner who created it. The owner is a string derived from
+the `MCP_INSPECTOR_SESSION` cookie. Sessions without a bound profile (no owner) remain
+accessible to all callers, matching the pre-auth-profile behaviour.
+
+### Owner cookie `Secure` attribute
+
+The `MCP_INSPECTOR_SESSION` cookie is minted with the `Secure` attribute **only when the
+incoming request is effectively HTTPS**. The attribute is derived at mint time from the
+request's scheme; there is no configuration property to toggle it.
+
+| Deployment | Effective request scheme | Cookie minted with `Secure`? | Browser sends cookie back? |
+|---|---|---|---|
+| Production HTTPS (direct TLS, or TLS-terminated proxy with forwarded headers) | `https` | Yes | Yes, over HTTPS only |
+| Local HTTP demo (`127.0.0.1:8080`) | `http` | No | Yes (no `Secure` requirement) |
+
+The local HTTP demo keeps working with zero configuration: the demo stand runs plain
+HTTP, so the minted cookie carries no `Secure`. This is a deliberate exception: forcing
+`Secure` unconditionally would break the demo and local development, and there is no
+threat to mitigate on a loopback-only dev tool.
+
+For production deployments behind a TLS-terminated reverse proxy, the container must
+honour forwarded headers (`server.forward-headers-strategy=framework` or `native`).
+Without it, `request.isSecure()` reports `false` at the inner HTTP connector and the
+cookie is minted without `Secure`. This is standard Spring Boot behaviour for every
+request-time scheme check, not a new requirement of this feature.
+
+### Predefined profiles (Spring configuration)
+
+You can pre-populate auth profiles from `application.yml` under the
+`spring.ai.mcp.inspector.auth-profiles` namespace. The YAML example below shows
+all four supported types:
+
+```yaml
+spring:
+  ai:
+    mcp:
+      inspector:
+        auth-profiles:
+          profiles:
+            - name: prod-bearer
+              type: BEARER
+              bearer:
+                token: ${PROD_BEARER_TOKEN}
+            - name: prod-api
+              type: API_KEY
+              api-key:
+                *** X-API-Key
+                value: ${PROD_API_KEY}
+                placement: HEADER
+            - name: prod-oauth
+              type: OAUTH2
+              oauth2:
+                grant-mode: CLIENT_CREDENTIALS
+                token-url: https://auth.example.com/token
+                client-id: inspector
+                client-secret: ${PROD_CLIENT_SECRET}
+                scopes: mcp.read
+            - name: extra-headers
+              type: CUSTOM_HEADERS
+              custom-headers:
+                headers:
+                  - name: X-Tenant
+                    value: acme
+```
+
+### Profile limit per owner
+
+Every owner is capped at **50 profiles** (constant `AuthProfileStore.DEFAULT_MAX_PROFILES_PER_OWNER`). When the
+limit is reached, `POST /auth-profile` answers `400` with:
+
+```json
+{
+  "error": "profile limit reached for this session (50)"
+}
+```
+
+The error is an `IllegalArgumentException` mapped to `400` by the controller's exception
+handler. The limit is a hard ceiling enforced before any profile registration; the
+caller must delete an existing profile before registering a new one.
+
+The counter `profileLimitRejections` (AtomicLong) increments on every rejected
+registration and is exposed via the accessor `AuthProfileStore#profileLimitRejections()`.
+
+### Profile lifecycle states
+
+Every profile moves through a state machine:
+
+| State | Description |
+|-------|-------------|
+| `PENDING` | Authorization-code profile awaiting the browser `/exchange` callback. |
+| `REGISTERED` | Profile registered, not yet bound to a proxy session. |
+| `ACTIVE` | Authorization-code profile whose code was exchanged; tokens held backend-side. |
+| `BOUND` | Profile bound to a proxy session (one-time transition; immutable while bound). |
+
+- **Registering** a non-OAuth2 profile enters `REGISTERED` directly.
+- **Registering** an `AUTHORIZATION_CODE` OAuth2 profile enters `PENDING` and returns
+  a server-issued one-time state plus the IdP `authorizationUrl` in the response.
+- **Completing** the `/exchange` flow transitions `PENDING` to `ACTIVE`.
+- **Connecting** a proxy session with the profile bound transitions `REGISTERED` or
+  `ACTIVE` to `BOUND`. A `BOUND` profile is immutable (updates rejected) and cannot be
+  bound again.
+
+**Guarantee for active / bound profiles.** The eviction sweep (`removeExpired`) removes
+*every* entry whose TTL has passed, with no state-based exemption. The TTL is reset on
+every profile update (which resets `expiresAt` to `now + TTL`). Active or bound profiles
+that are still in use should be implicitly kept alive by the absence of a long enough
+idle gap: the TTL default is 24h, and a profile that is actively used is refreshed
+before that window expires. If a profile must be kept alive indefinitely, re-register it
+before the TTL elapses.
+
+### TTL and eviction
+
+**Profile TTL.** Every stored profile carries a bounded lifetime (`expiresAt` field).
+The default is **24 hours** (`DEFAULT_PROFILE_TTL`) and can be changed via
+`AuthProfileStore#setProfileTtl(Duration)`. Non-positive values fall back to the
+default. The lifetime is set at registration time and is not extended by read or bind
+operations; only an explicit `PUT /auth-profile/{id}` update resets the clock.
+
+**Auth-code state TTL.** A server-issued one-time CSRF state for the authorization-code
+flow lives for **10 minutes** (`STATE_TTL` in `OAuth2AuthCodeTokenExchanger`). After
+that period:
+
+- `POST /auth-profile/{id}/exchange` answers `400` with `"state mismatch, expired or
+  already consumed"`.
+- The state is consumed (removed) on first use; replay is rejected.
+- The backend never tells the client whether the state was expired or mismatched, to
+  avoid leaking replay-attack information.
+
+**The reaper.** A scheduled sweep (`ProxySessionRegistry#reap()`, 1-minute interval by
+default, configurable via `spring.ai.mcp.inspector.timeouts.reaper-interval`) runs
+three cleanup tasks:
+
+1. `AuthProfileStore#removeExpired(now)`: removes every profile whose TTL has passed
+   and evicts the profile's cached tokens.
+2. `OAuth2AuthCodeTokenExchanger#removeExpiredStates(now)`: removes every expired
+   pending state AND any orphaned expired tokens whose expiry has passed (so the token
+   map does not grow unboundedly between explicit `evict()` calls).
+3. Session idle eviction: closes every proxy session that is already closed or has been
+   idle longer than the configured inactivity budget (default 30m, matching the
+   `sse-session` timeout).
+
+### Expired state: what the client sees
+
+When a client uses an expired auth-code CSRF state:
+
+- The `POST /auth-profile/{id}/exchange` endpoint returns `400` with
+  `{"error": "state mismatch, expired or already consumed"}`.
+- The error is indistinguishable from a wrong state or a replay attack (the state is
+  consumed on first use, so a second attempt with the same cookie also returns `400`).
+- The client must re-register the profile (a new `POST /auth-profile` returns a fresh
+  state and `authorizationUrl`).
+
+When a client uses an expired profile (profile removed by TTL sweep):
+
+- `GET /auth-profile/{id}` returns `404`.
+- `PUT /auth-profile/{id}` returns `404`.
+- `DELETE /auth-profile/{id}` returns `404`.
+- The profile no longer exists in the store, so the client must register it again.
+
+### Observability probes
+
+The auth-profile subsystem exposes internal counters and accessors for monitoring
+and diagnostics. These are **not** Micrometer metrics: they are plain `AtomicLong`
+counters and `ConcurrentHashMap#size()` accessors on the component beans. Wire them
+into your own monitoring infrastructure, or read them from a test / actuator endpoint.
+
+| Name | Type | Source | Meaning |
+|------|------|--------|---------|
+| `AuthProfileStore#sizeForOwner(id)` | `int` | `AuthProfileStore` | Current profile count for a given owner. |
+| `AuthProfileStore#size()` | `int` | `AuthProfileStore` | Total profiles across all owners. |
+| `AuthProfileStore#profileLimitRejections()` | `long` | `AuthProfileStore` | Cumulative rejections by the per-owner cap. |
+| `OAuth2ClientCredentialsTokenManager#profileLockCount()` | `int` | `TokenManager` | Current size of the per-profile lock map. |
+| `OAuth2ClientCredentialsTokenManager#orphanLockCleanups()` | `long` | `TokenManager` | Cumulative orphan-lock sweep cleanups. |
+| `OAuth2ClientCredentialsTokenManager#credentialCount()` | `int` | `TokenManager` | Number of stored credential entries. |
+| `OAuth2ClientCredentialsTokenManager#cacheSize()` | `int` | `TokenManager` | Number of cached token entries. |
+| `OAuth2AuthCodeTokenExchanger#expiredStatesRemoved()` | `long` | `Exchanger` | Cumulative expired states removed by the sweeper. |
+| `OAuth2AuthCodeTokenExchanger#stateCount()` | `int` | `Exchanger` | Current number of pending state entries. |
+| `OAuth2AuthCodeTokenExchanger#tokenCount()` | `int` | `Exchanger` | Current number of stored token entries. |
+| `ProxySessionRegistry#size()` | `int` | `SessionRegistry` | Current number of active proxy sessions. |
+
+### Migration notes (from pre-auth-profile versions)
+
+The auth-profile feature (issue #54) is additive relative to versions before it. No
+existing API contract changed. Notable new behaviours:
+
+- **New endpoints.** Six new auth-profile endpoints (see table above) under
+  `/mcp-inspector-api/auth-profile`. These are behind the proxy auth filter, so they
+  require the same `X-MCP-Inspector-Auth` token as the proxy backend.
+- **New error kinds.** `POST /auth-profile` now returns `400` for duplicate profile
+  names and `400` when the per-owner cap is reached. `POST /auth-profile/{id}/exchange`
+  returns `400` for expired / consumed / mismatched CSRF states.
+- **Owner cookie.** The `MCP_INSPECTOR_SESSION` cookie is now required for the
+  auth-profile endpoints. Sessions without a bound profile remain accessible to all
+  callers, matching the pre-auth-profile behaviour.
+- **Profile TTL.** Profiles not touched for 24 hours are automatically removed. The
+  default TTL is deliberately generous for development; production deployments with a
+  large number of owners should consider reducing it via `AuthProfileStore#setProfileTtl()`.
+- **Token eviction hook.** Deleting or updating a profile now evicts the profile's cached
+  OAuth2 tokens and stored credentials. After eviction, a subsequent token lookup fails
+  closed with `IllegalStateException` (mapped to `400`), never falling back to a stale
+  secret.
 
 ## Running the demo
 

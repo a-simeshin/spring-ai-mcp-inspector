@@ -1,0 +1,16 @@
+src/App.tsx, src/components/ClientsTab.tsx, src/components/__tests__/ClientsTab.test.tsx:
+new Clients tab in the vendored inspector SPA, a live registry of the MCP client
+connections captured by the recording client transports (issue #120, layer C3).
+ClientsTab polls GET ${path}/api/client-connections every 3s with the raw
+X-MCP-Inspector-Auth bootstrap header and renders one card per snapshot entry
+(name, transport, sanitized target, state badge live/initializing/failed/closed,
+in/out counters, last error). Empty state when the registry has no clients;
+explicit disabled state on 404 (client capture off); role=alert error state on
+other non-OK responses. App.tsx registers the "clients" TabsTrigger (icon Users,
+lucide-react) and mounts ClientsTab next to TimelineTab. Data-testid anchors:
+client-connection-card, client-connection-state. No upstream equivalent exists;
+this is a Spring AI MCP Inspector extension.
+App.tsx also registers the "clients" tab id in ALL_TABS and buildValidTabs:
+clicking the trigger writes the hash and the hash router resolves it, so
+without the registration the router rewrote #clients back to the default
+tab and the trigger could never open its panel.

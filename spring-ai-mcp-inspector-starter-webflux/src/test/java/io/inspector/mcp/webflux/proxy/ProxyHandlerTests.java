@@ -21,6 +21,8 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.qameta.allure.Description;
@@ -33,12 +35,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.boot.web.server.WebServer;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.boot.web.server.context.WebServerInitializedEvent;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.web.reactive.function.server.EntityResponse;
@@ -46,26 +50,40 @@ import org.springframework.web.reactive.function.server.HandlerStrategies;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
+import reactor.test.StepVerifier;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.keepalive.PingDetectingClientTransport;
+import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyErrorDto;
+import io.inspector.mcp.core.proxy.ProxyReconnectPolicy;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.transport.DetectedTransport;
 import io.inspector.mcp.core.transport.TransportDetector;
 import io.inspector.mcp.core.transport.TransportType;
+import io.inspector.mcp.webflux.auth.ReactiveSessionOwnerResolver;
+import io.inspector.mcp.webflux.router.KeepAliveEventRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -156,6 +174,14 @@ class ProxyHandlerTests {
 		final WebServerInitializedEvent event = webServerStartedEvent(port);
 		final WebServerApplicationContext context = mock(WebServerApplicationContext.class);
 		given(context.getServerNamespace()).willReturn("management");
+		given(event.getApplicationContext()).willReturn(context);
+		return event;
+	}
+
+	private static WebServerInitializedEvent mainServerStartedEvent(final int port) {
+		final WebServerInitializedEvent event = webServerStartedEvent(port);
+		final WebServerApplicationContext context = mock(WebServerApplicationContext.class);
+		given(context.getServerNamespace()).willReturn("server");
 		given(event.getApplicationContext()).willReturn(context);
 		return event;
 	}
@@ -424,7 +450,7 @@ class ProxyHandlerTests {
 
 	@Nested
 	@DisplayName("openSse() / openStdio()")
-	class OpenSse {
+	class BuildSse {
 
 		@Test
 		@Story("SSE proxy open")
@@ -433,7 +459,7 @@ class ProxyHandlerTests {
 		void openSse_withSseUrl_registersSessionAndReturnsEventStream() {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
 
@@ -499,7 +525,7 @@ class ProxyHandlerTests {
 				return null;
 			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
 
@@ -520,7 +546,290 @@ class ProxyHandlerTests {
 					assertThat(sse.event()).isEqualTo("message");
 					assertThat(sse.data()).contains("world");
 				})
-				.verifyComplete();
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() emits a terminal retry event when the upstream target dies, so the browser stops reconnecting")
+		void openSse_whenUpstreamTargetDies_emitsTerminalRetryEvent() {
+			// given
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+
+			// when: the upstream connection is refused, the target stream errors out as
+			// dead
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+			captured[0].targetToBrowser().tryEmitError(new java.net.ConnectException("Connection refused"));
+
+			// then: the stream carries the prologue and the terminal retry event before
+			// it ends (merge order between the two inner publishers is not significant)
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			final java.util.List<org.springframework.http.codec.ServerSentEvent<String>> seen = new java.util.ArrayList<>();
+			reactor.test.StepVerifier.create(body.doOnNext(seen::add))
+				.thenConsumeWhile((sse) -> true)
+				.expectError()
+				.verify(Duration.ofSeconds(5));
+			assertThat(seen).anyMatch((sse) -> "endpoint".equals(sse.event()));
+			assertThat(seen)
+				.anyMatch((sse) -> java.time.Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS)
+					.equals(sse.retry()));
+			// Readable error delivery: the death also rides a structured error event
+			assertThat(seen).anyMatch((sse) -> "error".equals(sse.event()) && sse.data() != null
+					&& sse.data().contains("upstream_unreachable"));
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() emits a terminal retry event when the proxy fails to start against a dead upstream")
+		void openSse_whenUpstreamDeadOnStart_emitsTerminalRetryEventThenCompletes() {
+			// given
+			// The mocked registry must reproduce the real teardown: removeAndClose
+			// fires closeSignal, otherwise the targetToBrowser branch of the merged
+			// flux never terminates and the stream hangs instead of completing.
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			willAnswer((inv) -> {
+				captured[0].close();
+				return null;
+			}).given(ProxyHandlerTests.this.registry).removeAndClose(anyString());
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any(ProxySession.class)))
+				.willReturn(reactor.core.publisher.Mono.error(new java.net.ConnectException("Connection refused")));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then: the structured upstream_unreachable error event and the terminal
+			// retry event, then the stream completes (merge order is not significant)
+			// for a refused connect; merge order is not significant)
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			final java.util.List<org.springframework.http.codec.ServerSentEvent<String>> seen = new java.util.ArrayList<>();
+			reactor.test.StepVerifier.create(body.doOnNext(seen::add))
+				.thenConsumeWhile((sse) -> true)
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
+			assertThat(seen).anyMatch((sse) -> "endpoint".equals(sse.event()));
+			assertThat(seen)
+				.anyMatch((sse) -> java.time.Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS)
+					.equals(sse.retry()));
+			// Readable error delivery: the death also rides a structured error event
+			assertThat(seen).anyMatch((sse) -> "error".equals(sse.event()) && sse.data() != null
+					&& sse.data().contains("upstream_unreachable"));
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() emits the terminal death pair exactly once when both emission sites are forced to interleave for the same dead upstream")
+		void openSse_whenBothDeathSitesInterleave_emitsTerminalPairExactlyOnce() throws InterruptedException {
+			// given: both terminal emission sites (the start failure callback and the
+			// pump's onErrorResume) for the same dead upstream; the stream is subscribed
+			// cold first, then the start site fires on a helper thread and parks in the
+			// test hook right after emitting its death pair, so the pump site is forced
+			// to interleave against the parked start site with the ordering pinned by
+			// latches instead of a timing loop
+			final CountDownLatch startSiteEmittedPair = new CountDownLatch(1);
+			final CountDownLatch letStartSiteFinish = new CountDownLatch(1);
+			final AtomicBoolean firstSite = new AtomicBoolean(false);
+			ProxyHandlerTests.this.handler.setAfterDeathFramesHook(() -> {
+				if (firstSite.compareAndSet(false, true)) {
+					startSiteEmittedPair.countDown();
+					try {
+						letStartSiteFinish.await(10, TimeUnit.SECONDS);
+					}
+					catch (final InterruptedException ex) {
+						Thread.currentThread().interrupt();
+					}
+				}
+			});
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final reactor.core.publisher.Sinks.Empty<Void> startGate = reactor.core.publisher.Sinks.empty();
+			given(ProxyHandlerTests.this.mcpProxy.start(any(ProxySession.class))).willReturn(startGate.asMono());
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			final java.util.List<org.springframework.http.codec.ServerSentEvent<String>> seen = new java.util.ArrayList<>();
+			final CountDownLatch streamTerminated = new CountDownLatch(1);
+			body.doOnNext(seen::add).subscribe((next) -> {
+			}, (err) -> streamTerminated.countDown(), () -> streamTerminated.countDown());
+
+			// when: the start site emits its death pair on the helper thread and parks
+			// mid-flight; the pump stream then dies with the same death on the test
+			// thread while the start site is parked; only then is the start site released
+			final java.util.concurrent.ExecutorService startSite = java.util.concurrent.Executors
+				.newSingleThreadExecutor();
+			startSite.submit(() -> startGate.tryEmitError(new java.net.ConnectException("Connection refused")));
+			assertThat(startSiteEmittedPair.await(10, TimeUnit.SECONDS))
+				.as("the start site emitted its terminal death pair")
+				.isTrue();
+			captured[0].targetToBrowser().tryEmitError(new java.net.ConnectException("Connection refused"));
+			assertThat(streamTerminated.await(10, TimeUnit.SECONDS)).as("the stream terminated").isTrue();
+			letStartSiteFinish.countDown();
+			startSite.shutdown();
+			assertThat(startSite.awaitTermination(5, TimeUnit.SECONDS)).as("the start site finished").isTrue();
+
+			// then: exactly one structured error event and one terminal retry line reach
+			// the browser, no matter which of the two interleaved sites won the emission
+			assertThat(seen).anyMatch((sse) -> "endpoint".equals(sse.event()));
+			assertThat(seen.stream().filter((sse) -> "error".equals(sse.event())).count()).isEqualTo(1L);
+			assertThat(seen.stream()
+				.filter((sse) -> java.time.Duration.ofMillis(ProxyReconnectPolicy.TERMINAL_RECONNECT_MILLIS)
+					.equals(sse.retry()))
+				.count()).isEqualTo(1L);
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with a non-death transport error keeps the plain error path: no terminal retry event")
+		void openSse_whenTargetFailsWithoutDeath_noTerminalRetryEvent() {
+			// given
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+
+			// when: a non-transport failure is not an upstream death
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+			captured[0].targetToBrowser().tryEmitError(new IllegalStateException("boom"));
+
+			// then: prologue, then the plain error terminal - no structured event is
+			// invented for an unclassifiable non-death failure, and no retry hint
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			reactor.test.StepVerifier.create(body)
+				.assertNext((sse) -> assertThat(sse.event()).isEqualTo("endpoint"))
+				.expectError()
+				.verify(Duration.ofSeconds(5));
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() maps a failed proxy start into a structured SSE error event and tears the session down")
+		void openSse_startFailure_emitsStructuredErrorEventAndRemovesSession() {
+			// given - the proxy start fails with a mappable authz failure, but only after
+			// the response stream is subscribed (mirroring the async production
+			// handshake)
+			final reactor.core.publisher.Sinks.Empty<Void> startGate = reactor.core.publisher.Sinks.empty();
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willReturn(startGate.asMono()
+				.then(reactor.core.publisher.Mono.error(new RuntimeException("[401 Unauthorized] GET http://up/sse"))));
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then - the stream carries the endpoint prologue, then the D3 structured
+			// error event (the DTO, not a silent cut), and the failed session is removed
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			reactor.test.StepVerifier.create(body)
+				.assertNext((sse) -> assertThat(sse.event()).isEqualTo("endpoint"))
+				.then(() -> startGate.tryEmitEmpty())
+				.assertNext((sse) -> {
+					assertThat(sse.event()).isEqualTo("error");
+					assertThat(sse.data()).contains("\"code\":\"unauthorized\"");
+					assertThat(sse.data()).contains("\"url\":\"http://up/sse\"");
+				})
+				.then(() -> captured[0].targetToBrowser().tryEmitComplete())
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
+			verify(ProxyHandlerTests.this.registry, org.mockito.Mockito.atLeastOnce())
+				.removeAndClose(captured[0].sessionId());
+		}
+
+		@Test
+		@Story("SSE proxy open")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with an unmappable proxy start failure emits the generic MCP_CONNECT_FAILED proxy-error event and still tears the session down")
+		void openSse_startFailureWithoutHttpStatus_emitsGenericProxyErrorEventAndRemovesSession() {
+			// given - a start failure the D3 mapper cannot turn into a DTO (no HTTP
+			// status in the message), released only after the stream is subscribed so
+			// the prologue keeps its position
+			final reactor.core.publisher.Sinks.Empty<Void> startGate = reactor.core.publisher.Sinks.empty();
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willReturn(startGate.asMono()
+				.then(reactor.core.publisher.Mono.error(new IllegalStateException("connection reset"))));
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then - prologue, then the generic unclassified proxy-error payload, and
+			// the failed session is removed
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			reactor.test.StepVerifier.create(body)
+				.assertNext((sse) -> assertThat(sse.event()).isEqualTo("endpoint"))
+				.then(() -> startGate.tryEmitEmpty())
+				.assertNext((sse) -> {
+					assertThat(sse.event()).isEqualTo("proxy-error");
+					assertThat(sse.data()).contains("MCP_CONNECT_FAILED")
+						.contains("\"reason\":\"unknown\"")
+						.contains("connection reset");
+				})
+				.then(() -> captured[0].targetToBrowser().tryEmitComplete())
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
+			verify(ProxyHandlerTests.this.registry, org.mockito.Mockito.atLeastOnce())
+				.removeAndClose(captured[0].sessionId());
 		}
 
 		@Test
@@ -535,7 +844,7 @@ class ProxyHandlerTests {
 				return null;
 			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/app/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
 						.contextPath("/app")
@@ -551,7 +860,8 @@ class ProxyHandlerTests {
 					response);
 			reactor.test.StepVerifier.create(body)
 				.assertNext((sse) -> assertThat(sse.data()).startsWith("/app/mcp-inspector-api/message?sessionId="))
-				.verifyComplete();
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 		}
 
 		@Test
@@ -561,7 +871,7 @@ class ProxyHandlerTests {
 		void onWebServerStarted_withManagementNamespace_isIgnored() {
 			// given — the actuator's own server reports port 9999
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			ProxyHandlerTests.this.handler.onWebServerStarted(managementServerStartedEvent(9999));
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse").build());
@@ -570,7 +880,26 @@ class ProxyHandlerTests {
 			ProxyHandlerTests.this.handler.openSse(request).block();
 
 			// then — the port is still unset, so the resolver falls back to 8080
-			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(URI.create("http://127.0.0.1:8080/sse"));
+		}
+
+		@Test
+		@Story("Management server guard")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("A WebServerInitializedEvent from the main server context updates the loopback port")
+		void onWebServerStarted_withMainNamespace_updatesLoopbackPort() {
+			// given: a non-management context event reports port 7373
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			ProxyHandlerTests.this.handler.onWebServerStarted(mainServerStartedEvent(7373));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse").build());
+
+			// when
+			ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then: loopbackPort() returns the reported port (port > 0 branch)
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(URI.create("http://127.0.0.1:7373/sse"));
 		}
 
 		@Test
@@ -582,7 +911,7 @@ class ProxyHandlerTests {
 			// http://127.0.0.1:8080/sse (loopback port defaults to 8080 before server
 			// start)
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse").build());
 
@@ -593,7 +922,7 @@ class ProxyHandlerTests {
 			// opened
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(URI.create("http://127.0.0.1:8080/sse"));
 			verify(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 		}
 
@@ -749,6 +1078,308 @@ class ProxyHandlerTests {
 	}
 
 	@Nested
+	@DisplayName("D8 legacy-session WARN")
+	class LegacySessionWarn {
+
+		@Test
+		@Story("Legacy session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("repeat access to the same owner-less session logs the legacy WARN exactly once")
+		void legacySession_repeatAccess_logsWarnOnce() {
+			// given - an unbound (legacy) session
+			final ProxySession session = newSession("s-legacy");
+			given(ProxyHandlerTests.this.registry.get("s-legacy")).willReturn(session);
+			final ch.qos.logback.classic.Logger warnerLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
+				.getLogger(io.inspector.mcp.core.proxy.LegacySessionAccessWarner.class);
+			final ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender = new ch.qos.logback.core.read.ListAppender<>();
+			appender.start();
+			warnerLogger.addAppender(appender);
+			try {
+				final ServerRequest request = toServerRequest(
+						MockServerHttpRequest.post("/mcp-inspector-api/message?sessionId=s-legacy")
+							.contentType(MediaType.APPLICATION_JSON)
+							.body("{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}"));
+
+				// when - the same legacy session is touched repeatedly
+				ProxyHandlerTests.this.handler.postMessage(request).block();
+				ProxyHandlerTests.this.handler.postMessage(request).block();
+				ProxyHandlerTests.this.handler.postMessage(request).block();
+
+				// then - exactly one WARN was emitted for the session
+				final long warns = appender.list.stream()
+					.filter((e) -> e.getFormattedMessage() != null
+							&& e.getFormattedMessage().contains("legacy session without owner binding"))
+					.count();
+				assertThat(warns).isEqualTo(1);
+			}
+			finally {
+				warnerLogger.detachAppender(appender);
+			}
+		}
+
+	}
+
+	@Nested
+	@DisplayName("postMcp(): connection timeout budget")
+	class ConnectionTimeoutBudget {
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() with connectionTimeout=1s and a bring-up that times out before initialize returns a 504 whose payload names the connect phase")
+		void postMcp_connectPhaseOverrun_namesConnectPhase() throws Exception {
+			// given: the bring-up hangs and its timeout fires at 400ms, well before the
+			// 1s initialize budget, so the connect-phase overrun is routed to the
+			// awaiter through the session sink without racing the initialize timer
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any()))
+				.willAnswer((inv) -> reactor.core.publisher.Mono.<Void>never().timeout(Duration.ofMillis(400)));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?connectionTimeout=1")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then: 504 with the existing MCP_CONNECT_FAILED contract, reason=timeout,
+			// phase=connect, and elapsed within the budget plus scheduling slack
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> bodyMap = (Map<String, Object>) ((EntityResponse<Object>) response).entity();
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> error = (Map<String, Object>) bodyMap.get("error");
+			assertThat(error.get("code")).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.get("reason")).isEqualTo("timeout");
+			assertThat(error.get("phase")).isEqualTo("connect");
+			assertThat(((Number) error.get("budgetMs")).longValue()).isEqualTo(1000L);
+			assertThat(((Number) error.get("elapsedMs")).longValue()).isLessThan(1000L + 5000L);
+			assertThat(error.get("retryable")).isEqualTo(Boolean.TRUE);
+			verify(ProxyHandlerTests.this.registry, timeout(5000).atLeastOnce()).removeAndClose(any(String.class));
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() with connectionTimeout=1s and an initialize that never answers returns a 504 whose payload names the initialize phase")
+		void postMcp_initializePhaseOverrun_namesInitializePhase() throws Exception {
+			// given: the bring-up completes instantly but the initialize answer never
+			// arrives, so the initialize-phase budget fires
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willReturn(Mono.empty());
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?connectionTimeout=1")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then: 504 with the MCP_CONNECT_FAILED contract and the initialize phase
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> bodyMap = (Map<String, Object>) ((EntityResponse<Object>) response).entity();
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> error = (Map<String, Object>) bodyMap.get("error");
+			assertThat(error.get("code")).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(error.get("reason")).isEqualTo("timeout");
+			assertThat(error.get("phase")).isEqualTo("initialize");
+			assertThat(((Number) error.get("budgetMs")).longValue()).isEqualTo(1000L);
+			assertThat(((Number) error.get("elapsedMs")).longValue()).isLessThan(1000L + 5000L);
+			assertThat(error.get("retryable")).isEqualTo(Boolean.TRUE);
+			verify(ProxyHandlerTests.this.registry, timeout(5000).atLeastOnce()).removeAndClose(any(String.class));
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("absent connectionTimeout falls back to timeouts.connection, not to streamable-request (distinct values)")
+		void postMcp_withoutParameter_usesConfiguredConnectionTimeout() throws Exception {
+			// given: connection=200ms (the fallback under test) and a much longer
+			// streamable-request so a legacy-path wait would be plainly slower
+			final McpInspectorProperties props = new McpInspectorProperties();
+			props.getTimeouts().setConnection(Duration.ofMillis(200));
+			props.getTimeouts().setStreamableRequest(Duration.ofSeconds(30));
+			final ProxyHandler budgetHandler = new ProxyHandler(ProxyHandlerTests.this.registry,
+					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
+					ProxyHandlerTests.this.transportDetector, ProxyHandlerTests.this.objectMapper, props);
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willReturn(Mono.empty());
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+
+			// when: no connectionTimeout parameter
+			final long startedAt = System.nanoTime();
+			final ServerResponse response = budgetHandler.postMcp(request).block();
+			final long waitedMs = (System.nanoTime() - startedAt) / 1_000_000L;
+
+			// then: the wait matches the 200ms connection budget, not the 30s
+			// streamable-request
+			assertThat(waitedMs).isLessThan(5000L);
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> bodyMap = (Map<String, Object>) ((EntityResponse<Object>) response).entity();
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> error = (Map<String, Object>) bodyMap.get("error");
+			assertThat(error.get("reason")).isEqualTo("timeout");
+			assertThat(((Number) error.get("budgetMs")).longValue()).isEqualTo(200L);
+			assertThat(((Number) error.get("elapsedMs")).longValue()).isLessThan(200L + 5000L);
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("out-of-range or malformed connectionTimeout values answer 400 with the structured error body and open no session")
+		void postMcp_invalidParameter_answers400structuredBody() throws Exception {
+			// given: a request body and a list of invalid raw values (non-numeric,
+			// decimal, zero, negative, huge)
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			final String[] invalid = { "abc", "1.5", "0", "-5", "9223372036854775807", "9300000000000", "10000000000",
+					"601" };
+			for (final String raw : invalid) {
+				// when
+				final ServerRequest request = toServerRequest(
+						MockServerHttpRequest.post("/mcp-inspector-api/mcp?connectionTimeout=" + raw)
+							.contentType(MediaType.APPLICATION_JSON)
+							.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
+				final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+				// then: 400 with the structured MCP_CONNECT_FAILED body, no session
+				assertThat(response).as("raw value %s", raw).isNotNull();
+				assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+				assertThat(entityBody(response).get("error").toString()).as("raw value %s", raw)
+					.contains("MCP_CONNECT_FAILED")
+					.contains("validation")
+					.contains("retryable=false")
+					.contains(raw);
+			}
+			verify(ProxyHandlerTests.this.registry, org.mockito.Mockito.never()).put(any(ProxySession.class));
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with an invalid connectionTimeout answers 400 with the structured error body instead of silently ignoring it")
+		void openSse_invalidParameter_answers400structuredBody() {
+			// given
+			final ServerRequest request = toServerRequest(MockServerHttpRequest
+				.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse&connectionTimeout=abc")
+				.build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then: the parameter is validated on the SSE endpoint too
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(entityBody(response).get("error").toString()).contains("MCP_CONNECT_FAILED").contains("abc");
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openStdio() with a valid connectionTimeout opens normally and with an invalid one answers 400 (parameter honoured on stdio)")
+		void openStdio_parameterValidated() {
+			// given: a valid 5s budget
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStdio(any(), any())).willReturn(target);
+			final ServerRequest valid = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/stdio?command=node&connectionTimeout=5").build());
+
+			// when
+			final ServerResponse ok = ProxyHandlerTests.this.handler.openStdio(valid).block();
+
+			// then: opens
+			assertThat(ok).isNotNull();
+			assertThat(ok.statusCode()).isEqualTo(HttpStatus.OK);
+
+			// and when: an invalid value is rejected with the structured body
+			final ServerRequest invalid = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/stdio?command=node&connectionTimeout=1.5").build());
+			final ServerResponse bad = ProxyHandlerTests.this.handler.openStdio(invalid).block();
+			assertThat(bad).isNotNull();
+			assertThat(bad.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(entityBody(bad).get("error").toString()).contains("MCP_CONNECT_FAILED").contains("1.5");
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() with connectionTimeout=1s and a start() that never completes emits a proxy-error event with the connect phase")
+		void openSse_connectPhaseOverrun_emitsStructuredProxyErrorEvent() {
+			// given: an SSE open whose bring-up never completes; the 1s budget is the
+			// only timer on this path
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willReturn(reactor.core.publisher.Mono.never());
+			final ServerRequest request = toServerRequest(MockServerHttpRequest
+				.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse&connectionTimeout=1")
+				.build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then: the stream carries a structured proxy-error event naming the
+			// connect phase, budget and elapsed
+			assertThat(response).isNotNull();
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			final org.springframework.http.codec.ServerSentEvent<String> errorEvent = body
+				.filter((event) -> "proxy-error".equals(event.event()))
+				.next()
+				.block(java.time.Duration.ofSeconds(10));
+			assertThat(errorEvent).isNotNull();
+			assertThat(errorEvent.data()).contains("MCP_CONNECT_FAILED")
+				.contains("\"phase\":\"connect\"")
+				.contains("\"budgetMs\":1000");
+			verify(ProxyHandlerTests.this.registry, timeout(5000).atLeastOnce()).removeAndClose(any(String.class));
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() bring-up failing with a non-timeout error emits a proxy-error event with the generic MCP_CONNECT_FAILED payload")
+		void openSse_nonTimeoutFailure_emitsGenericProxyErrorEvent() {
+			// given: the bring-up fails immediately with a plain exception (not a
+			// budget overrun), exercising the generic arm of the error event mapping
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any()))
+				.willReturn(Mono.error(new IllegalStateException("spawn failed")));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then: the stream carries the generic structured payload
+			assertThat(response).isNotNull();
+			@SuppressWarnings("unchecked")
+			final reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> body = (reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>>) extractBodyFlux(
+					response);
+			final org.springframework.http.codec.ServerSentEvent<String> errorEvent = body
+				.filter((event) -> "proxy-error".equals(event.event()))
+				.next()
+				.block(java.time.Duration.ofSeconds(10));
+			assertThat(errorEvent).isNotNull();
+			assertThat(errorEvent.data()).contains("MCP_CONNECT_FAILED")
+				.contains("\"reason\":\"unknown\"")
+				.contains("spawn failed");
+			verify(ProxyHandlerTests.this.registry, timeout(5000).atLeastOnce()).removeAndClose(any(String.class));
+		}
+
+	}
+
+	@Nested
 	@DisplayName("postMcp() — Streamable-HTTP")
 	class PostMcp {
 
@@ -806,6 +1437,59 @@ class ProxyHandlerTests {
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
 			assertThat(entityBody(response).get("error").toString()).contains("MCP_CONNECT_FAILED");
 			assertThat(entityBody(response).get("error").toString()).contains("connection_refused");
+		}
+
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() maps the proxy's InvalidProxyRequestException onto 502 invalid_request with "
+				+ "retryable=false and the value-safe message")
+		void postMcp_newSessionInvalidProxyRequest_returns502InvalidRequestNotRetryable() {
+			// given - the factory rejected a restricted custom header name at build time
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willThrow(new InvalidProxyRequestException(
+						"custom header 'host' is not allowed by the JDK HTTP client: restricted header name"));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://up/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then - 502 invalid_request, retryable=false: an identical retry fails
+			// identically
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			assertThat(entityBody(response).get("error").toString()).contains("invalid_request");
+			assertThat(entityBody(response).get("error").toString()).contains("retryable=false");
+		}
+
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() keeps a foreign IllegalArgumentException (NumberFormatException) unknown and never "
+				+ "copies its raw message into the response body")
+		void postMcp_newSessionForeignIllegalArgument_returnsUnknownWithoutRawMessage() {
+			// given - a JDK parser blow-up is NOT a proxy rejection; its message may
+			// quote user input, so it must not travel to the browser
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class)))
+				.willThrow(new RuntimeException(new NumberFormatException("For input string: \"pw-123\"")));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://up/mcp")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then - classified unknown, generic message, retryable stays true
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+			assertThat(entityBody(response).get("error").toString()).contains("MCP_CONNECT_FAILED");
+			assertThat(entityBody(response).get("error").toString()).contains("reason=unknown");
+			assertThat(entityBody(response).get("error").toString()).doesNotContain("pw-123");
+			assertThat(entityBody(response).get("error").toString()).contains("retryable=true");
 		}
 
 		@Test
@@ -1020,6 +1704,8 @@ class ProxyHandlerTests {
 		@Description("deleteMcp() removing a known session returns 200 ok")
 		void deleteMcp_whenSessionRemoved_returnsOk() {
 			// given
+			final ProxySession session = newSession("s4");
+			given(ProxyHandlerTests.this.registry.get("s4")).willReturn(session);
 			given(ProxyHandlerTests.this.registry.removeAndClose("s4")).willReturn(true);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.delete("/mcp-inspector-api/mcp")
 				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s4")
@@ -1054,6 +1740,118 @@ class ProxyHandlerTests {
 	}
 
 	@Nested
+	@DisplayName("D8 owner-check on existing session")
+	class OwnerCheck {
+
+		private ProxyHandler wiredHandler(final ReactiveSessionOwnerResolver resolver) {
+			return new ProxyHandler(ProxyHandlerTests.this.registry, ProxyHandlerTests.this.transportFactory,
+					ProxyHandlerTests.this.mcpProxy, ProxyHandlerTests.this.transportDetector,
+					ProxyHandlerTests.this.objectMapper, ProxyHandlerTests.this.properties, resolver,
+					mock(AuthProfileStore.class), mock(OAuth2ClientCredentialsTokenManager.class),
+					mock(OAuth2AuthCodeTokenExchanger.class));
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMessage() returns 404 when the session owner differs from the caller")
+		void postMessage_foreignOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s1");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn("owner-B");
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/message")
+				.queryParam("sessionId", "s1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+
+			// when
+			final ServerResponse response = wired.postMessage(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMessage() returns 404 when the caller owner cannot be resolved")
+		void postMessage_nullCallerOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s1");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn(null);
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/message")
+				.queryParam("sessionId", "s1")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"));
+
+			// when
+			final ServerResponse response = wired.postMessage(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("deleteMcp() returns 404 when the session owner differs from the caller")
+		void deleteMcp_foreignOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s4");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s4")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn("owner-B");
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.delete("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s4")
+				.build());
+
+			// when
+			final ServerResponse response = wired.deleteMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("deleteMcp() returns 404 when the caller owner cannot be resolved")
+		void deleteMcp_nullCallerOwner_returns404() {
+			// given
+			final ProxySession session = newSession("s4");
+			session.bindProfile("owner-A", "profile-1");
+			given(ProxyHandlerTests.this.registry.get("s4")).willReturn(session);
+			final ReactiveSessionOwnerResolver resolver = mock(ReactiveSessionOwnerResolver.class);
+			given(resolver.resolve(any())).willReturn(null);
+			final ProxyHandler wired = wiredHandler(resolver);
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.delete("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s4")
+				.build());
+
+			// when
+			final ServerResponse response = wired.deleteMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+	}
+
+	@Nested
 	@DisplayName("constructor / config edge branches")
 	class ConstructorAndConfigEdges {
 
@@ -1073,7 +1871,7 @@ class ProxyHandlerTests {
 				return null;
 			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
 
@@ -1087,7 +1885,8 @@ class ProxyHandlerTests {
 					response);
 			reactor.test.StepVerifier.create(body)
 				.assertNext((sse) -> assertThat(sse.data()).startsWith("/mcp-inspector-api/message?sessionId="))
-				.verifyComplete();
+				.expectComplete()
+				.verify(Duration.ofSeconds(5));
 		}
 
 		@Test
@@ -1308,7 +2107,7 @@ class ProxyHandlerTests {
 			// ProxyTargetResolver
 			// and resolved to http://127.0.0.1:8080/sse (default path for sse transport)
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url= ").build());
 
@@ -1318,7 +2117,7 @@ class ProxyHandlerTests {
 			// then — resolver handles blank url as loopback default, session IS opened
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(ProxyHandlerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(URI.create("http://127.0.0.1:8080/sse"));
 		}
 
 	}
@@ -1548,14 +2347,18 @@ class ProxyHandlerTests {
 		@Test
 		@Story("Streamable-HTTP relay")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("postMcp() opening a new session whose upstream never replies times out with a 504 and tears down the orphaned session")
+		@Description("postMcp() opening a new session whose upstream never replies times out on the 200ms connection budget (streamable-request stays 30s), answers a 504 naming the initialize phase, and tears down the orphaned session")
 		void postMcp_newSessionTimeout_returnsGatewayTimeoutAndRemovesSession() {
-			// given — a fast streamable request timeout so the awaiter trips quickly, and
-			// a
-			// brand-new session (includeSessionHeader == true) whose upstream stays
-			// silent
+			// given: a fast connection budget so the new-session initialize awaiter trips
+			// quickly, and a brand-new session (includeSessionHeader == true) whose
+			// upstream
+			// stays silent. streamable-request stays at its 30s default: the new-session
+			// wait is bounded by the connection budget, and the elapsedMs bound below
+			// turns
+			// red if that ever regresses to streamable-request.
 			final McpInspectorProperties fastProps = new McpInspectorProperties();
-			fastProps.getTimeouts().setStreamableRequest(java.time.Duration.ofMillis(100));
+			fastProps.getTimeouts().setConnection(java.time.Duration.ofMillis(200));
+			fastProps.getTimeouts().setStreamableRequest(java.time.Duration.ofSeconds(30));
 			final ProxyHandler fastHandler = new ProxyHandler(ProxyHandlerTests.this.registry,
 					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
 					ProxyHandlerTests.this.transportDetector, ProxyHandlerTests.this.objectMapper, fastProps);
@@ -1579,6 +2382,56 @@ class ProxyHandlerTests {
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
 			assertThat(entityBody(response).get("error").toString()).contains("MCP_CONNECT_FAILED");
 			assertThat(entityBody(response).get("error").toString()).contains("timeout");
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> error = (Map<String, Object>) entityBody(response).get("error");
+			assertThat(error.get("phase")).isEqualTo("initialize");
+			assertThat(((Number) error.get("budgetMs")).longValue()).isEqualTo(200L);
+			// budget source pin: the wait came from the 200ms connection budget, not from
+			// the 30s streamable-request. The lower bound carries 10ms of slack: timer
+			// delivery and the elapsed nanoTime read can disagree by a tick, so the
+			// timeout can land a millisecond under the budget without firing early.
+			final long elapsedMs = ((Number) error.get("elapsedMs")).longValue();
+			assertThat(elapsedMs).isGreaterThanOrEqualTo(190L);
+			assertThat(elapsedMs).isLessThan(200L + 5000L);
+			verify(ProxyHandlerTests.this.registry).removeAndClose(captured[0].sessionId());
+		}
+
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() new-session handshake failing with 401 returns the structured DTO with a redacted url and tears down the orphaned session")
+		void postMcp_newSessionAuthFailure_returnsRedacted401AndRemovesSession() {
+			// given — a new session whose upstream immediately fails the handshake with
+			// 401 (includeSessionHeader == true, so the session is registered/bound and
+			// must be removed on the failed initial handshake)
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
+				final ProxySession s = inv.getArgument(0);
+				s.targetToBrowser().tryEmitError(new RuntimeException("401 Unauthorized"));
+				return Mono.empty();
+			});
+			final ProxySession[] captured = new ProxySession[1];
+			willAnswer((inv) -> {
+				captured[0] = inv.getArgument(0);
+				return null;
+			}).given(ProxyHandlerTests.this.registry).put(any(ProxySession.class));
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://target/mcp?api_key=SECRET")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"initialize\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then — structured 401 DTO with the D5-redacted url (scheme/host/path only,
+			// the api_key secret stripped from the query) and the never-returned session
+			// is removed (D3 cleanup).
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+			final ProxyErrorDto dto = (ProxyErrorDto) ((EntityResponse<Object>) response).entity();
+			assertThat(dto.code()).isEqualTo("unauthorized");
+			assertThat(dto.url()).isEqualTo("http://target/mcp");
 			verify(ProxyHandlerTests.this.registry).removeAndClose(captured[0].sessionId());
 		}
 
@@ -1591,11 +2444,11 @@ class ProxyHandlerTests {
 		@Test
 		@Story("Header forwarding")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() forwards the inbound Authorization header into the header-aware openSse factory overload")
+		@Description("openSse() forwards the inbound Authorization header into the header-aware buildSse(URI, String, Map) factory overload")
 		void openSse_withAuthorizationHeader_usesHeaderAwareSseFactory() {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class), any(), any())).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class), any(), any())).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
 						.header("Authorization", "Bearer abc")
@@ -1607,21 +2460,74 @@ class ProxyHandlerTests {
 			// then — the 3-arg header-aware overload is used, not the bare single-arg one
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(ProxyHandlerTests.this.transportFactory).openSse(any(URI.class),
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(any(URI.class),
 					org.mockito.ArgumentMatchers.eq("Bearer abc"), org.mockito.ArgumentMatchers.eq(Map.of()));
 		}
 
 		@Test
 		@Story("Header forwarding")
 		@Severity(SeverityLevel.NORMAL)
-		@Description("openSse() without any inbound auth headers uses the bare single-arg openSse factory overload")
+		@Description("openSse() with a malformed x-custom-auth-headers payload returns 400 and builds no transport")
+		void openSse_withMalformedCustomHeaderList_returns400() {
+			// given
+			// the legacy comma-separated shape the UI never sent
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
+						.header("x-custom-auth-headers", "X-Tenant, X-Trace")
+						.header("X-Tenant", "acme")
+						.build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openSse(request).block();
+
+			// then
+			// explicit 400, no transport built
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(entityBody(response).get("error"))
+				.isEqualTo("x-custom-auth-headers must be a JSON array of header names, but is not valid JSON");
+			verify(ProxyHandlerTests.this.transportFactory, never()).buildSse(any(URI.class));
+			verify(ProxyHandlerTests.this.transportFactory, never()).buildSse(any(URI.class), any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMcp() with a malformed x-custom-auth-headers payload returns 400 and opens no session")
+		void postMcp_withMalformedCustomHeaderList_returns400() {
+			// given
+			// a new-session POST whose payload is not a JSON array
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://up/mcp")
+						.header("x-custom-auth-headers", "{\"names\":[]}")
+						.header("X-Tenant", "acme")
+						.contentType(MediaType.APPLICATION_JSON)
+						.body("{\"jsonrpc\":\"2.0\",\"method\":\"notify\"}"));
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
+
+			// then
+			// explicit 400, no transport built
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(entityBody(response).get("error"))
+				.isEqualTo("x-custom-auth-headers must be a JSON array of header names, but is an object");
+			verify(ProxyHandlerTests.this.transportFactory, never()).openStreamable(any(URI.class));
+			verify(ProxyHandlerTests.this.transportFactory, never()).openStreamable(any(URI.class), any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() without any inbound auth headers uses the bare single-arg buildSse(URI) factory overload")
 		void openSse_withoutHeaders_usesBareSseFactory() {
 			// given — no Authorization, no x-custom-auth-headers: inboundAuthorization
 			// null
 			// and inboundCustomHeaders empty, so the noHeaders branch picks the 1-arg
 			// overload
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse").build());
 
@@ -1631,7 +2537,7 @@ class ProxyHandlerTests {
 			// then
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(ProxyHandlerTests.this.transportFactory).openSse(any(URI.class));
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(any(URI.class));
 		}
 
 		@Test
@@ -1645,10 +2551,10 @@ class ProxyHandlerTests {
 			// /
 			// isEmpty / null-value branches
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class), any(), any())).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class), any(), any())).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
-						.header("x-custom-auth-headers", " X-Tenant , , X-Absent ,X-Trace")
+						.header("x-custom-auth-headers", "[\" X-Tenant \", \" \", \"X-Absent\", \"X-Trace\"]")
 						.header("X-Tenant", "acme")
 						.header("X-Trace", "t-1")
 						.build());
@@ -1661,7 +2567,7 @@ class ProxyHandlerTests {
 			// unset X-Absent name are dropped; no Authorization is present
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(ProxyHandlerTests.this.transportFactory).openSse(any(URI.class),
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(any(URI.class),
 					org.mockito.ArgumentMatchers.isNull(),
 					org.mockito.ArgumentMatchers.eq(Map.of("X-Tenant", "acme", "X-Trace", "t-1")));
 		}
@@ -1677,7 +2583,7 @@ class ProxyHandlerTests {
 			// header-aware
 			// overload selected
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(ProxyHandlerTests.this.transportFactory.openSse(any(URI.class), any(), any())).willReturn(target);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(URI.class), any(), any())).willReturn(target);
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/sse?transportType=sse&url=http://up/sse")
 						.header("Authorization", "Bearer z")
@@ -1690,7 +2596,7 @@ class ProxyHandlerTests {
 			// then
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(ProxyHandlerTests.this.transportFactory).openSse(any(URI.class),
+			verify(ProxyHandlerTests.this.transportFactory).buildSse(any(URI.class),
 					org.mockito.ArgumentMatchers.eq("Bearer z"), org.mockito.ArgumentMatchers.eq(Map.of()));
 		}
 
@@ -1707,7 +2613,7 @@ class ProxyHandlerTests {
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.get("/mcp-inspector-api/stdio?command=node")
 						.header("Authorization", "Bearer abc")
-						.header("x-custom-auth-headers", "X-Tenant")
+						.header("x-custom-auth-headers", "[\"X-Tenant\"]")
 						.header("X-Tenant", "acme")
 						.build());
 
@@ -1723,6 +2629,31 @@ class ProxyHandlerTests {
 		@Test
 		@Story("Header forwarding")
 		@Severity(SeverityLevel.NORMAL)
+		@Description("openStdio() with a malformed x-custom-auth-headers payload returns 400 and builds no transport")
+		void openStdio_withMalformedCustomHeaderList_returns400() {
+			// given
+			// the legacy comma-separated shape the UI never sent
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/stdio?command=node")
+						.header("x-custom-auth-headers", "X-Tenant, X-Trace")
+						.header("X-Tenant", "acme")
+						.build());
+
+			// when
+			final ServerResponse response = ProxyHandlerTests.this.handler.openStdio(request).block();
+
+			// then
+			// explicit 400, no transport built
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+			assertThat(entityBody(response).get("error"))
+				.isEqualTo("x-custom-auth-headers must be a JSON array of header names, but is not valid JSON");
+			verify(ProxyHandlerTests.this.transportFactory, never()).openStdio(any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() opening a new session forwards the inbound Authorization header into the header-aware openStreamable overload")
 		void postMcp_newSessionWithAuthorizationHeader_usesHeaderAwareStreamableFactory() {
 			// given
@@ -1732,7 +2663,7 @@ class ProxyHandlerTests {
 			final ServerRequest request = toServerRequest(
 					MockServerHttpRequest.post("/mcp-inspector-api/mcp?url=http://up/mcp")
 						.header("Authorization", "Bearer abc")
-						.header("x-custom-auth-headers", "X-Tenant")
+						.header("x-custom-auth-headers", "[\"X-Tenant\"]")
 						.header("X-Tenant", "acme")
 						.contentType(MediaType.APPLICATION_JSON)
 						.body("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"));
@@ -1818,7 +2749,7 @@ class ProxyHandlerTests {
 			final ProxySession session = newSession("s1");
 			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
 			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-123",
-					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000, "demo://task/status");
 			given(this.taskService.getTask("t-123")).willReturn(handle);
 			final ServerRequest request = buildTaskRequest("s1",
 					"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
@@ -1833,6 +2764,59 @@ class ProxyHandlerTests {
 			final JsonNode result = body.get("result");
 			assertThat(result.get("taskId").asText()).isEqualTo("t-123");
 			assertThat(result.get("status").asText()).isEqualTo("working");
+			assertThat(result.get("keepAlive").asText()).isEqualTo("demo://task/status");
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/get records the request and the locally produced response into the traffic timeline")
+		void tasksGet_interceptedLocally_recordsLocalExchange() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-123",
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000, null);
+			given(this.taskService.getTask("t-123")).willReturn(handle);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> requestCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(ProxyHandlerTests.this.mcpProxy).recordLocalExchange(eq(session), requestCaptor.capture(),
+					responseCaptor.capture());
+			assertThat(requestCaptor.getValue().get("method").asText()).isEqualTo("tasks/get");
+			assertThat(requestCaptor.getValue().get("id").asInt()).isEqualTo(13);
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(13);
+			assertThat(recordedResponse.get("result").get("taskId").asText()).isEqualTo("t-123");
+		}
+
+		@Test
+		@Story("no interception for non-task methods")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("a non-task method relayed upstream is never recorded as a locally answered exchange")
+		void nonTaskMethod_neverRecordsLocalExchange() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			given(ProxyHandlerTests.this.mcpProxy.start(any())).willReturn(Mono.empty());
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/list\"}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then: passthrough traffic keeps the plain relay timeline behavior
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isNotEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+			verify(ProxyHandlerTests.this.mcpProxy, never()).recordLocalExchange(any(), any(), any());
 		}
 
 		@Test
@@ -1869,7 +2853,7 @@ class ProxyHandlerTests {
 			final ProxySession session = newSession("s1");
 			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
 			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-456",
-					"cancelled", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+					"cancelled", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.cancelTask("t-456")).willReturn(handle);
 			final ServerRequest request = buildTaskRequest("s1",
 					"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"t-456\"}}");
@@ -1942,7 +2926,7 @@ class ProxyHandlerTests {
 			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
 			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-msg",
 					"failed", "Tool execution failed: timeout", "2025-01-01T00:00:00Z", "2025-01-01T00:01:00Z", 60000,
-					5000);
+					5000, null);
 			given(this.taskService.getTask("t-msg")).willReturn(handle);
 			final ServerRequest request = buildTaskRequest("s1",
 					"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-msg\"}}");
@@ -1956,6 +2940,7 @@ class ProxyHandlerTests {
 			final JsonNode body = ProxyHandlerTests.entityJson(response);
 			final JsonNode result = body.get("result");
 			assertThat(result.get("statusMessage").asText()).isEqualTo("Tool execution failed: timeout");
+			assertThat(result.has("keepAlive")).isFalse();
 		}
 
 		@Test
@@ -2055,18 +3040,29 @@ class ProxyHandlerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("when no TaskService bean is available, tasks/get falls through to the regular relay path")
 		void tasksGet_withoutTaskService_relaysToUpstream() throws Exception {
-			// given
+			// given: the upstream answer is pre-emitted on the session replay sink, so
+			// the
+			// relay await resolves immediately instead of waiting out the 30 s request
+			// timeout
+			final String frame = "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}";
 			final ProxySession session = newSession("s1");
+			final JsonNode upstreamAnswer = ProxyHandlerTests.this.objectMapper.readTree(
+					"{\"jsonrpc\":\"2.0\",\"id\":6,\"result\":{\"taskId\":\"t-1\",\"status\":\"vendor-implementation\"}}");
+			session.targetToBrowser().tryEmitNext(upstreamAnswer);
 			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
-			final ServerRequest request = buildTaskRequest("s1",
-					"{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-1\"}}");
+			final ServerRequest request = buildTaskRequest("s1", frame);
 
 			// when - the default handler has no TaskService
 			final ServerResponse response = ProxyHandlerTests.this.handler.postMcp(request).block();
 
-			// then - the frame is relayed, not intercepted locally
+			// then - the frame is relayed upstream and the upstream answer comes back
+			// verbatim
 			assertThat(response).isNotNull();
-			assertThat(response.statusCode()).isNotEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(ProxyHandlerTests.entityJson(response)).isEqualTo(upstreamAnswer);
+			assertThat(session.browserToTarget().asFlux().blockFirst(Duration.ofMillis(500)))
+				.as("tasks/get frame must be emitted toward upstream")
+				.isEqualTo(ProxyHandlerTests.this.objectMapper.readTree(frame));
 		}
 
 		@Test
@@ -2106,7 +3102,7 @@ class ProxyHandlerTests {
 			final java.time.Instant before = session.lastActivity();
 			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
 			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-123",
-					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.getTask("t-123")).willReturn(handle);
 			final ServerRequest request = buildTaskRequest("s1",
 					"{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"t-123\"}}");
@@ -2130,7 +3126,7 @@ class ProxyHandlerTests {
 			final java.util.List<io.inspector.mcp.core.task.TaskHandle> handles = new java.util.ArrayList<>(102);
 			for (int i = 1; i <= 102; i++) {
 				handles.add(new io.inspector.mcp.core.task.TaskHandle("t-" + i, "working", null, "2025-01-01T00:00:00Z",
-						"2025-01-01T00:00:00Z", 60000, 5000));
+						"2025-01-01T00:00:00Z", 60000, 5000, null));
 			}
 			given(this.taskService.listTasks()).willReturn(handles);
 			final ServerRequest request = buildTaskRequest("s1",
@@ -2156,9 +3152,9 @@ class ProxyHandlerTests {
 			final ProxySession session = newSession("s1");
 			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
 			final io.inspector.mcp.core.task.TaskHandle first = new io.inspector.mcp.core.task.TaskHandle("t-1",
-					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000, null);
 			final io.inspector.mcp.core.task.TaskHandle second = new io.inspector.mcp.core.task.TaskHandle("t-2",
-					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000);
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000, null);
 			given(this.taskService.listTasks()).willReturn(java.util.List.of(first, second));
 			final ServerRequest request = buildTaskRequest("s1",
 					"{\"jsonrpc\":\"2.0\",\"id\":43,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"1\"}}");
@@ -2173,6 +3169,178 @@ class ProxyHandlerTests {
 			assertThat(result.get("tasks")).hasSize(1);
 			assertThat(result.get("tasks").get(0).get("taskId").asText()).isEqualTo("t-2");
 			assertThat(result.has("nextCursor")).as("last page has no nextCursor").isFalse();
+		}
+
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("tasks/list with a non-numeric cursor returns a JSON-RPC -32602 error naming the cursor")
+		void tasksList_nonNumericCursor_returnsInvalidParamsError() throws Exception {
+			// given: a cursor that is not a decimal offset
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final java.util.List<io.inspector.mcp.core.task.TaskHandle> noTasks = java.util.List.of();
+			given(this.taskService.listTasks()).willReturn(noTasks);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"not-a-number\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then: a -32602 Invalid params error naming the offending cursor instead of
+			// an empty page
+			assertThat(response).isNotNull();
+			final JsonNode error = ProxyHandlerTests.entityJson(response).get("error");
+			assertThat(error.get("code").asInt()).isEqualTo(-32602);
+			assertThat(error.get("message").asText()).contains("not-a-number");
+		}
+
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/list error records the request and the -32602 error envelope into the timeline")
+		void tasksList_nonNumericCursor_recordsRequestAndErrorEnvelopeInTimeline() throws Exception {
+			// given: a cursor that is not a decimal offset
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final java.util.List<io.inspector.mcp.core.task.TaskHandle> noTasks = java.util.List.of();
+			given(this.taskService.listTasks()).willReturn(noTasks);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tasks/list\",\"params\":{\"cursor\":\"not-a-number\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then: the request and the locally produced -32602 error envelope are
+			// recorded together into the traffic timeline, request first
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> requestCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(ProxyHandlerTests.this.mcpProxy).recordLocalExchange(eq(session), requestCaptor.capture(),
+					responseCaptor.capture());
+			assertThat(requestCaptor.getValue().get("method").asText()).isEqualTo("tasks/list");
+			assertThat(requestCaptor.getValue().get("id").asInt()).isEqualTo(44);
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(44);
+			assertThat(recordedResponse.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(recordedResponse.get("error").get("message").asText()).contains("not-a-number");
+		}
+
+		@Test
+		@Story("tasks/get interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/get error records the request and the -32602 error envelope into the timeline")
+		void tasksGet_unknownTask_recordsRequestAndErrorEnvelopeInTimeline() throws Exception {
+			// given: an unknown taskId answered locally with a -32602 error
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			given(this.taskService.getTask("missing"))
+				.willThrow(new io.inspector.mcp.core.task.TaskNotFoundException("missing"));
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":45,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"missing\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then: the request and the locally produced -32602 error envelope are
+			// recorded together into the traffic timeline, request first
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> requestCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(ProxyHandlerTests.this.mcpProxy).recordLocalExchange(eq(session), requestCaptor.capture(),
+					responseCaptor.capture());
+			assertThat(requestCaptor.getValue().get("method").asText()).isEqualTo("tasks/get");
+			assertThat(requestCaptor.getValue().get("id").asInt()).isEqualTo(45);
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(45);
+			assertThat(recordedResponse.get("error").get("code").asInt()).isEqualTo(-32602);
+			assertThat(recordedResponse.get("error").get("message").asText()).containsIgnoringCase("not found");
+		}
+
+		@Test
+		@Story("tasks/list interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/list records the request and the locally produced response into the traffic timeline")
+		void tasksList_interceptedLocally_recordsLocalExchange() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-1",
+					"working", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000, null);
+			given(this.taskService.listTasks()).willReturn(java.util.List.of(handle));
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":48,\"method\":\"tasks/list\"}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then: the locally answered frame never reaches the upstream
+			StepVerifier.create(session.browserToTarget().asFlux())
+				.expectSubscription()
+				.expectNoEvent(Duration.ofMillis(200))
+				.thenCancel()
+				.verify();
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> requestCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(ProxyHandlerTests.this.mcpProxy).recordLocalExchange(eq(session), requestCaptor.capture(),
+					responseCaptor.capture());
+			// the recorded pair correlates through the shared JSON-RPC id
+			assertThat(requestCaptor.getValue().get("method").asText()).isEqualTo("tasks/list");
+			assertThat(requestCaptor.getValue().get("id").asInt()).isEqualTo(48);
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(48);
+			assertThat(recordedResponse.get("result").get("tasks")).hasSize(1);
+			assertThat(recordedResponse.get("result").get("tasks").get(0).get("taskId").asText()).isEqualTo("t-1");
+			// the recorded payload equals the body returned to the client
+			// compare serialized JSON: the recorded tree and the response body can differ
+			// in numeric node classes (long vs int) while carrying the same payload
+			assertThat(recordedResponse.toString()).isEqualTo(ProxyHandlerTests.entityJson(response).toString());
+		}
+
+		@Test
+		@Story("tasks/cancel interception")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a locally answered tasks/cancel records the request and the locally produced response into the traffic timeline")
+		void tasksCancel_interceptedLocally_recordsLocalExchange() throws Exception {
+			// given
+			final ProxySession session = newSession("s1");
+			given(ProxyHandlerTests.this.registry.get("s1")).willReturn(session);
+			final io.inspector.mcp.core.task.TaskHandle handle = new io.inspector.mcp.core.task.TaskHandle("t-456",
+					"cancelled", null, "2025-01-01T00:00:00Z", "2025-01-01T00:00:00Z", 60000, 5000, null);
+			given(this.taskService.cancelTask("t-456")).willReturn(handle);
+			final ServerRequest request = buildTaskRequest("s1",
+					"{\"jsonrpc\":\"2.0\",\"id\":49,\"method\":\"tasks/cancel\",\"params\":{\"taskId\":\"t-456\"}}");
+
+			// when
+			final ServerResponse response = this.handlerWithTasks.postMcp(request).block();
+
+			// then: the locally answered frame never reaches the upstream
+			StepVerifier.create(session.browserToTarget().asFlux())
+				.expectSubscription()
+				.expectNoEvent(Duration.ofMillis(200))
+				.thenCancel()
+				.verify();
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final ArgumentCaptor<JsonNode> requestCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			final ArgumentCaptor<JsonNode> responseCaptor = ArgumentCaptor.forClass(JsonNode.class);
+			verify(ProxyHandlerTests.this.mcpProxy).recordLocalExchange(eq(session), requestCaptor.capture(),
+					responseCaptor.capture());
+			// the recorded pair correlates through the shared JSON-RPC id
+			assertThat(requestCaptor.getValue().get("method").asText()).isEqualTo("tasks/cancel");
+			assertThat(requestCaptor.getValue().get("id").asInt()).isEqualTo(49);
+			final JsonNode recordedResponse = responseCaptor.getValue();
+			assertThat(recordedResponse.get("id").asInt()).isEqualTo(49);
+			assertThat(recordedResponse.get("result").get("taskId").asText()).isEqualTo("t-456");
+			assertThat(recordedResponse.get("result").get("status").asText()).isEqualTo("cancelled");
+			// the recorded payload equals the body returned to the client
+			// compare serialized JSON: the recorded tree and the response body can differ
+			// in numeric node classes (long vs int) while carrying the same payload
+			assertThat(recordedResponse.toString()).isEqualTo(ProxyHandlerTests.entityJson(response).toString());
 		}
 
 	}
@@ -2240,8 +3408,10 @@ class ProxyHandlerTests {
 			given(ProxyHandlerTests.this.transportFactory.openStreamable(any(URI.class))).willReturn(target);
 			final JsonNode response = ProxyHandlerTests.this.objectMapper
 				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":{\"tasks\":{\"custom\":true}}}}");
+			final AtomicReference<ProxySession> startedSession = new AtomicReference<>();
 			given(ProxyHandlerTests.this.mcpProxy.start(any())).willAnswer((inv) -> {
 				final ProxySession s = inv.getArgument(0);
+				startedSession.set(s);
 				s.targetToBrowser().tryEmitNext(response);
 				return Mono.empty();
 			});
@@ -2251,7 +3421,7 @@ class ProxyHandlerTests {
 						.body("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}"));
 
 			// when
-			final ServerResponse serverResponse = ProxyHandlerTests.this.handler.postMcp(request).block();
+			final ServerResponse serverResponse = this.handlerWithTasks.postMcp(request).block();
 
 			// then
 			assertThat(serverResponse).isNotNull();
@@ -2260,6 +3430,10 @@ class ProxyHandlerTests {
 			assertThat(responseBody.path("result").path("capabilities").path("tasks").path("custom").asBoolean())
 				.as("upstream tasks must be preserved")
 				.isTrue();
+			assertThat(startedSession.get()).isNotNull();
+			assertThat(startedSession.get().isTasksInterceptionEnabled())
+				.as("upstream-advertised tasks keeps task-method interception off")
+				.isFalse();
 		}
 
 		@Test
@@ -2512,6 +3686,75 @@ class ProxyHandlerTests {
 				.as("session-id header must be present on first POST response")
 				.isNotEmpty();
 			verify(this.taskService, never()).getTask(any());
+		}
+
+	}
+
+	@Nested
+	@DisplayName("keep-alive wiring")
+	class KeepAliveWiring {
+
+		@Test
+		@Story("Proxy keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() wraps the target transport with ping detection and registers the tracker for /keepalive polling")
+		void openSse_wrapsTargetTransportAndRegistersTracker() {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(java.net.URI.class))).willReturn(target);
+			final KeepAliveEventRegistry keepAliveEvents = new KeepAliveEventRegistry();
+			final ProxyHandler wired = new ProxyHandler(ProxyHandlerTests.this.registry,
+					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
+					ProxyHandlerTests.this.transportDetector, ProxyHandlerTests.this.objectMapper,
+					ProxyHandlerTests.this.properties, null, keepAliveEvents);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?url=http://target/sse").build());
+			final ArgumentCaptor<ProxySession> captor = ArgumentCaptor.forClass(ProxySession.class);
+
+			// when
+			final ServerResponse response = wired.openSse(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			verify(ProxyHandlerTests.this.registry).put(captor.capture());
+			final ProxySession session = captor.getValue();
+			assertThat(session.targetTransport()).isInstanceOf(PingDetectingClientTransport.class);
+			assertThat(session.keepAliveTracker()).isNotNull();
+			assertThat(keepAliveEvents.tracker(session.sessionId())).isSameAs(session.keepAliveTracker());
+		}
+
+		@Test
+		@Story("Proxy keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a recorded proxy ping is emitted to the session sink as mcp:keepalive-ping with an {\"at\"} JSON payload")
+		void recordedPing_emitsJsonKeepAliveEventToRegisteredSink() {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(ProxyHandlerTests.this.transportFactory.buildSse(any(java.net.URI.class))).willReturn(target);
+			final KeepAliveEventRegistry keepAliveEvents = new KeepAliveEventRegistry();
+			final ProxyHandler wired = new ProxyHandler(ProxyHandlerTests.this.registry,
+					ProxyHandlerTests.this.transportFactory, ProxyHandlerTests.this.mcpProxy,
+					ProxyHandlerTests.this.transportDetector, ProxyHandlerTests.this.objectMapper,
+					ProxyHandlerTests.this.properties, null, keepAliveEvents);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector-api/sse?url=http://target/sse").build());
+			final ArgumentCaptor<ProxySession> captor = ArgumentCaptor.forClass(ProxySession.class);
+			wired.openSse(request).block();
+			verify(ProxyHandlerTests.this.registry).put(captor.capture());
+			final ProxySession session = captor.getValue();
+			final Sinks.Many<ServerSentEvent<String>> sink = keepAliveEvents.sink(session.sessionId());
+			assertThat(sink).isNotNull();
+
+			// when + then
+			StepVerifier.create(sink.asFlux())
+				.then(() -> session.keepAliveTracker().recordPing(java.time.Instant.parse("2026-09-20T10:00:00Z")))
+				.assertNext((event) -> {
+					assertThat(event.event()).isEqualTo("mcp:keepalive-ping");
+					assertThat(event.data()).isEqualTo("{\"at\":\"2026-09-20T10:00:00Z\"}");
+				})
+				.thenCancel()
+				.verify(Duration.ofSeconds(5));
 		}
 
 	}

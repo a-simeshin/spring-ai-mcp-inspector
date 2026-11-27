@@ -1,0 +1,30 @@
+src/utils/schemaUtils.ts: add findMissingOutputSchemaWarning plus the shared
+advertisesOutputSchema predicate, now also used by cacheToolOutputSchemas so
+the validators cache and the detector can no longer disagree about whether a
+tool advertised a schema. The helper detects the spring-ai#6773 case
+best-effort, client-side: the tool advertises no meaningful outputSchema
+(shapeless {} counts as none; {anyOf: [...]} without type counts as a
+schema) while the observed CallToolResult itself encodes a JSON primitive: a
+quoted JSON string, number, boolean, or null in a text block, or a primitive
+structuredContent. Plain text that fails JSON.parse is NOT flagged: a
+String-returning tool without generateOutputSchema is the normal case and
+the client cannot observe the annotation, so the old any-text signal
+over-triggered on every schema-less tool. Any JSON object or array block
+vetoes the warning (structured results are out of scope), and error results
+are never flagged. Known tradeoff: a numeric/boolean result without the
+annotation is indistinguishable from the #6773 shape client-side and still
+warns.
+
+src/components/ToolResults.tsx: render the warning inline above the tool
+result body when findMissingOutputSchemaWarning fires, with an amber
+background and a link to
+https://github.com/spring-projects/spring-ai/issues/6773. The warning is
+keyed by data-testid="missing-output-schema-warning" for testability.
+
+Covered by the reworked Jest cases in
+src/utils/__tests__/schemaUtils.test.ts (findMissingOutputSchemaWarning
+describe block: JSON primitives positive; plain text, task-polling status,
+object/array blocks, and advertised schemas negative) and by new rendering
+tests in src/components/__tests__/ToolResults.test.tsx that fail if the
+warning markup stops rendering (the previous suite stayed green even with
+the render branch disabled).

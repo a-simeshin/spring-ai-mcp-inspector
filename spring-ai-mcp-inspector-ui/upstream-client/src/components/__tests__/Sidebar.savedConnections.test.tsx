@@ -82,6 +82,8 @@ describe("Sidebar saved connections UI", () => {
     onSaveConnection: jest.fn() as (name: string) => SavedConnection,
     onDeleteConnection: jest.fn(),
     onSelectConnection: jest.fn(),
+    connectionTimeout: "",
+    setConnectionTimeout: jest.fn(),
   };
 
   const renderSidebar = (props = {}) => {
@@ -342,6 +344,40 @@ describe("Sidebar saved connections UI", () => {
     });
   });
 
+  describe("Connection timeout restoration", () => {
+    it("restores connectionTimeout from saved connection on select", () => {
+      const conn = makeConnection({
+        connectionTimeout: "45",
+      });
+      renderSidebar({
+        savedConnections: [conn],
+      });
+
+      const connEl = screen.getByTestId(`saved-connection-${conn.id}`);
+      fireEvent.click(connEl);
+
+      expect(defaultProps.onSelectConnection).toHaveBeenCalledWith(
+        expect.objectContaining({ connectionTimeout: "45" }),
+      );
+    });
+
+    it("restores empty string when saved connection has no connectionTimeout (legacy)", () => {
+      const conn = makeConnection({
+        connectionTimeout: undefined,
+      });
+      renderSidebar({
+        savedConnections: [conn],
+      });
+
+      const connEl = screen.getByTestId(`saved-connection-${conn.id}`);
+      fireEvent.click(connEl);
+
+      expect(defaultProps.onSelectConnection).toHaveBeenCalledWith(
+        expect.objectContaining({ connectionTimeout: undefined }),
+      );
+    });
+  });
+
   describe("Saved connections collapse/expand", () => {
     it("collapses and expands saved connections section", () => {
       renderSidebar();
@@ -358,6 +394,91 @@ describe("Sidebar saved connections UI", () => {
       // Expand
       fireEvent.click(toggleButton);
       expect(screen.getByTestId("save-current-connection")).toBeInTheDocument();
+    });
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Stale auth-profile bindings (issue #267):
+  // the banner names the connection and the missing profile, offers one-click
+  // Unlink / Open Auth Settings, and never renders stored names as markup.
+  describe("Stale auth profile banner (issue #267)", () => {
+    const staleConnection = makeConnection({
+      id: "c1",
+      name: "Ghost Conn",
+      authProfileName: "ghost",
+    });
+
+    it("names the affected connection and the missing profile", () => {
+      renderSidebar({
+        savedConnections: [staleConnection],
+        staleAuthProfileBindings: [staleConnection],
+      });
+      const banner = screen.getByTestId("stale-auth-binding-c1");
+      expect(banner).toHaveTextContent("Ghost Conn");
+      expect(banner).toHaveTextContent("ghost");
+    });
+
+    it("renders multiple stale bindings as separate items", () => {
+      const second = makeConnection({
+        id: "c2",
+        name: "Other Conn",
+        authProfileName: "gone",
+      });
+      renderSidebar({
+        savedConnections: [staleConnection, second],
+        staleAuthProfileBindings: [staleConnection, second],
+      });
+      expect(screen.getByTestId("stale-auth-binding-c1")).toBeInTheDocument();
+      expect(screen.getByTestId("stale-auth-binding-c2")).toBeInTheDocument();
+    });
+
+    it("unlinks the profile in one click", () => {
+      const onUnlinkAuthProfile = jest.fn();
+      renderSidebar({
+        savedConnections: [staleConnection],
+        staleAuthProfileBindings: [staleConnection],
+        onUnlinkAuthProfile,
+      });
+      fireEvent.click(
+        screen.getByTestId("stale-auth-binding-unlink-c1"),
+      );
+      expect(onUnlinkAuthProfile).toHaveBeenCalledWith("c1");
+    });
+
+    it("opens auth settings in one click", () => {
+      const onOpenAuthSettings = jest.fn();
+      renderSidebar({
+        savedConnections: [staleConnection],
+        staleAuthProfileBindings: [staleConnection],
+        onOpenAuthSettings,
+      });
+      fireEvent.click(screen.getByTestId("stale-auth-binding-open-settings"));
+      expect(onOpenAuthSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows no banner for valid connections", () => {
+      renderSidebar({
+        savedConnections: [makeConnection()],
+        staleAuthProfileBindings: [],
+      });
+      expect(
+        screen.queryByTestId("stale-auth-binding-conn-1"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("escapes markup inside stored names", () => {
+      const hostile = makeConnection({
+        id: "xss-1",
+        name: '<img src=x onerror="alert(1)">',
+        authProfileName: "<script>alert(2)</script>",
+      });
+      renderSidebar({
+        savedConnections: [hostile],
+        staleAuthProfileBindings: [hostile],
+      });
+      const banner = screen.getByTestId("stale-auth-binding-xss-1");
+      expect(banner).toHaveTextContent('<img src=x onerror="alert(1)">');
+      expect(banner.querySelector("img")).toBeNull();
+      expect(banner.querySelector("script")).toBeNull();
     });
   });
 });

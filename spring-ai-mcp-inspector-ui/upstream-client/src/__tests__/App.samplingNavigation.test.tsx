@@ -190,6 +190,11 @@ describe("App - Sampling auto-navigation", () => {
     });
   });
 
+  // [spring-ai-mcp-inspector PATCH] Local regression test: the delayed hop
+  // back to the originating tab must not fire after unmount. window.location
+  // is global, so a stray timer here rewrites the hash of whatever runs next,
+  // which is exactly how this suite used to fail under jest's randomised
+  // test order.
   test("unmounting cancels the pending tab bounce instead of rewriting the hash", async () => {
     let capturedOnPendingRequest: OnPendingRequestHandler | undefined;
 

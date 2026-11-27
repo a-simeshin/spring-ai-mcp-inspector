@@ -16,8 +16,18 @@
 
 package io.inspector.mcp.webflux.router;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.server.McpServerFeatures;
@@ -32,6 +42,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.reactivestreams.Subscriber;
+import org.reactivestreams.Subscription;
 import org.springframework.boot.web.server.WebServer;
 import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.boot.web.server.context.WebServerInitializedEvent;
@@ -40,11 +52,16 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
+import org.springframework.web.reactive.function.server.EntityResponse;
 import org.springframework.web.reactive.function.server.HandlerStrategies;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
+import reactor.core.Scannable.Attr;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -54,6 +71,7 @@ import io.inspector.mcp.core.bootstrap.BootstrapHtmlRenderer;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrap;
 import io.inspector.mcp.core.bootstrap.InspectorBootstrapAssembler;
 import io.inspector.mcp.core.client.ExternalStdioClientFactory;
+import io.inspector.mcp.core.client.InitializeResultCapturingTransport;
 import io.inspector.mcp.core.client.LoopbackMcpClientFactory;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.dto.RootDto;
@@ -61,6 +79,7 @@ import io.inspector.mcp.core.dto.RootsDto;
 import io.inspector.mcp.core.introspect.model.IntrospectionReport;
 import io.inspector.mcp.core.introspect.model.SchemaWarning;
 import io.inspector.mcp.core.introspect.model.WarningCode;
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
 import io.inspector.mcp.core.oauth.InspectorOAuthClient;
 import io.inspector.mcp.core.oauth.OAuthInitiateRequest;
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
@@ -129,6 +148,11 @@ class InspectorHandlerTests {
 		return ServerRequest.create(exchange, STRATEGIES.messageReaders());
 	}
 
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> entityBody(final ServerResponse response) {
+		return (Map<String, Object>) ((EntityResponse<Object>) response).entity();
+	}
+
 	private static McpSyncClient connectedClient() {
 		final McpSyncClient client = mock(McpSyncClient.class);
 		given(client.initialize()).willReturn(null);
@@ -156,7 +180,8 @@ class InspectorHandlerTests {
 		this.handler.onWebServerStarted(webServerStartedEvent(8081));
 		given(this.transportDetector.detect())
 			.willReturn(new DetectedTransport(TransportType.STREAMABLE, "/mcp", null, "WEBFLUX"));
-		given(this.loopbackFactory.forStreamable(any(), org.mockito.ArgumentMatchers.eq(8081), any(), any()))
+		given(this.loopbackFactory.forStreamable(any(), org.mockito.ArgumentMatchers.eq(8081), any(), any(), any(),
+				any(KeepAliveTracker.class)))
 			.willReturn(client);
 		final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 			.contentType(MediaType.APPLICATION_JSON)
@@ -176,13 +201,6 @@ class InspectorHandlerTests {
 			.block();
 		assertThat(response).isNotNull();
 		return entityBody(response);
-	}
-
-	@SuppressWarnings("unchecked")
-	private static Map<String, Object> entityBody(final ServerResponse response) {
-		final Object entity = ((org.springframework.web.reactive.function.server.EntityResponse<Object>) response)
-			.entity();
-		return (Map<String, Object>) entity;
 	}
 
 	private String readState(final ServerResponse response) {
@@ -374,7 +392,7 @@ class InspectorHandlerTests {
 				.willReturn(new DetectedTransport(TransportType.STREAMABLE, "/mcp", null, "WEBFLUX"));
 			final McpSyncClient client = connectedClient();
 			given(InspectorHandlerTests.this.loopbackFactory.forStreamable(any(), org.mockito.ArgumentMatchers.eq(8081),
-					any(), any()))
+					any(), any(), any(), any(KeepAliveTracker.class)))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -417,7 +435,7 @@ class InspectorHandlerTests {
 			// given
 			InspectorHandlerTests.this.handler.onWebServerStarted(webServerStartedEvent(8081));
 			final McpSyncClient client = connectedClient();
-			given(InspectorHandlerTests.this.externalStdioFactory.forCommand(any(), any())).willReturn(client);
+			given(InspectorHandlerTests.this.externalStdioFactory.forCommand(any(), any(), any())).willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
 				.body("{\"externalCommand\":\"node server.js --flag\"}"));
@@ -428,8 +446,48 @@ class InspectorHandlerTests {
 			// then
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
-			verify(InspectorHandlerTests.this.externalStdioFactory).forCommand(any(), any());
+			verify(InspectorHandlerTests.this.externalStdioFactory).forCommand(any(), any(), any());
 			verify(client).initialize();
+		}
+
+		@Test
+		@Story("Open session")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("connect() with an externalCommand reports the skills extension declared in the captured raw initialize frame (capture != null branch, SEP-2640)")
+		void connect_withExternalCommand_reportsSkillsExtensionFromCapturedFrame() {
+			// given: the external factory hands back the capturing transport it was
+			// asked to observe, pre-populated with the raw initialize frame a stdio
+			// server would have returned
+			InspectorHandlerTests.this.handler.onWebServerStarted(webServerStartedEvent(8081));
+			final McpSyncClient client = connectedClient();
+			final io.modelcontextprotocol.spec.McpClientTransport delegateTransport = org.mockito.Mockito
+				.mock(io.modelcontextprotocol.spec.McpClientTransport.class);
+			final InitializeResultCapturingTransport capture = new InitializeResultCapturingTransport(
+					delegateTransport);
+			final java.util.Map<String, Object> rawFrame = new java.util.HashMap<>(Map.of("capabilities",
+					Map.of("extensions", Map.of("io.modelcontextprotocol/skills", Map.of("directoryRead", true)))));
+			capture.unmarshalFrom(rawFrame, io.modelcontextprotocol.client.McpAsyncClient.INITIALIZE_RESULT_TYPE_REF);
+			given(InspectorHandlerTests.this.externalStdioFactory.forCommand(any(), any(), any()))
+				.willAnswer((invocation) -> {
+					final AtomicReference<InitializeResultCapturingTransport> ref = invocation.getArgument(2);
+					ref.set(capture);
+					return client;
+				});
+			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"externalCommand\":\"node server.js\"}"));
+
+			// when
+			final ServerResponse response = InspectorHandlerTests.this.handler.connect(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final Map<String, Object> body = entityBody(response);
+			@SuppressWarnings("unchecked")
+			final Map<String, Object> skillsExtension = (Map<String, Object>) body.get("skillsExtension");
+			assertThat(skillsExtension.get("supported")).isEqualTo(true);
+			assertThat(skillsExtension.get("directoryRead")).isEqualTo(true);
 		}
 
 		@Test
@@ -443,7 +501,7 @@ class InspectorHandlerTests {
 				.willReturn(new DetectedTransport(TransportType.SSE, "/app/sse", "/app/mcp/message", "WEBFLUX"));
 			final McpSyncClient client = connectedClient();
 			given(InspectorHandlerTests.this.loopbackFactory.forSse(any(), org.mockito.ArgumentMatchers.eq(8081),
-					org.mockito.ArgumentMatchers.eq("/app/sse"), any()))
+					org.mockito.ArgumentMatchers.eq("/app/sse"), any(), any(), any(KeepAliveTracker.class)))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -456,7 +514,7 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			verify(InspectorHandlerTests.this.loopbackFactory).forSse(any(), org.mockito.ArgumentMatchers.eq(8081),
-					org.mockito.ArgumentMatchers.eq("/app/sse"), any());
+					org.mockito.ArgumentMatchers.eq("/app/sse"), any(), any(), any(KeepAliveTracker.class));
 		}
 
 		@Test
@@ -470,7 +528,7 @@ class InspectorHandlerTests {
 				.willReturn(new DetectedTransport(TransportType.STATELESS, "/mcp", null, "WEBFLUX"));
 			final McpSyncClient client = connectedClient();
 			given(InspectorHandlerTests.this.loopbackFactory.forStateless(any(), org.mockito.ArgumentMatchers.eq(8081),
-					any(), any()))
+					any(), any(), any()))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -483,7 +541,7 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			verify(InspectorHandlerTests.this.loopbackFactory).forStateless(any(),
-					org.mockito.ArgumentMatchers.eq(8081), any(), any());
+					org.mockito.ArgumentMatchers.eq(8081), any(), any(), any());
 		}
 
 		@Test
@@ -866,6 +924,147 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			assertThat(response.headers().getContentType()).isEqualTo(MediaType.APPLICATION_JSON);
+		}
+
+		@Test
+		@Story("Keep-alive")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("keepalive() for an unknown session returns 404")
+		void keepalive_withUnknownSession_returnsNotFound() {
+			// given
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector/api/keepalive?sessionId=nope").build());
+
+			// when
+			final ServerResponse response = InspectorHandlerTests.this.handler.keepalive(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Keep-alive")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("keepalive() for a session whose tracker never observed a ping returns observed=false with empty state")
+		void keepalive_withKnownSessionAndNoPings_returnsObservedFalseWithNoInterval() {
+			// given
+			final String sessionId = openLoopbackSession(connectedClient());
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector/api/keepalive?sessionId=" + sessionId).build());
+
+			// when
+			final ServerResponse response = InspectorHandlerTests.this.handler.keepalive(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(response.headers().getContentType()).isEqualTo(MediaType.APPLICATION_JSON);
+			final Map<String, Object> body = entityBody(response);
+			assertThat(body.get("observed")).isEqualTo(false);
+			assertThat(body.get("lastPingAt")).isNull();
+		}
+
+		@Test
+		@Story("Keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("keepalive() resolves proxy sessions (the UI default connection mode) through the keep-alive registry")
+		void keepalive_forProxySession_returnsProxyTrackerSnapshot() {
+			// given
+			final KeepAliveEventRegistry keepAliveEvents = new KeepAliveEventRegistry();
+			final KeepAliveTracker tracker = new KeepAliveTracker();
+			tracker.recordPing(java.time.Instant.parse("2026-09-20T10:00:00Z"));
+			keepAliveEvents.register("proxy-1", tracker);
+			final InspectorHandler proxyAware = new InspectorHandler(InspectorHandlerTests.this.transportDetector,
+					InspectorHandlerTests.this.loopbackFactory, InspectorHandlerTests.this.externalStdioFactory,
+					InspectorHandlerTests.this.tokenProvider, InspectorHandlerTests.this.objectMapper,
+					InspectorHandlerTests.this.oauthClient, InspectorHandlerTests.this.properties,
+					InspectorHandlerTests.this.bootstrapAssembler, InspectorHandlerTests.this.bootstrapHtmlRenderer,
+					keepAliveEvents);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector/api/keepalive?sessionId=proxy-1").build());
+
+			// when
+			final ServerResponse response = proxyAware.keepalive(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			final Map<String, Object> body = entityBody(response);
+			assertThat(body.get("observed")).isEqualTo(true);
+			assertThat(body.get("lastPingAt")).isEqualTo("2026-09-20T10:00:00Z");
+		}
+
+		@Test
+		@Story("Keep-alive")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("keepalive() answers 404 when neither a REST session nor a proxy tracker matches")
+		void keepalive_registeredSinkWithoutTracker_returnsNotFound() {
+			// given
+			final KeepAliveEventRegistry keepAliveEvents = new KeepAliveEventRegistry();
+			keepAliveEvents.register("proxy-untracked", null);
+			final InspectorHandler proxyAware = new InspectorHandler(InspectorHandlerTests.this.transportDetector,
+					InspectorHandlerTests.this.loopbackFactory, InspectorHandlerTests.this.externalStdioFactory,
+					InspectorHandlerTests.this.tokenProvider, InspectorHandlerTests.this.objectMapper,
+					InspectorHandlerTests.this.oauthClient, InspectorHandlerTests.this.properties,
+					InspectorHandlerTests.this.bootstrapAssembler, InspectorHandlerTests.this.bootstrapHtmlRenderer,
+					keepAliveEvents);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector/api/keepalive?sessionId=proxy-untracked").build());
+
+			// when
+			final ServerResponse response = proxyAware.keepalive(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("events() streams the registered proxy keep-alive sink when no REST session matches")
+		void events_forProxySession_streamsRegisteredSink() {
+			// given
+			final KeepAliveEventRegistry keepAliveEvents = new KeepAliveEventRegistry();
+			keepAliveEvents.register("proxy-1", new KeepAliveTracker());
+			final InspectorHandler proxyAware = new InspectorHandler(InspectorHandlerTests.this.transportDetector,
+					InspectorHandlerTests.this.loopbackFactory, InspectorHandlerTests.this.externalStdioFactory,
+					InspectorHandlerTests.this.tokenProvider, InspectorHandlerTests.this.objectMapper,
+					InspectorHandlerTests.this.oauthClient, InspectorHandlerTests.this.properties,
+					InspectorHandlerTests.this.bootstrapAssembler, InspectorHandlerTests.this.bootstrapHtmlRenderer,
+					keepAliveEvents);
+			final ServerRequest request = toServerRequest(
+					MockServerHttpRequest.get("/mcp-inspector/api/events?sessionId=proxy-1").build());
+
+			// when
+			final ServerResponse response = proxyAware.events(request).block();
+
+			// then
+			assertThat(response).isNotNull();
+			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(response.headers().getContentType()).isEqualTo(MediaType.TEXT_EVENT_STREAM);
+		}
+
+		@Test
+		@Story("Keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("events() for a REST session emits the unified {\"at\"} JSON payload on mcp:keepalive-ping")
+		void events_restSession_emitsUnifiedJsonKeepAlivePingPayload() {
+			// given
+			final McpSyncClient client = connectedClient();
+			final String sessionId = openLoopbackSession(client);
+			final SessionContext ctx = InspectorHandlerTests.this.sessions().get(sessionId);
+
+			// when / then
+			StepVerifier.create(ctx.sink().asFlux())
+				.then(() -> ctx.keepAliveTracker().recordPing(java.time.Instant.parse("2026-09-20T10:00:00Z")))
+				.assertNext((event) -> {
+					assertThat(event.event()).isEqualTo("mcp:keepalive-ping");
+					assertThat(event.data()).isEqualTo("{\"at\":\"2026-09-20T10:00:00Z\"}");
+				})
+				.thenCancel()
+				.verify(java.time.Duration.ofSeconds(5));
 		}
 
 		@Test
@@ -1707,7 +1906,7 @@ class InspectorHandlerTests {
 				.willReturn(new DetectedTransport(TransportType.STREAMABLE, "/mcp", null, "WEBFLUX"));
 			final McpSyncClient client = connectedClient();
 			given(InspectorHandlerTests.this.loopbackFactory.forStreamable(any(), org.mockito.ArgumentMatchers.eq(8081),
-					any(), any()))
+					any(), any(), any(), any(KeepAliveTracker.class)))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -1720,7 +1919,7 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			verify(InspectorHandlerTests.this.loopbackFactory).forStreamable(any(),
-					org.mockito.ArgumentMatchers.eq(8081), any(), any());
+					org.mockito.ArgumentMatchers.eq(8081), any(), any(), any(), any(KeepAliveTracker.class));
 		}
 
 		@Test
@@ -1736,7 +1935,7 @@ class InspectorHandlerTests {
 			given(client.initialize()).willReturn(null);
 			given(client.getServerInfo()).willReturn(null);
 			given(InspectorHandlerTests.this.loopbackFactory.forStreamable(any(), org.mockito.ArgumentMatchers.eq(8081),
-					any(), any()))
+					any(), any(), any(), any(KeepAliveTracker.class)))
 				.willReturn(client);
 			final ServerRequest request = toServerRequest(MockServerHttpRequest.post("/mcp-inspector/api/connect")
 				.contentType(MediaType.APPLICATION_JSON)
@@ -1820,6 +2019,242 @@ class InspectorHandlerTests {
 			assertThat(response).isNotNull();
 			assertThat(response.statusCode()).isEqualTo(HttpStatus.OK);
 			assertThat(response.headers().getContentType()).isEqualTo(MediaType.TEXT_HTML);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("broadcast()")
+	class Broadcast {
+
+		@Test
+		@Story("Concurrent frame emit")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("concurrent server-initiated broadcasts on one session sink are all accepted, "
+				+ "none is dropped with FAIL_NON_SERIALIZED")
+		void emitSessionEvent_concurrentBroadcasts_allFramesAccepted() throws Exception {
+			// given: 32 parallel server-initiated frames on one session, as overlapping
+			// elicitation, sampling and roots-list-changed requests produce in practice.
+			// A
+			// raw tryEmitNext() on the multicast sink answers FAIL_NON_SERIALIZED to
+			// every
+			// thread that loses the sink's CAS; broadcast() must not lose frames to it.
+			final int threads = 32;
+			final Sinks.Many<ServerSentEvent<String>> sink = newSessionSink();
+			final ExecutorService pool = Executors.newFixedThreadPool(threads);
+			final AtomicInteger rejected = new AtomicInteger();
+			final List<CompletableFuture<Void>> jobs = new ArrayList<>(threads);
+			final CountDownLatch ready = new CountDownLatch(threads);
+			final CountDownLatch start = new CountDownLatch(1);
+			try {
+				for (int i = 0; i < threads; i++) {
+					final int idx = i;
+					jobs.add(CompletableFuture.runAsync(() -> {
+						ready.countDown();
+						try {
+							start.await();
+						}
+						catch (final InterruptedException ex) {
+							Thread.currentThread().interrupt();
+							return;
+						}
+						if (!InspectorHandler.emitSessionEvent(sink, "message", serverSentEvent("frame-" + idx))) {
+							rejected.incrementAndGet();
+						}
+					}, pool));
+				}
+				assertThat(ready.await(5, TimeUnit.SECONDS)).as("all emitters ready").isTrue();
+
+				// when
+				start.countDown();
+				CompletableFuture.allOf(jobs.toArray(new CompletableFuture[0])).get(10, TimeUnit.SECONDS);
+
+				// then
+				assertThat(rejected.get()).as("no frame may be rejected when %d threads emit concurrently", threads)
+					.isZero();
+				StepVerifier.create(sink.asFlux().take(threads)).expectNextCount(threads).verifyComplete();
+			}
+			finally {
+				pool.shutdownNow();
+				pool.awaitTermination(2, TimeUnit.SECONDS);
+			}
+		}
+
+		@Test
+		@Story("Concurrent frame emit")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a frame emitted while another emit holds the session sink is retried until the "
+				+ "sink frees up, not silently dropped")
+		void emitSessionEvent_whileSinkHeldByConcurrentEmit_frameRetriedNotDropped() throws Exception {
+			// given: a subscriber that parks inside the first onNext, so the first emit
+			// provably holds the sink's emit lock while it is blocked
+			final Sinks.Many<ServerSentEvent<String>> sink = newSessionSink();
+			final CountDownLatch firstInFlight = new CountDownLatch(1);
+			final CountDownLatch releaseFirst = new CountDownLatch(1);
+			final List<String> received = Collections.synchronizedList(new ArrayList<>());
+			sink.asFlux().subscribe(new Subscriber<ServerSentEvent<String>>() {
+				@Override
+				public void onSubscribe(final Subscription s) {
+					s.request(Long.MAX_VALUE);
+				}
+
+				@Override
+				public void onNext(final ServerSentEvent<String> event) {
+					received.add(event.event());
+					firstInFlight.countDown();
+					try {
+						releaseFirst.await(5, TimeUnit.SECONDS);
+					}
+					catch (final InterruptedException ex) {
+						Thread.currentThread().interrupt();
+					}
+				}
+
+				@Override
+				public void onError(final Throwable t) {
+					// terminal, nothing to record
+				}
+
+				@Override
+				public void onComplete() {
+					// terminal, nothing to record
+				}
+			});
+			final ExecutorService pool = Executors.newSingleThreadExecutor();
+			try {
+				final Future<Boolean> first = pool
+					.submit(() -> InspectorHandler.emitSessionEvent(sink, "first", serverSentEvent("first")));
+				assertThat(firstInFlight.await(5, TimeUnit.SECONDS)).as("first frame parked in subscriber dispatch")
+					.isTrue();
+				// the sink is provably held at this point: a raw emit attempt is rejected
+				// with FAIL_NON_SERIALIZED and, being rejected, emits nothing
+				assertThat(sink.tryEmitNext(serverSentEvent("probe"))).isEqualTo(Sinks.EmitResult.FAIL_NON_SERIALIZED);
+
+				// a releaser fires the parked subscriber right after this thread enters
+				// the
+				// contended emit; the retried emit spins until the sink frees up
+				final CountDownLatch enteringSecondEmit = new CountDownLatch(1);
+				final Thread releaser = new Thread(() -> {
+					try {
+						enteringSecondEmit.await(5, TimeUnit.SECONDS);
+					}
+					catch (final InterruptedException ex) {
+						Thread.currentThread().interrupt();
+					}
+					releaseFirst.countDown();
+				});
+				releaser.start();
+				enteringSecondEmit.countDown();
+				final boolean secondAccepted = InspectorHandler.emitSessionEvent(sink, "second",
+						serverSentEvent("second"));
+
+				// then
+				assertThat(first.get(5, TimeUnit.SECONDS)).as("first frame accepted").isTrue();
+				assertThat(secondAccepted).as("second frame must be retried to success, not dropped").isTrue();
+				releaser.join(5_000);
+				assertThat(received).as("both frames delivered, the raw probe emitted nothing")
+					.containsExactly("first", "second");
+			}
+			finally {
+				pool.shutdownNow();
+				pool.awaitTermination(2, TimeUnit.SECONDS);
+			}
+		}
+
+		@Test
+		@Story("Concurrent frame emit")
+		@Severity(SeverityLevel.MINOR)
+		@Description("a frame emitted after the session sink terminated is reported as rejected "
+				+ "without a retry, not silently swallowed")
+		void emitSessionEvent_afterSinkTerminated_returnsFalse() {
+			// given: the completed sink is wrapped to count raw tryEmitNext probes, so a
+			// retry-on-any-failure loop cannot hide: it would probe the terminated sink
+			// for the full EMIT_SPIN_BUDGET instead of reporting at once
+			final CountingTryEmitSink sink = new CountingTryEmitSink(newSessionSink());
+			assertThat(sink.tryEmitComplete().isSuccess()).as("sink completes without subscribers").isTrue();
+
+			// when
+			final boolean accepted = InspectorHandler.emitSessionEvent(sink, "message", serverSentEvent("event"));
+
+			// then
+			assertThat(accepted).as("emit after termination must be rejected without retry").isFalse();
+			assertThat(sink.tryEmitNextCount()).as("terminal rejection must not be retried").isEqualTo(1);
+		}
+
+		private static Sinks.Many<ServerSentEvent<String>> newSessionSink() {
+			// the exact sink connect() creates for a session
+			return Sinks.many().multicast().onBackpressureBuffer(256, false);
+		}
+
+		private static ServerSentEvent<String> serverSentEvent(final String eventName) {
+			return ServerSentEvent.<String>builder().event(eventName).data(eventName).build();
+		}
+
+		/**
+		 * Delegates to the wrapped session sink and counts {@code tryEmitNext} probes, so
+		 * a test can prove a terminal rejection is reported at once instead of being
+		 * retried against the emit budget.
+		 */
+		private static final class CountingTryEmitSink implements Sinks.Many<ServerSentEvent<String>> {
+
+			private final Sinks.Many<ServerSentEvent<String>> delegate;
+
+			private final AtomicInteger tryEmitNextCount = new AtomicInteger();
+
+			private CountingTryEmitSink(final Sinks.Many<ServerSentEvent<String>> delegate) {
+				this.delegate = delegate;
+			}
+
+			int tryEmitNextCount() {
+				return this.tryEmitNextCount.get();
+			}
+
+			@Override
+			public Sinks.EmitResult tryEmitNext(final ServerSentEvent<String> event) {
+				this.tryEmitNextCount.incrementAndGet();
+				return this.delegate.tryEmitNext(event);
+			}
+
+			@Override
+			public Sinks.EmitResult tryEmitComplete() {
+				return this.delegate.tryEmitComplete();
+			}
+
+			@Override
+			public Sinks.EmitResult tryEmitError(final Throwable error) {
+				return this.delegate.tryEmitError(error);
+			}
+
+			@Override
+			public void emitNext(final ServerSentEvent<String> event, final Sinks.EmitFailureHandler failureHandler) {
+				this.delegate.emitNext(event, failureHandler);
+			}
+
+			@Override
+			public void emitComplete(final Sinks.EmitFailureHandler failureHandler) {
+				this.delegate.emitComplete(failureHandler);
+			}
+
+			@Override
+			public void emitError(final Throwable error, final Sinks.EmitFailureHandler failureHandler) {
+				this.delegate.emitError(error, failureHandler);
+			}
+
+			@Override
+			public int currentSubscriberCount() {
+				return this.delegate.currentSubscriberCount();
+			}
+
+			@Override
+			public Flux<ServerSentEvent<String>> asFlux() {
+				return this.delegate.asFlux();
+			}
+
+			@Override
+			public Object scanUnsafe(final Attr key) {
+				return this.delegate.scanUnsafe(key);
+			}
+
 		}
 
 	}

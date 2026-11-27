@@ -1,0 +1,16 @@
+src/App.tsx#readResource cache-hit guard: commit the cached payload to
+the pane only while its uri is still the live selection. A Tools-result
+resource link re-reads a cached uri without changing the selection; the
+unguarded commit used to overwrite the Resources pane while another row
+was selected, leaving pane and selection diverged. The live selection is
+mirrored into a ref inside the selectedResource prop handler, because
+row clicks set the selection and start the read in the same event batch.
+Both positive halves are pinned by
+src/__tests__/App.resourceCachePane.test.tsx: a re-click of an
+already-cached row commits the cached payload while the row is the live
+selection, and a cached template read commits the template payload
+(selection set before the read, see
+read-resource-template-selection-first.txt). Each pin fails under its
+mutant (removed ref sync / reordered template read) and passes on the
+fixed code.
+Issue: #344

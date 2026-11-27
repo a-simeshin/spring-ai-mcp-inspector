@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.github.a-simeshin</groupId>
         <artifactId>spring-ai-mcp-inspector-parent</artifactId>
-        <version>2.1.0-SNAPSHOT</version>
+        <version>2.5.0-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -76,6 +76,19 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- The generated-skeleton replay IT compiles and runs the generated WebFlux
+             regression test in this JVM: @AutoConfigureWebTestClient lives in the stack
+             test module, the generated test is launched through the JUnit Platform Launcher. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-webtestclient</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
             <scope>test</scope>
         </dependency>
         <!-- Selenide + WebDriverManager drive the browser smoke test; versions from the root pom. -->

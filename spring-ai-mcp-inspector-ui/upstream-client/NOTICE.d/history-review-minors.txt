@@ -1,0 +1,26 @@
+src/App.tsx + src/lib/persistentHistory.ts (+ regression tests in
+src/__tests__/App.transportScoping.test.tsx and
+src/lib/__tests__/persistentHistory.test.ts): owner review minors on
+PR #218 (2026-11-13). Three fixes in the history bucket keying:
+
+- App.tsx historyKeyForConnection: a selected saved entry adopts the
+  pending history bucket only while the form still points at its
+  endpoint (the same transport-scoped comparison the disconnect-time
+  carry-over uses). The association previously survived a reload, so
+  typing a different URL after selecting A still wrote into A's
+  bucket; a mismatched form now falls back to the transport-scoped
+  ad-hoc key.
+- App.tsx handleDeleteConnection: deleting the selected connection
+  also releases the live session's frozen bucket key. Previously the
+  frozen key kept receiving writes after clearHistory and recreated
+  an orphan bucket for the deleted id; the session now keeps writing
+  into the form-derived bucket.
+- persistentHistory.ts migrateHistory: merged buckets are sorted by
+  timestamp ascending (canonical appendHistory order) before the FIFO
+  trim. A Save over an existing connection migrates a source bucket
+  whose entries are older than the destination's newest; plain
+  concatenation interleaved the two ascending sequences and the panel
+  showed entries out of order.
+
+Regression tests cover all three scenarios and are RED without the
+fixes.

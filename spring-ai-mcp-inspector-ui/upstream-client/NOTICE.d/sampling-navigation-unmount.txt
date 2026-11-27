@@ -1,0 +1,8 @@
+src/__tests__/App.samplingNavigation.test.tsx - local regression test added
+to the upstream "App - Sampling auto-navigation" suite: unmounting App must
+cancel the pending delayed tab bounce (the Reject path schedules a second,
+delayed hop back to the originating tab) instead of rewriting
+window.location.hash after unmount. Without the cancellation a stray timer
+rewrites the hash of whatever runs next, which surfaced under jest's
+randomised test order. Fails if the delayed navigation timer survives
+unmount in App.tsx.

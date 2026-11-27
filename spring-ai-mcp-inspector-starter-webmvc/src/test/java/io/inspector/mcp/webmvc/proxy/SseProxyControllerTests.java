@@ -18,6 +18,7 @@ package io.inspector.mcp.webmvc.proxy;
 
 import java.lang.reflect.Method;
 import java.net.URI;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -33,11 +34,16 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Mono;
@@ -45,19 +51,33 @@ import reactor.core.publisher.Sinks;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
+import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.BearerProfile;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
+import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.core.keepalive.PingDetectingClientTransport;
+import io.inspector.mcp.core.proxy.InvalidProxyRequestException;
 import io.inspector.mcp.core.proxy.McpProxy;
+import io.inspector.mcp.core.proxy.ProxyConnectFailure;
+import io.inspector.mcp.core.proxy.ProxyConnectFailureException;
 import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
+import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * Unit tests for {@link SseProxyController}. Collaborators are mocked; assertions cover
@@ -115,22 +135,127 @@ class SseProxyControllerTests {
 	}
 
 	/**
-	 * Reads back the frames the controller wrote into the emitter before the servlet
-	 * container attached its handler — {@code ResponseBodyEmitter} buffers them in a
-	 * private field, and this project has no MockMvc infrastructure to replay them
-	 * through.
-	 * @param emitter the emitter returned by the controller
-	 * @return every buffered chunk concatenated
-	 * @throws Exception if the buffered frames cannot be read
+	 * Waits up to 10s for the buffered emitter frames to contain the expected snippet:
+	 * the connect-phase timeout is emitted asynchronously by the start() subscription, so
+	 * the assertion must tolerate the event landing slightly after openSse returns.
+	 * @param expected the snippet to wait for
+	 * @param frames supplier reading the current buffered frames
+	 * @throws Exception when reading the buffered frames fails
 	 */
+	private static void awaitUntilContains(final String expected, final java.util.concurrent.Callable<String> frames)
+			throws Exception {
+		final long deadline = System.currentTimeMillis() + 10_000L;
+		while (System.currentTimeMillis() < deadline) {
+			if (frames.call().contains(expected)) {
+				return;
+			}
+			Thread.sleep(50L);
+		}
+	}
+
+	/**
+	 * Deterministic repro for issue #374: bufferedFrames() iterates the emitter's
+	 * earlySendAttempts buffer (a LinkedHashSet) without holding the emitter's writeLock
+	 * while a concurrent send() appends chunks. On the unguarded read this throws
+	 * ConcurrentModificationException under load; the guarded read stays race-free by
+	 * mutual exclusion.
+	 */
+	@Test
+	void bufferedFrames_readUnderConcurrentEarlySendAttempts_doesNotCorruptIteration() throws Exception {
+		final SseEmitter emitter = new SseEmitter(60_000L);
+		// Pre-fill the buffer single-threaded so one bufferedFrames() iteration
+		// spans enough wall-clock time for a concurrent put to land inside it.
+		for (int i = 0; i < 200_000; i++) {
+			emitter.send("w" + i);
+		}
+		final java.util.concurrent.atomic.AtomicBoolean writing = new java.util.concurrent.atomic.AtomicBoolean(true);
+		final Thread writer = new Thread(() -> {
+			int sent = 0;
+			while (writing.get()) {
+				try {
+					emitter.send("c" + sent++);
+				}
+				catch (java.io.IOException | IllegalStateException ex) {
+					break;
+				}
+			}
+		});
+		writer.start();
+		try {
+			for (int round = 0; round < 50; round++) {
+				bufferedFrames(emitter);
+			}
+		}
+		finally {
+			writing.set(false);
+			writer.join(5_000L);
+		}
+	}
+
 	private static String bufferedFrames(final SseEmitter emitter) throws Exception {
 		final java.lang.reflect.Field field = ResponseBodyEmitter.class.getDeclaredField("earlySendAttempts");
 		field.setAccessible(true);
+		// The buffer is mutated by send() under the emitter's writeLock; the
+		// read must hold the same lock, otherwise iteration throws
+		// ConcurrentModificationException under concurrent sends (issue #374).
+		final java.lang.reflect.Field lockField = ResponseBodyEmitter.class.getDeclaredField("writeLock");
+		lockField.setAccessible(true);
+		final java.util.concurrent.locks.Lock writeLock = (java.util.concurrent.locks.Lock) lockField.get(emitter);
 		final StringBuilder out = new StringBuilder();
-		for (final Object chunk : (java.util.Collection<?>) field.get(emitter)) {
-			out.append(chunk.getClass().getMethod("getData").invoke(chunk));
+		writeLock.lock();
+		try {
+			for (final Object chunk : (java.util.Collection<?>) field.get(emitter)) {
+				out.append(chunk.getClass().getMethod("getData").invoke(chunk));
+			}
+		}
+		finally {
+			writeLock.unlock();
 		}
 		return out.toString();
+	}
+
+	/**
+	 * Reads a private terminal-state field of the emitter to distinguish the quiet
+	 * completion contract from the legacy {@code completeWithError}: only the latter
+	 * records a {@code failure} on the emitter.
+	 * @param emitter the emitter returned by the controller
+	 * @param name the {@link ResponseBodyEmitter} field to read ({@code complete} or
+	 * {@code failure})
+	 * @return the field value
+	 * @throws Exception if the field cannot be read
+	 */
+	private static Object emitterState(final SseEmitter emitter, final String name) throws Exception {
+		final java.lang.reflect.Field field = ResponseBodyEmitter.class.getDeclaredField(name);
+		field.setAccessible(true);
+		return field.get(emitter);
+	}
+
+	/**
+	 * Builds a controller with the D8/D9 auth wiring: a signed-cookie owner resolver and
+	 * an owner-scoped auth-profile store plus the OAuth2 managers.
+	 * @param store the auth-profile store
+	 * @param resolver the session-owner resolver
+	 * @return the wired controller
+	 */
+	private SseProxyController wiredController(final AuthProfileStore store,
+			final ServletSessionOwnerResolver resolver) {
+		return new SseProxyController(SseProxyControllerTests.this.registry,
+				SseProxyControllerTests.this.transportFactory, SseProxyControllerTests.this.mcpProxy,
+				SseProxyControllerTests.this.objectMapper, SseProxyControllerTests.this.properties, null, resolver,
+				store, mock(OAuth2ClientCredentialsTokenManager.class), mock(OAuth2AuthCodeTokenExchanger.class));
+	}
+
+	/**
+	 * Reads a numeric field out of the buffered proxy-error payload text.
+	 * @param frames the buffered emitter frames
+	 * @param field the JSON field name
+	 * @return the field value
+	 */
+	private static long longField(final String frames, final String field) {
+		final java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\"" + field + "\":(\\d+)")
+			.matcher(frames);
+		assertThat(matcher.find()).as("proxy-error payload carries %s", field).isTrue();
+		return Long.parseLong(matcher.group(1));
 	}
 
 	@Nested
@@ -194,7 +319,7 @@ class SseProxyControllerTests {
 
 	@Nested
 	@DisplayName("openSse() — session bring-up")
-	class OpenSse {
+	class BuildSse {
 
 		@Test
 		@Story("Open SSE session")
@@ -203,15 +328,15 @@ class SseProxyControllerTests {
 		void openSse_withSseUrl_registersSessionAndStartsProxy() {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 
 			// when
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
-					null, null, REQUEST);
+					null, null, null, REQUEST);
 
 			// then
 			assertThat(emitter).isNotNull();
-			verify(SseProxyControllerTests.this.transportFactory).openSse(URI.create("http://target/sse"));
+			verify(SseProxyControllerTests.this.transportFactory).buildSse(URI.create("http://target/sse"));
 			verify(SseProxyControllerTests.this.registry).put(any(ProxySession.class));
 			verify(SseProxyControllerTests.this.mcpProxy).start(any(ProxySession.class));
 		}
@@ -227,7 +352,7 @@ class SseProxyControllerTests {
 
 			// when
 			SseProxyControllerTests.this.controller.openSse("streamable-http", "http://target/mcp", null, null, null,
-					REQUEST);
+					null, REQUEST);
 
 			// then
 			verify(SseProxyControllerTests.this.transportFactory).openStreamable(URI.create("http://target/mcp"));
@@ -238,22 +363,70 @@ class SseProxyControllerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() with a missing (null) url resolves to the loopback /sse endpoint and registers a session")
 		void openSse_withMissingUrl_resolvesToLoopbackAndRegistersSession() {
-			// given — no url stub: the mock returns null from openSse(URI), which is a
+			// given (no url stub): the mock returns null from buildSse(URI), which is a
 			// valid (if inert) target for the session in unit-test context
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class)))
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
 				.willReturn(mock(McpClientTransport.class));
 
 			// when — null url is now resolved to http://127.0.0.1:8080/sse by
 			// ProxyTargetResolver (loopbackPort() falls back to 8080 when portHolder is
 			// null)
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", null, null, null, null,
-					REQUEST);
+					null, REQUEST);
 
 			// then — the resolver succeeds, a session IS opened and registered
 			assertThat(emitter).isNotNull();
-			verify(SseProxyControllerTests.this.transportFactory).openSse(URI.create("http://127.0.0.1:8080/sse"));
+			verify(SseProxyControllerTests.this.transportFactory).buildSse(URI.create("http://127.0.0.1:8080/sse"));
 			verify(SseProxyControllerTests.this.registry).put(any(ProxySession.class));
 			verify(SseProxyControllerTests.this.mcpProxy).start(any(ProxySession.class));
+		}
+
+		@Test
+		@Story("Open SSE session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() fails with a classified connect failure carrying the header name and "
+				+ "JDK reason when a restricted custom header name is rejected at transport build time; the "
+				+ "@ExceptionHandler maps it onto the structured 502 body (see SseProxyControllerWireTests)")
+		void openSse_whenRestrictedCustomHeaderRejected_failsWithHeaderName() {
+			// given - inbound custom headers route the controller onto the header-aware
+			// overload, whose build-time rejection carries the offending header name
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
+			request.addHeader("x-custom-auth-headers", "[\"X-Tenant\"]");
+			request.addHeader("X-Tenant", "acme");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class), any(), any()))
+				.willThrow(new InvalidProxyRequestException(
+						"custom header 'host' is not allowed by the JDK HTTP client: restricted header name"));
+
+			// when & then - a classified connect failure carrying the header name;
+			// the @ExceptionHandler maps it onto the MCP_CONNECT_FAILED wire body
+			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, null, request))
+				.isInstanceOf(ProxyConnectFailureException.class)
+				.hasMessageContaining("custom header 'host' is not allowed by the JDK HTTP client");
+			verify(SseProxyControllerTests.this.registry, never()).put(any());
+		}
+
+		@Test
+		@Story("Open SSE session")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() classifies a timeout build failure as Reason.TIMEOUT, which the "
+				+ "@ExceptionHandler maps onto 504 (not 502)")
+		void openSse_whenBuildTimesOut_failsAsTimeout() {
+			// given - headers bound so the header-aware overload fires
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
+			request.addHeader("x-custom-auth-headers", "[\"X-Tenant\"]");
+			request.addHeader("X-Tenant", "acme");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class), any(), any()))
+				.willThrow(new RuntimeException(new java.net.SocketTimeoutException("connect timed out")));
+
+			// when & then
+			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, null, request))
+				.isInstanceOf(ProxyConnectFailureException.class)
+				.extracting((ex) -> ((ProxyConnectFailureException) ex).failure().reason())
+				.isEqualTo(ProxyConnectFailure.Reason.TIMEOUT);
 		}
 
 		@Test
@@ -261,12 +434,11 @@ class SseProxyControllerTests {
 		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() with an unsupported transportType fails to build a transport and skips registration")
 		void openSse_withUnsupportedType_doesNotRegisterSession() {
-			// when
-			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("carrier-pigeon", "x", null,
-					null, null, REQUEST);
-
-			// then
-			assertThat(emitter).isNotNull();
+			// when & then - the classified build failure now surfaces as an immediate
+			// 502 instead of an SSE stream that dies with a bodyless 500
+			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openSse("carrier-pigeon", "x", null, null,
+					null, null, REQUEST))
+				.isInstanceOf(ProxyConnectFailureException.class);
 			verify(SseProxyControllerTests.this.registry, never()).put(any());
 		}
 
@@ -277,13 +449,13 @@ class SseProxyControllerTests {
 		void openSse_underContextPath_prologueCarriesPrefix() throws Exception {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final MockHttpServletRequest request = new MockHttpServletRequest();
 			request.setContextPath("/app");
 
 			// when
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
-					null, null, request);
+					null, null, null, request);
 
 			// then
 			// the "data:" anchor pins the start of the value, so a doubled prefix fails
@@ -297,11 +469,11 @@ class SseProxyControllerTests {
 		void openSse_withoutContextPath_prologueHasNoPrefix() throws Exception {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 
 			// when
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
-					null, null, REQUEST);
+					null, null, null, REQUEST);
 
 			// then
 			assertThat(bufferedFrames(emitter)).contains("data:/mcp-inspector-api/message?sessionId=");
@@ -314,13 +486,13 @@ class SseProxyControllerTests {
 		void openSse_withRootContextPath_prologueHasNoDoubleSlash() throws Exception {
 			// given
 			final McpClientTransport target = mock(McpClientTransport.class);
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class))).willReturn(target);
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
 			final MockHttpServletRequest request = new MockHttpServletRequest();
 			request.setContextPath("/");
 
 			// when
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
-					null, null, request);
+					null, null, null, request);
 
 			// then
 			assertThat(bufferedFrames(emitter)).contains("data:/mcp-inspector-api/message?sessionId=");
@@ -337,7 +509,7 @@ class SseProxyControllerTests {
 
 			// when
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openStdio("python", "-m server",
-					"{\"KEY\":\"v\"}", REQUEST);
+					"{\"KEY\":\"v\"}", null, REQUEST);
 
 			// then
 			assertThat(emitter).isNotNull();
@@ -355,7 +527,8 @@ class SseProxyControllerTests {
 				.willReturn(mock(McpClientTransport.class));
 
 			// when
-			final SseEmitter emitter = SseProxyControllerTests.this.controller.openStdio("python", null, null, REQUEST);
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openStdio("python", null, null, null,
+					REQUEST);
 
 			// then
 			assertThat(emitter).isNotNull();
@@ -367,28 +540,153 @@ class SseProxyControllerTests {
 		@Severity(SeverityLevel.MINOR)
 		@Description("openStdio() with a blank command fails to build a transport and skips registration")
 		void openStdio_withBlankCommand_doesNotRegisterSession() {
-			// when
-			final SseEmitter emitter = SseProxyControllerTests.this.controller.openStdio("   ", null, null, REQUEST);
-
-			// then
-			assertThat(emitter).isNotNull();
+			// when & then - the missing-command rejection surfaces as an immediate 502
+			// instead of an SSE stream that dies with a bodyless 500
+			assertThatThrownBy(
+					() -> SseProxyControllerTests.this.controller.openStdio("   ", null, null, null, REQUEST))
+				.isInstanceOf(ProxyConnectFailureException.class);
 			verify(SseProxyControllerTests.this.registry, never()).put(any());
 		}
 
 		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() with connectionTimeout=1s and a start() that never completes emits a structured proxy-error event naming the connect phase")
+		void openSse_connectPhaseOverrun_emitsStructuredProxyErrorEvent() throws Exception {
+			// given: an SSE open whose bring-up never completes; the 1s budget is the
+			// only timer on this path
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			given(SseProxyControllerTests.this.mcpProxy.start(any())).willReturn(Mono.never());
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, "1", REQUEST);
+
+			// then: the buffered frames end with a proxy-error event carrying the
+			// structured payload (phase=connect, budget=1000ms)
+			final String expected = "\"phase\":\"connect\"";
+			awaitUntilContains(expected, () -> bufferedFrames(emitter));
+			final String frames = bufferedFrames(emitter);
+			assertThat(frames).contains("proxy-error")
+				.contains("MCP_CONNECT_FAILED")
+				.contains(expected)
+				.contains("\"budgetMs\":1000")
+				.doesNotContain("\"reason\":\"unknown\"");
+			// elapsedMs is measured from the start of the bring-up and the Reactor
+			// timeout callback lands on a shared parallel scheduler thread, so under
+			// load it can trail the budget (a full-suite local run measured 2562ms for
+			// this 1000ms budget): pin that the timer fires no earlier than the budget
+			// and lags it by seconds at most.
+			final long elapsedMs = longField(frames, "elapsedMs");
+			assertThat(elapsedMs).isGreaterThanOrEqualTo(1000L);
+			assertThat(elapsedMs).isLessThan(1000L + 5000L);
+			// removeAndClose runs on the start-handler thread, racing the sink
+			// subscriber that delivered the event above: after() waits the full
+			// second, then pins exactly one cleanup call, so a restored duplicate
+			// removeAndClose fails with TooManyActualInvocations.
+			verify(SseProxyControllerTests.this.registry, after(1000).times(1)).removeAndClose(any(String.class));
+			// terminal state: the connect-budget timeout path ends the stream with
+			// complete() after the structured proxy-error event (complete=true,
+			// failure=null): the browser sees the error and then a finished stream.
+			assertThat(emitterState(emitter, "complete")).as("the connect-budget timeout completed the emitter")
+				.isEqualTo(true);
+			assertThat(emitterState(emitter, "failure")).as("the timeout path uses complete(), not completeWithError")
+				.isNull();
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openStdio() with connectionTimeout=1s and a start() that never completes emits a structured proxy-error event naming the connect phase")
+		void openStdio_connectPhaseOverrun_emitsStructuredProxyErrorEvent() throws Exception {
+			// given: a stdio open whose bring-up never completes
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(SseProxyControllerTests.this.transportFactory.openStdio(any(), any())).willReturn(target);
+			given(SseProxyControllerTests.this.mcpProxy.start(any())).willReturn(Mono.never());
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openStdio("python", null, null, "1",
+					REQUEST);
+
+			// then: same structured payload as the SSE variant
+			final String expected = "\"phase\":\"connect\"";
+			awaitUntilContains(expected, () -> bufferedFrames(emitter));
+			final String frames = bufferedFrames(emitter);
+			assertThat(frames).contains("proxy-error")
+				.contains("MCP_CONNECT_FAILED")
+				.contains(expected)
+				.contains("\"budgetMs\":1000")
+				.doesNotContain("\"reason\":\"unknown\"");
+			// elapsedMs is measured from the start of the bring-up and the Reactor
+			// timeout callback lands on a shared parallel scheduler thread, so under
+			// load it can trail the budget (a full-suite local run measured 2562ms for
+			// this 1000ms budget): pin that the timer fires no earlier than the budget
+			// and lags it by seconds at most.
+			final long elapsedMs = longField(frames, "elapsedMs");
+			assertThat(elapsedMs).isGreaterThanOrEqualTo(1000L);
+			assertThat(elapsedMs).isLessThan(1000L + 5000L);
+			verify(SseProxyControllerTests.this.registry, after(1000).times(1)).removeAndClose(any(String.class));
+			// terminal state: the connect-budget timeout path ends the stream with
+			// complete() after the structured proxy-error event (complete=true,
+			// failure=null): the browser sees the error and then a finished stream.
+			assertThat(emitterState(emitter, "complete")).as("the connect-budget timeout completed the emitter")
+				.isEqualTo(true);
+			assertThat(emitterState(emitter, "failure")).as("the timeout path uses complete(), not completeWithError")
+				.isNull();
+		}
+
+		@Test
+		@Story("Connection timeout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() and openStdio() with an invalid connectionTimeout answer 400 with the structured error body (parity with the reactive stack)")
+		void openSse_invalidParameter_answers400structuredBody() throws Exception {
+			// given: a MockMvc entry point so the full annotation pipeline
+			// (argument resolution + @ExceptionHandler) runs, as in production
+			final MockMvc mvc = MockMvcBuilders.standaloneSetup(SseProxyControllerTests.this.controller)
+				.addPlaceholderValue("spring.ai.mcp.inspector.path", "/mcp-inspector")
+				.build();
+
+			// when: an invalid value on both endpoints
+			final MvcResult sse = mvc
+				.perform(get("/mcp-inspector-api/sse?transportType=sse&url=http://target/sse&connectionTimeout=abc"))
+				.andExpect(status().isBadRequest())
+				.andReturn();
+			final MvcResult stdio = mvc.perform(get("/mcp-inspector-api/stdio?command=python&connectionTimeout=1.5"))
+				.andExpect(status().isBadRequest())
+				.andReturn();
+
+			// then: the structured MCP_CONNECT_FAILED validation body, no session opened
+			final JsonNode sseError = SseProxyControllerTests.this.objectMapper
+				.readTree(sse.getResponse().getContentAsString())
+				.path("error");
+			assertThat(sseError.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(sseError.path("reason").asText()).isEqualTo("validation");
+			assertThat(sseError.path("connectionTimeout").asText()).isEqualTo("abc");
+			assertThat(sseError.path("retryable").asBoolean()).isFalse();
+			final JsonNode stdioError = SseProxyControllerTests.this.objectMapper
+				.readTree(stdio.getResponse().getContentAsString())
+				.path("error");
+			assertThat(stdioError.path("code").asText()).isEqualTo("MCP_CONNECT_FAILED");
+			assertThat(stdioError.path("connectionTimeout").asText()).isEqualTo("1.5");
+			assertThat(stdioError.path("retryable").asBoolean()).isFalse();
+			verify(SseProxyControllerTests.this.registry, never()).put(any(ProxySession.class));
+		}
+
+		@Test
 		@Story("Open SSE session")
-		@Severity(SeverityLevel.MINOR)
+		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() with a null transportType defaults to the SSE transport")
 		void openSse_withNullType_defaultsToSse() {
 			// given
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class)))
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
 				.willReturn(mock(McpClientTransport.class));
 
 			// when
-			SseProxyControllerTests.this.controller.openSse(null, "http://target/sse", null, null, null, REQUEST);
+			SseProxyControllerTests.this.controller.openSse(null, "http://target/sse", null, null, null, null, REQUEST);
 
 			// then
-			verify(SseProxyControllerTests.this.transportFactory).openSse(URI.create("http://target/sse"));
+			verify(SseProxyControllerTests.this.transportFactory).buildSse(URI.create("http://target/sse"));
 		}
 
 		@Test
@@ -403,7 +701,7 @@ class SseProxyControllerTests {
 
 			// when
 			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("streamable-http", "", null,
-					null, null, REQUEST);
+					null, null, null, REQUEST);
 
 			// then — resolver produces a valid loopback URI, session IS registered
 			assertThat(emitter).isNotNull();
@@ -421,18 +719,64 @@ class SseProxyControllerTests {
 		@Test
 		@Story("Header forwarding")
 		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with a malformed x-custom-auth-headers payload throws 400 before any session is opened")
+		void openSse_withMalformedCustomHeaderList_throws400() {
+			// given
+			// the legacy comma-separated shape the UI never sent
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
+			request.addHeader("x-custom-auth-headers", "X-Tenant, X-Trace");
+			request.addHeader("X-Tenant", "acme");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+
+			// when & then
+			// explicit 400, no transport built, no session registered
+			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, null, request))
+				.isInstanceOf(ResponseStatusException.class)
+				.hasMessageContaining("400")
+				.hasMessageContaining("x-custom-auth-headers must be a JSON array of header names");
+			verify(SseProxyControllerTests.this.transportFactory, never()).buildSse(any(URI.class));
+			verify(SseProxyControllerTests.this.transportFactory, never()).buildSse(any(URI.class), any(), any());
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openStdio() with a malformed x-custom-auth-headers payload throws 400 before any session is opened")
+		void openStdio_withMalformedCustomHeaderList_throws400() {
+			// given
+			// the legacy comma-separated shape the UI never sent
+			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/stdio");
+			request.addHeader("x-custom-auth-headers", "X-Tenant, X-Trace");
+			request.addHeader("X-Tenant", "acme");
+			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+
+			// when & then
+			// explicit 400, no stdio transport built, no session registered
+			assertThatThrownBy(
+					() -> SseProxyControllerTests.this.controller.openStdio("python", null, null, null, request))
+				.isInstanceOf(ResponseStatusException.class)
+				.hasMessageContaining("400")
+				.hasMessageContaining("x-custom-auth-headers must be a JSON array of header names");
+			verify(SseProxyControllerTests.this.transportFactory, never()).openStdio(any(), any());
+			verify(SseProxyControllerTests.this.registry, never()).put(any(ProxySession.class));
+		}
+
+		@Test
+		@Story("Header forwarding")
+		@Severity(SeverityLevel.NORMAL)
 		@Description("openSse() with no request attributes uses the single-arg SSE factory overload")
 		void openSse_withoutRequestAttributes_usesSingleArgOverload() {
 			// given — no RequestContextHolder bound (tearDown clears it)
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class)))
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
 				.willReturn(mock(McpClientTransport.class));
 
 			// when
-			SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null, null, null, REQUEST);
+			SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null, null, null, null,
+					REQUEST);
 
 			// then
-			verify(SseProxyControllerTests.this.transportFactory).openSse(URI.create("http://target/sse"));
-			verify(SseProxyControllerTests.this.transportFactory, never()).openSse(any(URI.class), any(), any());
+			verify(SseProxyControllerTests.this.transportFactory).buildSse(URI.create("http://target/sse"));
 		}
 
 		@Test
@@ -443,17 +787,18 @@ class SseProxyControllerTests {
 			// given
 			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
 			request.addHeader("Authorization", "Bearer tok");
-			request.addHeader("x-custom-auth-headers", "X-Tenant");
+			request.addHeader("x-custom-auth-headers", "[\"X-Tenant\"]");
 			request.addHeader("X-Tenant", "acme");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class), any(), any()))
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class), any(), any()))
 				.willReturn(mock(McpClientTransport.class));
 
 			// when
-			SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null, null, null, REQUEST);
+			SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null, null, null, null,
+					REQUEST);
 
 			// then
-			verify(SseProxyControllerTests.this.transportFactory).openSse(eq(URI.create("http://target/sse")),
+			verify(SseProxyControllerTests.this.transportFactory).buildSse(eq(URI.create("http://target/sse")),
 					eq("Bearer tok"), eq(Map.of("X-Tenant", "acme")));
 		}
 
@@ -471,7 +816,7 @@ class SseProxyControllerTests {
 
 			// when
 			SseProxyControllerTests.this.controller.openSse("streamable-http", "http://target/mcp", null, null, null,
-					REQUEST);
+					null, REQUEST);
 
 			// then
 			verify(SseProxyControllerTests.this.transportFactory).openStreamable(eq(URI.create("http://target/mcp")),
@@ -487,15 +832,15 @@ class SseProxyControllerTests {
 			// custom-header list
 			final MockHttpServletRequest request = new MockHttpServletRequest("GET", "/mcp-inspector-api/sse");
 			RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
-			given(SseProxyControllerTests.this.transportFactory.openSse(any(URI.class)))
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
 				.willReturn(mock(McpClientTransport.class));
 
 			// when
-			SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null, null, null, REQUEST);
+			SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null, null, null, null,
+					REQUEST);
 
 			// then
-			verify(SseProxyControllerTests.this.transportFactory).openSse(URI.create("http://target/sse"));
-			verify(SseProxyControllerTests.this.transportFactory, never()).openSse(any(URI.class), any(), any());
+			verify(SseProxyControllerTests.this.transportFactory).buildSse(URI.create("http://target/sse"));
 		}
 
 	}
@@ -578,6 +923,143 @@ class SseProxyControllerTests {
 	}
 
 	@Nested
+	@DisplayName("D8 owner-check on existing session")
+	class OwnerCheck {
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMessage() returns 404 when the session owner differs from the caller")
+		void postMessage_foreignOwner_returns404() throws Exception {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.bindProfile("owner-A", "profile-1");
+			given(SseProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-B");
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final SseProxyController wired = wiredController(store, resolver);
+			final JsonNode body = SseProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+			// when
+			final ResponseEntity<Void> response = wired.postMessage("s1", body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMessage() returns 404 when the caller owner cannot be resolved")
+		void postMessage_nullCallerOwner_returns404() throws Exception {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.bindProfile("owner-A", "profile-1");
+			given(SseProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn(null);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final SseProxyController wired = wiredController(store, resolver);
+			final JsonNode body = SseProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+			// when
+			final ResponseEntity<Void> response = wired.postMessage("s1", body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("postMessage() allows access when session has no bound owner")
+		void postMessage_noBoundOwner_returns202() throws Exception {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			given(SseProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-A");
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final SseProxyController wired = wiredController(store, resolver);
+			final JsonNode body = SseProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+			// when
+			final ResponseEntity<Void> response = wired.postMessage("s1", body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+		}
+
+		@Test
+		@Story("Session ownership")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMessage() allows access when session owner matches caller")
+		void postMessage_sameOwner_returns202() throws Exception {
+			// given
+			final ProxySession session = newSession("s1", mock(McpClientTransport.class));
+			session.bindProfile("owner-A", "profile-1");
+			given(SseProxyControllerTests.this.registry.get("s1")).willReturn(session);
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-A");
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			final SseProxyController wired = wiredController(store, resolver);
+			final JsonNode body = SseProxyControllerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+			// when
+			final ResponseEntity<Void> response = wired.postMessage("s1", body);
+
+			// then
+			assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+		}
+
+	}
+
+	@Nested
+	@DisplayName("D8 legacy-session WARN")
+	class LegacySessionWarn {
+
+		@Test
+		@Story("Legacy session")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("repeat access to the same owner-less session logs the legacy WARN exactly once")
+		void legacySession_repeatAccess_logsWarnOnce() throws Exception {
+			// given - an unbound (legacy) session
+			final ProxySession session = newSession("s-legacy", mock(McpClientTransport.class));
+			given(SseProxyControllerTests.this.registry.get("s-legacy")).willReturn(session);
+			final ch.qos.logback.classic.Logger warnerLogger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
+				.getLogger(io.inspector.mcp.core.proxy.LegacySessionAccessWarner.class);
+			final ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender = new ch.qos.logback.core.read.ListAppender<>();
+			appender.start();
+			warnerLogger.addAppender(appender);
+			try {
+				final JsonNode body = SseProxyControllerTests.this.objectMapper
+					.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}");
+
+				// when - the same legacy session is touched repeatedly
+				SseProxyControllerTests.this.controller.postMessage("s-legacy", body);
+				SseProxyControllerTests.this.controller.postMessage("s-legacy", body);
+				SseProxyControllerTests.this.controller.postMessage("s-legacy", body);
+
+				// then - exactly one WARN was emitted for the session
+				final long warns = appender.list.stream()
+					.filter((e) -> e.getFormattedMessage() != null
+							&& e.getFormattedMessage().contains("legacy session without owner binding"))
+					.count();
+				assertThat(warns).isEqualTo(1);
+			}
+			finally {
+				warnerLogger.detachAppender(appender);
+			}
+		}
+
+	}
+
+	@Nested
 	@DisplayName("constructor")
 	class Constructor {
 
@@ -593,6 +1075,290 @@ class SseProxyControllerTests {
 
 			// then
 			assertThat(c).isNotNull();
+		}
+
+	}
+
+	@Nested
+	@DisplayName("D8 auth-profile session bring-up")
+	class AuthProfileSession {
+
+		@Test
+		@Story("Auth profile")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with a profileId but no wired auth store/resolver throws IllegalStateException")
+		void openSse_withProfileButUnwired_throwsIllegalState() {
+			// given — the default controller is built without an auth-profile store
+
+			// when / then
+			assertThatThrownBy(() -> SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, "p", null, REQUEST))
+				.isInstanceOf(IllegalStateException.class);
+		}
+
+		@Test
+		@Story("Auth profile")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with a foreign/unknown profileId emits a structured 400 error event and opens no session")
+		void openSse_withUnknownProfile_emitsStructured400() throws Exception {
+			// given — the owner resolves but the store has no such profile
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-1");
+			given(store.resolve(any(), any())).willReturn(java.util.Optional.empty());
+			final SseProxyController wired = wiredController(store, resolver);
+
+			// when
+			final SseEmitter emitter = wired.openSse("sse", "http://target/sse", null, null, null, "foreign", null,
+					REQUEST);
+
+			// then — structured 400 and no session registered
+			assertThat(bufferedFrames(emitter)).contains("bad_request");
+			verify(SseProxyControllerTests.this.registry, never()).put(any());
+		}
+
+		@Test
+		@Story("Auth profile")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() with an owned profile applies auth headers via the header-aware transport overload")
+		void openSse_withOwnedProfile_usesAuthTransportOverload() throws Exception {
+			// given — the profile resolves and binds
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-1");
+			given(store.resolve(any(), any())).willReturn(java.util.Optional.of(new BearerProfile("p", "tok")));
+			given(store.bind(any(), any(), any())).willReturn(true);
+			given(SseProxyControllerTests.this.transportFactory.buildSseWithAuth(any(), any(), any()))
+				.willReturn(mock(McpClientTransport.class));
+			final SseProxyController wired = wiredController(store, resolver);
+
+			// when
+			final SseEmitter emitter = wired.openSse("sse", "http://target/sse", null, null, null, "p", null, REQUEST);
+
+			// then — the auth-bearing transport is used and the session registers
+			assertThat(emitter).isNotNull();
+			verify(SseProxyControllerTests.this.transportFactory).buildSseWithAuth(any(), any(), any());
+			verify(store).bind(any(), any(), any());
+			verify(SseProxyControllerTests.this.registry).put(any(ProxySession.class));
+		}
+
+		@Test
+		@Story("Auth profile")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() with a profile whose one-time bind is rejected emits a structured 400 and closes the session")
+		void openSse_withBindRejected_emitsStructured400AndClosesSession() throws Exception {
+			// given — the profile resolves but the one-time bind is rejected
+			final ServletSessionOwnerResolver resolver = mock(ServletSessionOwnerResolver.class);
+			final AuthProfileStore store = mock(AuthProfileStore.class);
+			given(resolver.resolve(any(), any())).willReturn("owner-1");
+			given(store.resolve(any(), any())).willReturn(java.util.Optional.of(new BearerProfile("p", "tok")));
+			given(store.bind(any(), any(), any())).willReturn(false);
+			given(SseProxyControllerTests.this.transportFactory.buildSseWithAuth(any(), any(), any()))
+				.willReturn(mock(McpClientTransport.class));
+			final SseProxyController wired = wiredController(store, resolver);
+
+			// when
+			final SseEmitter emitter = wired.openSse("sse", "http://target/sse", null, null, null, "p", null, REQUEST);
+
+			// then — structured 400, the freshly opened session is torn down, nothing
+			// registered
+			assertThat(bufferedFrames(emitter)).contains("bad_request");
+			verify(SseProxyControllerTests.this.registry).removeAndClose(any(String.class));
+			verify(SseProxyControllerTests.this.registry, never()).put(any());
+		}
+
+	}
+
+	@Nested
+	@DisplayName("D3 proxy-start failure mapping")
+	class ProxyStartFailure {
+
+		@Test
+		@Story("Proxy start failure")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() whose proxy fails to start with an unclassifiable non-death failure ends the stream quietly: no structured event, and no completeWithError Boot /error dispatch")
+		void openSse_startFailure_unclassified_endsQuietly() throws Exception {
+			// given: the proxy pump fails with a failure carrying no HTTP status and no
+			// death classification (neither mapped nor upstream death)
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
+				.willReturn(mock(McpClientTransport.class));
+			given(SseProxyControllerTests.this.mcpProxy.start(any()))
+				.willReturn(Mono.error(new RuntimeException("boom")));
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, null, REQUEST);
+
+			// then: no structured event is invented for an unclassified failure, and the
+			// legacy completeWithError (whose Boot /error dispatch cannot render JSON
+			// into
+			// text/event-stream, HttpMessageNotWritableException) is not used either
+			assertThat(bufferedFrames(emitter)).as("unclassified failures emit no DTO frame")
+				.doesNotContain("upstream_");
+		}
+
+		@Test
+		@Story("Proxy start failure")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() whose proxy fails to start against a dead upstream emits the upstream_unreachable error event")
+		void openSse_startFailure_deadUpstream_emitsUpstreamUnreachableEvent() throws Exception {
+			// given: the upstream connect is refused; no HTTP status, classified as death
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
+				.willReturn(mock(McpClientTransport.class));
+			given(SseProxyControllerTests.this.mcpProxy.start(any()))
+				.willReturn(Mono.error(new java.net.ConnectException("Connection refused")));
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, null, REQUEST);
+
+			// then: the browser learns WHY the stream died: the fallback death DTO rides
+			// the named error event before the stream closes
+			assertThat(bufferedFrames(emitter)).contains("upstream_unreachable");
+		}
+
+		@Test
+		@Story("Proxy start failure")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() whose proxy fails to start with an auth failure emits a structured unauthorized error event")
+		void openSse_startFailure_authMappable_emitsStructuredError() throws Exception {
+			// given — the proxy pump fails with a 401 authorization failure
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
+				.willReturn(mock(McpClientTransport.class));
+			given(SseProxyControllerTests.this.mcpProxy.start(any()))
+				.willReturn(Mono.error(new RuntimeException("401 Unauthorized")));
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, null, REQUEST);
+
+			// then — the structured unauthorized DTO is emitted
+			assertThat(bufferedFrames(emitter)).contains("unauthorized");
+		}
+
+	}
+
+	@Nested
+	@DisplayName("transport-build failure mapping")
+	class TransportBuildFailure {
+
+		@Test
+		@Story("Transport build failure")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() whose target transport cannot be built with a mappable auth failure emits the structured unauthorized error event instead of the legacy completeWithError")
+		void openSse_buildFailure_mappable_emitsStructuredError() throws Exception {
+			// given: the factory rejects the transport build with a 401-classified
+			// failure
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
+				.willThrow(new RuntimeException("401 Unauthorized"));
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, null, REQUEST);
+
+			// then: the browser learns WHY the stream died: the mapped DTO rides the
+			// named
+			// error event; a session is never registered for a transport that was not
+			// built
+			assertThat(bufferedFrames(emitter)).contains("unauthorized");
+			verify(SseProxyControllerTests.this.registry, never()).put(any());
+		}
+
+		@Test
+		@Story("Transport build failure")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() whose target transport build fails on a dead upstream emits the upstream_unreachable error event")
+		void openSse_buildFailure_deadUpstream_emitsUpstreamUnreachableEvent() throws Exception {
+			// given: the upstream connect is refused while the transport is being built
+			// (the refusal surfaces as a runtime wrapper, as the SDK transport rethrows)
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
+				.willThrow(new RuntimeException("connect failed", new java.net.ConnectException("Connection refused")));
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, null, REQUEST);
+
+			// then: the fallback death DTO rides the named error event before the stream
+			// closes
+			assertThat(bufferedFrames(emitter)).contains("upstream_unreachable");
+		}
+
+		@Test
+		@Story("Transport build failure")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("openSse() whose target transport build fails with an unclassifiable failure ends the stream quietly without the legacy completeWithError")
+		void openSse_buildFailure_unclassified_endsQuietly() throws Exception {
+			// given: the build fails with a failure carrying no HTTP status and no death
+			// classification (neither mapped nor upstream death)
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class)))
+				.willThrow(new RuntimeException("boom"));
+
+			// when
+			final SseEmitter emitter = SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null,
+					null, null, null, REQUEST);
+
+			// then: no structured event is invented for an unclassified failure, and the
+			// stream ends quietly: complete == true and no failure recorded. The legacy
+			// completeWithError would leave a failure on the emitter and dispatch to
+			// Boot /error, whose JSON body has no converter for text/event-stream
+			assertThat(bufferedFrames(emitter)).as("unclassified failures emit no DTO frame")
+				.doesNotContain("upstream_");
+			assertThat(emitterState(emitter, "complete")).as("the stream is still completed").isEqualTo(true);
+			assertThat(emitterState(emitter, "failure")).as("legacy completeWithError is not used").isNull();
+			verify(SseProxyControllerTests.this.registry, never()).put(any());
+		}
+
+	}
+
+	@Nested
+	@DisplayName("keep-alive wiring")
+	class KeepAliveWiring {
+
+		@Test
+		@Story("Proxy keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("openSse() wraps the target transport with ping detection so inbound pings reach the tracker")
+		void openSse_wrapsTargetTransportWithPingDetection() {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final ArgumentCaptor<ProxySession> captor = ArgumentCaptor.forClass(ProxySession.class);
+
+			// when
+			SseProxyControllerTests.this.controller.openSse("sse", "http://target/sse", null, null, null, null,
+					REQUEST);
+
+			// then
+			verify(SseProxyControllerTests.this.registry).put(captor.capture());
+			final ProxySession session = captor.getValue();
+			assertThat(session.targetTransport()).isInstanceOf(PingDetectingClientTransport.class);
+			assertThat(session.keepAliveTracker()).isNotNull();
+		}
+
+		@Test
+		@Story("Proxy keep-alive")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a recorded proxy ping is broadcast to UI subscribers as mcp:keepalive-ping with an {at} payload")
+		void recordedPing_broadcastsKeepAliveEventToEmitterRegistry() {
+			// given
+			final McpClientTransport target = mock(McpClientTransport.class);
+			given(SseProxyControllerTests.this.transportFactory.buildSse(any(URI.class))).willReturn(target);
+			final InspectorSseEmitterRegistry emitters = mock(InspectorSseEmitterRegistry.class);
+			final SseProxyController wired = new SseProxyController(SseProxyControllerTests.this.registry,
+					SseProxyControllerTests.this.transportFactory, SseProxyControllerTests.this.mcpProxy,
+					SseProxyControllerTests.this.objectMapper, SseProxyControllerTests.this.properties, null, emitters);
+			final ArgumentCaptor<ProxySession> captor = ArgumentCaptor.forClass(ProxySession.class);
+
+			// when
+			wired.openSse("sse", "http://target/sse", null, null, null, null, REQUEST);
+			verify(SseProxyControllerTests.this.registry).put(captor.capture());
+			final ProxySession session = captor.getValue();
+			session.keepAliveTracker().recordPing(Instant.parse("2026-09-20T10:00:00Z"));
+
+			// then
+			final ArgumentCaptor<Map<String, String>> payload = ArgumentCaptor.forClass(Map.class);
+			verify(emitters).broadcast(eq(session.sessionId()), eq("mcp:keepalive-ping"), payload.capture());
+			assertThat(payload.getValue()).containsEntry("at", "2026-09-20T10:00:00Z");
 		}
 
 	}

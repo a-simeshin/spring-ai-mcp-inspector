@@ -72,6 +72,25 @@ public final class ProxyAppHarness {
 	 */
 	public static ConfigurableApplicationContext start(String protocol, boolean authEnabled, String authToken,
 			String... extraArgs) {
+		return startWithSources(protocol, authEnabled, authToken, new Class<?>[0], extraArgs);
+	}
+
+	/**
+	 * Boots the demo app with additional configuration sources registered alongside
+	 * {@link DemoApplication} (lite-mode fixture classes, per the board's config-fixture
+	 * convention: no {@code @Configuration} stereotype, so sibling contexts never pick
+	 * them up through component scanning).
+	 * @param protocol one of {@code SSE}, {@code STREAMABLE}, {@code STATELESS}
+	 * @param authEnabled whether to leave the proxy auth filter active
+	 * @param authToken fixed token to use (only honored when {@code authEnabled})
+	 * @param additionalSources extra configuration classes to register
+	 * @param extraArgs additional command-line args, appended last so they beat both
+	 * {@code application.yml} and the build's system properties
+	 * @return live context; caller is responsible for
+	 * {@link ConfigurableApplicationContext#close()}
+	 */
+	public static ConfigurableApplicationContext startWithSources(String protocol, boolean authEnabled,
+			String authToken, Class<?>[] additionalSources, String... extraArgs) {
 		// No web(...) call and no spring.main.web-application-type: Boot deduces the
 		// application type from the classpath, and after the split the classpath holds
 		// exactly one server. Forcing the type here would only restate what the module
@@ -83,9 +102,29 @@ public final class ProxyAppHarness {
 		if (authToken != null) {
 			args.add("--spring.ai.mcp.inspector.auth-token=" + authToken);
 		}
+		// The upstream warm-up (issue #325) sends JSON-RPC pings that the upstream sees
+		// as ordinary POSTs. Most ITs here pin exact upstream request sequences (auth
+		// token lifecycles, owner scoping, per-POST Authorization pins), so the harness
+		// boots the proxy with the warm-up off. A test that passes its own value via
+		// extraArgs wins: Boot folds duplicate command-line keys into one comma-joined
+		// value, which fails the int binding (observed as "0,10").
+		boolean warmupOverridden = false;
+		for (final String extra : extraArgs) {
+			if (extra.startsWith("--spring.ai.mcp.inspector.proxy.upstream-warm-connections=")) {
+				warmupOverridden = true;
+				break;
+			}
+		}
+		if (!warmupOverridden) {
+			args.add("--spring.ai.mcp.inspector.proxy.upstream-warm-connections=0");
+		}
+		// The liveness probe keeps its production default (enabled) here: the
+		// probe never fails a live upstream, and tests may override it via
+		// extraArgs like any other property.
 		java.util.Collections.addAll(args, extraArgs);
 
-		return new SpringApplicationBuilder(DemoApplication.class).run(args.toArray(new String[0]));
+		return new SpringApplicationBuilder(DemoApplication.class).sources(additionalSources)
+			.run(args.toArray(new String[0]));
 	}
 
 	/** Extracts the dynamically allocated server port. */

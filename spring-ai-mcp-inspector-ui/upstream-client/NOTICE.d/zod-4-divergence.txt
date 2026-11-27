@@ -1,0 +1,15 @@
+package.json: the direct zod dependency moves off the upstream pin,
+3.25.76 to 4.6.6 (major), within the PR #314 dependabot npm_and_yarn
+group bump (13 packages, 10 of them transitive security bumps).
+
+Why this divergence from upstream's pin is safe to take:
+- @modelcontextprotocol/sdk 1.32.2 declares `zod: "^3.25 || ^4.0"`, a
+  supported combination, so 4.6.6 satisfies the SDK's own range.
+- @mcp-ui/client keeps its nested zod 3.25.76
+  (node_modules/@mcp-ui/client/node_modules/zod in the lock), so the
+  rest of the vendored dependency tree stays on 3.x.
+- Production usage of zod in the client is only `z.object({})`
+  (src/App.tsx:1224, 1240, 1545 at PR head ef7c6468).
+
+Covered by: jest (`npm test`), the tsc build (`npm run build`), and the
+full Selenide demo E2E webmvc suite, all green on PR head ef7c6468.

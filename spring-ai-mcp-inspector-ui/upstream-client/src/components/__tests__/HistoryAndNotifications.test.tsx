@@ -1,14 +1,34 @@
+// [spring-ai-mcp-inspector PATCH] History panel tests (persistent history).
 import { render, screen, fireEvent, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, it, expect, jest } from "@jest/globals";
+import { describe, it, expect, jest, beforeEach } from "@jest/globals";
 import HistoryAndNotifications from "../HistoryAndNotifications";
 import { ServerNotification } from "@modelcontextprotocol/sdk/types.js";
+import { useKeepAlive } from "@/lib/hooks/useKeepAlive";
 
 // Mock JsonView component
 jest.mock("../JsonView", () => {
   return function JsonView({ data }: { data: string }) {
     return <div data-testid="json-view">{data}</div>;
   };
+});
+
+// [spring-ai-mcp-inspector PATCH] Mock useKeepAlive so the collapsed
+// keep-alive section can be exercised without a live session (#235).
+jest.mock("@/lib/hooks/useKeepAlive", () => ({
+  useKeepAlive: jest.fn(),
+}));
+
+beforeEach(() => {
+  (useKeepAlive as jest.Mock).mockReset();
+  // Neutral default keeps the section hidden for the history tests above.
+  (useKeepAlive as jest.Mock).mockReturnValue({
+    observed: false,
+    lastPingAt: null,
+    isStale: false,
+    recentPings: [],
+  });
 });
 
 describe("HistoryAndNotifications", () => {
@@ -216,6 +236,21 @@ describe("HistoryAndNotifications", () => {
     expect(screen.getByText("Response:")).toBeTruthy();
   });
 
+  it("shows the plain-text localStorage storage warning", () => {
+    // PR #218 review: entries (tool arguments and responses) are persisted
+    // unencrypted in browser storage; the panel must say so. RED on the
+    // pre-rework component, which had no warning at all.
+    render(
+      <HistoryAndNotifications
+        requestHistory={mockRequestHistory}
+        serverNotifications={[]}
+      />,
+    );
+    expect(
+      screen.getByText(/saved unencrypted in your browser storage/i),
+    ).toBeTruthy();
+  });
+
   it("displays empty state messages when no data is available", () => {
     render(
       <HistoryAndNotifications requestHistory={[]} serverNotifications={[]} />,
@@ -285,5 +320,164 @@ describe("HistoryAndNotifications", () => {
 
     // Notifications should now be empty
     expect(screen.getByText("No notifications yet")).toBeTruthy();
+  });
+
+  // [spring-ai-mcp-inspector PATCH] history-error-styling: tests for failed-entry error styling (#195).
+  it("applies error styling to failed history entries", () => {
+    const mixedHistory = [
+      {
+        request: JSON.stringify({ method: "tools/call", params: { name: "echo" } }),
+        response: JSON.stringify({ content: [{ type: "text", text: "ok" }] }),
+      },
+      {
+        request: JSON.stringify({ method: "tools/call", params: { name: "errorTool" } }),
+        response: JSON.stringify({
+          content: [{ type: "text", text: "Something went wrong" }],
+          isError: true,
+        }),
+        isError: true,
+      },
+    ];
+
+    const { container } = render(
+      <HistoryAndNotifications
+        requestHistory={mixedHistory}
+        serverNotifications={[]}
+      />,
+    );
+
+    // Rows are reversed (newest first): index 0 = errorTool, index 1 = echo
+    const rows = container.querySelectorAll("ul > li");
+    expect(rows).toHaveLength(2);
+
+    // Failed entry (errorTool) should have red accent border and red text
+    const failedRow = rows[0];
+    expect(failedRow.className).toContain("border-red-500");
+    expect(failedRow.className).toContain("border-l-4");
+    const failedMethodSpan = failedRow.querySelector("span");
+    expect(failedMethodSpan?.className).toContain("text-red-600");
+
+    // Successful entry (echo) should NOT have error styling, but keeps the
+    // transparent left border so all rows stay aligned
+    const successRow = rows[1];
+    expect(successRow.className).not.toContain("border-red-500");
+    expect(successRow.className).toContain("border-l-4");
+    expect(successRow.className).toContain("border-transparent");
+    const successMethodSpan = successRow.querySelector("span");
+    expect(successMethodSpan?.className).not.toContain("text-red-600");
+  });
+
+  it("applies error styling to entries with transport error response when the isError prop is set", () => {
+    const historyWithTransportError = [
+      {
+        request: JSON.stringify({ method: "tools/call", params: { name: "broken" } }),
+        response: JSON.stringify({ error: "Connection refused" }),
+        isError: true,
+      },
+    ];
+
+    const { container } = render(
+      <HistoryAndNotifications
+        requestHistory={historyWithTransportError}
+        serverNotifications={[]}
+      />,
+    );
+
+    const row = container.querySelector("ul > li");
+    expect(row?.className).toContain("border-red-500");
+    expect(row?.className).toContain("border-l-4");
+    const methodSpan = row?.querySelector("span");
+    expect(methodSpan?.className).toContain("text-red-600");
+  });
+
+  it("keeps successful entries aligned with failed ones via transparent left border", () => {
+    const mixedHistory = [
+      {
+        request: JSON.stringify({ method: "tools/call", params: { name: "echo" } }),
+        response: JSON.stringify({ content: [{ type: "text", text: "ok" }] }),
+      },
+      {
+        request: JSON.stringify({ method: "tools/call", params: { name: "errorTool" } }),
+        response: JSON.stringify({ error: "Connection refused" }),
+        isError: true,
+      },
+    ];
+
+    const { container } = render(
+      <HistoryAndNotifications
+        requestHistory={mixedHistory}
+        serverNotifications={[]}
+      />,
+    );
+
+    const rows = container.querySelectorAll("ul > li");
+    expect(rows).toHaveLength(2);
+    // Newest first: rows[0] failed, rows[1] successful
+    expect(rows[0].className).toContain("border-red-500");
+    // Both rows carry border-l-4 so the 4px shift applies to none of them
+    rows.forEach((row) => expect(row.className).toContain("border-l-4"));
+    expect(rows[1].className).toContain("border-transparent");
+    expect(rows[1].className).not.toContain("border-red-500");
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Keep-alive collapsed section tests (#235).
+
+  it("does not render keep-alive section when no pings observed", () => {
+    render(
+      <HistoryAndNotifications
+        requestHistory={[]}
+        serverNotifications={[]}
+        sessionId={null}
+      />,
+    );
+
+    expect(screen.queryByText(/Keep-alive pings/)).toBeNull();
+  });
+
+  it("does not render keep-alive section when sessionId is null", () => {
+    render(
+      <HistoryAndNotifications
+        requestHistory={[]}
+        serverNotifications={[]}
+        sessionId={null}
+      />,
+    );
+
+    // With null sessionId, no keep-alive section should render
+    expect(screen.queryByText(/Keep-alive pings/)).toBeNull();
+  });
+});
+
+describe("keep-alive section keyboard accessibility", () => {
+  // [spring-ai-mcp-inspector PATCH] The expander must be operable from the
+  // keyboard alone (#235 review): Enter expands, Space collapses.
+  it("expands with Enter and collapses with Space without a pointer", async () => {
+    const user = userEvent.setup();
+    (useKeepAlive as jest.Mock).mockReturnValue({
+      observed: true,
+      lastPingAt: "2026-10-29T10:00:00.000Z",
+      isStale: false,
+      recentPings: [],
+    });
+    render(
+      <HistoryAndNotifications
+        requestHistory={[]}
+        serverNotifications={[]}
+        sessionId="session-1"
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: /Keep-alive pings/ });
+    // Collapsed: no section body yet.
+    expect(screen.queryByText("No pings recorded yet")).toBeNull();
+
+    toggle.focus();
+    await user.keyboard("[Enter]");
+    expect(screen.getByText("No pings recorded yet")).toBeTruthy();
+    expect(within(toggle).getByText("\u25BC")).toBeTruthy();
+
+    await user.keyboard("[Space]");
+    expect(screen.queryByText("No pings recorded yet")).toBeNull();
+    expect(within(toggle).getByText("\u25B6")).toBeTruthy();
   });
 });

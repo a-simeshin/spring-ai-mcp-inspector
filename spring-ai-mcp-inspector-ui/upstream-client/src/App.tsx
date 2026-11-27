@@ -31,17 +31,23 @@ import {
   hasValidMetaPrefix,
   isReservedMetaKey,
 } from "@/utils/metaUtils";
-import { getToolUiResourceUri } from "@modelcontextprotocol/ext-apps/app-bridge";
+// [spring-ai-mcp-inspector PATCH] ui-app-detection: shared non-throwing
+// guard for _meta.ui.resourceUri (issue #183).
+import { hasUIMetadata } from "@/utils/uiMetadataGuard";
 import { AuthDebuggerState, EMPTY_DEBUGGER_STATE } from "./lib/auth-types";
 import { OAuthStateMachine } from "./lib/oauth-state-machine";
 import { createProxyFetch } from "./lib/proxyFetch";
 import { cacheToolOutputSchemas } from "./utils/schemaUtils";
 import { cleanParams } from "./utils/paramUtils";
+// [spring-ai-mcp-inspector PATCH] Fire-and-forget MCP calls must not leak
+// their rethrow as unhandledrejection (#276).
+import { swallowLoggedMcpError } from "./utils/mcpErrorHandling";
 import type { JsonSchemaType } from "./utils/jsonUtils";
 import React, {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -52,14 +58,12 @@ import {
 } from "./lib/hooks/useDraggablePane";
 // [spring-ai-mcp-inspector PATCH] Compact (<1024px) layout switch (#60).
 import { useIsCompactLayout } from "./lib/hooks/useIsCompactLayout";
+// [spring-ai-mcp-inspector PATCH] useKeepAlive feeds the Connection pane
+// "Last keep-alive: Xs ago" indicator and the stale-connection warning banner
+// (#235, t_3925eae7).
+import { useKeepAlive } from "./lib/hooks/useKeepAlive";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import {
   AppWindow,
@@ -71,12 +75,17 @@ import {
   Key,
   ListTodo,
   MessageSquare,
+  MessageSquarePlus,
+  Play,
   Settings,
+  Users,
 } from "lucide-react";
 
 import { z } from "zod";
 import "./App.css";
 import AuthDebugger from "./components/AuthDebugger";
+// [spring-ai-mcp-inspector PATCH] ClientsTab: live client connection registry (#120).
+import ClientsTab from "./components/ClientsTab";
 import ConsoleTab from "./components/ConsoleTab";
 import HistoryAndNotifications from "./components/HistoryAndNotifications";
 import PingTab from "./components/PingTab";
@@ -90,6 +99,10 @@ import TasksTab from "./components/TasksTab";
 import AppsTab from "./components/AppsTab";
 // [spring-ai-mcp-inspector PATCH] TimelineTab — MCP event timeline (#112).
 import TimelineTab from "./components/TimelineTab";
+// [spring-ai-mcp-inspector PATCH] SEP-2322 input_required panel (#253).
+import InputRequiredTab, {
+  PendingInputChain,
+} from "./components/InputRequiredTab";
 import { InspectorConfig } from "./lib/configurationTypes";
 import {
   getMCPProxyAddress,
@@ -102,10 +115,20 @@ import {
   saveInspectorConfig,
   getMCPTaskTtl,
 } from "./utils/configUtils";
+// [spring-ai-mcp-inspector PATCH] issue #269 rework: shared URL validation
+// for both Connect CTAs.
+import { validateServerUrl } from "./utils/urlValidation";
 import ElicitationTab, {
   PendingElicitationRequest,
   ElicitationResponse,
 } from "./components/ElicitationTab";
+// [spring-ai-mcp-inspector PATCH] SEP-2322 (spec revision 2026-07-28)
+// input_required round-trip for tools/call, client layer (#253).
+import {
+  InputRequiredController,
+  InputResponses,
+  isInputRequiredResult,
+} from "./lib/inputRequired";
 import {
   CustomHeaders,
   migrateFromLegacyAuth,
@@ -117,32 +140,35 @@ import {
   saveConnection,
   deleteSavedConnection,
   findConnectionByName,
+  savedConnectionHistoryKey,
   stripSecrets,
   touchSavedConnection,
+  unlinkAuthProfileFromSavedConnection,
 } from "./lib/savedConnections";
+// [spring-ai-mcp-inspector PATCH] Persistent history (#218): bucket carry
+// over on the saved-connection lifecycle and cleanup on delete.
+import { clearHistory, migrateHistory } from "./lib/persistentHistory";
 import MetadataTab from "./components/MetadataTab";
+// [spring-ai-mcp-inspector PATCH] Named auth profiles + legacy secret
+// migration (issue #54, plan v15 D1/D2/D7/D9B/D10).
+import {
+  AuthProfileSummary,
+  migrateLegacyAuthStorage,
+} from "./lib/auth-profiles";
 
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
 
 // [spring-ai-mcp-inspector PATCH] MCP Tasks are an experimental/extension
-// capability (SEP-1686). Spring AI / MCP Java SDK 2.0.0 servers structurally
-// cannot advertise them, so the Tasks tab is always disabled and the user
-// cannot infer why. The hint text below is attached to the Tooltip wrapper span
-// (title + aria-label), NOT to the disabled trigger: tabs.tsx applies
-// `disabled:pointer-events-none`, which blocks hover on the trigger itself.
-const MCP_TASKS_DOCS_URL = "https://modelcontextprotocol.io/seps/1686-tasks";
-const MCP_TASKS_DISABLED_HINT =
-  "This server does not support MCP Tasks. See the SEP-1686 proposal.";
+// capability (SEP-1686). When the server advertises the 'tasks' capability the
+// tab is enabled; otherwise a tooltip explains why and links to the proposal.
 
 type PrefilledAppsToolCall = {
   id: number;
   toolName: string;
   params: Record<string, unknown>;
-  result: CompatibilityCallToolResult;
-};
-
-const hasAppResourceUri = (tool: Tool): boolean => {
-  return Boolean(getToolUiResourceUri(tool));
+  // [spring-ai-mcp-inspector PATCH] ui-app-detection: optional for
+  // preselect-without-run (ToolsTab "Open as App" button).
+  result?: CompatibilityCallToolResult;
 };
 
 const cloneToolParams = (
@@ -191,20 +217,22 @@ const ALL_TABS: string[] = [
   "ping",
   "sampling",
   "elicitations",
+  "input-required",
   "roots",
   "auth",
   "metadata",
   "timeline",
+  "clients",
 ];
 
-const getDefaultTab = (
-  caps: ServerCapabilities | null | undefined,
-): string => {
+const getDefaultTab = (caps: ServerCapabilities | null | undefined): string => {
   if (caps?.resources) return "resources";
   if (caps?.prompts) return "prompts";
   if (caps?.tools) return "tools";
-  if (caps?.tasks) return "tasks";
-  return "ping";
+  // [spring-ai-mcp-inspector PATCH] With no rendered capability panels, the
+  // default is the Tasks tab: it is always valid and shows the issue #212
+  // capability-gap body when tasks.list is absent.
+  return "tasks";
 };
 
 const buildValidTabs = (
@@ -213,15 +241,19 @@ const buildValidTabs = (
   ...(caps?.resources ? ["resources"] : []),
   ...(caps?.prompts ? ["prompts"] : []),
   ...(caps?.tools ? ["tools"] : []),
-  ...(caps?.tasks ? ["tasks"] : []),
+  // [spring-ai-mcp-inspector PATCH] The Tasks tab is always valid: it shows
+  // the capability-gap body when tasks.list is absent (issue #212).
+  "tasks",
   "apps",
   "ping",
   "sampling",
   "elicitations",
+  "input-required",
   "roots",
   "auth",
   "metadata",
   "timeline",
+  "clients",
 ];
 
 // Near-miss normalization: case-insensitive match and simple singular/plural
@@ -254,7 +286,48 @@ const resolveTab = (
   return normalized ?? getDefaultTab(caps);
 };
 
+// [spring-ai-mcp-inspector PATCH] Connection timeout bounds mirror the proxy
+// contract (ProxyConnectionBudgets): a whole number of seconds 1..600.
+// Anything else must be rejected client-side, otherwise the request reaches
+// the proxy and fails with a bare 400 banner. Accepted input is decimal
+// digits only: the proxy parses the raw string with Long.parseLong, so
+// "1e1" and "0x10" fail there and are caught here with the field-level
+// error instead. "+30" parses as 30 at the proxy, so rejecting it is
+// stricter than the proxy on purpose (one accepted notation per value).
+// Owner decision on the 2026-11-19 #335 rebase: the validator and its
+// error constant live in App (shared connect handler), not in Sidebar.
+const CONNECTION_TIMEOUT_MAX_SECONDS = 600;
+const CONNECTION_TIMEOUT_ERROR = `Must be a whole number of seconds between 1 and ${CONNECTION_TIMEOUT_MAX_SECONDS}`;
+
+const isValidConnectionTimeout = (raw: string): boolean => {
+  const trimmed = raw.trim();
+  if (trimmed === "") {
+    return true;
+  }
+  if (!/^[0-9]+$/.test(trimmed)) {
+    return false;
+  }
+  const n = Number(trimmed);
+  return n >= 1 && n <= CONNECTION_TIMEOUT_MAX_SECONDS;
+};
+
 const App = () => {
+  // [spring-ai-mcp-inspector PATCH] D10 legacy localStorage secret migration:
+  // MUST run synchronously BEFORE the state initializers below read the six
+  // legacy keys (read → seed state → removeItem). Idempotent: after the first
+  // call the keys are gone and the seed is empty.
+  const legacyAuthSeed = migrateLegacyAuthStorage();
+
+  // [spring-ai-mcp-inspector PATCH] Named auth profiles (issue #54): the
+  // active profile is handed off to the backend via `?profileId=` (server
+  // owns secrets); profiles list is owner-scoped, secrets never persisted.
+  const [profiles, setProfiles] = useState<AuthProfileSummary[]>([]);
+  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
+  // [spring-ai-mcp-inspector PATCH] Stale auth-profile bindings (issue #267):
+  // false until the first list result (success or suppressed 404) arrives, so
+  // a bound connection is not flagged stale before the server has answered.
+  const [authProfilesResolved, setAuthProfilesResolved] = useState(false);
+
   const [resources, setResources] = useState<Resource[]>([]);
   const [resourceTemplates, setResourceTemplates] = useState<
     ResourceTemplate[]
@@ -284,9 +357,18 @@ const App = () => {
   const [args, setArgs] = useState<string>(getInitialArgs);
 
   const [sseUrl, setSseUrl] = useState<string>(getInitialSseUrl);
+  // [spring-ai-mcp-inspector PATCH] Set once the user edits the server URL
+  // field; the /config default must not overwrite a user-typed URL afterwards
+  // (issue #374 E2E flake).
+  const sseUrlTouchedRef = useRef(false);
   const [transportType, setTransportType] = useState<
     "stdio" | "sse" | "streamable-http"
   >(getInitialTransportType);
+  // [spring-ai-mcp-inspector PATCH] issue #269 rework: URL validation state
+  // lives here so the sidebar CTA and the empty-state canvas CTA share the
+  // exact same error message and disable condition.
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [urlTouched, setUrlTouched] = useState(false);
   const [connectionType, setConnectionType] = useState<"direct" | "proxy">(
     () => {
       return (
@@ -295,6 +377,15 @@ const App = () => {
       );
     },
   );
+  // [spring-ai-mcp-inspector PATCH] Optional connection timeout (seconds).
+  // Empty string = proxy default (30s). Persisted in localStorage.
+  const [connectionTimeout, setConnectionTimeout] = useState<string>(() => {
+    return localStorage.getItem("lastConnectionTimeout") || "";
+  });
+  // [spring-ai-mcp-inspector PATCH] Connection timeout validation state:
+  // starts null (a stale invalid persisted value must not silently lock
+  // Connect), set on field blur and on the shared connect handler.
+  const [timeoutError, setTimeoutError] = useState<string | null>(null);
   const [logLevel, setLogLevel] = useState<LoggingLevel>("debug");
   const [notifications, setNotifications] = useState<ServerNotification[]>([]);
   const [roots, setRoots] = useState<Root[]>([]);
@@ -303,44 +394,29 @@ const App = () => {
   const [config, setConfig] = useState<InspectorConfig>(() =>
     initializeInspectorConfig(CONFIG_LOCAL_STORAGE_KEY),
   );
-  const [bearerToken, setBearerToken] = useState<string>(() => {
-    return localStorage.getItem("lastBearerToken") || "";
-  });
+  // [spring-ai-mcp-inspector PATCH] D10: seeded from migrateLegacyAuthStorage()
+  // (React state only — nothing is re-persisted to localStorage).
+  const [bearerToken, setBearerToken] = useState<string>(legacyAuthSeed.bearerToken);
 
-  const [headerName, setHeaderName] = useState<string>(() => {
-    return localStorage.getItem("lastHeaderName") || "";
-  });
+  const [headerName, setHeaderName] = useState<string>(legacyAuthSeed.headerName);
 
-  const [oauthClientId, setOauthClientId] = useState<string>(() => {
-    return localStorage.getItem("lastOauthClientId") || "";
-  });
+  const [oauthClientId, setOauthClientId] = useState<string>(
+    legacyAuthSeed.oauthClientId,
+  );
 
-  const [oauthScope, setOauthScope] = useState<string>(() => {
-    return localStorage.getItem("lastOauthScope") || "";
-  });
+  const [oauthScope, setOauthScope] = useState<string>(legacyAuthSeed.oauthScope);
 
-  const [oauthClientSecret, setOauthClientSecret] = useState<string>(() => {
-    return localStorage.getItem("lastOauthClientSecret") || "";
-  });
+  const [oauthClientSecret, setOauthClientSecret] = useState<string>(
+    legacyAuthSeed.oauthClientSecret,
+  );
 
   // Custom headers state with migration from legacy auth
   const [customHeaders, setCustomHeaders] = useState<CustomHeaders>(() => {
-    const savedHeaders = localStorage.getItem("lastCustomHeaders");
-    if (savedHeaders) {
-      try {
-        return JSON.parse(savedHeaders);
-      } catch (error) {
-        console.warn(
-          `Failed to parse custom headers: "${savedHeaders}", will try legacy migration`,
-          error,
-        );
-        // Fall back to migration if JSON parsing fails
-      }
+    if (legacyAuthSeed.customHeaders.length > 0) {
+      return legacyAuthSeed.customHeaders;
     }
-
-    // Migrate from legacy auth if available
-    const legacyToken = localStorage.getItem("lastBearerToken") || "";
-    const legacyHeaderName = localStorage.getItem("lastHeaderName") || "";
+    const legacyToken = legacyAuthSeed.bearerToken;
+    const legacyHeaderName = legacyAuthSeed.headerName;
 
     if (legacyToken) {
       return migrateFromLegacyAuth(legacyToken, legacyHeaderName);
@@ -371,6 +447,11 @@ const App = () => {
         decline: (error: Error) => void;
       }
     >
+  >([]);
+  // [spring-ai-mcp-inspector PATCH] SEP-2322 input_required panel (#253):
+  // pending input chains rendered in the Input Required tab.
+  const [pendingInputChains, setPendingInputChains] = useState<
+    PendingInputChain[]
   >([]);
   const [isAuthDebuggerVisible, setIsAuthDebuggerVisible] = useState(false);
 
@@ -408,6 +489,10 @@ const App = () => {
   const [selectedResource, setSelectedResource] = useState<Resource | null>(
     null,
   );
+  // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): live mirror of
+  // the selected resource for the guards in readResource; a ref stays
+  // current across awaits where a closed-over state snapshot would not.
+  const selectedResourceRef = useRef<Resource | null>(null);
   const [resourceSubscriptions, setResourceSubscriptions] = useState<
     Set<string>
   >(new Set<string>());
@@ -444,6 +529,19 @@ const App = () => {
 
   const currentTabRef = useRef<string>(activeTab);
   const lastToolCallOriginTabRef = useRef<string>(activeTab);
+  // [spring-ai-mcp-inspector PATCH] Issue #298: elicitation cards that arrive
+  // while a tools/call is in flight are correlated with that call so they can
+  // be expired when it settles. Only the most recent in-flight call is
+  // tracked, matching lastToolCallOriginTabRef above.
+  const nextToolCallIdRef = useRef(0);
+  const activeToolCallIdRef = useRef<number | null>(null);
+  // [spring-ai-mcp-inspector PATCH] Issue #298: ids of calls that already
+  // settled. A card can arrive (SSE delivery) after its call settled (POST
+  // response), and the finally block only expires cards that exist at that
+  // moment, so at arrival the card must be created already expired.
+  // activeToolCallIdRef is deliberately never reset: after a call settles it
+  // keeps that call's id, which is the id a late-arriving card maps to.
+  const settledToolCallIdsRef = useRef<Set<number>>(new Set());
   // [spring-ai-mcp-inspector PATCH] Answering a sampling or elicitation request
   // re-asserts the originating tab once more after 100 ms. Upstream never keeps the
   // handle, so that timer outlives the component and rewrites window.location.hash
@@ -451,9 +549,9 @@ const App = () => {
   // one test stomps the next one's hash) and, in the app, yanks a user who navigated
   // away within those 100 ms. Both schedulers share this handle: the second one
   // supersedes the first rather than racing it.
-  const originatingTabTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
+  const originatingTabTimerRef = useRef<
+    ReturnType<typeof setTimeout> | undefined
+  >(undefined);
 
   useEffect(() => {
     currentTabRef.current = activeTab;
@@ -498,12 +596,88 @@ const App = () => {
     selectedTaskRef.current = selectedTask;
   }, [selectedTask]);
 
+  // [spring-ai-mcp-inspector PATCH] Persistent history (#218): session bucket
+  // id captured at connect(), released on disconnect (review blocker 2).
+  // Declared before useConnection so the frozen key is in scope below.
+  const [activeHistoryConnectionId, setActiveHistoryConnectionId] = useState<
+    string | undefined
+  >(undefined);
+  // [spring-ai-mcp-inspector PATCH] Id of the saved entry Save CREATED
+  // during the current session (owner review on PR #218, 2026-11-13): the
+  // disconnect-time bucket carry-over moves entries only into this entry,
+  // never into whatever happens to be active at disconnect. Reset when a
+  // session starts; a Save that updates or overwrites an existing entry
+  // does not set it.
+  const sessionSaveCreatedConnectionIdRef = useRef<string | undefined>(
+    undefined,
+  );
+  // [spring-ai-mcp-inspector PATCH] Saved connections state (#121),
+  // declared before useConnection: the pending history bucket key follows
+  // the active saved entry. Restored from localStorage on load and
+  // re-validated against the saved list (owner review on PR #218,
+  // 2026-11-13): without the restore a reload dropped the association,
+  // the history panel fell back to the ad-hoc sse:<url> bucket, and the
+  // saved connection's history became unreachable until re-selection.
+  const [activeConnectionId, setActiveConnectionId] = useState<
+    string | undefined
+  >(() => {
+    const stored = localStorage.getItem("lastActiveConnectionId");
+    if (!stored) {
+      return undefined;
+    }
+    return loadSavedConnections().some((c) => c.id === stored)
+      ? stored
+      : undefined;
+  });
+  // [spring-ai-mcp-inspector PATCH] Pending history bucket key (owner
+  // decision on PR #218, 2026-10-24: the history layer is keyed on
+  // activeConnectionId). A saved connection keys its bucket by the saved
+  // entry id, so two saved connections with the same URL never share a
+  // bucket and editing a saved connection's URL cannot orphan its history;
+  // ad-hoc (unsaved) connections keep the transport-scoped form key.
+  const historyKeyForConnection = useCallback(() => {
+    const formKey =
+      transportType === "stdio"
+        ? `stdio:${command} ${args}`
+        : `${transportType}:${sseUrl || "ephemeral"}`;
+    if (activeConnectionId === undefined) {
+      return formKey;
+    }
+    // [spring-ai-mcp-inspector PATCH] Owner review minor on PR #218,
+    // 2026-11-13: the association survived a reload, so typing a
+    // different URL after selecting A still wrote into A's bucket. The
+    // selected entry adopts the session only while the form still points
+    // at its endpoint (the same transport-scoped comparison the
+    // disconnect-time carry-over uses); a mismatched form falls back to
+    // the ad-hoc key.
+    const selected = loadSavedConnections().find(
+      (c) => c.id === activeConnectionId,
+    );
+    if (
+      selected !== undefined &&
+      savedConnectionHistoryKey(selected) === formKey
+    ) {
+      return activeConnectionId;
+    }
+    return formKey;
+  }, [activeConnectionId, transportType, command, args, sseUrl]);
   const {
     connectionStatus,
+    // [spring-ai-mcp-inspector PATCH] Two distinct failures, two fields:
+    // connectionError is the transport contract MCP_CONNECT_FAILED (issue #56,
+    // the server was never reached), authError is the proxy authorization DTO
+    // (issue #54, the server answered and refused).
     connectionError,
+    authError,
     serverCapabilities,
     serverImplementation,
     mcpClient,
+    // [spring-ai-mcp-inspector PATCH] proxy-side session id: the id the
+    // inspector's keep-alive endpoints actually resolve (#235)
+    proxySessionId,
+    // [spring-ai-mcp-inspector PATCH] Observed initialize handshake for the
+    // VersionBadge in the connect zone (see NOTICE.d/version-badge.txt).
+    initializeSnapshot,
     requestHistory,
     clearRequestHistory,
     makeRequest,
@@ -514,6 +688,7 @@ const App = () => {
     completionsSupported,
     connect: connectMcpServer,
     disconnect: disconnectMcpServer,
+    resetSessionAndConnect,
   } = useConnection({
     transportType,
     command,
@@ -524,12 +699,26 @@ const App = () => {
     oauthClientId,
     oauthClientSecret,
     oauthScope,
+    // [spring-ai-mcp-inspector PATCH] Active named auth profile (issue #54).
+    activeProfileId,
     config,
     connectionType,
+    connectionTimeout,
+    // [spring-ai-mcp-inspector PATCH] Persistent history (#121). The bucket
+    // key is frozen from the Connect click until disconnect (review
+    // blocker 2 on PR #218): while a session id is captured, editing the
+    // URL/command fields neither reshuffles the History panel nor sends
+    // later calls into a half-typed bucket. On disconnect the key returns
+    // to following the form fields, and the next connect() captures fresh.
+    connectionId:
+      activeHistoryConnectionId ?? historyKeyForConnection(),
     onNotification: (notification) => {
       setNotifications((prev) => [...prev, notification as ServerNotification]);
 
-      if (notification.method === "notifications/tasks/list_changed") {
+      if (
+        notification.method === "notifications/tasks/list_changed" &&
+        serverCapabilitiesRef.current?.tasks?.list
+      ) {
         void listTasks();
       }
 
@@ -589,6 +778,15 @@ const App = () => {
           id: requestId,
           request: requestData,
           originatingTab: currentTab,
+          // [spring-ai-mcp-inspector PATCH] Issue #298: remember which
+          // tools/call is waiting on this card so its settlement can
+          // expire the form. The ref keeps the last started call id, so a
+          // card arriving after that call already settled (fast settle wins
+          // the race against SSE delivery) is created expired right away.
+          toolCallId: activeToolCallIdRef.current ?? undefined,
+          expired:
+            activeToolCallIdRef.current != null &&
+            settledToolCallIdsRef.current.has(activeToolCallIdRef.current),
           resolve,
           decline: (error: Error) => {
             console.error("Elicitation request rejected:", error);
@@ -608,9 +806,14 @@ const App = () => {
   const [savedConnections, setSavedConnections] = useState<SavedConnection[]>(
     () => loadSavedConnections(),
   );
-  const [activeConnectionId, setActiveConnectionId] = useState<
-    string | undefined
-  >(undefined);
+
+  // [spring-ai-mcp-inspector PATCH] Subscribe to keep-alive pings so the
+  // Connection pane can show "Last keep-alive: Xs ago" and warn when the
+  // stream goes stale (#235, t_3925eae7).
+  // The keep-alive tracker lives on the proxy session the inspector created
+  // for this UI connection; the upstream mcpSessionId (direct mode capture)
+  // is unknown to the inspector and would 404 (#235).
+  const keepAlive = useKeepAlive(proxySessionId);
 
   const handleSaveConnection = useCallback(
     (name: string): SavedConnection | undefined => {
@@ -623,6 +826,7 @@ const App = () => {
         args: transportType === "stdio" ? args : undefined,
         env: transportType === "stdio" ? env : undefined,
         customHeaders,
+        connectionTimeout: connectionTimeout || undefined,
       });
       // [spring-ai-mcp-inspector PATCH] Determine target id by comparing
       // name against the currently active connection, not by blindly
@@ -641,9 +845,7 @@ const App = () => {
         const existing = findConnectionByName(name);
         if (existing) {
           if (
-            !window.confirm(
-              `Connection "${name}" already exists. Overwrite?`,
-            )
+            !window.confirm(`Connection "${name}" already exists. Overwrite?`)
           ) {
             return undefined;
           }
@@ -652,6 +854,31 @@ const App = () => {
         // else no collision: targetId undefined -> creates a new entry.
       }
       const saved = saveConnection(draft, targetId);
+      // [spring-ai-mcp-inspector PATCH] Only a save that CREATES a new
+      // entry adopts the session's history bucket on disconnect (owner
+      // review on PR #218, 2026-11-13). Updates and confirmed overwrites
+      // of existing entries do not: their buckets already hold another
+      // server's history.
+      if (targetId === undefined) {
+        sessionSaveCreatedConnectionIdRef.current = saved.id;
+      }
+      // [spring-ai-mcp-inspector PATCH] Carry the session's history bucket
+      // over to the saved entry (owner review on PR #218, 2026-11-13):
+      // saving an ad-hoc session used to orphan its entries under the
+      // form-derived key while the panel moved to the saved entry's empty
+      // bucket. During a live session the frozen key keeps receiving
+      // writes, so the move is deferred to disconnect; when disconnected
+      // the entries move right away. Skipped when the live bucket already
+      // belongs to a saved entry (re-saving, or saving a variant of a
+      // selected connection): those entries stay with the connection that
+      // produced them.
+      const liveBucketKey = historyKeyForConnection();
+      if (
+        activeHistoryConnectionId === undefined &&
+        !loadSavedConnections().some((c) => c.id === liveBucketKey)
+      ) {
+        migrateHistory(liveBucketKey, saved.id);
+      }
       setActiveConnectionId(saved.id);
       setSavedConnections(loadSavedConnections());
       return saved;
@@ -664,20 +891,71 @@ const App = () => {
       args,
       env,
       customHeaders,
+      connectionTimeout,
       activeConnectionId,
+      activeHistoryConnectionId,
+      historyKeyForConnection,
     ],
   );
 
   const handleDeleteConnection = useCallback(
     (id: string) => {
       deleteSavedConnection(id);
+      // [spring-ai-mcp-inspector PATCH] Also drop the deleted connection's
+      // history bucket (owner review on PR #218, 2026-11-13): previously
+      // the request/response bodies stayed in localStorage until LRU
+      // eviction.
+      clearHistory(id);
       if (activeConnectionId === id) {
         setActiveConnectionId(undefined);
       }
+      // [spring-ai-mcp-inspector PATCH] Owner review minor on PR #218,
+      // 2026-11-13: deleting the connection that owns the live session
+      // released the association but not the session's frozen bucket key,
+      // so in-flight history writes kept recreating an orphan bucket for
+      // the deleted id after clearHistory. Release the freeze with the
+      // association: the session keeps writing into the form-derived
+      // bucket instead.
+      if (activeHistoryConnectionId === id) {
+        setActiveHistoryConnectionId(undefined);
+      }
       setSavedConnections(loadSavedConnections());
     },
-    [activeConnectionId],
+    [activeConnectionId, activeHistoryConnectionId],
   );
+
+  // [spring-ai-mcp-inspector PATCH] Stale auth-profile bindings (issue #267):
+  // the effective profile set is only known after the first list load
+  // (a 404 from a backend without the auth-profile API counts as empty),
+  // so staleness is evaluated after that, not from the initial empty state.
+  const handleProfilesChange = useCallback((next: AuthProfileSummary[]) => {
+    setProfiles(next);
+    setAuthProfilesResolved(true);
+  }, []);
+
+  const staleAuthProfileBindings = useMemo(
+    () =>
+      authProfilesResolved
+        ? savedConnections.filter(
+            (c) =>
+              typeof c.authProfileName === "string" &&
+              c.authProfileName !== "" &&
+              !profiles.some((p) => p.name === c.authProfileName),
+          )
+        : [],
+    [authProfilesResolved, savedConnections, profiles],
+  );
+
+  const handleUnlinkAuthProfile = useCallback((connectionId: string) => {
+    const updated = unlinkAuthProfileFromSavedConnection(connectionId);
+    if (updated) {
+      setSavedConnections(updated);
+    }
+  }, []);
+
+  const handleOpenAuthSettings = useCallback(() => {
+    setIsAuthDebuggerVisible(true);
+  }, []);
 
   // [spring-ai-mcp-inspector PATCH] Saved connections: reset fields
   // absent from the entry so stale values (e.g. stdio fields leaking
@@ -711,6 +989,9 @@ const App = () => {
       if (connection.customHeaders) {
         setCustomHeaders(connection.customHeaders);
       }
+      // [spring-ai-mcp-inspector PATCH] Restore saved connectionTimeout
+      // (absent = empty = proxy default).
+      setConnectionTimeout(connection.connectionTimeout ?? "");
       setActiveConnectionId(connection.id);
       touchSavedConnection(connection.id);
       // [spring-ai-mcp-inspector PATCH] Refresh the list state after
@@ -726,8 +1007,17 @@ const App = () => {
       setArgs,
       setEnv,
       setCustomHeaders,
+      setConnectionTimeout,
     ],
   );
+
+  // [spring-ai-mcp-inspector PATCH] Keep a live ref of serverCapabilities so the
+  // notification callback (installed before connect completes) reads the current
+  // value, not the stale null closure from the first render. See issue #212.
+  const serverCapabilitiesRef = useRef<ServerCapabilities | null>(null);
+  useEffect(() => {
+    serverCapabilitiesRef.current = serverCapabilities;
+  }, [serverCapabilities]);
 
   useEffect(() => {
     if (mcpClient || serverCapabilities) {
@@ -742,14 +1032,15 @@ const App = () => {
       const hash = window.location.hash.slice(1);
       // [spring-ai-mcp-inspector PATCH] Null-capabilities routing (#t_fdeb9f56):
       // when connected but capabilities have no rendered panels (null or
-      // empty of resources/prompts/tools), only PingTab renders. Force
-      // "ping" as the active tab regardless of the current hash.
-      const resolved = mcpClient &&
+      // empty of resources/prompts/tools), force the Tasks tab: with issue
+      // #212 it renders its capability-gap body, so a real panel shows.
+      const resolved =
+        mcpClient &&
         !serverCapabilities?.resources &&
         !serverCapabilities?.prompts &&
         !serverCapabilities?.tools
-        ? "ping"
-        : resolveTab(hash, serverCapabilities);
+          ? "tasks"
+          : resolveTab(hash, serverCapabilities);
       if (resolved !== hash) {
         window.location.hash = resolved;
       }
@@ -758,11 +1049,17 @@ const App = () => {
   }, [mcpClient, serverCapabilities]);
 
   useEffect(() => {
-    if (mcpClient && activeTab === "tasks") {
+    // [spring-ai-mcp-inspector PATCH] Gate on the operation-level sub-capability
+    // (tasks.list controls tasks/list per MCP spec). See issue #212.
+    if (
+      mcpClient &&
+      activeTab === "tasks" &&
+      serverCapabilities?.tasks?.list
+    ) {
       void listTasks();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mcpClient, activeTab]);
+  }, [mcpClient, activeTab, serverCapabilities?.tasks?.list]);
 
   useEffect(() => {
     if (mcpClient && activeTab === "apps" && serverCapabilities?.tools) {
@@ -791,25 +1088,29 @@ const App = () => {
     localStorage.setItem("lastConnectionType", connectionType);
   }, [connectionType]);
 
+  // [spring-ai-mcp-inspector PATCH] Persist the saved-connection
+  // association (#218 owner review, 2026-11-13): a reload restores it so
+  // the history panel and the next connect land in the saved bucket
+  // instead of splitting entries into an ad-hoc form-derived bucket.
   useEffect(() => {
-    if (bearerToken) {
-      localStorage.setItem("lastBearerToken", bearerToken);
+    if (activeConnectionId === undefined) {
+      localStorage.removeItem("lastActiveConnectionId");
     } else {
-      localStorage.removeItem("lastBearerToken");
+      localStorage.setItem("lastActiveConnectionId", activeConnectionId);
     }
-  }, [bearerToken]);
+  }, [activeConnectionId]);
 
+  // [spring-ai-mcp-inspector PATCH] D10: the six legacy auth persistence
+  // effects (lastBearerToken / lastHeaderName / lastCustomHeaders /
+  // lastOauthClientId / lastOauthScope / lastOauthClientSecret) are REMOVED.
+  // Secrets live in React state only and travel backend-ward via the
+  // `/auth-profile` handoff; nothing secret-bearing is written to
+  // localStorage anymore. migrateLegacyAuthStorage() consumed and removed any
+  // pre-existing values on mount.
+  // [spring-ai-mcp-inspector PATCH] Persist connection timeout to localStorage.
   useEffect(() => {
-    if (headerName) {
-      localStorage.setItem("lastHeaderName", headerName);
-    } else {
-      localStorage.removeItem("lastHeaderName");
-    }
-  }, [headerName]);
-
-  useEffect(() => {
-    localStorage.setItem("lastCustomHeaders", JSON.stringify(customHeaders));
-  }, [customHeaders]);
+    localStorage.setItem("lastConnectionTimeout", connectionTimeout);
+  }, [connectionTimeout]);
 
   // Auto-migrate from legacy auth when custom headers are empty but legacy auth exists
   useEffect(() => {
@@ -825,28 +1126,121 @@ const App = () => {
   }, [bearerToken, headerName, customHeaders, setCustomHeaders]);
 
   useEffect(() => {
-    localStorage.setItem("lastOauthClientId", oauthClientId);
-  }, [oauthClientId]);
-
-  useEffect(() => {
-    localStorage.setItem("lastOauthScope", oauthScope);
-  }, [oauthScope]);
-
-  useEffect(() => {
-    localStorage.setItem("lastOauthClientSecret", oauthClientSecret);
-  }, [oauthClientSecret]);
-
-  useEffect(() => {
     saveInspectorConfig(CONFIG_LOCAL_STORAGE_KEY, config);
   }, [config]);
+
+  // [spring-ai-mcp-inspector PATCH] Persistent history: freeze the history
+  // bucket key at connect() time (PR #218 review blocker 2). The transport-
+  // scoped key is computed once when Connect is clicked and held for the
+  // whole session; disconnect() releases it. While the fields stay editable
+  // during a live connection, the captured key keeps history writes and the
+  // History panel on one stable bucket instead of following every keystroke.
+  const handleConnect = useCallback(() => {
+    // [spring-ai-mcp-inspector PATCH] A new session starts with no
+    // Save-created entry (owner review on PR #218, 2026-11-13).
+    sessionSaveCreatedConnectionIdRef.current = undefined;
+    setActiveHistoryConnectionId(historyKeyForConnection());
+    void connectMcpServer();
+  }, [connectMcpServer, historyKeyForConnection]);
+
+  const handleDisconnect = useCallback(async () => {
+    // [spring-ai-mcp-inspector PATCH] Before releasing the frozen key,
+    // carry entries written under it into the saved entry Save created
+    // during this session (owner review on PR #218, 2026-11-13): a
+    // mid-session Save defers the bucket move to here, because the frozen
+    // key keeps receiving writes until the session ends. The move happens
+    // only into an entry Save created this session (a sidebar selection or
+    // a re-pointed URL must not adopt another server's history) and only
+    // while that entry still points at the connect-time endpoint.
+    const frozen = activeHistoryConnectionId;
+    const savedId = sessionSaveCreatedConnectionIdRef.current;
+    const created = loadSavedConnections().find((c) => c.id === savedId);
+    if (
+      frozen !== undefined &&
+      created !== undefined &&
+      savedConnectionHistoryKey(created) === frozen
+    ) {
+      migrateHistory(frozen, created.id);
+    }
+    setActiveHistoryConnectionId(undefined);
+    await disconnectMcpServer();
+  }, [activeHistoryConnectionId, disconnectMcpServer]);
+
+  // [spring-ai-mcp-inspector PATCH] issue #269 rework: one validated connect
+  // handler for both Connect buttons (the sidebar CTA and the empty-state
+  // canvas CTA). For URL-based transports an empty or invalid server URL
+  // surfaces the URL validation error and blocks the connect instead of
+  // falling back to the loopback demo server; a proxy connection with an
+  // invalid connection timeout is blocked by the same handler.
+  // The validated handler delegates to handleConnect (not
+  // connectMcpServer) so the persistent-history bucket freeze from the
+  // PR #218 wrappers applies to both CTAs.
+  // [spring-ai-mcp-inspector PATCH] Re-validate the persisted timeout on
+  // field blur: the same field-level check the Sidebar ran before the
+  // validation state moved up here.
+  const validateConnectionTimeout = useCallback(() => {
+    setTimeoutError(
+      isValidConnectionTimeout(connectionTimeout)
+        ? null
+        : CONNECTION_TIMEOUT_ERROR,
+    );
+  }, [connectionTimeout]);
+
+  const handleConnectRequest = useCallback(() => {
+    if (transportType !== "stdio") {
+      setUrlTouched(true);
+      const result = validateServerUrl(sseUrl);
+      setUrlError(result.isValid ? null : result.errorMessage);
+      if (!result.isValid) {
+        return;
+      }
+    }
+    // [spring-ai-mcp-inspector PATCH] Block connect if the connection
+    // timeout is invalid (proxy only: direct never forwards the timeout,
+    // so a stale invalid persisted value must not silently lock Connect).
+    if (
+      connectionType === "proxy" &&
+      !isValidConnectionTimeout(connectionTimeout)
+    ) {
+      setTimeoutError(CONNECTION_TIMEOUT_ERROR);
+      return;
+    }
+    void handleConnect();
+  }, [
+    transportType,
+    sseUrl,
+    handleConnect,
+    connectionType,
+    connectionTimeout,
+  ]);
 
   const onOAuthConnect = useCallback(
     (serverUrl: string) => {
       setSseUrl(serverUrl);
       setIsAuthDebuggerVisible(false);
+      // OAuth redirects landed on this URL: the history bucket for the new
+      // session must key on the active saved connection when one is selected
+      // (same precedence as handleConnect); an ad-hoc session keys on this
+      // URL. The prefix follows the live transportType (the OAuth flow is
+      // reachable on SSE too, SSE carries the same authProvider): a
+      // hardcoded "streamable-http:" would land an SSE session in a
+      // wrong-transport bucket that Disconnect+Reconnect (sse:<url>) can no
+      // longer see. Derived here from the callback argument, not via
+      // historyKeyForConnection(): setSseUrl above does not update the
+      // closure variable this render, so the helper would read the
+      // pre-redirect URL for the ad-hoc branch.
+      // [spring-ai-mcp-inspector PATCH] A new session starts with no
+      // Save-created entry (owner review on PR #218, 2026-11-13).
+      sessionSaveCreatedConnectionIdRef.current = undefined;
+      setActiveHistoryConnectionId(
+        activeConnectionId ??
+          (transportType === "stdio"
+            ? `stdio:${command} ${args}`
+            : `${transportType}:${serverUrl}`),
+      );
       void connectMcpServer();
     },
-    [connectMcpServer],
+    [connectMcpServer, transportType, command, args, activeConnectionId],
   );
 
   const onOAuthDebugConnect = useCallback(
@@ -977,7 +1371,10 @@ const App = () => {
             data.defaultTransport as "stdio" | "sse" | "streamable-http",
           );
         }
-        if (data.defaultServerUrl) {
+        // [spring-ai-mcp-inspector PATCH] Skip the default when the user has
+        // already edited the URL field; the late fetch response used to clobber
+        // the typed value (issue #374 E2E flake).
+        if (data.defaultServerUrl && !sseUrlTouchedRef.current) {
           setSseUrl(data.defaultServerUrl);
         }
       })
@@ -1015,8 +1412,10 @@ const App = () => {
       const hash = window.location.hash.slice(1);
       // [spring-ai-mcp-inspector PATCH] Null-capabilities routing (#t_fdeb9f56):
       // when connected but serverCapabilities is null, undefined, or an empty
-      // truthy object (resources/prompts/tools absent), only PingTab renders.
-      // Any non-ping hash would leave the UI with zero visible tabpanels.
+      // truthy object (resources/prompts/tools absent), only PingTab and the
+      // Tasks capability-gap body render. Force "tasks" so the gap body
+      // explains what is missing (issue #212); any other hash would leave
+      // the UI with zero visible tabpanels.
       // Check this BEFORE the if(serverCapabilities) branch, because a truthy
       // {} bypasses the old null-guard and resolveTab({}) routes to #apps.
       if (
@@ -1025,11 +1424,11 @@ const App = () => {
         !serverCapabilities?.prompts &&
         !serverCapabilities?.tools
       ) {
-        if ("ping" !== hash) {
-          window.location.hash = "ping";
+        if ("tasks" !== hash) {
+          window.location.hash = "tasks";
         }
-        if (activeTab !== "ping") {
-          setActiveTab("ping");
+        if (activeTab !== "tasks") {
+          setActiveTab("tasks");
         }
         return;
       }
@@ -1090,6 +1489,12 @@ const App = () => {
   ) => {
     setPendingElicitationRequests((prev) => {
       const request = prev.find((r) => r.id === id);
+      if (request?.expired) {
+        // [spring-ai-mcp-inspector PATCH] Issue #298: the correlated tools/call
+        // already settled, so the server is no longer waiting. Keep the card:
+        // dropping it here would close the form silently and lose the input.
+        return prev;
+      }
       if (request) {
         request.resolve(response);
 
@@ -1100,6 +1505,22 @@ const App = () => {
       }
       return prev.filter((r) => r.id !== id);
     });
+  };
+
+  // [spring-ai-mcp-inspector PATCH] Issue #298: mark every elicitation card
+  // correlated with a settled tools/call as expired instead of leaving the
+  // form active: the server stopped waiting, so a late Submit could never
+  // deliver the answer and used to close the card silently.
+  const expireElicitationsForToolCall = (toolCallId: number) => {
+    setPendingElicitationRequests((prev) =>
+      prev.some((req) => req.toolCallId === toolCallId && !req.expired)
+        ? prev.map((req) =>
+            req.toolCallId === toolCallId && !req.expired
+              ? { ...req, expired: true }
+              : req,
+          )
+        : prev,
+    );
   };
 
   const clearError = (tabKey: keyof typeof errors) => {
@@ -1174,15 +1595,28 @@ const App = () => {
   };
 
   const readResource = async (uri: string) => {
-    // Local patch (vs upstream v0.22.0):
+    // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0):
     // Original early-return on cache hit forgot to sync the singleton
     // `resourceContent` state that ResourcesTab renders in the right pane.
     // Result: after viewing a resource template, clicking back to a
     // previously-cached resource left the right pane showing stale content.
     // Upstream issue: https://github.com/modelcontextprotocol/inspector/issues/1266
+    // Cache hits no longer early-return: the cached value is shown
+    // immediately (stale-while-revalidate) and resources/read is sent again,
+    // so Refresh and re-selecting a row pick up fresh server state (the
+    // demo://clock timestamp advances on every read). Cached error payloads
+    // are retried the same way.
     if (resourceContentMap[uri]) {
-      setResourceContent(resourceContentMap[uri]);
-      return;
+      // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): commit the
+      // cached payload to the pane only while its uri is still the live
+      // selection. A Tools-result resource link reads a cached uri
+      // without touching the selection; an unguarded commit here used to
+      // overwrite the pane while a different row was selected, leaving
+      // pane and selection diverged (issue #344). The re-read below still
+      // happens: the guard gates only the sync pane commit.
+      if (selectedResourceRef.current?.uri === uri) {
+        setResourceContent(resourceContentMap[uri]);
+      }
     }
     if (fetchingResources.has(uri)) {
       return;
@@ -1199,14 +1633,28 @@ const App = () => {
           params: { uri },
         },
         ReadResourceResultSchema,
-        "resources",
       );
       console.log("[App] Resource read response:", {
         uri,
         responseLength: JSON.stringify(response).length,
         hasContents: !!(response as { contents?: unknown[] }).contents,
       });
-      setResourceContent(response);
+      // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): guard the
+      // pane update and the resources-tab error clear by the requested
+      // uri. By the time the resources/read response resolves, the user
+      // may have selected another row, and a late response for a
+      // deselected resource used to overwrite the preview pane and, on
+      // success, to clear the selected row's own error Alert. The
+      // request is deliberately sent without a tabKey so the resources
+      // tab error is owned here instead of being set and cleared
+      // unconditionally in sendMCPRequest. The per-uri cache below stays
+      // unconditional: a response is always correct for its own uri.
+      // Upstream has the same race (modelcontextprotocol/inspector
+      // #1266/#1274); its fix PRs #1267/#1275 were closed unmerged.
+      if (selectedResourceRef.current?.uri === uri) {
+        setResourceContent(response);
+        clearError("resources");
+      }
       setResourceContentMap((prev) => ({
         ...prev,
         [uri]: response,
@@ -1218,6 +1666,14 @@ const App = () => {
         ...prev,
         [uri]: JSON.stringify({ error: errorString }),
       }));
+      // [spring-ai-mcp-inspector PATCH] (vs upstream v0.22.0): surface
+      // the read failure as the resources-tab Alert only while its uri
+      // is still selected; the Alert renders in place of the whole pane,
+      // so an unguarded set would replace the resource the user has
+      // moved to. This is the error half of the #344 race guard.
+      if (selectedResourceRef.current?.uri === uri) {
+        setErrors((prev) => ({ ...prev, resources: errorString }));
+      }
     } finally {
       setFetchingResources((prev) => {
         const next = new Set(prev);
@@ -1286,6 +1742,131 @@ const App = () => {
     cacheToolOutputSchemas(response.tools);
   };
 
+  // [spring-ai-mcp-inspector PATCH] SEP-2322 (spec revision 2026-07-28)
+  // input_required round-trip for tools/call, client layer (#253): when a
+  // tools/call answer needs more input, the chain is registered here and the
+  // controller fires onInputRequired events (correlation id, requests,
+  // requestState, original params). resendToolCall() on the controller re-issues
+  // the ORIGINAL call with the user's inputResponses and the requestState
+  // echoed byte-exact, looping across rounds until a final result or error;
+  // cancel() drops the chain. The controller is created once; it reaches the
+  // current sendMCPRequest through a ref so it never captures a stale closure.
+  const sendToolCallRef = useRef(sendMCPRequest);
+  // Refreshed on every render (no effect) so the once-created controller
+  // always reaches the latest sendMCPRequest closure.
+  sendToolCallRef.current = sendMCPRequest;
+  const inputRequiredRef = useRef<InputRequiredController | null>(null);
+  if (!inputRequiredRef.current) {
+    inputRequiredRef.current = new InputRequiredController(
+      async (params) => {
+        // [spring-ai-mcp-inspector PATCH] Issue #298: a resumed input_required
+        // round is a tools/call like any other. Stamping the correlation refs
+        // here, exactly the way callTool does, keeps elicitation cards
+        // produced by the resumed call alive while it waits and expires them
+        // when it settles. Without this the card maps to the settled round-1
+        // id and is born expired. expireElicitationsForToolCall is captured
+        // from the render that creates the controller: it only closes over
+        // the stable pending-requests setter, so the stale copy behaves
+        // identically.
+        const toolCallId = nextToolCallIdRef.current++;
+        activeToolCallIdRef.current = toolCallId;
+        try {
+          return await sendToolCallRef.current(
+            { method: "tools/call" as const, params },
+            CompatibilityCallToolResultSchema,
+            "tools",
+          );
+        } finally {
+          settledToolCallIdsRef.current.add(toolCallId);
+          expireElicitationsForToolCall(toolCallId);
+        }
+      },
+    );
+  }
+
+  // [spring-ai-mcp-inspector PATCH] SEP-2322 input_required panel (#253):
+  // subscribe once to the controller created above. A new round of a live
+  // chain replaces the stored snapshot (same correlation id, round + 1);
+  // chain closure (final result, error, or cancel) drops it. Round 1 of a
+  // new chain focuses the panel, mirroring the legacy elicitation flow.
+  useEffect(() => {
+    const controller = inputRequiredRef.current;
+    if (!controller) {
+      return;
+    }
+    const unsubscribeInput = controller.onInputRequired((event) => {
+      setPendingInputChains((prev) => [
+        ...prev.filter((chain) => chain.correlationId !== event.correlationId),
+        {
+          correlationId: event.correlationId,
+          round: event.round,
+          requests: event.requests,
+          requestState: event.requestState,
+          originalParams: event.originalParams,
+        },
+      ]);
+      if (event.round === 1) {
+        setActiveTab("input-required");
+        window.location.hash = "input-required";
+      }
+    });
+    const unsubscribeClosed = controller.onChainClosed((event) => {
+      setPendingInputChains((prev) =>
+        prev.filter((chain) => chain.correlationId !== event.correlationId),
+      );
+    });
+    return () => {
+      unsubscribeInput();
+      unsubscribeClosed();
+    };
+  }, []);
+
+  // [spring-ai-mcp-inspector PATCH] SEP-2322 input_required panel (#253):
+  // submit re-sends the ORIGINAL tools/call through the controller (which
+  // echoes the requestState byte-exact and continues the same chain); a
+  // multi-round answer resolves with the next input_required result, which
+  // the panel already shows via onInputRequired, so only a final result
+  // reaches the tools tab. A failed re-send surfaces as an error-shaped
+  // result there instead of a dead end.
+  const handleInputRequiredSubmit = (
+    chain: PendingInputChain,
+    responses: InputResponses,
+  ): void => {
+    void inputRequiredRef.current
+      ?.resendToolCall(
+        chain.originalParams,
+        responses,
+        chain.requestState,
+        chain.correlationId,
+      )
+      .then((result) => {
+        if (isInputRequiredResult(result)) {
+          return;
+        }
+        setToolResult(result as CompatibilityCallToolResult);
+      })
+      .catch((error: unknown) => {
+        setToolResult({
+          content: [
+            {
+              type: "text" as const,
+              text: `input_required chain failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            },
+          ],
+          isError: true,
+        });
+      });
+  };
+
+  // [spring-ai-mcp-inspector PATCH] SEP-2322 input_required panel (#253):
+  // cancel abandons the chain cleanly (the controller rejects later resends
+  // for it; the pending snapshot is dropped via onChainClosed).
+  const handleInputRequiredCancel = (chain: PendingInputChain): void => {
+    inputRequiredRef.current?.cancel(chain.correlationId);
+  };
+
   const callTool = async (
     name: string,
     params: Record<string, unknown>,
@@ -1293,6 +1874,12 @@ const App = () => {
     runAsTask?: boolean,
   ): Promise<CompatibilityCallToolResult> => {
     lastToolCallOriginTabRef.current = currentTabRef.current;
+
+    // [spring-ai-mcp-inspector PATCH] Issue #298: while this call is in
+    // flight, elicitation requests it triggers record this id; the finally
+    // block below expires those cards once the call settles.
+    const toolCallId = nextToolCallIdRef.current++;
+    activeToolCallIdRef.current = toolCallId;
 
     try {
       // Find the tool schema to clean parameters properly
@@ -1376,9 +1963,42 @@ const App = () => {
         // Polling loop
         let taskCompleted = false;
         while (!taskCompleted) {
+          // [spring-ai-mcp-inspector PATCH] Bail out if the server stopped
+          // advertising tasks (disconnect/reconnect) mid-poll. Without this,
+          // a stale loop keeps firing tasks/get on a capability-less server.
+          if (!serverCapabilitiesRef.current?.tasks) {
+            taskCompleted = true;
+            setIsPollingTask(false);
+            setToolResult({
+              content: [
+                {
+                  type: "text",
+                  text: "Task polling stopped: server no longer advertises the tasks capability.",
+                },
+              ],
+            });
+            break;
+          }
           try {
             // Wait for 1 second before polling
             await new Promise((resolve) => setTimeout(resolve, pollInterval));
+
+            // [spring-ai-mcp-inspector PATCH] Re-check capability after the
+            // wait: disconnect/reconnect during the pollInterval delay could
+            // leave the server without tasks support. See issue #212.
+            if (!serverCapabilitiesRef.current?.tasks) {
+              taskCompleted = true;
+              setIsPollingTask(false);
+              setToolResult({
+                content: [
+                  {
+                    type: "text",
+                    text: "Task polling stopped: server no longer advertises the tasks capability.",
+                  },
+                ],
+              });
+              break;
+            }
 
             const taskStatus = await sendMCPRequest(
               {
@@ -1400,6 +2020,22 @@ const App = () => {
 
               if (taskStatus.status === "completed") {
                 console.log(`Fetching result for task ${taskId}`);
+                // [spring-ai-mcp-inspector PATCH] tasks/result also requires
+                // the tasks capability. The server may have dropped it between
+                // tasks/get and tasks/result. See issue #212.
+                if (!serverCapabilitiesRef.current?.tasks) {
+                  taskCompleted = true;
+                  setIsPollingTask(false);
+                  setToolResult({
+                    content: [
+                      {
+                        type: "text",
+                        text: "Task polling stopped: server no longer advertises the tasks capability.",
+                      },
+                    ],
+                  });
+                  break;
+                }
                 const result = await sendMCPRequest(
                   {
                     method: "tasks/result",
@@ -1474,6 +2110,14 @@ const App = () => {
         return latestToolResult;
       } else {
         const directResult = response as CompatibilityCallToolResult;
+        // [spring-ai-mcp-inspector PATCH] SEP-2322 (spec 2026-07-28): an
+        // input_required answer opens (or would continue) a client-side chain;
+        // the result itself still flows to the tools tab unchanged, and the
+        // legacy elicitation flow is untouched (it is a server request on
+        // elicitation/create, not a tools/call result).
+        if (isInputRequiredResult(response)) {
+          inputRequiredRef.current?.openChain(request.params, response);
+        }
         setToolResult(directResult);
         // Clear any validation errors since tool execution completed
         setErrors((prev) => ({ ...prev, tools: null }));
@@ -1493,12 +2137,26 @@ const App = () => {
       // Clear validation errors - tool execution errors are shown in ToolResults
       setErrors((prev) => ({ ...prev, tools: null }));
       return toolResult;
+    } finally {
+      // [spring-ai-mcp-inspector PATCH] Issue #298: the call reached a
+      // terminal state (result, tool error, or transport failure). Expire
+      // correlated elicitation cards instead of leaving their forms active:
+      // the server stopped waiting, and a late Submit used to close them
+      // silently while losing the answer. The correlation ref is NOT reset:
+      // it keeps the last started call id so a card delivered after this
+      // moment (fast settle outracing SSE) still maps to its call.
+      settledToolCallIdsRef.current.add(toolCallId);
+      expireElicitationsForToolCall(toolCallId);
     }
   };
 
   const listTasks = useCallback(async () => {
+    // [spring-ai-mcp-inspector PATCH] Gate tasks/list on the operation-level
+    // sub-capability (spec: tasks.list controls tasks/list). See issue #212.
+    if (!serverCapabilitiesRef.current?.tasks?.list) return;
     try {
       const response = await listMcpTasks(nextTaskCursor);
+      if (!response) return; // useConnection returned undefined (gated)
       setTasks(response.tasks);
       setNextTaskCursor(response.nextCursor);
       // Inline error clear to avoid extra dependency on clearError
@@ -1512,8 +2170,12 @@ const App = () => {
   }, [listMcpTasks, nextTaskCursor]);
 
   const cancelTask = async (taskId: string) => {
+    // [spring-ai-mcp-inspector PATCH] Gate tasks/cancel on the operation-level
+    // sub-capability (spec: tasks.cancel controls tasks/cancel). See issue #212.
+    if (!serverCapabilitiesRef.current?.tasks?.cancel) return;
     try {
       const response = await cancelMcpTask(taskId);
+      if (!response) return; // useConnection returned undefined (gated)
       setTasks((prev) => prev.map((t) => (t.taskId === taskId ? response : t)));
       if (selectedTask?.taskId === taskId) {
         setSelectedTask(response);
@@ -1525,6 +2187,20 @@ const App = () => {
         tasks: (e as Error).message ?? String(e),
       }));
     }
+  };
+
+  // [spring-ai-mcp-inspector PATCH] Per-task polling via tasks/get MCP
+  // method. Used by TasksTab to poll individual 'working' tasks at their
+  // own pollInterval. Wired through sendMCPRequest like other MCP methods.
+  const getTask = async (taskId: string) => {
+    const response = await sendMCPRequest(
+      {
+        method: "tasks/get",
+        params: { taskId },
+      },
+      GetTaskResultSchema,
+    );
+    return response;
   };
 
   const handleRootsChange = async () => {
@@ -1565,7 +2241,29 @@ const App = () => {
     );
     return (
       <Suspense fallback={<div>Loading...</div>}>
-        <OAuthCallback onConnect={onOAuthConnect} />
+        {/* [spring-ai-mcp-inspector PATCH] Auth-code profile exchange callback
+            (issue #54, D9B): on success the profile becomes active and the
+            connection starts; the debugger flow falls through unchanged. */}
+        <OAuthCallback
+          onConnect={onOAuthConnect}
+          onProfileAuthorized={(profileId) => {
+            // D9B: pass the freshly authorized profileId into the very first connect
+            // so it is applied even before the activeProfileId state update re-renders
+            // the hook closure.
+            setActiveProfileId(profileId);
+            // [spring-ai-mcp-inspector PATCH] Capture the history bucket key
+            // at connect time exactly like handleConnect (PR #218 review
+            // blocker, round 5): a profile-authorized session is ad-hoc (no
+            // saved connection id), so without the freeze the key would
+            // follow the editable URL field for the whole session and a
+            // mid-session edit would reshuffle the history buckets.
+            // [spring-ai-mcp-inspector PATCH] A new session starts with no
+            // Save-created entry (owner review on PR #218, 2026-11-13).
+            sessionSaveCreatedConnectionIdRef.current = undefined;
+            setActiveHistoryConnectionId(historyKeyForConnection());
+            void connectMcpServer(undefined, 0, profileId);
+          }}
+        />
       </Suspense>
     );
   }
@@ -1609,7 +2307,19 @@ const App = () => {
           rects to fit the viewport at scrollY=0, and a 50vh sidebar leaves
           less than 200px for the stacked Tools panes below the wrapped tab
           bar — too little for the list and detail to both be usable with
-          their internal scrolling. */}
+          their internal scrolling. [spring-ai-mcp-inspector PATCH] Mobile
+          pre-connect sidebar (issue #230): before the first connect BOTH
+          cap classes are dropped (no vh cap below lg), so the sidebar grows
+          to its natural height and the URL input and the Connect button sit
+          in normal flow instead of a capped inner scroll area (at 375x812
+          the 30vh scroll area showed 113px of a 500px column: URL top 193
+          and Connect top 481 were out of view and a real click at Connect's
+          centre hit the floating theme bar; at 812x375 landscape the 50vh
+          sm: cap squeezed the pane to ~187px and put Connect back inside an
+          inner scroll). Once connected both caps return
+          (h-[30vh]) so the #58 contract (config/list/detail rects inside the
+          first 667px viewport at scrollY=0) keeps holding; the cap only
+          matters with tab content mounted, which never happens pre-connect. */}
       <div
         style={
           isCompactLayout
@@ -1621,12 +2331,19 @@ const App = () => {
                 transition: isSidebarDragging ? "none" : "width 0.15s",
               }
         }
-        className="bg-card border-border flex flex-col relative w-full lg:w-auto lg:border-r border-b lg:border-b-0 h-[30vh] sm:h-[50vh] lg:h-auto overflow-y-auto lg:overflow-y-visible"
+        className={`bg-card border-border flex flex-col relative w-full lg:w-auto lg:border-r border-b lg:border-b-0 ${
+          mcpClient ? "h-[30vh] sm:h-[50vh]" : ""
+        } lg:h-auto overflow-y-auto lg:overflow-y-visible`}
         data-testid="config-pane"
       >
         <Sidebar
           connectionStatus={connectionStatus}
           connectionError={connectionError}
+          // [spring-ai-mcp-inspector PATCH] Keep-alive observability props
+          // (#235, t_3925eae7).
+          keepAliveLastPingAt={keepAlive.lastPingAt}
+          keepAliveIsStale={keepAlive.isStale}
+          keepAliveObserved={keepAlive.observed}
           transportType={transportType}
           setTransportType={setTransportType}
           command={command}
@@ -1634,7 +2351,12 @@ const App = () => {
           args={args}
           setArgs={setArgs}
           sseUrl={sseUrl}
-          setSseUrl={setSseUrl}
+          setSseUrl={(value: string) => {
+            // [spring-ai-mcp-inspector PATCH] User edits win over the
+            // /config default (issue #374 E2E flake).
+            sseUrlTouchedRef.current = true;
+            setSseUrl(value);
+          }}
           env={env}
           setEnv={setEnv}
           config={config}
@@ -1647,20 +2369,49 @@ const App = () => {
           setOauthClientSecret={setOauthClientSecret}
           oauthScope={oauthScope}
           setOauthScope={setOauthScope}
-          onConnect={connectMcpServer}
-          onDisconnect={disconnectMcpServer}
+          // [spring-ai-mcp-inspector PATCH] Named auth profiles + D3 error
+          // banner (issue #54).
+          profiles={profiles}
+          onProfilesChange={handleProfilesChange}
+          activeProfileId={activeProfileId}
+          onActiveProfileChange={setActiveProfileId}
+          authError={authError}
+          // [spring-ai-mcp-inspector PATCH] Persistent history (#218):
+          // wrappers capture/release the history bucket key at connect and
+          // disconnect time (see handleConnect/handleDisconnect above).
+          // [spring-ai-mcp-inspector PATCH] issue #269 rework: onConnect
+          // is the shared validating handler; URL validation state is
+          // lifted to App so the canvas CTA validates under the same
+          // condition.
+          onConnect={handleConnectRequest}
+          urlError={urlError}
+          setUrlError={setUrlError}
+          urlTouched={urlTouched}
+          setUrlTouched={setUrlTouched}
+          onDisconnect={handleDisconnect}
+          onResetSession={resetSessionAndConnect}
           logLevel={logLevel}
           sendLogLevelRequest={sendLogLevelRequest}
           loggingSupported={!!serverCapabilities?.logging || false}
           connectionType={connectionType}
           setConnectionType={setConnectionType}
+          connectionTimeout={connectionTimeout}
+          setConnectionTimeout={setConnectionTimeout}
+          timeoutError={timeoutError}
+          validateConnectionTimeout={validateConnectionTimeout}
           serverImplementation={serverImplementation}
+          // [spring-ai-mcp-inspector PATCH] VersionBadge handshake snapshot.
+          initializeSnapshot={initializeSnapshot}
           // [spring-ai-mcp-inspector PATCH] Saved connections (#121).
           savedConnections={savedConnections}
           activeConnectionId={activeConnectionId}
           onSaveConnection={handleSaveConnection}
           onDeleteConnection={handleDeleteConnection}
           onSelectConnection={handleSelectConnection}
+          // [spring-ai-mcp-inspector PATCH] Stale auth-profile bindings (#267).
+          staleAuthProfileBindings={staleAuthProfileBindings}
+          onUnlinkAuthProfile={handleUnlinkAuthProfile}
+          onOpenAuthSettings={handleOpenAuthSettings}
         />
         {!isCompactLayout && (
           <div
@@ -1673,7 +2424,9 @@ const App = () => {
               width: 6,
               height: "100%",
               zIndex: 10,
-              background: isSidebarDragging ? "rgba(0,0,0,0.08)" : "transparent",
+              background: isSidebarDragging
+                ? "rgba(0,0,0,0.08)"
+                : "transparent",
             }}
             aria-label="Resize sidebar"
             data-testid="sidebar-drag-handle"
@@ -1690,18 +2443,29 @@ const App = () => {
               value={activeTab}
               className="w-full p-4"
               onValueChange={(value) => {
-                setActiveTab(value);
+                // [spring-ai-mcp-inspector PATCH] Tab state flows through the hashchange listener only (#200): the redundant synchronous setActiveTab is removed, the listener is the single source of truth. A controlled reproduction on the base commit (real Chromium, real clicks, CPU throttling up to 20x) found no trigger/panel divergence, so no race is claimed.
                 window.location.hash = value;
               }}
             >
-              {/* [spring-ai-mcp-inspector PATCH] Below `sm` (640px) the tab
-                  bar wraps instead of overflowing: the upstream TabsList base
-                  is `inline-flex h-9` with no wrap, so on a 375px viewport
-                  the trailing tabs (Sampling/Elicitations/Roots/Auth/Metadata)
-                  render off-screen with no scroll and no affordance. flex-wrap
-                  + h-auto let the triggers flow into rows; sm:h-9 +
-                  sm:flex-nowrap restore the single upstream row at >=640px. */}
-              <TabsList className="mb-4 py-0 flex-wrap h-auto sm:h-9 sm:flex-nowrap">
+              {/* [spring-ai-mcp-inspector PATCH] The tab bar wraps instead of
+                  overflowing at every viewport width. The upstream TabsList
+                  base is `inline-flex h-9` with no wrap, so at a 375px
+                  viewport the trailing tabs (Sampling/Elicitations/Roots/
+                  Auth/Metadata) rendered off-screen with no scroll and no
+                  affordance; flex-wrap + h-auto let the triggers flow into
+                  rows. The desktop `sm:h-9 sm:flex-nowrap` override that
+                  originally restored the single upstream row from 640px up
+                  is dropped (#275): with the local Timeline (#112) and Input
+                  Required (#253) entries the bar carries 13 triggers
+                  (~1320px), which overflows the 960px inspector column at
+                  1280x800, leaving trailing triggers unreachable while the
+                  page itself never scrolls horizontally, so nothing signals
+                  the loss. The wrapped row that Input Required adds (#253)
+                  was pushing the tools detail pane past the 375x667 fold
+                  (InspectorUiIT ResponsiveLayout), so the bar's bottom
+                  margin is mb-2 below `sm`; the upstream mb-4 spacing
+                  applies from `sm` up. */}
+              <TabsList className="mb-2 py-0 flex-wrap h-auto sm:mb-4">
                 <TabsTrigger
                   value="resources"
                   disabled={!serverCapabilities?.resources}
@@ -1723,49 +2487,15 @@ const App = () => {
                   <Hammer className="w-4 h-4 mr-2" />
                   Tools
                 </TabsTrigger>
-                {/* [spring-ai-mcp-inspector PATCH] The disabled trigger has
-                    pointer-events:none (components/ui/tabs.tsx), so the tooltip
-                    and the native title must live on a live wrapper span, and
-                    aria-label on the same wrapper keeps the reason reachable
-                    for assistive tech. tabIndex keeps the wrapper reachable by
-                    keyboard: Radix TooltipTrigger does not make a plain span
-                    focusable, and the disabled trigger itself never receives
-                    focus. The enabled branch stays unchanged. */}
-                {serverCapabilities?.tasks ? (
-                  <TabsTrigger value="tasks">
-                    <ListTodo className="w-4 h-4 mr-2" />
-                    Tasks
-                  </TabsTrigger>
-                ) : (
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span
-                          className="pointer-events-auto inline-flex items-center"
-                          tabIndex={0}
-                          title={MCP_TASKS_DISABLED_HINT}
-                          aria-label={MCP_TASKS_DISABLED_HINT}
-                        >
-                          <TabsTrigger value="tasks" disabled>
-                            <ListTodo className="w-4 h-4 mr-2" />
-                            Tasks
-                          </TabsTrigger>
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom" className="max-w-xs text-center">
-                        This server does not support MCP Tasks.{" "}
-                        <a
-                          href={MCP_TASKS_DOCS_URL}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="underline"
-                        >
-                          MCP Tasks documentation
-                        </a>
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                )}
+                {/* [spring-ai-mcp-inspector PATCH] The Tasks trigger is always
+                    rendered and enabled: without the capability the Tasks
+                    panel itself shows the issue #212 capability-gap body, so
+                    the tab stays reachable and explains its empty state
+                    inline instead of needing a hover affordance. */}
+                <TabsTrigger value="tasks">
+                  <ListTodo className="w-4 h-4 mr-2" />
+                  Tasks
+                </TabsTrigger>
                 <TabsTrigger value="apps">
                   <AppWindow className="w-4 h-4 mr-2" />
                   Apps
@@ -1792,6 +2522,18 @@ const App = () => {
                     </span>
                   )}
                 </TabsTrigger>
+                {/* [spring-ai-mcp-inspector PATCH] SEP-2322 input_required
+                    panel (#253): pending input_required chains with a badge,
+                    mirroring the elicitations trigger. */}
+                <TabsTrigger value="input-required" className="relative">
+                  <MessageSquarePlus className="w-4 h-4 mr-2" />
+                  Input Required
+                  {pendingInputChains.length > 0 && (
+                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center">
+                      {pendingInputChains.length}
+                    </span>
+                  )}
+                </TabsTrigger>
                 <TabsTrigger value="roots">
                   <FolderTree className="w-4 h-4 mr-2" />
                   Roots
@@ -1809,12 +2551,19 @@ const App = () => {
                   <Bell className="w-4 h-4 mr-2" />
                   Timeline
                 </TabsTrigger>
+                {/* [spring-ai-mcp-inspector PATCH] Clients tab (#120): live
+                    client connection registry from the recording transports. */}
+                <TabsTrigger value="clients">
+                  <Users className="w-4 h-4 mr-2" />
+                  Clients
+                </TabsTrigger>
               </TabsList>
 
               <div className="w-full">
                 {!serverCapabilities?.resources &&
                 !serverCapabilities?.prompts &&
-                !serverCapabilities?.tools ? (
+                !serverCapabilities?.tools &&
+                !serverCapabilities?.tasks?.list ? (
                   <>
                     <div className="flex items-center justify-center p-4">
                       <p className="text-lg text-gray-500 dark:text-gray-400">
@@ -1822,6 +2571,29 @@ const App = () => {
                         capabilities
                       </p>
                     </div>
+                    {/* [spring-ai-mcp-inspector PATCH] Show the tasks empty
+                        state even when the server has no capabilities at all,
+                        so the issue #212 message stays reachable. */}
+                    {activeTab === "tasks" && (
+                      <TasksTab
+                        activeTab={activeTab}
+                        tasks={tasks}
+                        tasksSupported={false}
+                        listTasks={() => {}}
+                        clearTasks={() => {}}
+                        cancelTask={cancelTask}
+                        cancelSupported={false}
+                        getTask={async () => {
+                          throw new Error(
+                            "tasks/get requires the tasks capability",
+                          );
+                        }}
+                        selectedTask={selectedTask}
+                        setSelectedTask={setSelectedTask}
+                        error={errors.tasks}
+                        nextCursor={nextTaskCursor}
+                      />
+                    )}
                     <PingTab
                       // [spring-ai-mcp-inspector PATCH] Ping inline feedback (#232): return Promise for await
                       onPingClick={() =>
@@ -1862,6 +2634,9 @@ const App = () => {
                       selectedResource={selectedResource}
                       setSelectedResource={(resource) => {
                         clearError("resources");
+                        // [spring-ai-mcp-inspector PATCH]: keep the guard
+                        // ref in sync with the selection (#344).
+                        selectedResourceRef.current = resource;
                         setSelectedResource(resource);
                       }}
                       resourceSubscriptionsSupported={
@@ -1887,7 +2662,11 @@ const App = () => {
                       prompts={prompts}
                       listPrompts={() => {
                         clearError("prompts");
-                        listPrompts();
+                        // [spring-ai-mcp-inspector PATCH] sendMCPRequest
+                        // already renders the failure as the prompts error
+                        // alert; swallow its rethrow so the dropped promise
+                        // cannot become an unhandledrejection (#276).
+                        swallowLoggedMcpError(listPrompts());
                       }}
                       clearPrompts={() => {
                         setPrompts([]);
@@ -1895,7 +2674,10 @@ const App = () => {
                       }}
                       getPrompt={(name, args) => {
                         clearError("prompts");
-                        getPrompt(name, args);
+                        // [spring-ai-mcp-inspector PATCH] Same as
+                        // listPrompts: error already surfaced via
+                        // errors.prompts; swallow the rethrow (#276).
+                        swallowLoggedMcpError(getPrompt(name, args));
                       }}
                       selectedPrompt={selectedPrompt}
                       setSelectedPrompt={(prompt) => {
@@ -1940,7 +2722,7 @@ const App = () => {
                         const calledTool = tools.find(
                           (tool) => tool.name === name,
                         );
-                        if (calledTool && hasAppResourceUri(calledTool)) {
+                        if (calledTool && hasUIMetadata(calledTool)) {
                           setPrefilledAppsToolCall({
                             id: ++prefilledAppsToolCallIdRef.current,
                             toolName: name,
@@ -1967,26 +2749,51 @@ const App = () => {
                         clearError("resources");
                         readResource(uri);
                       }}
+                      // [spring-ai-mcp-inspector PATCH] ui-app-detection:
+                      // "Open as App" navigates to Apps tab and preselects
+                      // the tool (no auto-run; result is absent).
+                      onOpenAsApp={(tool: Tool) => {
+                        setPrefilledAppsToolCall({
+                          id: ++prefilledAppsToolCallIdRef.current,
+                          toolName: tool.name,
+                          params: {},
+                        });
+                        setActiveTab("apps");
+                      }}
                     />
+                    {/* [spring-ai-mcp-inspector PATCH] The Tasks tab always
+                        renders; tasksSupported drives the capability-gap body
+                        and stops all tasks/* polling (issue #212). */}
                     <TasksTab
-                      tasks={tasks}
-                      listTasks={() => {
-                        clearError("tasks");
-                        listTasks();
-                      }}
-                      clearTasks={() => {
-                        setTasks([]);
-                        setNextTaskCursor(undefined);
-                      }}
-                      cancelTask={cancelTask}
-                      selectedTask={selectedTask}
-                      setSelectedTask={(task) => {
-                        clearError("tasks");
-                        setSelectedTask(task);
-                      }}
-                      error={errors.tasks}
-                      nextCursor={nextTaskCursor}
-                    />
+                        activeTab={activeTab}
+                        tasks={tasks}
+                        tasksSupported={!!serverCapabilities?.tasks?.list}
+                        listTasks={() => {
+                          clearError("tasks");
+                          listTasks();
+                        }}
+                        clearTasks={() => {
+                          setTasks([]);
+                          setNextTaskCursor(undefined);
+                        }}
+                        cancelTask={cancelTask}
+                        cancelSupported={!!serverCapabilities?.tasks?.cancel}
+                        getTask={getTask}
+                        selectedTask={selectedTask}
+                        setSelectedTask={(task) => {
+                          clearError("tasks");
+                          setSelectedTask(task);
+                        }}
+                        error={errors.tasks}
+                        nextCursor={nextTaskCursor}
+                        updateTask={(task) => {
+                          setTasks((prev) =>
+                            prev.map((t) =>
+                              t.taskId === task.taskId ? task : t,
+                            ),
+                          );
+                        }}
+                      />
                     <AppsTab
                       sandboxPath={`${getMCPProxyAddress(config)}/sandbox`}
                       tools={tools}
@@ -2037,6 +2844,13 @@ const App = () => {
                       pendingRequests={pendingElicitationRequests}
                       onResolve={handleResolveElicitation}
                     />
+                    {/* [spring-ai-mcp-inspector PATCH] SEP-2322 input_required
+                        panel (#253). */}
+                    <InputRequiredTab
+                      pendingChains={pendingInputChains}
+                      onSubmit={handleInputRequiredSubmit}
+                      onCancel={handleInputRequiredCancel}
+                    />
                     <RootsTab
                       roots={roots}
                       setRoots={setRoots}
@@ -2048,7 +2862,11 @@ const App = () => {
                       onMetadataChange={handleMetadataChange}
                     />
                     {/* [spring-ai-mcp-inspector PATCH] Timeline tab (#112). */}
-                    <TimelineTab />
+                    {/* [spring-ai-mcp-inspector PATCH] keep-alive resolves the proxy-side session id */}
+                    <TimelineTab sessionId={proxySessionId} />
+                    {/* [spring-ai-mcp-inspector PATCH] Clients tab (#120): live
+                        client connection registry from the recording transports. */}
+                    <ClientsTab />
                   </>
                 )}
               </div>
@@ -2066,6 +2884,34 @@ const App = () => {
               <p className="text-lg text-gray-500 dark:text-gray-400">
                 Connect to an MCP server to start inspecting
               </p>
+              {/* [spring-ai-mcp-inspector PATCH] Empty-state Connect CTA
+                  (issue #269): the landing page needs a primary connect
+                  affordance; it routes through the same validated handler
+                  as the sidebar CTA, so an empty or invalid server URL
+                  disables the button and shows the URL validation error
+                  instead of connecting. */}
+              <Button
+                data-testid="empty-state-connect-button"
+                onClick={handleConnectRequest}
+                disabled={
+                  (transportType !== "stdio" && !!urlError) ||
+                  (connectionType === "proxy" && !!timeoutError)
+                }
+              >
+                <Play className="w-4 h-4 mr-2" />
+                Connect
+              </Button>
+              {/* [spring-ai-mcp-inspector PATCH] issue #269 rework: surface
+                  the shared URL validation error next to the canvas CTA. */}
+              {urlError && (
+                <p
+                  className="text-xs text-red-500"
+                  role="alert"
+                  data-testid="empty-state-url-error"
+                >
+                  {urlError}
+                </p>
+              )}
               <div className="flex items-center gap-2">
                 <p className="text-sm text-muted-foreground">
                   Need to configure authentication?
@@ -2114,6 +2960,7 @@ const App = () => {
               serverNotifications={notifications}
               onClearHistory={clearRequestHistory}
               onClearNotifications={handleClearNotifications}
+              sessionId={proxySessionId}
             />
           </div>
         </div>

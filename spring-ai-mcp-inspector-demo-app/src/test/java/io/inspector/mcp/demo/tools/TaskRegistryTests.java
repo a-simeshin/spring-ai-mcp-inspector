@@ -9,9 +9,13 @@
  */
 package io.inspector.mcp.demo.tools;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 
+import io.inspector.mcp.core.task.TaskHandle;
 import io.inspector.mcp.demo.tools.TaskRegistry.Entry;
 
 import org.assertj.core.api.Assertions;
@@ -164,6 +168,18 @@ class TaskRegistryTests {
 	}
 
 	@Test
+	void taskServiceHandleCarriesKeepAliveUrl() throws Exception {
+		// given
+		final Entry entry = registry.createTask(Duration.ofMinutes(1), 2, "demo://task/status");
+
+		// when: the TaskService view is what the proxy's tasks/get answers from
+		final TaskHandle handle = registry.getTask(entry.taskId);
+
+		// then: the keep-alive URI must survive into the handle (issue #182 AC5)
+		Assertions.assertThat(handle.keepAlive()).isEqualTo("demo://task/status");
+	}
+
+	@Test
 	void evictExpiredTasksRemovesTerminalEntriesPastTtl() {
 		// given: several tasks in different states
 		final Duration shortTtl = Duration.ofMillis(50);
@@ -229,16 +245,20 @@ class TaskRegistryTests {
 	}
 
 	@Test
-	void evictionMeasuredFromCompletionNotCreation() throws Exception {
-		// given: task with a 400ms TTL completed 200ms after creation
+	void evictionMeasuredFromCompletionNotCreation() {
+		// given: registry on a mutable clock, so the sweeper's time base advances in
+		// exact steps instead of relying on real sleeps
+		final MutableClock clock = new MutableClock();
+		final TaskRegistry registry = new TaskRegistry(clock);
+		// task with a 400ms TTL completed 200ms after creation
 		final Duration ttl = Duration.ofMillis(400);
 		final Entry entry = registry.createTask(ttl, 2, "demo://task/status");
-		Thread.sleep(200);
+		clock.advance(Duration.ofMillis(200));
 		registry.completeTask(entry.taskId, "done");
 
 		// when: sweep 250ms after completion (450ms after creation: past the TTL as
 		// measured from creation, but well inside the TTL measured from completion)
-		Thread.sleep(250);
+		clock.advance(Duration.ofMillis(250));
 		registry.evictExpiredTasks();
 
 		// then: still present, because eviction runs from the completion timestamp
@@ -247,7 +267,7 @@ class TaskRegistryTests {
 			.isNotNull();
 
 		// and when: sweep again after the full TTL has elapsed since completion
-		Thread.sleep(200);
+		clock.advance(Duration.ofMillis(200));
 		registry.evictExpiredTasks();
 
 		// then: evicted
@@ -287,6 +307,35 @@ class TaskRegistryTests {
 		Assertions.assertThat(registry.getTaskEntry(entry.taskId))
 			.as("keep-alive must prevent eviction of terminal task")
 			.isNotNull();
+	}
+
+	/**
+	 * Deterministic clock for TTL eviction tests: holds a single instant and advances
+	 * only when the test says so.
+	 */
+	private static final class MutableClock extends Clock {
+
+		private volatile Instant instant = Instant.EPOCH;
+
+		@Override
+		public ZoneId getZone() {
+			return ZoneOffset.UTC;
+		}
+
+		@Override
+		public Clock withZone(final ZoneId zone) {
+			return this;
+		}
+
+		@Override
+		public Instant instant() {
+			return this.instant;
+		}
+
+		void advance(final Duration by) {
+			this.instant = this.instant.plus(by);
+		}
+
 	}
 
 }

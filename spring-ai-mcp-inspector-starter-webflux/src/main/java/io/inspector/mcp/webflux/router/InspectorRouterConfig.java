@@ -30,7 +30,9 @@ import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 
 import io.inspector.mcp.core.config.McpInspectorProperties;
+import io.inspector.mcp.webflux.auth.AuthProfileHandler;
 import io.inspector.mcp.webflux.proxy.ProxyHandler;
+import io.inspector.mcp.webflux.proxy.SandboxProxyHandler;
 
 import static org.springframework.web.reactive.function.server.RequestPredicates.DELETE;
 import static org.springframework.web.reactive.function.server.RequestPredicates.GET;
@@ -72,11 +74,14 @@ public class InspectorRouterConfig {
 
 	@Bean
 	public RouterFunction<ServerResponse> inspectorRouter(final InspectorHandler handler,
-			final ObjectProvider<TimelineHandler> timelineHandler, final McpInspectorProperties properties) {
+			final ObjectProvider<TimelineHandler> timelineHandler,
+			final ObjectProvider<ClientConnectionsHandler> clientConnectionsHandler,
+			final McpInspectorProperties properties) {
 		final String basePath = properties.getPath();
 		final String apiPath = basePath + "/api";
 		final String indexPath = basePath + "/index.html";
 		final TimelineHandler timeline = timelineHandler.getIfAvailable();
+		final ClientConnectionsHandler clientConnections = clientConnectionsHandler.getIfAvailable();
 		RouterFunction<ServerResponse> router = route(GET(basePath),
 				(req) -> ServerResponse.temporaryRedirect(indexRedirect(req, indexPath)).build())
 			.andRoute(GET(basePath + "/"),
@@ -99,6 +104,7 @@ public class InspectorRouterConfig {
 			.andRoute(POST(apiPath + "/jsonrpc/respond"), handler::respond)
 			.andRoute(GET(apiPath + "/events"), handler::events)
 			.andRoute(GET(apiPath + "/roots"), handler::getRoots)
+			.andRoute(GET(apiPath + "/keepalive"), handler::keepalive)
 			.andRoute(PUT(apiPath + "/roots"), handler::putRoots)
 			.andRoute(POST(apiPath + "/oauth/initiate"), handler::oauthInitiate)
 			.andRoute(GET(apiPath + "/oauth/callback"), handler::oauthCallback)
@@ -108,8 +114,35 @@ public class InspectorRouterConfig {
 			// route must be claimed before the /** resource catch-all below.
 			router = router.andRoute(GET(apiPath + "/timeline"), timeline::query);
 		}
+		if (clientConnections != null) {
+			// Same path and payload contract as the WebMVC
+			// ClientConnectionsController; the route must be claimed before the
+			// /** resource catch-all below.
+			router = router.andRoute(GET(apiPath + "/client-connections"), clientConnections::snapshot);
+		}
 		return router.and(RouterFunctions.resources(basePath + "/**", UI_ROOT,
 				(resource, headers) -> headers.setCacheControl(ASSET_CACHE_CONTROL)));
+	}
+
+	/**
+	 * Owner-scoped auth-profile routes (D2/D8): POST/GET/PUT/DELETE
+	 * {@code /auth-profile[/{profileId}]} + GET {@code /prefill} + POST
+	 * {@code /{profileId}/exchange}. Declared as a separate {@link RouterFunction} bean —
+	 * Boot combines every router bean into the single handler mapping.
+	 * @param authProfileHandler the auth-profile handler
+	 * @param properties the inspector properties
+	 * @return the router function for the auth-profile endpoints
+	 */
+	@Bean
+	public RouterFunction<ServerResponse> authProfileRouter(final AuthProfileHandler authProfileHandler,
+			final McpInspectorProperties properties) {
+		final String apiPath = properties.getPath() + "/api";
+		return route(POST(apiPath + "/auth-profile"), authProfileHandler::register)
+			.andRoute(GET(apiPath + "/auth-profile"), authProfileHandler::list)
+			.andRoute(GET(apiPath + "/auth-profile/prefill"), authProfileHandler::prefill)
+			.andRoute(PUT(apiPath + "/auth-profile/{profileId}"), authProfileHandler::update)
+			.andRoute(DELETE(apiPath + "/auth-profile/{profileId}"), authProfileHandler::delete)
+			.andRoute(POST(apiPath + "/auth-profile/{profileId}/exchange"), authProfileHandler::exchange);
 	}
 
 	/**
@@ -129,14 +162,16 @@ public class InspectorRouterConfig {
 	 * Upstream-compatible proxy routes. Lives on a sibling prefix ({@code path + "-api"})
 	 * to keep the v1 inspector contract intact.
 	 * @param proxy the proxy handler bean
+	 * @param sandboxProxy the sandbox proxy handler bean
 	 * @param properties the inspector configuration properties
 	 * @return the router function for proxy endpoints
 	 */
 	@Bean
 	public RouterFunction<ServerResponse> inspectorProxyRouter(final ProxyHandler proxy,
-			final McpInspectorProperties properties) {
+			final SandboxProxyHandler sandboxProxy, final McpInspectorProperties properties) {
 		final String proxyBase = properties.getProxyPath();
 		return route(GET(proxyBase + "/health"), proxy::health).andRoute(GET(proxyBase + "/config"), proxy::config)
+			.andRoute(GET(proxyBase + "/sandbox"), sandboxProxy::serveSandbox)
 			.andRoute(POST(proxyBase + "/fetch"), proxy::fetch)
 			.andRoute(GET(proxyBase + "/sse"), proxy::openSse)
 			.andRoute(GET(proxyBase + "/stdio"), proxy::openStdio)

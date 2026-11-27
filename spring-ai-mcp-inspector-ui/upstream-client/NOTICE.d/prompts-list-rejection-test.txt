@@ -1,0 +1,9 @@
+src/__tests__/App.promptsListUnhandledRejection.test.tsx — App-level pin for
+the prompts/list fire-and-forget wiring (issue #276): renders App with a
+mocked useConnection whose prompts/list rejects, drives the PromptsTab
+listPrompts prop and asserts that sendMCPRequest's rethrow is swallowed by
+the swallowLoggedMcpError wrapper at the App wiring: the prompts error is
+still surfaced to the tab and the test run leaves no unhandled promise
+rejection for Jest's own unhandled-rejection detection to fail on (two
+macrotasks give that detection room to fire). Fails if only the wrapper
+around listPrompts() in App.tsx regresses.

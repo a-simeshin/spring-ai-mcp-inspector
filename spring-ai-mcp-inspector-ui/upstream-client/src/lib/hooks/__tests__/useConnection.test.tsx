@@ -1,10 +1,21 @@
+// [spring-ai-mcp-inspector PATCH] owner-session isolation and auth-profile tests
+// [spring-ai-mcp-inspector PATCH] Regression tests for connect state hygiene (NOTICE.d/stale-connect-status-fix.txt).
+// [spring-ai-mcp-inspector PATCH] useConnection proxy session id capture tests (#235).
+// [spring-ai-mcp-inspector PATCH] Connection timeout param forwarding tests (connection-timeout.txt).
 import { renderHook, act } from "@testing-library/react";
 import { useConnection } from "../useConnection";
+// [spring-ai-mcp-inspector PATCH] History persistence regression tests (#218).
 import { z } from "zod/v3";
+
+// [spring-ai-mcp-inspector PATCH] history-error-styling: hook-level tests for
+// isError producer-path in requestHistory (#195).
 import {
   ClientRequest,
   CreateTaskResultSchema,
+  ErrorCode,
   JSONRPCMessage,
+  ListTasksResultSchema,
+  CancelTaskResultSchema,
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 import type {
@@ -24,17 +35,24 @@ import {
   ElicitResult,
   ElicitRequest,
 } from "@modelcontextprotocol/sdk/types.js";
-import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
+import {
+  auth,
+  UnauthorizedError,
+} from "@modelcontextprotocol/sdk/client/auth.js";
 import { discoverScopes } from "../../auth";
 import { CustomHeaders } from "../../types/customHeaders";
+import { loadHistory } from "../../persistentHistory";
+import { ProxyErrorDto } from "../../connectionErrors";
 
-// Mock fetch
-global.fetch = jest.fn().mockResolvedValue({
-  json: () => Promise.resolve({ status: "ok" }),
-  headers: {
-    get: jest.fn().mockReturnValue(null),
-  },
-});
+// Mock fetch - return a fresh Response for each call
+global.fetch = jest.fn().mockImplementation(() =>
+  Promise.resolve(
+    new Response(JSON.stringify({ status: "ok" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })
+  )
+);
 
 // Mock the SDK dependencies
 const mockRequest = jest.fn().mockResolvedValue({ test: "response" });
@@ -42,7 +60,7 @@ const mockClient = {
   request: mockRequest,
   notification: jest.fn(),
   connect: jest.fn().mockResolvedValue(undefined),
-  close: jest.fn(),
+  close: jest.fn().mockResolvedValue(undefined),
   getServerCapabilities: jest.fn(),
   getServerVersion: jest.fn(),
   getInstructions: jest.fn(),
@@ -56,21 +74,25 @@ const mockSSETransport: {
   url: URL | undefined;
   options: SSEClientTransportOptions | undefined;
   onmessage?: (message: JSONRPCMessage) => void;
+  onerror?: (error: Error) => void;
 } = {
   start: jest.fn(),
   url: undefined,
   options: undefined,
   onmessage: undefined,
+  onerror: undefined,
 };
 
 const mockStreamableHTTPTransport: {
   start: jest.Mock;
   url: URL | undefined;
   options: SSEClientTransportOptions | undefined;
+  terminateSession: jest.Mock;
 } = {
   start: jest.fn(),
   url: undefined,
   options: undefined,
+  terminateSession: jest.fn(),
 };
 
 jest.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
@@ -113,6 +135,7 @@ jest.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => {
     StreamableHTTPClientTransport: jest.fn((url, options) => {
       mockStreamableHTTPTransport.url = url;
       mockStreamableHTTPTransport.options = options;
+      mockStreamableHTTPTransport.terminateSession = jest.fn().mockResolvedValue(undefined);
       return mockStreamableHTTPTransport;
     }),
   };
@@ -145,6 +168,7 @@ jest.mock("../../auth", () => ({
   InspectorOAuthClientProvider: jest.fn().mockImplementation(() => ({
     tokens: jest.fn().mockResolvedValue({ access_token: "mock-token" }),
     redirectUrl: "http://localhost:3000/oauth/callback",
+    clear: jest.fn(),
   })),
   clearClientInformationFromSessionStorage: jest.fn(),
   saveClientInformationToSessionStorage: jest.fn(),
@@ -987,6 +1011,101 @@ describe("useConnection", () => {
     });
   });
 
+  describe("Connection timeout", () => {
+    const SSEClientTransport = jest.requireMock(
+      "@modelcontextprotocol/sdk/client/sse.js",
+    ).SSEClientTransport;
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    test("omits connectionTimeout param when not provided", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const url = SSEClientTransport.mock.calls[0][0] as URL;
+      expect(url.searchParams.has("connectionTimeout")).toBe(false);
+    });
+
+    test("omits connectionTimeout param when empty string", async () => {
+      const props = { ...defaultProps, connectionTimeout: "" };
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const url = SSEClientTransport.mock.calls[0][0] as URL;
+      expect(url.searchParams.has("connectionTimeout")).toBe(false);
+    });
+
+    test("forwards connectionTimeout param as seconds when set", async () => {
+      const props = { ...defaultProps, connectionTimeout: "60" };
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const url = SSEClientTransport.mock.calls[0][0] as URL;
+      expect(url.searchParams.get("connectionTimeout")).toBe("60");
+    });
+
+    test("trims whitespace from connectionTimeout before forwarding", async () => {
+      const props = { ...defaultProps, connectionTimeout: "  45  " };
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const url = SSEClientTransport.mock.calls[0][0] as URL;
+      expect(url.searchParams.get("connectionTimeout")).toBe("45");
+    });
+
+    test("applies to stdio transport type", async () => {
+      const props = {
+        ...defaultProps,
+        transportType: "stdio" as const,
+        command: "node",
+        args: "server.js",
+        connectionTimeout: "15",
+      };
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const url = SSEClientTransport.mock.calls[0][0] as URL;
+      expect(url.searchParams.get("connectionTimeout")).toBe("15");
+      expect(url.searchParams.get("command")).toBe("node");
+    });
+
+    test("applies to streamable-http transport type", async () => {
+      const StreamableHTTPClientTransport = jest.requireMock(
+        "@modelcontextprotocol/sdk/client/streamableHttp.js",
+      ).StreamableHTTPClientTransport;
+      const props = {
+        ...defaultProps,
+        transportType: "streamable-http" as const,
+        connectionTimeout: "20",
+      };
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const url = StreamableHTTPClientTransport.mock.calls[0][0] as URL;
+      expect(url.searchParams.get("connectionTimeout")).toBe("20");
+    });
+  });
+
   describe("Proxy Authentication Headers", () => {
     beforeEach(() => {
       jest.clearAllMocks();
@@ -1048,6 +1167,61 @@ describe("useConnection", () => {
       expect(
         (global.fetch as jest.Mock).mock.calls[1][1].headers,
       ).toHaveProperty("X-MCP-Proxy-Auth", "Bearer test-proxy-token");
+    });
+
+    // [spring-ai-mcp-inspector PATCH] case-insensitive header merge regression
+    // (#299): the SDK materializes requestInit.headers into a Headers instance
+    // (lowercase names) before invoking eventSourceInit.fetch, so merging that
+    // source with the proxy auth record via Object.assign produced two names
+    // differing only in case (x-mcp-proxy-auth + X-MCP-Proxy-Auth). The
+    // browser joined the pair into "Bearer t, Bearer t" and the proxy
+    // answered 401. NOTICE.d/proxy-header-case-merge.txt.
+    test("merges Headers source and proxy auth record into one case-insensitive key", async () => {
+      const propsWithProxyAuth = {
+        ...defaultProps,
+        connectionType: "proxy" as const,
+        config: {
+          ...DEFAULT_INSPECTOR_CONFIG,
+          MCP_PROXY_AUTH_TOKEN: {
+            ...DEFAULT_INSPECTOR_CONFIG.MCP_PROXY_AUTH_TOKEN,
+            value: "test-proxy-token",
+          },
+        },
+      };
+
+      const { result } = renderHook(() => useConnection(propsWithProxyAuth));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const transportFetch = mockSSETransport.options?.eventSourceInit?.fetch;
+      expect(transportFetch).toBeDefined();
+
+      (global.fetch as jest.Mock).mockClear();
+      await transportFetch?.("http://test.com", {
+        // What the SDK really passes: a Headers instance built from
+        // requestInit.headers, so every name arrives lowercased.
+        headers: new Headers({
+          accept: "text/event-stream",
+          "x-mcp-proxy-auth": "Bearer test-proxy-token",
+        }),
+        cache: "no-store",
+        mode: "cors",
+        signal: new AbortController().signal,
+        redirect: "follow",
+        credentials: "include",
+      });
+
+      const outgoing = (global.fetch as jest.Mock).mock.calls[
+        (global.fetch as jest.Mock).mock.calls.length - 1
+      ];
+      const outgoingHeaders = outgoing[1].headers as Record<string, string>;
+      const authKeys = Object.keys(outgoingHeaders).filter(
+        (key) => key.toLowerCase() === "x-mcp-proxy-auth",
+      );
+      expect(authKeys).toHaveLength(1);
+      expect(outgoingHeaders[authKeys[0]]).toBe("Bearer test-proxy-token");
     });
 
     test("does NOT send X-MCP-Proxy-Auth header when proxy auth token is configured for direct connectionType", async () => {
@@ -1220,6 +1394,215 @@ describe("useConnection", () => {
       expect(
         mockStreamableHTTPTransport.options?.requestInit?.headers,
       ).toHaveProperty("X-MCP-Proxy-Auth", "Bearer test-proxy-token");
+    });
+
+    test("preserves SDK Headers instance through the streamable fetch wrapper", async () => {
+      const propsWithStreamableHttp = {
+        ...defaultProps,
+        connectionType: "proxy" as const,
+        transportType: "streamable-http" as const,
+        config: {
+          ...DEFAULT_INSPECTOR_CONFIG,
+          MCP_PROXY_AUTH_TOKEN: {
+            ...DEFAULT_INSPECTOR_CONFIG.MCP_PROXY_AUTH_TOKEN,
+            value: "test-proxy-token",
+          },
+        },
+      };
+
+      const { result } = renderHook(() =>
+        useConnection(propsWithStreamableHttp),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const streamableFetch = mockStreamableHTTPTransport.options
+        ?.fetch as
+        | ((
+            url: string | URL | globalThis.Request,
+            init?: RequestInit,
+          ) => Promise<Response>)
+        | undefined;
+      expect(streamableFetch).toBeDefined();
+
+      // The SDK hands the proxied streamable fetch an init whose headers is a
+      // real Headers instance (content-type, accept, session/protocol). A plain
+      // `{...init.headers}` spread silently drops every entry; the wrapper must
+      // normalize it and keep the SDK headers while merging our auth + proxy
+      // headers in.
+      (global.fetch as jest.Mock).mockClear();
+      const sdkHeaders = new Headers({
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-session-id": "abc",
+      });
+
+      const testUrl = "http://test.com/mcp";
+      await streamableFetch?.(testUrl, {
+        method: "POST",
+        headers: sdkHeaders,
+        body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list" }),
+      });
+
+      const sent = (global.fetch as jest.Mock).mock.calls.at(-1)?.[1].headers;
+      expect(sent).toHaveProperty("content-type", "application/json");
+      expect(sent).toHaveProperty(
+        "accept",
+        "application/json, text/event-stream",
+      );
+      expect(sent).toHaveProperty("mcp-session-id", "abc");
+      expect(sent).toHaveProperty(
+        "X-MCP-Proxy-Auth",
+        "Bearer test-proxy-token",
+      );
+    });
+  });
+
+  describe("Proxy Session Id Capture", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockSSETransport.url = undefined;
+      mockSSETransport.options = undefined;
+      mockStreamableHTTPTransport.url = undefined;
+      mockStreamableHTTPTransport.options = undefined;
+    });
+
+    test("captures the proxy session id from the SSE POST endpoint URL (?sessionId=...)", async () => {
+      const props = {
+        ...defaultProps,
+        connectionType: "proxy" as const,
+        transportType: "sse" as const,
+      };
+
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const transportFetch = mockSSETransport.options?.fetch as (
+        url: string | URL | globalThis.Request,
+        init?: RequestInit,
+      ) => Promise<Response>;
+      expect(transportFetch).toBeDefined();
+
+      await act(async () => {
+        await transportFetch(
+          "http://proxy.example/message?sessionId=proxy-sse-sid-1",
+          { method: "POST" },
+        );
+      });
+
+      // The keep-alive endpoints resolve the proxy-side session id announced in
+      // the endpoint event, NOT the upstream mcp-session-id.
+      expect(result.current.proxySessionId).toBe("proxy-sse-sid-1");
+    });
+
+    test("captures the proxy session id from the streamable mcp-session-id response header", async () => {
+      const props = {
+        ...defaultProps,
+        connectionType: "proxy" as const,
+        transportType: "streamable-http" as const,
+      };
+
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const transportFetch = mockStreamableHTTPTransport.options?.fetch as (
+        url: string | URL | globalThis.Request,
+        init?: RequestInit,
+      ) => Promise<Response>;
+      expect(transportFetch).toBeDefined();
+
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        headers: new Headers({ "mcp-session-id": "proxy-stream-sid-1" }),
+      });
+
+      await act(async () => {
+        await transportFetch("http://proxy.example/mcp?url=http://upstream", {
+          method: "POST",
+        });
+      });
+
+      expect(result.current.proxySessionId).toBe("proxy-stream-sid-1");
+    });
+
+    test("sse proxy fetch wrapper preserves the SDK request headers (regression: dropped Content-Type caused 415)", async () => {
+      const props = {
+        ...defaultProps,
+        connectionType: "proxy" as const,
+        transportType: "sse" as const,
+      };
+
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const transportFetch = mockSSETransport.options?.fetch as (
+        url: string | URL | globalThis.Request,
+        init?: RequestInit,
+      ) => Promise<Response>;
+
+      await act(async () => {
+        await transportFetch("http://proxy.example/message?sessionId=proxy-sse-sid-9", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+            "X-SDK-Trace": "sdk-1",
+          },
+        });
+      });
+
+      const sent = (global.fetch as jest.Mock).mock.calls.at(-1)?.[1].headers;
+      expect(sent).toHaveProperty("Content-Type", "application/json");
+      expect(sent).toHaveProperty("Accept", "text/event-stream");
+      expect(sent).toHaveProperty("X-SDK-Trace", "sdk-1");
+      expect(result.current.proxySessionId).toBe("proxy-sse-sid-9");
+    });
+
+    test("stdio proxy fetch wrapper preserves the SDK request headers (regression: dropped Content-Type caused 415)", async () => {
+      const props = {
+        ...defaultProps,
+        connectionType: "proxy" as const,
+        transportType: "stdio" as const,
+        command: "test-command",
+        args: "test-args",
+        env: {},
+      };
+
+      const { result } = renderHook(() => useConnection(props));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      const transportFetch = mockSSETransport.options?.fetch as (
+        url: string | URL | globalThis.Request,
+        init?: RequestInit,
+      ) => Promise<Response>;
+
+      await act(async () => {
+        await transportFetch("http://proxy.example/stdio?command=test-command", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-SDK-Trace": "sdk-2",
+          },
+        });
+      });
+
+      const sent = (global.fetch as jest.Mock).mock.calls.at(-1)?.[1].headers;
+      expect(sent).toHaveProperty("Content-Type", "application/json");
+      expect(sent).toHaveProperty("X-SDK-Trace", "sdk-2");
     });
   });
 
@@ -1440,6 +1823,63 @@ describe("useConnection", () => {
       expect(mockSSETransport.url?.searchParams.get("transportType")).toBe(
         "sse",
       );
+    });
+
+    test("appends the activeProfileId to the first proxy connect URL", async () => {
+      // given : a named auth profile is active
+      const profileProps = {
+        ...defaultProps,
+        activeProfileId: "pid-active",
+      };
+
+      const { result } = renderHook(() => useConnection(profileProps));
+
+      // when : the first connect happens
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      // then : the very first proxy URL carries the active profileId
+      expect(mockSSETransport.url?.searchParams.get("profileId")).toBe(
+        "pid-active",
+      );
+    });
+
+    test("D9B callback wire: profileIdOverride wins over the stale activeProfileId on the first connect", async () => {
+      // given : the hook still holds a stale/previous active id, and the OAuth2
+      // callback has just returned a brand-new profileId before the state
+      // re-rendered
+      const profileProps = {
+        ...defaultProps,
+        activeProfileId: "pid-stale",
+      };
+
+      const { result } = renderHook(() => useConnection(profileProps));
+
+      // when : the very first connect is issued with the freshly returned
+      // profileId override
+      await act(async () => {
+        await result.current.connect(undefined, 0, "pid-new");
+      });
+
+      // then : the first proxy URL carries the newly returned profileId, NOT
+      // the stale active id
+      expect(mockSSETransport.url?.searchParams.get("profileId")).toBe(
+        "pid-new",
+      );
+      expect(mockSSETransport.url?.searchParams.get("profileId")).not.toBe(
+        "pid-stale",
+      );
+    });
+
+    test("no profileId is appended when neither activeProfileId nor an override is present", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(mockSSETransport.url?.searchParams.get("profileId")).toBeNull();
     });
   });
 
@@ -1866,5 +2306,2073 @@ describe("useConnection", () => {
         }),
       );
     });
+
+    // Regression for NOTICE.d/stale-connect-status-fix.txt. No disconnect in
+    // between: on develop/2.x a failed reconnect left serverImplementation
+    // from the previous successful session in state.
+    test("a failed connect after a successful one clears serverImplementation without a disconnect in between", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      // Non-empty capabilities so the test also catches a removed
+      // setServerCapabilities(null) in the catch paths.
+      mockClient.getServerCapabilities.mockReturnValue({
+        completions: {},
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // Successful connect: serverImplementation is set
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("connected");
+      expect(result.current.serverImplementation).toEqual({
+        name: "test-server",
+        version: "1.0.0",
+      });
+
+      // Failed reconnect, no disconnect: the stale values must be gone.
+      // getServerVersion/Capabilities only answer for the first (successful)
+      // attempt; the second client.connect() call rejects before they run.
+      mockClient.getServerVersion.mockReturnValue(undefined);
+      mockClient.getServerCapabilities.mockReturnValue(undefined);
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // Outer catch (:1237 leg of the fix): the transport connect succeeds and
+    // serverImplementation is already set, then a later step in the same
+    // connect() throws. Without the clear in the outer catch the stale server
+    // info from THIS attempt would survive the "error" status.
+    test("a failure after the server info was set clears serverImplementation", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      // capabilities.logging + defaultLoggingLevel drive connect() into
+      // client.setLoggingLevel, which the mock client does not implement:
+      // the resulting TypeError reaches the outer catch after
+      // serverImplementation was already set for this attempt.
+      mockClient.getServerCapabilities.mockReturnValue({
+        logging: {},
+      });
+
+      const { result } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          defaultLoggingLevel: "info",
+        }),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // Inner catch, auth branch (:891 leg of the fix). The transport connect
+    // succeeds and serverImplementation is already set for THIS attempt, then
+    // getInstructions() throws UnauthorizedError while building the history
+    // entry. OAuth recovery gives up (auth() returns a non-AUTHORIZED
+    // result), so the auth branch of the inner catch must clear the server
+    // info set moments earlier by this same attempt.
+    test("a late unauthorized failure clears serverImplementation", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      mockClient.getServerCapabilities.mockReturnValue({
+        completions: {},
+      });
+
+      const { result } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          oauthScope: "read",
+        }),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      mockAuth.mockReset();
+      mockAuth.mockResolvedValue("EMAIL_REQUIRED");
+      mockClient.getInstructions.mockImplementationOnce(() => {
+        throw new UnauthorizedError("auth required");
+      });
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      // connectionFailureFromError maps this mock (no .code) to "unknown";
+      // the auth branch is still the one that ran (auth() was consulted).
+      expect(mockAuth).toHaveBeenCalled();
+      expect(result.current.connectionError).toEqual(
+        expect.objectContaining({ message: "auth required" }),
+      );
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // Inner catch, general branch (:908 leg of the fix). Same setup as above,
+    // but the late failure is a plain error, so the general branch of the
+    // inner catch (not the auth branch) must clear the server info.
+    test("a late failure after the server info was set clears serverImplementation", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      mockClient.getServerCapabilities.mockReturnValue({
+        completions: {},
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      mockClient.getInstructions.mockImplementationOnce(() => {
+        throw new Error("instructions failed");
+      });
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.connectionError).toEqual(
+        expect.objectContaining({ message: "instructions failed" }),
+      );
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // BLOCK 3 replacement, round 2 (see NOTICE.d/stale-connect-status-fix.txt).
+    // The earlier failed-then-failed variant passed on develop/2.x: both
+    // attempts rejected inside client.connect() before :1044 ever set server
+    // info, so the base also ended with serverImplementation=null (verified:
+    // base useConnection.ts + head tests = that test green). For a real
+    // failed-then-failed scenario the second attempt must fail LATE, after
+    // :1044 set this attempt's server info: the transport connects, then
+    // getInstructions() throws while building the history entry. On the base
+    // the general branch of the inner catch does not clear that server info,
+    // so it survives the "error" status; this PR clears it.
+    test("a late-failing second connect clears server info it just set after an earlier failed attempt", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({ completions: {} });
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("first attempt refused"),
+      );
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // First attempt: fails inside client.connect(), nothing set.
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.connectionError).toEqual(
+        expect.objectContaining({ message: "first attempt refused" }),
+      );
+      expect(result.current.serverImplementation).toBeNull();
+
+      // Second attempt: the transport connect succeeds and :1044 sets this
+      // attempt's server info, then getInstructions() throws. The server
+      // info of THIS attempt must not survive the error.
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      mockClient.getInstructions.mockImplementationOnce(() => {
+        throw new Error("instructions failed");
+      });
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.connectionError).toEqual(
+        expect.objectContaining({ message: "instructions failed" }),
+      );
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // Start-of-connect clears (:623-624 legs of the fix). The proxy health
+    // check fails before any catch path runs, so without the clears at the
+    // start of connect() the previous session's serverImplementation and
+    // serverCapabilities would survive an attempt that never reached the
+    // transport. Owner review round 4: the variant of this test on the old
+    // head asserted only serverImplementation, which is why the missing
+    // serverCapabilities clear went unnoticed.
+    test("a proxy health failure clears the stale server info", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      mockClient.getServerCapabilities.mockReturnValue({ completions: {} });
+
+      const { result } = renderHook(() =>
+        useConnection({ ...defaultProps, connectionType: "proxy" as const }),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+      expect(result.current.serverImplementation).toEqual({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      expect(result.current.serverCapabilities).toEqual({ completions: {} });
+
+      // Next attempt: the proxy health endpoint is unreachable.
+      (global.fetch as jest.Mock).mockRejectedValueOnce(
+        new Error("proxy is down"),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe(
+        "error-connecting-to-proxy",
+      );
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // Start-of-connect clears again, second early-return path named by the
+    // owner review: the proxy auth branch (toast + "error" status + return)
+    // never reaches a catch clear either, so the previous session's server
+    // info must already be gone by the time connect() started.
+    test("a proxy auth failure clears the stale server info", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      mockClient.getServerCapabilities.mockReturnValue({ completions: {} });
+
+      const { result } = renderHook(() =>
+        useConnection({ ...defaultProps, connectionType: "proxy" as const }),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      // Next attempt: the proxy rejects the call with the session-token error.
+      mockClient.connect.mockRejectedValueOnce(
+        new Error(
+          "Authentication required. Use the session token from the proxy server console",
+        ),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      expect(mockToast).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Proxy Authentication Required" }),
+      );
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // disconnect() clear (:1286 leg of the fix): on develop/2.x disconnect()
+    // left serverImplementation from the previous session in state.
+    test("a successful connect then disconnect clears serverImplementation", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+      mockClient.getServerCapabilities.mockReturnValue({
+        completions: {},
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      await act(async () => {
+        await result.current.disconnect();
+      });
+
+      expect(result.current.connectionStatus).toBe("disconnected");
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
+
+    // The failure banner is cleared on an explicit Disconnect, but by the
+    // SYNCHRONOUS reset at the top of disconnect() (the issue #54 banner
+    // patch, already on the base), not by anything after the awaits. This PR
+    // deliberately keeps no post-await setConnectionError(null): the next
+    // two tests pin why.
+    test("a disconnect after a failed connect clears the failure", async () => {
+      mockClient.getServerVersion.mockReturnValue(undefined);
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.connectionError).not.toBeNull();
+
+      await act(async () => {
+        await result.current.disconnect();
+      });
+
+      expect(result.current.connectionStatus).toBe("disconnected");
+      expect(result.current.connectionError).toBeNull();
+      expect(result.current.serverImplementation).toBeNull();
+    });
+
+    // The sidebar Reconnect button calls onDisconnect(); onConnect() without
+    // awaiting, so the two run interleaved. Two orderings exist and both must
+    // keep the failure: (a) the failure lands LAST, after the disconnect tail
+    // (this test, gated on the connect rejection), and (b) the failure lands
+    // FIRST and the disconnect tail lands last (the next test, gated on
+    // mcpClient.close()). A post-await setConnectionError(null) in
+    // disconnect() wipes the failure in ordering (b); that clear was removed
+    // after the owner review, and the synchronous banner reset at the top of
+    // disconnect() cannot race because it runs before onConnect() starts.
+    test("a failing reconnect is not wiped by the interleaved disconnect", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      // The reconnect attempt parks inside client.connect() until released.
+      let releaseReconnect: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        releaseReconnect = resolve;
+      });
+      mockClient.connect.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            gate.then(() =>
+              reject(new Error("connection to the MCP server was refused")),
+            );
+          }),
+      );
+
+      let reconnect: Promise<void> | undefined;
+      await act(async () => {
+        // Reconnect button: disconnect first, connect second, not awaited.
+        const d = result.current.disconnect();
+        reconnect = result.current.connect();
+        releaseReconnect();
+        await Promise.all([
+          d,
+          reconnect.catch(() => undefined),
+        ]);
+      });
+
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.connectionError).toEqual(
+        expect.objectContaining({
+          message: "connection to the MCP server was refused",
+        }),
+      );
+      expect(result.current.serverImplementation).toBeNull();
+    });
+
+    // Owner review BLOCK, round 4 (ordering (b) from the comment above): the
+    // REVERSE interleaving, failure first, disconnect tail last. The old head
+    // cleared connectionError at the END of disconnect(), after the awaits;
+    // with the new connect failing fast, that late clear landed after the
+    // failure and wiped it, so the sidebar alert (driven by connectionError
+    // alone) disappeared while the base kept it. Here mcpClient.close() is
+    // parked on a deferred promise, the reconnect rejects and fully settles
+    // while the disconnect is stuck, and only then is the disconnect tail
+    // released. On the pre-rework head this test fails with
+    // connectionError: null; with the post-await clear removed it passes.
+    test("a failing reconnect keeps its error when the failure lands before the disconnect finishes", async () => {
+      mockClient.getServerVersion.mockReturnValue({
+        name: "test-server",
+        version: "1.0.0",
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      // Park the disconnect mid-flight: for the SSE transport the first await
+      // in disconnect() is mcpClient.close(), so by the time it parks the
+      // synchronous banner reset at the top has already run, but the tail
+      // (status change, server info clears) has not.
+      let resumeDisconnect: () => void = () => {};
+      const disconnectGate = new Promise<void>((resolve) => {
+        resumeDisconnect = resolve;
+      });
+      mockClient.close.mockImplementationOnce(() => disconnectGate);
+
+      // The reconnect fails fast, while the disconnect is parked.
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+
+      await act(async () => {
+        // Reconnect button: disconnect first, connect second, not awaited.
+        const d = result.current.disconnect();
+        const c = result.current.connect();
+        // The failure lands first: the connect fully settles, catch included.
+        await c.catch(() => undefined);
+        // Only now does the disconnect tail run, after the failure.
+        resumeDisconnect();
+        await d;
+      });
+
+      // The failure must survive the disconnect tail: with the removed
+      // post-await clear reintroduced, connectionError would be null here.
+      expect(result.current.connectionError).toEqual(
+        expect.objectContaining({
+          message: "connection to the MCP server was refused",
+        }),
+      );
+      expect(result.current.serverImplementation).toBeNull();
+      expect(result.current.serverCapabilities).toBeNull();
+    });
   });
+
+  describe("history transport scoping via useConnection", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      localStorage.clear();
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+      localStorage.clear();
+    });
+
+    test("keeps separate requestHistory when transport changes with same URL", async () => {
+      const baseUrl = "http://localhost:8080/mcp";
+      const sseConnId = "sse:" + baseUrl;
+      const streamableConnId = "streamable-http:" + baseUrl;
+
+      // Hook 1: SSE transport - connectionId matches App.tsx convention
+      const { result: sseResult } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          sseUrl: baseUrl,
+          connectionId: sseConnId,
+        }),
+      );
+
+      await act(async () => {
+        await sseResult.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      // After connect, requestHistory has 1 entry (initialize handshake)
+      expect(sseResult.current.requestHistory).toHaveLength(1);
+
+      // Make a request via SSE hook - pushHistory appends to both
+      // in-memory state and localStorage.
+      const mockSchema: AnySchema = z
+        .object({ test: z.string() })
+        .passthrough() as unknown as AnySchema;
+      await act(async () => {
+        await sseResult.current.makeRequest(
+          { method: "ping", params: {} },
+          mockSchema,
+        );
+      });
+
+      // After connect(1) + makeRequest(1)
+      expect(sseResult.current.requestHistory).toHaveLength(2);
+
+      // Hook 2: Streamable HTTP transport - same URL, different transport prefix
+      const { result: streamableResult } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          sseUrl: baseUrl,
+          connectionId: streamableConnId,
+        }),
+      );
+
+      // Streamable HTTP starts with empty requestHistory - isolated from SSE
+      expect(streamableResult.current.requestHistory).toHaveLength(0);
+
+      // localStorage confirms transport-scoped isolation.
+      // SSE bucket has both initialize + ping (2 entries) stored under sseConnId.
+      expect(loadHistory(sseConnId)).toHaveLength(2);
+      expect(loadHistory(streamableConnId)).toHaveLength(0);
+
+      // RED on mutation: bare URL or "ephemeral" finds nothing under
+      // transport-scoped keys (the old `connectionId: sseUrl || "ephemeral"`
+      // mapping would produce these keys).
+      expect(loadHistory(baseUrl)).toHaveLength(0);
+      expect(loadHistory("ephemeral")).toHaveLength(0);
+    });
+
+    test("STDIO transport keeps separate history from SSE with same URL", async () => {
+      const baseUrl = "http://localhost:8080/mcp";
+      const sseConnId = "sse:" + baseUrl;
+      const stdioConnId = "stdio:my-server --port 8080";
+
+      // Hook 1: SSE
+      const { result: sseResult } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          sseUrl: baseUrl,
+          connectionId: sseConnId,
+        }),
+      );
+
+      await act(async () => {
+        await sseResult.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      const mockSchema: AnySchema = z
+        .object({ test: z.string() })
+        .passthrough() as unknown as AnySchema;
+      await act(async () => {
+        await sseResult.current.makeRequest(
+          { method: "ping", params: {} },
+          mockSchema,
+        );
+      });
+
+      // After connect(1) + makeRequest(1)
+      expect(sseResult.current.requestHistory).toHaveLength(2);
+
+      // Hook 2: STDIO - same port, different transport
+      const { result: stdioResult } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          transportType: "stdio",
+          sseUrl: baseUrl,
+          connectionId: stdioConnId,
+        }),
+      );
+
+      // STDIO history is empty - isolated from SSE
+      expect(stdioResult.current.requestHistory).toHaveLength(0);
+
+      // SSE localStorage bucket has 2 entries (initialize + ping)
+      expect(loadHistory(sseConnId)).toHaveLength(2);
+      expect(loadHistory(stdioConnId)).toHaveLength(0);
+    });
+  });
+
+  describe("requestHistory isError flag", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockRequest.mockResolvedValue({ test: "response" });
+    });
+
+    const setupAndConnect = async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+      await act(async () => {
+        await result.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      return result;
+    };
+
+    const pingRequest: ClientRequest = {
+      method: "ping",
+      params: {},
+    };
+
+    const pingSchema = z.object({
+      test: z.string(),
+    });
+    const pingSchemaAny: AnySchema = pingSchema as unknown as AnySchema;
+
+    it("sets isError=true when response contains isError: true", async () => {
+      mockRequest.mockResolvedValueOnce({ isError: true });
+      const result = await setupAndConnect();
+
+      await act(async () => {
+        await result.current.makeRequest(pingRequest, pingSchemaAny);
+      });
+
+      const history = result.current.requestHistory;
+      expect(history.length).toBeGreaterThan(0);
+      const lastEntry = history[history.length - 1];
+      expect(lastEntry.isError).toBe(true);
+      expect(JSON.parse(lastEntry.request)).toEqual({
+        method: "ping",
+        params: {},
+      });
+      expect(JSON.parse(lastEntry.response!)).toEqual({ isError: true });
+    });
+
+    it("sets isError=true when response contains error property (JSON-RPC error)", async () => {
+      const errorResponse = {
+        error: { code: ErrorCode.MethodNotFound, message: "Method not found" },
+      };
+      mockRequest.mockResolvedValueOnce(errorResponse);
+      const result = await setupAndConnect();
+
+      await act(async () => {
+        await result.current.makeRequest(pingRequest, pingSchemaAny);
+      });
+
+      const history = result.current.requestHistory;
+      const lastEntry = history[history.length - 1];
+      expect(lastEntry.isError).toBe(true);
+      expect(JSON.parse(lastEntry.response!)).toEqual(errorResponse);
+    });
+
+    it("sets isError=true when request throws (transport/protocol error)", async () => {
+      const error = new McpError(ErrorCode.InternalError, "transport failure");
+      mockRequest.mockRejectedValueOnce(error);
+      const result = await setupAndConnect();
+
+      await act(async () => {
+        try {
+          await result.current.makeRequest(pingRequest, pingSchemaAny);
+        } catch {
+          // expected
+        }
+      });
+
+      const history = result.current.requestHistory;
+      const lastEntry = history[history.length - 1];
+      expect(lastEntry.isError).toBe(true);
+      expect(JSON.parse(lastEntry.response!)).toEqual({
+        error: "MCP error -32603: transport failure",
+      });
+    });
+
+    it("sets isError=false on successful response", async () => {
+      const successResponse = { test: "response" };
+      mockRequest.mockResolvedValueOnce(successResponse);
+      const result = await setupAndConnect();
+
+      await act(async () => {
+        await result.current.makeRequest(pingRequest, pingSchemaAny);
+      });
+
+      const history = result.current.requestHistory;
+      const lastEntry = history[history.length - 1];
+      expect(lastEntry.isError).toBe(false);
+      expect(JSON.parse(lastEntry.response!)).toEqual(successResponse);
+    });
+
+    it("persists the isError flag with the stored entry", async () => {
+      const connId = "sse:http://localhost:8080-persist-error";
+      mockRequest.mockResolvedValueOnce({ isError: true });
+      const { result } = renderHook(() =>
+        useConnection({ ...defaultProps, connectionId: connId }),
+      );
+      await act(async () => {
+        await result.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      await act(async () => {
+        await result.current.makeRequest(pingRequest, pingSchemaAny);
+      });
+
+      const stored = loadHistory(connId);
+      expect(stored.length).toBeGreaterThan(0);
+      const lastStored = stored[stored.length - 1];
+      // Owner review on PR #218, 2026-11-13: the flag must reach the
+      // storage layer, not stay in-memory only.
+      expect(lastStored.isError).toBe(true);
+      expect(JSON.parse(lastStored.request)).toEqual({
+        method: "ping",
+        params: {},
+      });
+    });
+
+    it("persists successful entries with isError=false", async () => {
+      const connId = "sse:http://localhost:8080-persist-ok";
+      mockRequest.mockResolvedValueOnce({ test: "response" });
+      const { result } = renderHook(() =>
+        useConnection({ ...defaultProps, connectionId: connId }),
+      );
+      await act(async () => {
+        await result.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      await act(async () => {
+        await result.current.makeRequest(pingRequest, pingSchemaAny);
+      });
+
+      const stored = loadHistory(connId);
+      expect(stored.length).toBeGreaterThan(0);
+      const lastStored = stored[stored.length - 1];
+      expect(lastStored.isError).toBe(false);
+    });
+
+    it("sets isError=false for notifications without response", async () => {
+      const result = await setupAndConnect();
+
+      await act(async () => {
+        await result.current.sendNotification({
+          method: "notifications/initialized",
+        });
+      });
+
+      const history = result.current.requestHistory;
+      const lastEntry = history[history.length - 1];
+      expect(lastEntry.isError).toBe(false);
+      expect(JSON.parse(lastEntry.request)).toEqual({
+        method: "notifications/initialized",
+      });
+      expect(lastEntry.response).toBeUndefined();
+    });
+  });
+
+  describe("Auth profile connect override (issue #54, D9B)", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockClient.connect.mockResolvedValue(undefined);
+    });
+
+    test("connect applies a freshly authorized profileId override to the streamable URL even before the hook re-renders", async () => {
+      const propsWithStreamableHttp = {
+        ...defaultProps,
+        transportType: "streamable-http" as const,
+        sseUrl: "http://localhost:8080",
+        activeProfileId: null as string | null,
+      };
+
+      const { result } = renderHook(() =>
+        useConnection(propsWithStreamableHttp),
+      );
+
+      await act(async () => {
+        // The OAuth2 callback fires this with the just-returned profileId, before
+        // the activeProfileId state update has re-rendered the hook (closure still
+        // carries null). The override must win so the first connect is authorized.
+        await result.current.connect(undefined, 0, "fresh-profile-id");
+      });
+
+      expect(
+        mockStreamableHTTPTransport.url?.searchParams.get("profileId"),
+      ).toBe("fresh-profile-id");
+    });
+
+    test("connect without an override falls back to the closure activeProfileId", async () => {
+      const propsWithStreamableHttp = {
+        ...defaultProps,
+        transportType: "streamable-http" as const,
+        sseUrl: "http://localhost:8080",
+        activeProfileId: "closure-profile-id",
+      };
+
+      const { result } = renderHook(() =>
+        useConnection(propsWithStreamableHttp),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(
+        mockStreamableHTTPTransport.url?.searchParams.get("profileId"),
+      ).toBe("closure-profile-id");
+    });
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Regression tests for disconnect/reconnect
+  // clearing both error banners (issue #54, decision in t_04321ec1).
+  describe("Disconnect/reconnect clears error banners", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockClient.connect.mockResolvedValue(undefined);
+      mockAuth.mockResolvedValue("AUTHORIZED");
+    });
+
+    afterAll(() => {
+      mockClient.connect.mockResolvedValue(undefined);
+      mockAuth.mockResolvedValue("AUTHORIZED");
+    });
+
+    test("disconnect clears connectionError after a failed connect", async () => {
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(result.current.connectionError).not.toBeNull();
+
+      await act(async () => {
+        await result.current.disconnect();
+      });
+
+      expect(result.current.connectionError).toBeNull();
+    });
+
+    test("disconnect clears authError and connectionError (issue #54)", async () => {
+      // D3 ProxyErrorDto that the backend proxy emits on streamable 401/403.
+      const authErrorDto: ProxyErrorDto = {
+        status: 401,
+        code: "unauthorized",
+        reason: "The MCP server rejected the request as unauthenticated.",
+        guidance: "Verify the token/API key. OAuth2 profiles refresh and retry once automatically.",
+        url: "https://server/mcp",
+      };
+
+      // Arrange fetch: health check 200, then streamable 401 with D3 DTO body.
+      (global.fetch as jest.Mock)
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ status: "ok" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(authErrorDto), {
+            status: 401,
+            statusText: "Unauthorized",
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+
+      // Arrange: mockClient.connect calls transport.start() (like the real SDK).
+      mockClient.connect.mockImplementationOnce(async (transport) => {
+        await transport.start();
+      });
+
+      // Arrange: mockStreamableHTTPTransport.start triggers the streamable
+      // transport fetch path (streamableFetchWithDtoParse inside useConnection).
+      mockStreamableHTTPTransport.start.mockImplementationOnce(async () => {
+        const fetchFn = mockStreamableHTTPTransport.options?.fetch;
+        if (fetchFn) {
+          await fetchFn(mockStreamableHTTPTransport.url!, {
+            headers: {},
+          });
+        }
+      });
+
+      const propsWithStreamableHttp = {
+        ...defaultProps,
+        transportType: "streamable-http" as const,
+        sseUrl: "http://localhost:8080",
+      };
+
+      const { result } = renderHook(() =>
+        useConnection(propsWithStreamableHttp),
+      );
+
+      // Act: connect. The transport fetch gets a 401 with the D3 DTO.
+      // streamableFetchWithDtoParse parses it and sets authError.
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      // Assert: authError is set from the real D3 response before disconnect.
+      // connectionError stays null because client.connect resolved (no transport
+      // error thrown), only the D3 authError was consumed.
+      expect(result.current.authError).toEqual(authErrorDto);
+
+      // Act: disconnect.
+      await act(async () => {
+        await result.current.disconnect();
+      });
+
+      // Assert: both error banners cleared.
+      expect(result.current.connectionError).toBeNull();
+      expect(result.current.authError).toBeNull();
+    });
+
+    test("reconnect after disconnect has no stale errors", async () => {
+      // First connect fails
+      mockClient.connect.mockRejectedValueOnce(
+        new Error("connection to the MCP server was refused"),
+      );
+      // Second connect succeeds
+      mockClient.connect.mockResolvedValueOnce(undefined);
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // Connect : fails
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionError).not.toBeNull();
+
+      // Disconnect : clears errors
+      await act(async () => {
+        await result.current.disconnect();
+      });
+      expect(result.current.connectionError).toBeNull();
+      expect(result.current.authError).toBeNull();
+
+      // Reconnect : succeeds, no stale error
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionError).toBeNull();
+      expect(result.current.authError).toBeNull();
+    });
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Transport death after connect: the proxy
+  // closes the downstream SSE stream once the upstream liveness probe fails
+  // (see NOTICE.d/transport-death-leaves-connected.txt). The SDK surfaces the
+  // closed stream as transport.onerror mid-session; without a handler the
+  // status stays "connected" forever while the upstream is dead.
+  describe("Transport death after connect", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      // Populate the server-info panel so the mid-session clear is observable.
+      mockClient.getServerVersion.mockReturnValue({
+        name: "demo-upstream",
+        version: "0.1.0",
+      });
+    });
+
+    afterEach(() => {
+      mockClient.getServerVersion.mockReset();
+      mockSSETransport.onerror = undefined;
+    });
+
+    test("leaves Connected when the transport reports an error after a successful connect", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      // Sanity: the happy path reached Connected with server info populated.
+      expect(result.current.connectionStatus).toBe("connected");
+      expect(result.current.serverImplementation).not.toBeNull();
+
+      // Act: the proxy closes the stream (the eventsource polyfill fires
+      // `error` and the SDK transport calls onerror) while the UI still
+      // believes it is connected.
+      act(() => {
+        mockSSETransport.onerror?.(
+          new SseError(0, "Connection closed by proxy", new ErrorEvent("error")),
+        );
+      });
+
+      // Assert: the status leaves Connected and lands in the error branch
+      // with a failure the sidebar banner can render, and the stale server
+      // info from the dead session is cleared.
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.connectionError).not.toBeNull();
+      expect(result.current.serverImplementation).toBeNull();
+    });
+
+    test("delegates to the transport's previous onerror handler before updating status", async () => {
+      // The SDK's Protocol.connect installs its own transport.onerror; the
+      // wrapper must call it first so the protocol error path stays alive.
+      const protocolOnError = jest.fn();
+      mockSSETransport.onerror = protocolOnError;
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+      // connect() wrapped the handler instead of dropping it.
+      expect(mockSSETransport.onerror).not.toBe(protocolOnError);
+
+      const failure = new SseError(
+        0,
+        "Connection closed by proxy",
+        new ErrorEvent("error"),
+      );
+      act(() => {
+        mockSSETransport.onerror?.(failure);
+      });
+
+      expect(protocolOnError).toHaveBeenCalledWith(failure);
+      expect(result.current.connectionStatus).toBe("error");
+    });
+  });
+  // [spring-ai-mcp-inspector PATCH] VersionBadge handshake capture
+  // (NOTICE.d/version-badge.txt): connect() must publish the initialize
+  // frame observed through the client's own request layer, without leaking
+  // the interception wrapper onto the client.
+  describe("VersionBadge handshake capture", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    test("captures the initialize handshake into initializeSnapshot", async () => {
+      // The real SDK client performs the handshake through its own request
+      // method inside connect(); simulate that on the mock client.
+      mockRequest.mockResolvedValueOnce({
+        protocolVersion: "2025-11-25",
+        serverInfo: { name: "demo-server", version: "1.2.3" },
+        capabilities: { tools: {} },
+      });
+      mockClient.connect.mockImplementationOnce(async function (
+        this: typeof mockClient,
+      ) {
+        await this.request(
+          {
+            method: "initialize",
+            params: { protocolVersion: "2026-07-28" },
+          } as never,
+          {} as never,
+        );
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+      await act(async () => {
+        await result.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(result.current.initializeSnapshot).toEqual({
+        clientRequestedVersion: "2026-07-28",
+        negotiatedVersion: "2025-11-25",
+        serverName: "demo-server",
+        serverVersion: "1.2.3",
+        capabilities: { tools: {} },
+      });
+    });
+
+    test("restores the original request method after connect", async () => {
+      // During the handshake the wrapper must be active...
+      mockClient.connect.mockImplementationOnce(async function (
+        this: typeof mockClient,
+      ) {
+        expect(this.request).not.toBe(mockRequest);
+      });
+      const { result } = renderHook(() => useConnection(defaultProps));
+      await act(async () => {
+        await result.current.connect();
+      });
+      // ...and afterwards the exact original jest.fn must be back, or mock
+      // assertions in later tests (toHaveBeenCalledWith) would break.
+      expect(mockClient.request).toBe(mockRequest);
+    });
+
+    test("ref-counts overlapping connects: only the last exit restores the original request", async () => {
+      // Production builds a fresh Client per connect, so two overlapping
+      // connects share one client only when the instance is reused, which is
+      // exactly what this module-level mockClient does. The pin (issue #79
+      // rework): the first exiting connect must NOT restore the original
+      // request while the second handshake is still wrapped; the last exit
+      // must bring back the exact original reference.
+      let resolveHsA: () => void;
+      const hsA = new Promise<void>((resolve) => {
+        resolveHsA = resolve;
+      });
+      let resolveHsB: () => void;
+      const hsB = new Promise<void>((resolve) => {
+        resolveHsB = resolve;
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // Attempt A parks inside its handshake.
+      mockClient.connect.mockReturnValueOnce(hsA);
+      const aPromise = result.current.connect();
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+
+      // Attempt B (reset bypasses the double-click guard) parks too: both
+      // handshakes now share the one wrapper on the reused client.
+      mockClient.connect.mockReturnValueOnce(hsB);
+      const bPromise = result.current.resetSessionAndConnect();
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      expect(mockClient.request).not.toBe(mockRequest);
+
+      // The FIRST exit (A) must not restore while B is still wrapped.
+      resolveHsA!();
+      await act(async () => {
+        await aPromise;
+      });
+      expect(mockClient.request).not.toBe(mockRequest);
+
+      // The LAST exit (B) restores the exact original reference.
+      resolveHsB!();
+      await act(async () => {
+        await bPromise;
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      expect(mockClient.request).toBe(mockRequest);
+    });
+
+    test("keeps a null snapshot when connect skips the handshake (resume)", async () => {
+      // connect() that performs no initialize frame: transport-level resume.
+      mockClient.connect.mockResolvedValueOnce(undefined);
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      // The VersionBadge shows its gray unknown state, not a stale snapshot.
+      expect(result.current.initializeSnapshot).toBeNull();
+    });
+  });
+});
+
+  // [spring-ai-mcp-inspector PATCH] Regression tests for PR #166 round 2.
+  // Blocker 1: connect() must NOT clear() the OAuth provider at the start.
+  // Before the fix, clear() ran in connect(), wiping tokens saved by the
+  // OAuth callback before the transport was built, so the first authenticated
+  // connect went out without a token and looped back to authorization.
+  describe("OAuth clear regression (PR #166)", () => {
+  const defaultProps: Parameters<typeof useConnection>[0] = {
+    transportType: "sse" as const,
+    command: "",
+    args: "",
+    sseUrl: "http://localhost:8080",
+    env: {},
+    config: DEFAULT_INSPECTOR_CONFIG,
+  };
+    let mockClear: jest.Mock;
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockClient.connect.mockResolvedValue(undefined);
+      mockClear = jest.fn();
+      // Provide a provider whose tokens() resolves to a real access_token,
+      // so the code path that injects the Authorization header is exercised.
+      const { InspectorOAuthClientProvider } = jest.requireMock("../../auth");
+      InspectorOAuthClientProvider.mockImplementation(() => ({
+        tokens: jest.fn().mockResolvedValue({ access_token: "test-token" }),
+        redirectUrl: "http://localhost:3000/oauth/callback",
+        clear: mockClear,
+      }));
+    });
+
+    afterEach(() => {
+      // Restore the default mock so other describe blocks see "mock-token".
+      const { InspectorOAuthClientProvider } = jest.requireMock("../../auth");
+      InspectorOAuthClientProvider.mockImplementation(() => ({
+        tokens: jest.fn().mockResolvedValue({ access_token: "mock-token" }),
+        redirectUrl: "http://localhost:3000/oauth/callback",
+        clear: jest.fn(),
+      }));
+    });
+
+    test("connect() does not call clear() on the OAuth provider", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      expect(mockClear).not.toHaveBeenCalled();
+    });
+
+    test("disconnect() does call clear() on the OAuth provider", async () => {
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      mockClear.mockClear();
+      await act(async () => {
+        await result.current.disconnect();
+      });
+
+      expect(mockClear).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Blocker 2: disconnect() must not throw when terminateSession() rejects
+  // with 404 (session already gone after a silent drop). Before the fix,
+  // the uncaught throw aborted the Reconnect handler before onConnect().
+  describe("disconnect swallows terminateSession 404 (PR #166)", () => {
+  const defaultProps: Parameters<typeof useConnection>[0] = {
+    transportType: "sse" as const,
+    command: "",
+    args: "",
+    sseUrl: "http://localhost:8080",
+    env: {},
+    config: DEFAULT_INSPECTOR_CONFIG,
+  };
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockClient.connect.mockResolvedValue(undefined);
+    });
+
+    test("disconnect resolves cleanly when terminateSession rejects", async () => {
+      // Set up a streamable-http connection so disconnect() calls terminateSession
+      const propsStreamable = {
+        ...defaultProps,
+        transportType: "streamable-http" as const,
+        config: {
+          ...DEFAULT_INSPECTOR_CONFIG,
+          MCP_PROXY_FULL_ADDRESS: {
+            ...DEFAULT_INSPECTOR_CONFIG.MCP_PROXY_FULL_ADDRESS,
+            value: "http://localhost:8080/mcp-inspector/mcp_proxy",
+          },
+        },
+      };
+
+      const { result } = renderHook(() => useConnection(propsStreamable));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      // Override terminateSession to reject (simulating 404/410)
+      mockStreamableHTTPTransport.terminateSession = jest
+        .fn()
+        .mockRejectedValue(new Error("404 Not Found"));
+
+      // disconnect must resolve, not throw
+      await act(async () => {
+        await expect(result.current.disconnect()).resolves.not.toThrow();
+      });
+
+      expect(result.current.connectionStatus).toBe("disconnected");
+    });
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Regression tests for PR #166 round 4.
+  // Blocker 1: stale completion after setLoggingLevel must not append history.
+  // Blocker 2: stale attempt must NOT clear connectingRef (A/B/C race).
+  // Blocker 3: OAuth failure must produce only ONE toast (Sidebar, not handleAuthError).
+  describe("PR #166 round 4 regression tests", () => {
+    const defaultProps: Parameters<typeof useConnection>[0] = {
+      transportType: "sse" as const,
+      command: "",
+      args: "",
+      sseUrl: "http://localhost:8080",
+      env: {},
+      config: DEFAULT_INSPECTOR_CONFIG,
+    };
+
+    let mockClear: jest.Mock;
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockClient.connect.mockResolvedValue(undefined);
+      mockClear = jest.fn();
+      const { InspectorOAuthClientProvider } = jest.requireMock("../../auth");
+      InspectorOAuthClientProvider.mockImplementation(() => ({
+        tokens: jest.fn().mockResolvedValue({ access_token: "test-token" }),
+        redirectUrl: "http://localhost:3000/oauth/callback",
+        clear: mockClear,
+      }));
+    });
+
+    afterEach(() => {
+      const { InspectorOAuthClientProvider } = jest.requireMock("../../auth");
+      InspectorOAuthClientProvider.mockImplementation(() => ({
+        tokens: jest.fn().mockResolvedValue({ access_token: "mock-token" }),
+        redirectUrl: "http://localhost:3000/oauth/callback",
+        clear: jest.fn(),
+      }));
+      // Top-level describe: the "useConnection" describe's own cleanup does
+      // not cover these tests, so an assigned setLoggingLevel leaks to tests
+      // that require it absent when randomize: true reorders the file
+      // (port of the 1.x fix, commit 7c48f92).
+      delete (mockClient as { setLoggingLevel?: unknown }).setLoggingLevel;
+    });
+
+    test("stale setLoggingLevel completion does not append history (exact count)", async () => {
+      // Regression (PR #166): a stale attempt whose setLoggingLevel resolves
+      // after a newer attempt started must not push a history entry.
+      // Strengthened from toBeLessThanOrEqual(1): with the guard the count is
+      // exactly A + B (2); without the guard at useConnection.ts the stale
+      // attempt appends a third entry.
+      const props = { ...defaultProps, defaultLoggingLevel: "info" as const };
+      const { result } = renderHook(() => useConnection(props));
+
+      mockClient.getServerCapabilities.mockReturnValue({ logging: {} });
+      mockClient.getServerVersion.mockReturnValue({ name: "test-server", version: "1.0" });
+      mockClient.setLoggingLevel = jest.fn().mockResolvedValue(undefined);
+
+      // Attempt A: connects, logging branch runs, one logging/setLevel entry.
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(
+        result.current.requestHistory.filter((e) =>
+          e.request.includes("logging/setLevel"),
+        ).length,
+      ).toBe(1);
+
+      // Attempt A2: same hook, setLoggingLevel now hangs.
+      let resolveLogging: () => void;
+      const loggingPromise = new Promise<void>((resolve) => {
+        resolveLogging = resolve;
+      });
+      mockClient.setLoggingLevel = jest.fn().mockReturnValue(loggingPromise);
+      const a2Promise = result.current.connect();
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+
+      // Attempt B via reset: bumps the generation; its own setLoggingLevel
+      // call resolves the same deferred promise below.
+      const bPromise = result.current.resetSessionAndConnect();
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+
+      resolveLogging!();
+      await act(async () => {
+        await a2Promise;
+        await bPromise;
+        await new Promise((r) => setTimeout(r, 0));
+      });
+
+      // Exactly A's and B's entries; the stale A2 appended nothing.
+      expect(
+        result.current.requestHistory.filter((e) =>
+          e.request.includes("logging/setLevel"),
+        ).length,
+      ).toBe(2);
+    });
+
+    test("stale OAuth failure does not overwrite the live session (generation guard)", async () => {
+      // Regression (PR #166): attempt A fails with 401 and awaits auth();
+      // while it waits, attempt B (reset) connects successfully. When A's
+      // auth() then REJECTS, A must not write error state over B's session.
+      const mockErrorEvent = new ErrorEvent("error", {
+        message: "Mock error event",
+      });
+      mockClient.connect.mockRejectedValueOnce(
+        new SseError(401, "Unauthorized", mockErrorEvent),
+      );
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // Make auth() hang so attempt A waits inside handleAuthError.
+      let rejectAuth: (reason?: unknown) => void;
+      const authPromise = new Promise<string>((_resolve, reject) => {
+        rejectAuth = reject;
+      });
+      // Record the moment attempt A actually enters auth(). Rejecting
+      // before A attached its `await` handler turns the rejection into a
+      // one-macrotask unhandled rejection (jest fails the test on that
+      // event even though the hook handles it a tick later); observed as
+      // a CI-only flake, so gate deterministically instead of on a timer.
+      let enteredAuth = false;
+      mockAuth.mockImplementation(() => {
+        enteredAuth = true;
+        return authPromise;
+      });
+
+      const aPromise = result.current.connect();
+      await act(async () => {
+        const deadline = Date.now() + 1000;
+        while (!enteredAuth && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 5));
+        }
+        expect(enteredAuth).toBe(true);
+        // One more turn so A attaches its await handler to authPromise.
+        await new Promise((r) => setTimeout(r, 0));
+      });
+
+      // Attempt B: reset and let it fully connect.
+      mockClient.connect.mockResolvedValue(undefined);
+      await act(async () => {
+        await result.current.resetSessionAndConnect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      // Now the stale attempt A's auth() rejects.
+      rejectAuth!(new Error("OAuth server error"));
+      await act(async () => {
+        await aPromise;
+        await new Promise((r) => setTimeout(r, 0));
+      });
+
+      // B's session survived the stale OAuth failure.
+      expect(result.current.connectionStatus).toBe("connected");
+      expect(result.current.connectionError).toBeNull();
+    });
+
+    test("stale attempt does not release connectingRef (A/B/C sequence)", async () => {
+      // Regression (PR #166): attempt A2 hangs mid-handshake (inside the
+      // try whose finally owns the guard release), reset starts B, then A2
+      // completes as stale. Its finally must NOT release connectingRef while
+      // B is still handshaking, or a third connect() (C) slips past the
+      // double-click guard. Observable: clients constructed before B is
+      // allowed to finish. With the guard C is blocked (1 client); without
+      // it C runs a full handshake (2 clients).
+      const { Client } = jest.requireMock(
+        "@modelcontextprotocol/sdk/client/index.js",
+      );
+      const propsStreamable = {
+        ...defaultProps,
+        transportType: "streamable-http" as const,
+      };
+      const { result } = renderHook(() => useConnection(propsStreamable));
+
+      // Attempt A: completes.
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+      expect(Client.mock.calls.length).toBe(1);
+
+      // Attempt A2: hangs inside the handshake (past the cleanup, inside
+      // the try/finally), so its finally runs when it completes as stale.
+      let resolveHsA2: () => void;
+      const hsA2 = new Promise<void>((resolve) => {
+        resolveHsA2 = resolve;
+      });
+      mockClient.connect.mockReturnValueOnce(hsA2);
+      const a2Promise = result.current.connect();
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+
+      // Attempt B (reset): also hangs inside its handshake.
+      let resolveHsB: () => void;
+      const hsB = new Promise<void>((resolve) => {
+        resolveHsB = resolve;
+      });
+      mockClient.connect.mockReturnValueOnce(hsB);
+      const bPromise = result.current.resetSessionAndConnect();
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+
+      // A2's handshake completes; A2 is stale and its finally runs now.
+      resolveHsA2!();
+      await act(async () => {
+        await a2Promise;
+      });
+
+      // Attempt C while B is still handshaking: the guard must hold.
+      // Every attempt constructs its own Client before its handshake, so by
+      // now A, A2 and B have built three; C must not add a fourth.
+      mockClient.connect.mockResolvedValue(undefined);
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(Client.mock.calls.length).toBe(3);
+
+      // Let B finish; it is the current attempt and completes without
+      // building another client.
+      resolveHsB!();
+      await act(async () => {
+        await bPromise;
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      expect(Client.mock.calls.length).toBe(3);
+      expect(result.current.connectionStatus).toBe("connected");
+    });
+
+    test("stale handshake closes its client (leak fix)", async () => {
+      // Regression (PR #166): when a stale handshake completes after a newer
+      // attempt started, the stale client must be closed. Removing the
+      // client.close() in the stale guard makes this test fail.
+      let resolveHandshake: () => void;
+      const handshake = new Promise<void>((resolve) => {
+        resolveHandshake = resolve;
+      });
+      mockClient.connect.mockReturnValueOnce(handshake);
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      // Attempt A: hangs inside client.connect.
+      const aPromise = result.current.connect();
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      expect(mockClient.close).not.toHaveBeenCalled();
+
+      // Attempt B (reset) connects successfully.
+      mockClient.connect.mockResolvedValue(undefined);
+      await act(async () => {
+        await result.current.resetSessionAndConnect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+
+      // A's handshake completes; A is stale and must close its client.
+      resolveHandshake!();
+      await act(async () => {
+        await aPromise;
+        await new Promise((r) => setTimeout(r, 0));
+      });
+
+      expect(mockClient.close).toHaveBeenCalledTimes(1);
+    });
+
+    test("resetSessionAndConnect keeps the OAuth grant (no authProvider.clear())", async () => {
+      // Regression (PR #166): Reset targets the stale MCP session, not the
+      // OAuth grant; restoring authProvider.clear() here forces full
+      // re-authorization on every Reset and fails this test.
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      mockClear.mockClear();
+
+      await act(async () => {
+        await result.current.resetSessionAndConnect();
+      });
+
+      expect(mockClear).not.toHaveBeenCalled();
+      // The OAuth tokens themselves stay available (kept for the next connect).
+      const { InspectorOAuthClientProvider } = jest.requireMock("../../auth");
+      expect(InspectorOAuthClientProvider).toHaveBeenCalled();
+    });
+
+    test("post-handshake failure fires exactly one toast (outer catch)", async () => {
+      // Regression (PR #166): errors after the handshake (outer catch) never
+      // set connectionError, so the Sidebar toast cannot fire for them; the
+      // hook must toast directly, exactly once, instead of silently setting
+      // status=error with no visible feedback.
+      const props = { ...defaultProps, defaultLoggingLevel: "info" as const };
+      const { result } = renderHook(() => useConnection(props));
+
+      mockClient.getServerCapabilities.mockReturnValue({ logging: {} });
+      mockClient.getServerVersion.mockReturnValue({ name: "test-server", version: "1.0" });
+      mockClient.setLoggingLevel = jest
+        .fn()
+        .mockRejectedValue(new Error("post-handshake boom"));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+
+      expect(mockToast).toHaveBeenCalledTimes(1);
+      expect(mockToast.mock.calls[0][0]?.title).toBe("Connection error");
+      expect(result.current.connectionStatus).toBe("error");
+      expect(result.current.connectionError).toBeNull();
+    });
+
+    test("OAuth failure produces only one toast", async () => {
+      const mockErrorEvent = new ErrorEvent("error", {
+        message: "Mock error event",
+      });
+
+      // First connect fails with 401
+      mockClient.connect.mockRejectedValueOnce(
+        new SseError(401, "Unauthorized", mockErrorEvent),
+      );
+
+      // Make auth() reject (OAuth failure)
+      mockAuth.mockRejectedValueOnce(new Error("OAuth server error"));
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      // Wait for state updates
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+
+      // Only ONE toast should have been called (from Sidebar effect, not handleAuthError)
+      // The handleAuthError no longer calls toast; the Sidebar effect calls toast
+      // when connectionError is set.
+      // Note: the Sidebar component is not rendered here, so mockToast from
+      // the useToast mock in useConnection.test.tsx is the only one called.
+      // We expect 0 or 1 calls from handleAuthError (now 0 after the fix).
+      // The Sidebar test would show 1 call. Here we verify handleAuthError
+      // does not call toast directly.
+      const oauthToastCalls = mockToast.mock.calls.filter(
+        (call) => call[0]?.title === "OAuth Authentication Failed"
+      );
+      expect(oauthToastCalls.length).toBe(0);
+    });
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Regression test for the PR #166 round 3
+  // review finding: the OAuth retry runs as its own connect attempt
+  // (retryCount = 1) and, when it completes, owns the current generation.
+  // The finally used to release connectingRef only for retryCount === 0,
+  // and the outer attempt had already become stale by then, so a successful
+  // OAuth retry left the guard latched and every later connect() was
+  // silently swallowed until a page reload. Refs #157.
+  describe("PR #166 OAuth retry guard regression", () => {
+    const defaultProps: Parameters<typeof useConnection>[0] = {
+      transportType: "sse" as const,
+      command: "",
+      args: "",
+      sseUrl: "http://localhost:8080",
+      env: {},
+      config: DEFAULT_INSPECTOR_CONFIG,
+    };
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockClient.connect.mockResolvedValue(undefined);
+      mockAuth.mockResolvedValue("AUTHORIZED");
+    });
+
+    test("connect works again after a successful OAuth retry (guard released)", async () => {
+      const { Client } = jest.requireMock(
+        "@modelcontextprotocol/sdk/client/index.js",
+      );
+      const mockErrorEvent = new ErrorEvent("error", {
+        message: "Mock error event",
+      });
+
+      // First attempt: 401, auth() returns AUTHORIZED, the recursive retry
+      // (retryCount = 1) completes the handshake. Two Clients are built.
+      mockClient.connect.mockRejectedValueOnce(
+        new SseError(401, "Unauthorized", mockErrorEvent),
+      );
+      const { result } = renderHook(() => useConnection(defaultProps));
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(result.current.connectionStatus).toBe("connected");
+      expect(mockAuth).toHaveBeenCalledTimes(1);
+      expect(Client.mock.calls.length).toBe(2);
+
+      await act(async () => {
+        await result.current.disconnect();
+      });
+      expect(result.current.connectionStatus).toBe("disconnected");
+
+      // The completing retry must have released connectingRef: this connect()
+      // runs a fresh handshake (a third Client, status connected). With the
+      // guard still latched it is swallowed at the top of connect() and
+      // constructs nothing.
+      await act(async () => {
+        await result.current.connect();
+      });
+      expect(Client.mock.calls.length).toBe(3);
+      expect(result.current.connectionStatus).toBe("connected");
+    });
+    describe("history storage denial resilience through useConnection", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+      localStorage.clear();
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+      localStorage.clear();
+    });
+
+    test("requestHistory accumulates entries even when localStorage writes are denied", async () => {
+      // Deny setItem via Storage.prototype: readStore still works but writes
+      // are silently dropped. The in-memory requestHistory must survive.
+      jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+        throw new DOMException("blocked in private mode", "SecurityError");
+      });
+
+      const testConnId = "denial-test-conn";
+      const { result } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          connectionId: testConnId,
+        }),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      const mockSchema: AnySchema = z
+        .object({ test: z.string() })
+        .passthrough() as unknown as AnySchema;
+      await act(async () => {
+        await result.current.makeRequest(
+          { method: "ping", params: {} },
+          mockSchema,
+        );
+      });
+
+      // requestHistory remains usable despite localStorage denial.
+      // After connect(1) + makeRequest(1) = 2 entries.
+      expect(result.current.requestHistory).toHaveLength(2);
+    });
+
+    test("clearRequestHistory does not throw under localStorage denial", async () => {
+      const testConnId = "denial-test-conn";
+
+      // First, add some history normally
+      const { result } = renderHook(() =>
+        useConnection({
+          ...defaultProps,
+          connectionId: testConnId,
+        }),
+      );
+
+      await act(async () => {
+        await result.current.connect();
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      const mockSchema: AnySchema = z
+        .object({ test: z.string() })
+        .passthrough() as unknown as AnySchema;
+      await act(async () => {
+        await result.current.makeRequest(
+          { method: "ping", params: {} },
+          mockSchema,
+        );
+      });
+
+      // After connect(1) + makeRequest(1) = 2 entries
+      expect(result.current.requestHistory).toHaveLength(2);
+
+      // Deny setItem (used by clearHistory -> writeStore)
+      jest.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+        throw new DOMException("blocked in private mode", "SecurityError");
+      });
+
+      // clearRequestHistory must not throw
+      await act(async () => {
+        result.current.clearRequestHistory();
+      });
+
+      // In-memory history cleared
+      expect(result.current.requestHistory).toHaveLength(0);
+    });
+  });
+  // [spring-ai-mcp-inspector PATCH] Regression tests for tasks/* capability
+  // gating (issue #212, PR #214). These verify that:
+  //   - no wire request is sent when the operation sub-capability is absent
+  //   - a positive branch works when the capability IS advertised
+  //   - a genuine error from the server still surfaces (not swallowed)
+  describe("tasks capability gating", () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    test("listTasks sends no wire request when serverCapabilities is null", async () => {
+      mockClient.getServerCapabilities.mockReturnValue(null);
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      // Clear the call history from connect (initialize + capability push).
+      mockRequest.mockClear();
+
+      const listResult = await result.current.listTasks();
+      expect(listResult).toBeUndefined();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test("listTasks sends no wire request when tasks.list sub-capability is absent", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: {},
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      mockRequest.mockClear();
+
+      const listResult = await result.current.listTasks();
+      expect(listResult).toBeUndefined();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test("listTasks sends no wire request when tasks is absent from capabilities", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      mockRequest.mockClear();
+
+      const listResult = await result.current.listTasks();
+      expect(listResult).toBeUndefined();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test("listTasks sends tasks/list when tasks.list sub-capability is present", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {} },
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      mockRequest.mockClear();
+
+      await act(async () => {
+        await result.current.listTasks();
+      });
+
+      expect(mockRequest).toHaveBeenCalledWith(
+        { method: "tasks/list", params: { cursor: undefined } },
+        ListTasksResultSchema,
+        expect.any(Object),
+      );
+    });
+
+    test("listTasks surfaces genuine server error (not swallowed)", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {} },
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      mockRequest.mockClear();
+      mockRequest.mockRejectedValueOnce(new Error("tasks/list: Method not found"));
+
+      await act(async () => {
+        await expect(result.current.listTasks()).rejects.toThrow(
+          "tasks/list: Method not found",
+        );
+      });
+    });
+
+    test("cancelTask sends no wire request when tasks.cancel sub-capability is absent", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {} },
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      mockRequest.mockClear();
+
+      const cancelResult = await result.current.cancelTask("task-1");
+      expect(cancelResult).toBeUndefined();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    test("cancelTask sends tasks/cancel when tasks.cancel sub-capability is present", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {}, cancel: {} },
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      mockRequest.mockClear();
+
+      await act(async () => {
+        await result.current.cancelTask("task-1");
+      });
+
+      expect(mockRequest).toHaveBeenCalledWith(
+        { method: "tasks/cancel", params: { taskId: "task-1" } },
+        CancelTaskResultSchema,
+        expect.any(Object),
+      );
+    });
+
+    test("disconnect stops stale listTasks calls", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {} },
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      await act(async () => {
+        await result.current.disconnect();
+      });
+
+      mockRequest.mockClear();
+
+      // After disconnect, serverCapabilities is null: listTasks must be a no-op.
+      const listResult = await result.current.listTasks();
+      expect(listResult).toBeUndefined();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    // [spring-ai-mcp-inspector PATCH] Regression: delayed-close must not leak
+    // tasks/list, tasks/get or tasks/result during the disconnect window.
+    // The fix synchronously nulls serverCapabilitiesRef BEFORE awaiting close()
+    // (useConnection.ts:1283-1285), so any work that reads capabilities during
+    // the pending window must see null. The mutation that reverts lines
+    // 1283-1285 makes this test go red.
+    test("delayed close: no tasks/* requests during disconnect window", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {} },
+        tools: { listChanged: true },
+      });
+
+      // Hold close() open: disconnect will await this deferred promise.
+      let resolveClose!: () => void;
+      const closePromise = new Promise<void>((resolve) => {
+        resolveClose = resolve;
+      });
+      mockClient.close.mockReturnValue(closePromise);
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      // Baseline: listTasks works when capabilities are present.
+      mockRequest.mockClear();
+      await act(async () => {
+        await result.current.listTasks();
+      });
+      expect(mockRequest).toHaveBeenCalledWith(
+        { method: "tasks/list", params: { cursor: undefined } },
+        ListTasksResultSchema,
+        expect.any(Object),
+      );
+
+      // Clear wire log so we only observe the disconnect window.
+      mockRequest.mockClear();
+
+      // Disconnect WITHOUT awaiting: close() is deferred, so disconnect stays
+      // in its pending state while we check for leaked task requests.
+      let disconnectPromise: Promise<void>;
+      await act(async () => {
+        disconnectPromise = result.current.disconnect();
+      });
+
+      // At this point disconnect() is in-flight: the synchronous
+      // invalidation of serverCapabilitiesRef has run, but
+      // mcpClient.close() is still pending. Any stale work must see
+      // capabilities as null.
+      //
+      // Give React a tick to flush the state updates.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+
+      // Attempt to list tasks during the disconnect window.
+      const duringResult = await result.current.listTasks();
+      expect(duringResult).toBeUndefined();
+
+      // Cancel task during the disconnect window.
+      const cancelResult = await result.current.cancelTask("task-1");
+      expect(cancelResult).toBeUndefined();
+
+      // No tasks/* requests should have reached the wire.
+      const taskRequests = mockRequest.mock.calls
+        .map(([req]) => (req as { method: string }).method)
+        .filter(
+          (m) =>
+            m === "tasks/list" ||
+            m === "tasks/get" ||
+            m === "tasks/result",
+        );
+      expect(taskRequests).toEqual([]);
+
+      // Release the deferred close so the test doesn't leak.
+      resolveClose();
+      await act(async () => {
+        await disconnectPromise;
+      });
+    });
+  });
+
+    test("listTasks genuine failure shows toast notification", async () => {
+      mockClient.getServerCapabilities.mockReturnValue({
+        tasks: { listChanged: true, list: {} },
+        tools: { listChanged: true },
+      });
+
+      const { result } = renderHook(() => useConnection(defaultProps));
+
+      await act(async () => {
+        await result.current.connect();
+      });
+
+      mockRequest.mockClear();
+      mockRequest.mockRejectedValueOnce(new Error("tasks/list: Method not found"));
+
+      await act(async () => {
+        await expect(result.current.listTasks()).rejects.toThrow(
+          "tasks/list: Method not found",
+        );
+      });
+
+      // The toast must fire with the error message, not be swallowed.
+      expect(mockToast).toHaveBeenCalledWith({
+        title: "Error",
+        description: "tasks/list: Method not found",
+        variant: "destructive",
+      });
+    });
+
 });

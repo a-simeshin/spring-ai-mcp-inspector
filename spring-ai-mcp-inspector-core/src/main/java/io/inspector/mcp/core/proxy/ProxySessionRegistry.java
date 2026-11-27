@@ -19,8 +19,10 @@ package io.inspector.mcp.core.proxy;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +33,8 @@ import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.Order;
 import org.springframework.scheduling.annotation.Scheduled;
 
+import io.inspector.mcp.core.auth.AuthProfileStore;
+import io.inspector.mcp.core.auth.OAuth2AuthCodeTokenExchanger;
 import io.inspector.mcp.core.shutdown.ShutdownDrain;
 
 /**
@@ -65,6 +69,15 @@ import io.inspector.mcp.core.shutdown.ShutdownDrain;
  * application, and therefore in every context this starter configures, but not in a bare
  * {@code GenericApplicationContext} assembled by hand.
  *
+ * <p>
+ * Session cleanup contract: (a) {@link #closeSession(String)} is dead code on this branch
+ * it has no production caller per call graph analysis (t_ab43e563): it is documented and
+ * kept for API compatibility, do not delete; (b) {@link #removeAndClose(String)} is the
+ * canonical removal+teardown path that all internal eviction ({@link #closeAll()},
+ * {@link #reap()}) routes through; (c) {@link #put(ProxySession)} guarantees that a
+ * displaced same-key session is closed and that a post-{@code closeAll()} late put leaves
+ * no registry entry behind.
+ *
  * @author Artem Simeshin
  */
 public class ProxySessionRegistry implements ApplicationContextAware {
@@ -94,8 +107,40 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	private volatile boolean closed;
 
 	/**
+	 * Optional owner-scoped auth-profile store; when present, session teardown clears the
+	 * session's bound profile and the reaper sweeps expired profiles (D4).
+	 */
+	private volatile AuthProfileStore authProfileStore;
+
+	/** Optional auth-code exchanger whose expired states are swept by {@link #reap()}. */
+	private volatile OAuth2AuthCodeTokenExchanger authCodeExchanger;
+
+	/**
+	 * Sets the optional auth-profile store whose bound profiles are cleared with the
+	 * session and whose expired entries are swept by {@link #reap()}.
+	 * @param authProfileStore the store, or {@code null} to disable the hooks
+	 */
+	public void setAuthProfileStore(final AuthProfileStore authProfileStore) {
+		this.authProfileStore = authProfileStore;
+	}
+
+	/**
+	 * Sets the optional auth-code exchanger whose expired states are swept by
+	 * {@link #reap()} (D3 sweeper wiring).
+	 * @param authCodeExchanger the exchanger, or {@code null} to disable the sweep
+	 */
+	public void setAuthCodeExchanger(final OAuth2AuthCodeTokenExchanger authCodeExchanger) {
+		this.authCodeExchanger = authCodeExchanger;
+	}
+
+	/**
 	 * Adds {@code session} under {@code session.sessionId()}, unless the registry has
 	 * already been drained — in which case the session is closed immediately instead.
+	 *
+	 * <p>
+	 * If a session with the same id was already registered, it is displaced and closed
+	 * (transport torn down, bound auth profile cleared) before the new session takes its
+	 * place.
 	 *
 	 * <p>
 	 * The guard is not theoretical. A {@code GET /sse} that arrived just before shutdown
@@ -110,14 +155,20 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	 */
 	public void put(final ProxySession session) {
 		if (this.closed) {
-			session.close();
+			closeSession(session);
 			return;
 		}
-		this.sessions.put(session.sessionId(), session);
+		final ProxySession displaced = this.sessions.put(session.sessionId(), session);
+		if (displaced != null && displaced != session) {
+			closeSession(displaced);
+		}
 		if (this.closed) {
 			// Lost the race: closeAll() flipped the flag after our first check but swept
-			// before our put landed. Double-checking closes it without needing a lock.
-			removeAndClose(session.sessionId());
+			// before our put landed. Remove the entry so the registry does not retain a
+			// closed session, then close it. Conditional remove so we do not evict a
+			// newer replacement put by a concurrent thread.
+			this.sessions.remove(session.sessionId(), session);
+			closeSession(session);
 		}
 	}
 
@@ -143,8 +194,31 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 		if (session == null) {
 			return false;
 		}
-		session.close();
+		closeSession(session);
 		return true;
+	}
+
+	/**
+	 * Closes the session for {@code sessionId} (when registered) and clears its bound
+	 * auth profile from the store (D4 cleanup race fix): the early-closed
+	 * {@link #put(ProxySession)} path and {@link #removeAndClose(String)} both route
+	 * through the object-level {@link #closeSession(ProxySession)} helper so no session
+	 * teardown can leave a stale profile binding behind.
+	 * @param sessionId the session id to close and unbind
+	 */
+	public void closeSession(final String sessionId) {
+		final ProxySession session = (sessionId != null) ? this.sessions.get(sessionId) : null;
+		if (session != null) {
+			closeSession(session);
+		}
+	}
+
+	private void closeSession(final ProxySession session) {
+		final AuthProfileStore store = this.authProfileStore;
+		if (store != null && session.profileId() != null) {
+			store.clearBySession(session.sessionId());
+		}
+		session.close();
 	}
 
 	/**
@@ -215,6 +289,24 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	}
 
 	/**
+	 * Returns a snapshot of all active session IDs, intended for tests.
+	 * @return set of session IDs at the time of the call
+	 */
+	public Set<String> sessionIds() {
+		return Set.copyOf(this.sessions.keySet());
+	}
+
+	/**
+	 * Performs the given action for each session currently in the registry. The action
+	 * iterates the live {@link ConcurrentHashMap} values: callers must be prepared for
+	 * concurrent modification.
+	 * @param action the action to perform on each session (never {@code null})
+	 */
+	public void forEachSession(final Consumer<? super ProxySession> action) {
+		this.sessions.values().forEach(action);
+	}
+
+	/**
 	 * Sets the inactivity budget used by {@link #reap()}. Falls back to the 30m default
 	 * when {@code budget} is {@code null} or non-positive.
 	 * @param budget the idle budget after which a quiet session is evicted
@@ -238,9 +330,18 @@ public class ProxySessionRegistry implements ApplicationContextAware {
 	 * {@link #removeAndClose(String)} so the upstream transport is torn down and the
 	 * sinks are completed.
 	 */
+
 	@Scheduled(fixedDelayString = "${spring.ai.mcp.inspector.timeouts.reaper-interval:PT1M}")
 	public void reap() {
 		final Instant now = Instant.now();
+		final AuthProfileStore store = this.authProfileStore;
+		if (store != null) {
+			store.removeExpired(now);
+		}
+		final OAuth2AuthCodeTokenExchanger exchanger = this.authCodeExchanger;
+		if (exchanger != null) {
+			exchanger.removeExpiredStates(now);
+		}
 		final Duration budget = this.inactivityBudget;
 		for (final ProxySession session : this.sessions.values()) {
 			final boolean closed = session.isClosed();

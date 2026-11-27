@@ -1,17 +1,44 @@
 import { TabsContent } from "@/components/ui/tabs";
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useKeepAlive } from "@/lib/hooks/useKeepAlive";
+// [spring-ai-mcp-inspector PATCH] SEP-2322 input_required chain threading
+// for the Timeline (#253): client-side grouping of the server-recorded pairs.
+import {
+  threadInputRequiredChains,
+  summarizeChain,
+  ChainSourceEvent,
+} from "@/lib/timelineChains";
+import { isInputRequiredResult } from "@/lib/inputRequired";
+import {
+  LeakInfo,
+  LeakMatchType,
+  capLeakText,
+  onTimelineScrollTo,
+  parseLeakAnnotation,
+} from "@/lib/leakAnnotations";
+// [spring-ai-mcp-inspector PATCH] Common Spring AI 2.0 pitfalls hint panel
+// reachable from the Timeline view (t_406cfdce).
+import { SpringAiPitfallsPanel } from "./SpringAiPitfallsPanel";
 
 // [spring-ai-mcp-inspector PATCH] New TimelineTab — MCP event timeline panel (#112).
 // [spring-ai-mcp-inspector PATCH] Protocol-version negotiation badge on initialize
 // response rows (#129, #130). Renders _protocolNegotiation enrichment from
 // McpTrafficRecorder as a severity-colored badge and expanded detail block.
+// [spring-ai-mcp-inspector PATCH] Error highlighting for CallToolResult frames
+// with isError=true (#184). Renders the row with a distinct error color, a
+// "tool error" badge, and the server error text in the tooltip and expanded row.
+// [spring-ai-mcp-inspector PATCH] Exception-leak badge on error tool-result
+// rows (#251). Renders the _leak enrichment from ExceptionLeakDetector next to
+// the tool-error badge with three visually distinct styles (EXACT / NORMALIZED /
+// PARTIAL); the badge jumps to the correlated APP_LOG row in this timeline.
 
 type TimelineEventType =
   | "MCP_JSONRPC_REQUEST"
   | "MCP_JSONRPC_RESPONSE"
   | "MCP_JSONRPC_NOTIFICATION"
   | "MCP_STREAM_EVENT"
-  | "APP_LOG";
+  | "APP_LOG"
+  | "KEEP_ALIVE";
 
 // Mirrors io.inspector.mcp.core.timeline.TimelineEvent as serialized by the REST
 // API: flat metadata plus the raw JSON-RPC frame (MCP events) or a log-fields
@@ -41,6 +68,7 @@ const EVENT_COLORS: Record<TimelineEventType, string> = {
   MCP_JSONRPC_NOTIFICATION: "text-yellow-400 border-l-yellow-500",
   MCP_STREAM_EVENT: "text-purple-400 border-l-purple-500",
   APP_LOG: "text-gray-400 border-l-gray-500",
+  KEEP_ALIVE: "text-cyan-400 border-l-cyan-500",
 };
 
 const EVENT_BG: Record<TimelineEventType, string> = {
@@ -49,7 +77,12 @@ const EVENT_BG: Record<TimelineEventType, string> = {
   MCP_JSONRPC_NOTIFICATION: "bg-yellow-950/30",
   MCP_STREAM_EVENT: "bg-purple-950/30",
   APP_LOG: "bg-gray-950/30",
+  KEEP_ALIVE: "bg-cyan-950/30",
 };
+
+// Error colors for CallToolResult frames with isError=true (#184).
+const ERROR_COLOR = "text-red-400 border-l-red-500";
+const ERROR_BG = "bg-red-950/30";
 
 // Badge color per severity, per the decision record (t_9315a78c).
 const SEVERITY_BADGE: Record<ProtocolNegotiation["severity"], { text: string; color: string }> = {
@@ -57,6 +90,15 @@ const SEVERITY_BADGE: Record<ProtocolNegotiation["severity"], { text: string; co
   DOWNGRADE: { text: "v (downgrade)", color: "bg-amber-800 text-amber-200" },
   INCOMPATIBLE: { text: "! (incompatible)", color: "bg-red-800 text-red-200" },
   UNKNOWN: { text: "? (unknown)", color: "bg-gray-700 text-gray-400 border border-gray-500" },
+};
+
+// [spring-ai-mcp-inspector PATCH] Leak badge style per match tier (#251): the
+// three tiers must stay visually distinct at a glance (U2): EXACT is solid red
+// (the strongest claim), NORMALIZED is solid amber, PARTIAL is dashed gray.
+const LEAK_BADGE: Record<LeakMatchType, { text: string; color: string }> = {
+  EXACT: { text: "leak: exact", color: "bg-red-950 text-red-300 border border-red-500" },
+  NORMALIZED: { text: "leak: normalized", color: "bg-amber-950 text-amber-300 border border-amber-500" },
+  PARTIAL: { text: "leak: partial", color: "bg-gray-800 text-gray-300 border border-dashed border-gray-500" },
 };
 
 function formatTimestamp(ts: string): string {
@@ -87,6 +129,41 @@ function protocolNegotiationOf(payload: Record<string, unknown>): ProtocolNegoti
     affectedMethods,
     summary,
   };
+}
+
+// [spring-ai-mcp-inspector PATCH] SEP-2322: detects an input_required
+// CallToolResult frame (result.resultType === "input_required" with at least
+// one of inputRequests / requestState), reusing the client layer's detector.
+function isInputRequiredFrame(payload: Record<string, unknown>): boolean {
+  return isInputRequiredResult(payload["result"]);
+}
+
+// Detects whether a JSON-RPC response payload is a CallToolResult with isError=true.
+// The shape is { jsonrpc, id, result: { content: [...], isError: true } }.
+function isCallToolError(payload: Record<string, unknown>): boolean {
+  const result = payload["result"];
+  if (!result || typeof result !== "object") return false;
+  const obj = result as Record<string, unknown>;
+  return obj["isError"] === true;
+}
+
+// Extracts the first text content block from a CallToolResult error payload,
+// for use as the badge tooltip.
+function errorTextOf(payload: Record<string, unknown>): string | null {
+  const result = payload["result"];
+  if (!result || typeof result !== "object") return null;
+  const obj = result as Record<string, unknown>;
+  const content = obj["content"];
+  if (!Array.isArray(content)) return null;
+  for (const block of content) {
+    if (block && typeof block === "object") {
+      const b = block as Record<string, unknown>;
+      if (b["type"] === "text" && typeof b["text"] === "string") {
+        return b["text"];
+      }
+    }
+  }
+  return null;
 }
 
 function ProtocolBadge({ negotiation }: { negotiation: ProtocolNegotiation }) {
@@ -129,13 +206,132 @@ function ProtocolNegotiationBlock({ negotiation }: { negotiation: ProtocolNegoti
   );
 }
 
-function TimelineEventRow({ event }: { event: TimelineEvent }) {
+// [spring-ai-mcp-inspector PATCH] Expanded error detail for CallToolResult
+// isError=true rows (#184): the server-side error message rendered prominently
+// above the raw JSON dump, so the validator text is visible without hovering.
+function ToolErrorBlock({ text }: { text: string | null }) {
+  return (
+    <div className="mb-1 p-2 border border-red-800 rounded bg-red-950/40 text-red-300">
+      <div className="font-semibold text-red-200 mb-1">Tool error:</div>
+      <div data-testid="timeline-tool-error-message">
+        {text ?? "CallToolResult returned isError=true"}
+      </div>
+    </div>
+  );
+}
+
+// [spring-ai-mcp-inspector PATCH] Leak badge on error tool-result rows (#251):
+// clickable, jumps to the correlated APP_LOG row. The tooltip carries the tier
+// and the log message, capped at 200 chars so long payloads never bloat it.
+function LeakBadge({ leak, onJumpToLog }: { leak: LeakInfo; onJumpToLog: (eventId: string) => void }) {
+  const badge = LEAK_BADGE[leak.matchType] ?? LEAK_BADGE.PARTIAL;
+  const title = capLeakText(
+    `Error text leaked a logged exception (match: ${leak.matchType.toLowerCase()}${leak.verbatim ? ", verbatim" : ""}). ` +
+      `Click to jump to the log entry. ${leak.logMessage}`,
+  );
+  return (
+    <button
+      type="button"
+      data-testid={`timeline-leak-badge-${leak.matchType.toLowerCase()}`}
+      className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono cursor-pointer ${badge.color}`}
+      title={title}
+      onClick={(e) => {
+        // The row toggles its expanded state on click; the badge click is a jump.
+        e.stopPropagation();
+        onJumpToLog(leak.logEventId);
+      }}
+    >
+      {badge.text}
+    </button>
+  );
+}
+
+// [spring-ai-mcp-inspector PATCH] Expanded leak detail (#251): the matched log
+// metadata above the raw JSON dump. The log message is line-clamped and the
+// block never renders raw stack traces (only the engine-capped first line).
+function LeakDetailBlock({ leak, onJumpToLog }: { leak: LeakInfo; onJumpToLog: (eventId: string) => void }) {
+  return (
+    <div className="mb-1 p-2 border border-amber-700 rounded bg-amber-950/40 text-amber-200">
+      <div className="font-semibold text-amber-100 mb-1">
+        Exception leak (match: {leak.matchType.toLowerCase()}
+        {leak.verbatim ? ", verbatim" : ""}):
+      </div>
+      <div className="font-mono text-amber-200/90">
+        <div>logged at: {leak.logTimestamp}</div>
+        {leak.logThrowableClass && <div>exception: {leak.logThrowableClass}</div>}
+        <div
+          data-testid="timeline-leak-log-message"
+          className="whitespace-pre-wrap break-words line-clamp-2"
+          title={capLeakText(leak.logMessage)}
+        >
+          {leak.logMessage}
+        </div>
+        {leak.droppedCandidates > 0 && (
+          <div className="opacity-70">
+            +{leak.droppedCandidates} more matching log{" "}
+            {leak.droppedCandidates === 1 ? "entry" : "entries"} in the window
+          </div>
+        )}
+        <div className="mt-1">
+          <button
+            type="button"
+            data-testid="timeline-leak-jump-link"
+            className="underline text-amber-300 cursor-pointer"
+            onClick={(e) => {
+              e.stopPropagation();
+              onJumpToLog(leak.logEventId);
+            }}
+          >
+            Jump to log entry
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TimelineEventRow({
+  event,
+  onJumpToLog,
+  rowRef,
+}: {
+  event: TimelineEvent;
+  onJumpToLog: (eventId: string) => void;
+  rowRef?: (el: HTMLDivElement | null) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const type = event.type;
-  const colorClass = EVENT_COLORS[type] || "text-gray-400";
-  const bgClass = EVENT_BG[type] || "bg-gray-950/30";
-
   const payload = event.payload ?? {};
+
+  // [spring-ai-mcp-inspector PATCH] Protocol negotiation badge on initialize response rows.
+  const negotiation = type === "MCP_JSONRPC_RESPONSE" ? protocolNegotiationOf(payload) : null;
+
+  // [spring-ai-mcp-inspector PATCH] Error highlighting for CallToolResult isError=true (#184).
+  const isError = type === "MCP_JSONRPC_RESPONSE" && isCallToolError(payload);
+  const errorText = isError ? errorTextOf(payload) : null;
+
+  // [spring-ai-mcp-inspector PATCH] SEP-2322: input_required badge (#253).
+  const needsInput =
+    type === "MCP_JSONRPC_RESPONSE" && isInputRequiredFrame(payload);
+  // [spring-ai-mcp-inspector PATCH] Exception-leak annotation on error tool
+  // results (#251): parsed defensively, so a malformed node renders as absent.
+  const leak = isError ? parseLeakAnnotation(payload) : null;
+
+  // [spring-ai-mcp-inspector PATCH] Client-traffic provenance (#120): frames
+  // captured from the configured MCP clients carry side=client, the client
+  // name and the direction (from the client's perspective), so the inspector
+  // can tell client traffic apart from proxied server traffic.
+  const clientSide = payload["side"] === "client";
+  const clientName =
+    typeof payload["clientName"] === "string" ? payload["clientName"] : null;
+  const direction =
+    payload["direction"] === "in" || payload["direction"] === "out"
+      ? payload["direction"]
+      : null;
+
+  const colorClass = isError ? ERROR_COLOR : (EVENT_COLORS[type] || "text-gray-400");
+  const bgClass = isError ? ERROR_BG : (EVENT_BG[type] || "bg-gray-950/30");
+
   const typeLabel = (type || "").replace("MCP_", "").replace("_", " ");
   const label =
     (typeof payload.method === "string" && payload.method) ||
@@ -143,11 +339,11 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
     (typeof payload.logLevel === "string" && payload.logLevel) ||
     typeLabel;
 
-  // [spring-ai-mcp-inspector PATCH] Protocol negotiation badge on initialize response rows.
-  const negotiation = type === "MCP_JSONRPC_RESPONSE" ? protocolNegotiationOf(payload) : null;
-
   return (
     <div
+      ref={rowRef}
+      /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): timeline-row anchor, was ancestor::div[contains(@class,'border-l-2')]. */
+      data-testid="timeline-row"
       className={`border-l-2 pl-3 py-1.5 mb-1 rounded-r cursor-pointer hover:opacity-80 ${bgClass} ${colorClass}`}
       onClick={() => setExpanded(!expanded)}
     >
@@ -155,7 +351,43 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
         <span className="font-mono opacity-70 shrink-0 w-14">{formatTimestamp(event.timestamp)}</span>
         <span className="font-semibold shrink-0 w-20">{typeLabel}</span>
         <span className="truncate min-w-0 flex-1">{label}</span>
+        {/* [spring-ai-mcp-inspector PATCH] Client-traffic badge (#120):
+            provenance of side=client frames, with the client name and the
+            direction arrow (out = client sent it, in = client received it). */}
+        {clientSide && (
+          <span
+            data-testid="timeline-side-badge"
+            className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-sky-800 text-sky-200"
+            title={`Client-side MCP traffic (side=client)${
+              clientName ? `, client: ${clientName}` : ""
+            }${direction ? `, direction: ${direction}` : ""}`}
+          >
+            client{clientName ? `: ${clientName}` : ""}
+            {direction ? (direction === "out" ? " →" : " ←") : ""}
+          </span>
+        )}
         {negotiation && <ProtocolBadge negotiation={negotiation} />}
+        {isError && (
+          <span
+            data-testid="timeline-tool-error-badge"
+            className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-red-800 text-red-200"
+            title={errorText ?? "CallToolResult returned isError=true"}
+          >
+            tool error
+          </span>
+        )}
+        {/* [spring-ai-mcp-inspector PATCH] SEP-2322: input_required frames are
+            actionable in the Input Required tab, so say so instead of looking
+            like a truncated dead end. */}
+        {needsInput && (
+          <span
+            data-testid="timeline-input-required-badge"
+            className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-amber-800 text-amber-200"
+          >
+            input required
+          </span>
+        )}
+        {leak && <LeakBadge leak={leak} onJumpToLog={onJumpToLog} />}
         {event.correlationId && (
           <span className="opacity-50 ml-auto shrink-0 font-mono text-[10px]">
             {event.correlationId.substring(0, 8)}
@@ -165,6 +397,8 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
       {expanded ? (
         <div className="mt-1 text-[11px] font-mono opacity-80 overflow-x-auto whitespace-pre-wrap max-h-40 overflow-y-auto">
           {negotiation && <ProtocolNegotiationBlock negotiation={negotiation} />}
+          {isError && <ToolErrorBlock text={errorText} />}
+          {leak && <LeakDetailBlock leak={leak} onJumpToLog={onJumpToLog} />}
           {Object.keys(payload).length > 0 ? (
             <div className="mb-1">{JSON.stringify(payload, null, 2)}</div>
           ) : (
@@ -176,37 +410,205 @@ function TimelineEventRow({ event }: { event: TimelineEvent }) {
   );
 }
 
-// [spring-ai-mcp-inspector PATCH] TimelineTab — scrollable timeline of MCP events.
-const TimelineTab = () => {
-  const [events, setEvents] = useState<TimelineEvent[]>([]);
-  const [autoRefresh, setAutoRefresh] = useState(true);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+// [spring-ai-mcp-inspector PATCH] SEP-2322 (#253): one input_required
+// round-trip rendered as a single collapsed chain: the original tools/call,
+// every input_required result, every re-send, and the final result share one
+// chain id (see lib/timelineChains) and render as one expandable row instead
+// of scattered dead-end frames. Members render chronologically (the API list
+// itself is newest-first).
+function ChainGroup({
+  chainId,
+  events,
+  onJumpToLog,
+}: {
+  chainId: string;
+  events: TimelineEvent[];
+  onJumpToLog: (eventId: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const summary = summarizeChain(events);
+  const stateStyle =
+    summary.state === "completed"
+      ? "bg-green-800 text-green-200"
+      : summary.state === "error"
+        ? "bg-red-800 text-red-200"
+        : "bg-amber-800 text-amber-200";
+  return (
+    <div
+      data-testid="timeline-chain"
+      className="border border-gray-700 rounded-r border-l-2 border-l-purple-500 pl-3 py-1.5 mb-1 bg-purple-950/30 text-purple-400"
+    >
+      <div
+        data-testid="timeline-chain-header"
+        className="flex items-center gap-2 text-xs cursor-pointer hover:opacity-80"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="font-semibold shrink-0">
+          tools/call chain{summary.toolName ? `: ${summary.toolName}` : ""}
+        </span>
+        <span
+          data-testid="timeline-chain-rounds"
+          className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono bg-gray-700 text-gray-300"
+        >
+          {summary.rounds} round{summary.rounds !== 1 ? "s" : ""}
+        </span>
+        <span
+          data-testid="timeline-chain-state"
+          className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono ${stateStyle}`}
+        >
+          {summary.state === "awaiting-input"
+            ? "awaiting input"
+            : summary.state === "error"
+              ? "error"
+              : "final result"}
+        </span>
+        <span className="opacity-50 ml-auto shrink-0 font-mono text-[10px]">
+          {chainId.substring(0, 8)}
+        </span>
+        <span className="shrink-0 text-[10px]">{expanded ? "▾" : "▸"}</span>
+      </div>
+      {expanded ? (
+        <div className="mt-1 ml-2 border-l border-gray-700 pl-2">
+          {[...events]
+            .reverse()
+            .map((event) => (
+              <TimelineEventRow
+                key={event.id}
+                event={event}
+                onJumpToLog={onJumpToLog}
+              />
+            ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
-  const fetchTimeline = useCallback(async () => {
-    const token = sessionStorage.getItem("inspectorConfig_v1_ephemeral");
-    const headers: Record<string, string> = {};
-    if (token) {
-      const parsed = JSON.parse(token);
-      if (parsed.MCP_PROXY_AUTH_TOKEN?.value) {
-        headers["Authorization"] = "Bearer " + parsed.MCP_PROXY_AUTH_TOKEN.value;
-      }
+// [spring-ai-mcp-inspector PATCH] Side of a timeline event (#120): frames
+// captured from the configured MCP clients carry side=client; everything
+// else is server-side traffic seen by the proxied server connection.
+function sideOf(event: TimelineEvent): "client" | "server" {
+  return event.payload?.["side"] === "client" ? "client" : "server";
+}
+
+// [spring-ai-mcp-inspector PATCH] TimelineTab — scrollable timeline of MCP events.
+// [spring-ai-mcp-inspector PATCH] Keep-alive pings rendered as KEEP_ALIVE events (#235).
+const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
+  const [events, setEvents] = useState<TimelineEvent[]>([]);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  // [spring-ai-mcp-inspector PATCH] Side filter (#120): which half of the
+  // traffic the log shows; purely client-side, the server exposes no filter
+  // parameter for it.
+  const [sideFilter, setSideFilter] = useState<"all" | "client" | "server">("all");
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const keepAlive = useKeepAlive(sessionId ?? null);
+
+  // [spring-ai-mcp-inspector PATCH] Side filter chips (#120): options derive
+  // from the UNFILTERED event set (#142 lesson 4), so selecting a side never
+  // removes the other side's chip from the bar.
+  const availableSides = useMemo(() => {
+    const sides = new Set<"client" | "server">();
+    for (const event of events) {
+      sides.add(sideOf(event));
     }
+    return sides;
+  }, [events]);
+
+  // [spring-ai-mcp-inspector PATCH] Exception-leak jump (#251): row refs by
+  // event id so a badge click (this tab) or a Tool Result pane link (other tab,
+  // delivered through the leakAnnotations broker) can scroll the correlated
+  // APP_LOG row into view. A jump that arrives before the row is rendered is
+  // retried on every fetched page, then silently dropped when evicted.
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  const pendingJumpRef = useRef<string | null>(null);
+
+  const registerRow = useCallback((id: string, el: HTMLDivElement | null) => {
+    if (el) {
+      rowRefs.current.set(id, el);
+    } else {
+      rowRefs.current.delete(id);
+    }
+  }, []);
+
+  const scrollToEvent = useCallback((eventId: string) => {
+    const el = rowRefs.current.get(eventId);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      pendingJumpRef.current = null;
+    } else {
+      pendingJumpRef.current = eventId;
+    }
+  }, []);
+
+  useEffect(() => onTimelineScrollTo(scrollToEvent), [scrollToEvent]);
+
+  useEffect(() => {
+    if (pendingJumpRef.current !== null && events.length > 0) {
+      scrollToEvent(pendingJumpRef.current);
+    }
+  }, [events, scrollToEvent]);
+
+  // [spring-ai-mcp-inspector PATCH] Timeline auth header (#316): a non-OK
+  // timeline poll must not silently render an empty log; it surfaces an
+  // explicit error banner, while a 200 with no events keeps the regular
+  // empty state. The raw X-MCP-Inspector-Auth header itself is sourced
+  // from the bootstrap payload below (as on the current base).
+  const fetchTimeline = useCallback(async () => {
     // The API is mounted under the configured spring.ai.mcp.inspector.path; the
     // server advertises the deployed prefix through the bootstrap payload.
+    // [spring-ai-mcp-inspector PATCH] The auth filter compares the
+    // X-MCP-Inspector-Auth header against the server-generated bootstrap
+    // token verbatim; Authorization/Bearer is not recognized (#235).
     const bootstrap = (window as unknown as {
-      __MCP_INSPECTOR_BOOTSTRAP?: { inspectorPath?: string };
+      __MCP_INSPECTOR_BOOTSTRAP?: {
+        inspectorPath?: string;
+        authToken?: string;
+      };
     }).__MCP_INSPECTOR_BOOTSTRAP;
+    const headers: Record<string, string> = {};
+    if (bootstrap?.authToken) {
+      headers["X-MCP-Inspector-Auth"] = bootstrap.authToken;
+    }
     const apiBase = (bootstrap?.inspectorPath || "/mcp-inspector").replace(/\/$/, "");
     try {
       const res = await fetch(`${apiBase}/api/timeline?limit=200`, { headers });
       if (res.ok) {
         const data = (await res.json()) as TimelineEvent[];
         setEvents(data);
+        setFetchError(null);
+      } else {
+        setFetchError(`Timeline request failed: HTTP ${res.status}`);
       }
     } catch {
-      // Silently ignore fetch errors
+      setFetchError("Timeline request failed: network error");
     }
   }, []);
+
+  // [spring-ai-mcp-inspector PATCH] Merge live keep-alive pings into the timeline
+  // as KEEP_ALIVE events, deduplicated by timestamp (#235).
+  useEffect(() => {
+    if (keepAlive.recentPings.length === 0) return;
+    setEvents((prev) => {
+      const existingTimestamps = new Set(
+        prev.filter((e) => e.type === "KEEP_ALIVE").map((e) => e.timestamp),
+      );
+      const newEvents: TimelineEvent[] = keepAlive.recentPings
+        .filter((ts) => !existingTimestamps.has(ts))
+        .map((ts) => ({
+          id: `keepalive-${ts}`,
+          correlationId: null,
+          sessionId: sessionId ?? null,
+          type: "KEEP_ALIVE" as const,
+          timestamp: ts,
+          payload: { method: "ping" },
+        }));
+      if (newEvents.length === 0) return prev;
+      return [...prev, ...newEvents].sort(
+        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+      );
+    });
+  }, [keepAlive.recentPings, sessionId]);
 
   useEffect(() => {
     void fetchTimeline();
@@ -224,6 +626,55 @@ const TimelineTab = () => {
     };
   }, [autoRefresh, fetchTimeline]);
 
+  // [spring-ai-mcp-inspector PATCH] SEP-2322 (#253): thread input_required
+  // round-trips into chains and render each chain once, at the position of
+  // its newest event; standalone events render exactly as before.
+  const renderItems = useMemo(() => {
+    // [spring-ai-mcp-inspector PATCH] Side filter (#120): applied before chain
+    // threading; an empty visible list renders the existing empty state.
+    const visible =
+      sideFilter === "all"
+        ? events
+        : events.filter((event) => sideOf(event) === sideFilter);
+    const threaded = threadInputRequiredChains(
+      visible as ChainSourceEvent[],
+    ) as (TimelineEvent & { chainId: string | null })[];
+    const items: (
+      | { kind: "single"; event: TimelineEvent }
+      | { kind: "chain"; chainId: string; events: TimelineEvent[] }
+    )[] = [];
+    const seenChains = new Set<string>();
+    for (const event of threaded) {
+      if (event.chainId === null) {
+        items.push({ kind: "single", event });
+        continue;
+      }
+      if (seenChains.has(event.chainId)) {
+        continue;
+      }
+      seenChains.add(event.chainId);
+      items.push({
+        kind: "chain",
+        chainId: event.chainId,
+        events: threaded.filter((candidate) => candidate.chainId === event.chainId),
+      });
+    }
+    return items;
+  }, [events, sideFilter]);
+
+  // [spring-ai-mcp-inspector PATCH] Pitfalls panel detector (#184): the
+  // isError=true entry activates when the timeline holds a CallToolResult
+  // response with isError=true.
+  const hasIsErrorWarning = useMemo(
+    () =>
+      events.some(
+        (event) =>
+          event.type === "MCP_JSONRPC_RESPONSE" &&
+          isCallToolError(event.payload ?? {}),
+      ),
+    [events],
+  );
+
   return (
     <TabsContent value="timeline" className="h-96">
       <div className="bg-gray-900 text-gray-100 p-4 rounded-lg h-full font-mono text-sm overflow-auto flex flex-col">
@@ -231,21 +682,80 @@ const TimelineTab = () => {
           <span className="text-xs opacity-50">
             {events.length} event{events.length !== 1 ? "s" : ""}
           </span>
-          <label className="flex items-center gap-1 text-xs opacity-70 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={autoRefresh}
-              onChange={(e) => setAutoRefresh(e.target.checked)}
-              className="w-3 h-3"
-            />
-            Auto-refresh (3s)
-          </label>
+          <div className="flex items-center gap-2 shrink-0">
+            {/* [spring-ai-mcp-inspector PATCH] Side filter chips (#120):
+                client vs server traffic; options derive from the unfiltered
+                event set, "all" is always available. */}
+            <div
+              className="flex items-center gap-1"
+              data-testid="timeline-side-filter"
+            >
+              {(["all", "client", "server"] as const)
+                .filter((side) => side === "all" || availableSides.has(side))
+                .map((side) => (
+                  <button
+                    key={side}
+                    type="button"
+                    data-testid={`timeline-side-filter-${side}`}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono cursor-pointer ${
+                      sideFilter === side
+                        ? "bg-gray-200 text-gray-900"
+                        : "bg-gray-700 text-gray-300"
+                    }`}
+                    onClick={() => setSideFilter(side)}
+                  >
+                    {side}
+                  </button>
+                ))}
+            </div>
+            <label className="flex items-center gap-1 text-xs opacity-70 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoRefresh}
+                onChange={(e) => setAutoRefresh(e.target.checked)}
+                className="w-3 h-3"
+              />
+              Auto-refresh (3s)
+            </label>
+          </div>
         </div>
+        {/* [spring-ai-mcp-inspector PATCH] Pitfalls panel: hint reachable
+            from the Timeline view. The isError=true entry activates when a
+            tool-error row exists in this timeline (#184 detector). */}
+        <SpringAiPitfallsPanel
+          className="mb-2 shrink-0"
+          hasIsErrorWarning={hasIsErrorWarning}
+        />
         <div className="flex-1 overflow-y-auto">
-          {events.length === 0 ? (
+          {fetchError ? (
+            // [spring-ai-mcp-inspector PATCH] Timeline error state (#316): a
+            // failed poll must surface instead of rendering as an empty log.
+            <div
+              role="alert"
+              className="border-l-4 border-red-500 bg-red-950/30 text-red-400 px-3 py-2 mt-4"
+            >
+              {fetchError}
+            </div>
+          ) : events.length === 0 ? (
             <div className="opacity-50 text-center mt-8">No timeline events yet</div>
           ) : (
-            events.map((event) => <TimelineEventRow key={event.id} event={event} />)
+            renderItems.map((item) =>
+              item.kind === "chain" ? (
+                <ChainGroup
+                  key={`chain-${item.chainId}`}
+                  chainId={item.chainId}
+                  events={item.events}
+                  onJumpToLog={scrollToEvent}
+                />
+              ) : (
+                <TimelineEventRow
+                  key={item.event.id}
+                  event={item.event}
+                  onJumpToLog={scrollToEvent}
+                  rowRef={(el) => registerRow(item.event.id, el)}
+                />
+              ),
+            )
           )}
         </div>
       </div>

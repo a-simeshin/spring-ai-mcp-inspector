@@ -3,11 +3,13 @@
 // in ToolResults.tsx and raw JSON.stringify rendering in ResourcesTab.tsx/
 // ResourceLinkView.tsx.
 // Supports image/* → <img>, audio/* → <audio>, other binary → <a download>,
-// text/* → JsonView fallback.
+// text/* → decoded plain text, application/json → JsonView tree, and
+// text/markdown → rendered markdown with a View source toggle (#170).
 // Security: "Open in new tab" is restricted to inert MIME types only
 // (text/plain, image/*, audio/*, video/*, application/pdf) to prevent
 // execution of attacker-controlled HTML/JS via data: URIs.
 import JsonView from "./JsonView";
+import MarkdownPreview from "./MarkdownPreview";
 
 interface MediaContentViewProps {
   /** MIME type of the content (e.g. "image/png", "text/plain"). */
@@ -62,7 +64,10 @@ const isInertMimeType = (mt: string): boolean => {
  * - `audio/*` (with base64Data)  → `<audio controls>` with data URI
  * - binary/* or other non-text mimeTypes with base64Data → `<a download>`
  *   (+ "Open in new tab" only for inert MIME types)
- * - text/* or no base64Data      → `<JsonView>` (preserves existing rendering)
+ * - text/* or no base64Data      → decoded plain text (#170);
+ *   application/json             → `<JsonView>` collapsible tree
+ *   text/markdown                → rendered markdown preview with a
+ *                                  View source toggle (MarkdownPreview)
  */
 const MediaContentView = ({
   mimeType,
@@ -93,10 +98,14 @@ const MediaContentView = ({
         <img
           src={dataUri}
           alt={alt || "Resource image"}
+          /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): resource-image anchor, was img[src^="data:image/png;base64,"]. */
+          data-testid="resource-image"
           className="max-w-full h-auto"
         />
         <div className="mt-2">
           <a
+            /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): resource-download anchor, was a[download=<filename>]. */
+            data-testid="resource-download"
             download={downloadName}
             href={dataUri}
             className="inline-flex items-center gap-2 px-4 py-2 rounded text-sm font-medium
@@ -128,6 +137,8 @@ const MediaContentView = ({
         </audio>
         <div className="mt-2">
           <a
+            /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): resource-download anchor, was a[download=<filename>]. */
+            data-testid="resource-download"
             download={downloadName}
             href={dataUri}
             className="inline-flex items-center gap-2 px-4 py-2 rounded text-sm font-medium
@@ -153,6 +164,8 @@ const MediaContentView = ({
           <span className="w-fit">{mimeTypeBadge}</span>
         )}
         <a
+          /* [spring-ai-mcp-inspector PATCH] demo E2E contract (#378): resource-download anchor, was a[download=<filename>]. */
+          data-testid="resource-download"
           download={downloadName}
           href={href}
           className="inline-flex items-center gap-2 px-4 py-2 rounded text-sm font-medium
@@ -179,12 +192,38 @@ const MediaContentView = ({
     );
   }
 
-  // Text content — render via JsonView (preserves existing behaviour)
+  // Text content. Plain text payloads render decoded in a <pre> block: real
+  // line breaks, no surrounding JSON quotes (issue #170). A JSON payload
+  // keeps the collapsible JsonView tree. Blob/base64 dispatch above is
+  // unchanged; no unescaping is applied, so literal backslash-n sequences
+  // in the payload are shown verbatim.
   const displayData = text ?? "";
+  // Markdown payloads render through MarkdownPreview (issue #170): sanitized
+  // rendered HTML by default, View source toggles to the raw text. The
+  // dispatch is case-insensitive via normalisedMimeType; every other text/*
+  // mime type keeps the plain text view below.
+  if (normalisedMimeType === "text/markdown") {
+    return (
+      <div className={className}>
+        {mimeTypeBadge}
+        <MarkdownPreview content={displayData} />
+      </div>
+    );
+  }
+  const isJsonMimeType = normalisedMimeType === "application/json";
   return (
     <div className={className}>
       {mimeTypeBadge}
-      <JsonView data={displayData} />
+      {isJsonMimeType ? (
+        <JsonView data={displayData} />
+      ) : (
+        <pre
+          className="p-4 border rounded font-mono text-sm whitespace-pre-wrap break-words max-h-96 overflow-auto"
+          data-testid="plain-text-view"
+        >
+          {displayData}
+        </pre>
+      )}
     </div>
   );
 };

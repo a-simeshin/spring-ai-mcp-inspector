@@ -134,6 +134,9 @@ describe("validateRedirectUrl", () => {
   });
 });
 
+// [spring-ai-mcp-inspector PATCH] Local suite added on top of the upstream
+// validateRedirectUrl suite: validateServerUrl (also added to the import
+// above) is the local export that backs the Connect field URL validation.
 describe("validateServerUrl", () => {
   describe("valid URLs", () => {
     it("should accept http:// URLs with host", () => {

@@ -1,0 +1,21 @@
+src/App.tsx + src/components/Sidebar.tsx: in the pre-connect empty state
+(the "Connect to an MCP server to start inspecting" landing, shown when no
+client is connected and the auth debugger is hidden), render a primary
+Connect button above the "Open Auth Settings" row.  Issue #269 rework:
+both Connect CTAs now route through one validated handler in App
+(handleConnectRequest) built on utils/urlValidation.ts.  For non-STDIO
+transports an empty or invalid server URL blocks the connect, disables the
+button under the sidebar's exact condition and shows the URL validation
+error inline next to the canvas CTA instead of connecting (previously the
+canvas button connected unvalidated and the proxy fell back to the loopback
+demo server).  To share the same error message and disable condition,
+urlError/urlTouched state moved from src/components/Sidebar.tsx up to App
+and is passed to the sidebar as props; the sidebar Connect click no longer
+duplicates the validation inline.  Connection timeout validation moved the
+same way (owner decision on the 2026-11-19 rebase onto develop/2.x): the
+validator and timeoutError live in App, Sidebar receives them as props,
+and both CTAs disable on an invalid proxy timeout.  Covered by
+src/__tests__/App.emptyStateConnect.test.tsx (validation and connect
+blocking), src/__tests__/App.sidebarConnectValidation.test.tsx (the
+sidebar CTA stays wired to the shared validating handler) and the existing
+sidebar URL validation specs.

@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.github.a-simeshin</groupId>
         <artifactId>spring-ai-mcp-inspector-parent</artifactId>
-        <version>2.1.0-SNAPSHOT</version>
+        <version>2.5.0-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -68,6 +68,17 @@
         </dependency>
 
         <!--
+            The demo app's own outbound MCP client (issue #120): one named
+            streamable-http connection pointing back at the app's own MCP server
+            endpoint, so the inspector shows a live client connection and
+            client-side traffic in the timeline without any external stub server.
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-client</artifactId>
+        </dependency>
+
+        <!--
             Test scope. These are compile-scope FOR THE TEST SOURCES of this module,
             which are published as a test-jar and consumed by both stack modules — so
             every dependency the shared ITs touch has to be declared here too.
@@ -75,6 +86,11 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

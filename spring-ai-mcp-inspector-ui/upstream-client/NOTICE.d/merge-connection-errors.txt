@@ -1,0 +1,14 @@
+src/lib/connectionErrors.ts (merged from connectionAuthErrors.ts +
+connectErrors.ts) + src/lib/__tests__/connectionAuthErrors.test.ts +
+src/lib/__tests__/connectErrors.test.ts - merge two overlapping
+error-handling modules into one. connectionAuthErrors.ts handled
+ProxyErrorDto parsing (D3 structured error contract, issue #54);
+connectErrors.ts handled ConnectFailure parsing (MCP_CONNECT_FAILED
+structured error contract, issue #109). Both modules overlapped on
+401 detection: isConnectionAuthError (comprehensive, 3 paths) vs
+isHttp401Error (simple .code === 401 check). Merged into
+connectionErrors.ts with all exports preserved, internal helpers
+deduplicated (isPlainObject replaces isJsonObject - identical body).
+All 5 importers updated: useConnection.ts, Sidebar.tsx,
+Sidebar.connectFailureAlert.test.tsx, connectionAuthErrors.test.ts,
+connectErrors.test.ts. The old files are deleted.

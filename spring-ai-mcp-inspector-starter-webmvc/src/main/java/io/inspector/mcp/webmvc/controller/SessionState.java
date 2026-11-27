@@ -24,6 +24,8 @@ import io.modelcontextprotocol.client.McpSyncClient;
 
 import io.inspector.mcp.core.client.PendingServerRequests;
 import io.inspector.mcp.core.dto.RootDto;
+import io.inspector.mcp.core.dto.SkillsExtensionSupport;
+import io.inspector.mcp.core.keepalive.KeepAliveTracker;
 import io.inspector.mcp.core.oauth.OAuthTokenResponse;
 
 /**
@@ -37,9 +39,17 @@ final class SessionState {
 
 	private final McpSyncClient client;
 
+	private final KeepAliveTracker keepAliveTracker;
+
 	private final List<RootDto> roots = new CopyOnWriteArrayList<>();
 
 	private final PendingServerRequests pendingServerRequests = new PendingServerRequests();
+
+	/**
+	 * SEP-2640 skills-extension detection from the session's initialize result. Set once
+	 * after {@code connect()} and read by the UI session model.
+	 */
+	private volatile SkillsExtensionSupport skillsExtension = SkillsExtensionSupport.ABSENT;
 
 	private volatile String oauthState;
 
@@ -52,11 +62,25 @@ final class SessionState {
 	private volatile OAuthTokenResponse oauthToken;
 
 	SessionState(final McpSyncClient client) {
+		this(client, null);
+	}
+
+	SessionState(final McpSyncClient client, final KeepAliveTracker keepAliveTracker) {
 		this.client = client;
+		this.keepAliveTracker = keepAliveTracker;
 	}
 
 	McpSyncClient client() {
 		return this.client;
+	}
+
+	/**
+	 * Returns the per-session keep-alive tracker, or {@code null} when the session was
+	 * not built with ping detection.
+	 * @return the tracker, or {@code null}
+	 */
+	KeepAliveTracker keepAliveTracker() {
+		return this.keepAliveTracker;
 	}
 
 	List<RootDto> roots() {
@@ -65,6 +89,14 @@ final class SessionState {
 
 	PendingServerRequests pendingServerRequests() {
 		return this.pendingServerRequests;
+	}
+
+	SkillsExtensionSupport skillsExtension() {
+		return this.skillsExtension;
+	}
+
+	void skillsExtension(final SkillsExtensionSupport value) {
+		this.skillsExtension = (value != null) ? value : SkillsExtensionSupport.ABSENT;
 	}
 
 	void replaceRoots(final List<RootDto> next) {
