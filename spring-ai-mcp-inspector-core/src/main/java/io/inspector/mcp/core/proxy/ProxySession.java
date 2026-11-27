@@ -234,13 +234,6 @@ public final class ProxySession {
 	private final Mono<Void> closeSignal;
 
 	/**
-	 * Resolved upstream target URI of the connect attempt that created this session
-	 * (issue #250). {@code null} until the owning controller sets it; the SSE connect
-	 * probe uses it when the first relayed POST fails.
-	 */
-	private volatile URI resolvedTarget;
-||||||| 059b36d4
-
 	 * IDs of active liveness-probe requests that must not be forwarded to the browser.
 	 */
 	private final Set<String> probeIds = ConcurrentHashMap.newKeySet();
@@ -325,24 +318,6 @@ public final class ProxySession {
 
 	public String sessionId() {
 		return this.sessionId;
-	}
-
-	/**
-	 * The resolved upstream target URI of the connect attempt that created this session,
-	 * or {@code null} when not set (issue #250).
-	 * @return the resolved target URI, or {@code null}
-	 */
-	public URI resolvedTarget() {
-		return this.resolvedTarget;
-	}
-
-	/**
-	 * Remembers the resolved upstream target URI so a later connect failure on the first
-	 * relayed POST can run the SSE probe against the same target (issue #250).
-	 * @param resolvedTarget the resolved target URI, or {@code null} to clear
-	 */
-	public void resolvedTarget(final URI resolvedTarget) {
-		this.resolvedTarget = resolvedTarget;
 	}
 
 	public McpClientTransport targetTransport() {
