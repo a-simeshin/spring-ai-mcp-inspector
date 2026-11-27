@@ -40,8 +40,10 @@ import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
 import io.inspector.mcp.core.timeline.BoundedTimelineService;
 import io.inspector.mcp.core.timeline.McpTrafficRecorder;
+import io.inspector.mcp.core.timeline.TimelineEvent;
 import io.inspector.mcp.core.timeline.TimelineEventType;
 import io.inspector.mcp.core.timeline.TimelineQuery;
+import io.inspector.mcp.core.timeline.TimelineService;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -130,7 +132,7 @@ class StreamableHttpProxyControllerConnectHintTests {
 	}
 
 	private JsonNode postConnect() {
-		final ResponseEntity<Object> response = this.controller.postMcp(null, this.upstreamBase + "/mcp",
+		final ResponseEntity<Object> response = this.controller.postMcp(null, this.upstreamBase + "/mcp", null,
 				this.objectMapper.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"));
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
 		return this.objectMapper.valueToTree(response.getBody()).path("error");
@@ -193,7 +195,7 @@ class StreamableHttpProxyControllerConnectHintTests {
 			exchange.sendResponseHeaders(405, -1);
 			exchange.close();
 		});
-		final ResponseEntity<Object> response = this.controller.postMcp(null, this.upstreamBase + "/probe-me",
+		final ResponseEntity<Object> response = this.controller.postMcp(null, this.upstreamBase + "/probe-me", null,
 				this.objectMapper.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"));
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
 		final JsonNode error = this.objectMapper.valueToTree(response.getBody()).path("error");
@@ -221,11 +223,89 @@ class StreamableHttpProxyControllerConnectHintTests {
 		this.controller = new StreamableHttpProxyController(this.registry, this.transportFactory, this.mcpProxy,
 				this.objectMapper);
 		stubUpstream(404, true, "text/event-stream", false);
-		final ResponseEntity<Object> response = this.controller.postMcp(null, this.upstreamBase + "/mcp",
+		final ResponseEntity<Object> response = this.controller.postMcp(null, this.upstreamBase + "/mcp", null,
 				this.objectMapper.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"));
 		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
 		final JsonNode error = this.objectMapper.valueToTree(response.getBody()).path("error");
 		assertThat(error.path("hint").path("kind").asText()).isEqualTo("sse_only");
+	}
+
+	@Test
+	@DisplayName("M2-5xx: 5xx bucket (Failed to send message) + live SSE => same sse_only hint")
+	void m2b_5xxWithSseAliveAppendsHint() {
+		stubUpstream(500, true, "text/event-stream", false);
+		final JsonNode error = postConnect();
+		assertThat(error.path("reason").asText()).isEqualTo("unknown");
+		assertThat(error.path("hint").path("kind").asText()).isEqualTo("sse_only");
+	}
+
+	@Test
+	@DisplayName("M5: connect timeout (slow upstream, 1s budget) => 504, no hint")
+	void m5_slowUpstreamTimeoutNoHint() throws InterruptedException {
+		this.upstream.createContext("/mcp", (exchange) -> {
+			try {
+				Thread.sleep(4000);
+			}
+			catch (final InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+			exchange.sendResponseHeaders(404, -1);
+			exchange.close();
+		});
+		final ResponseEntity<Object> response = this.controller.postMcp(null, this.upstreamBase + "/mcp", "1",
+				this.objectMapper.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"));
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT);
+		final JsonNode error = this.objectMapper.valueToTree(response.getBody()).path("error");
+		assertThat(error.has("hint")).isFalse();
+	}
+
+	@Test
+	@DisplayName("M6: non-trigger failure (connection refused) => no probe, no hint")
+	void m6_nonTrigger_noHintNoProbe() {
+		// Port 1 on loopback: nothing listens, the connect is refused before any HTTP.
+		final ResponseEntity<Object> response = this.controller.postMcp(null, "http://127.0.0.1:1/mcp", null,
+				this.objectMapper.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"));
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+		final JsonNode error = this.objectMapper.valueToTree(response.getBody()).path("error");
+		assertThat(error.has("hint")).isFalse();
+		final var events = this.timeline.query(TimelineQuery.all());
+		assertThat(events).hasSize(1);
+		assertThat(events.get(0).payload().path("probeOutcome").asText()).isEqualTo("not_run");
+	}
+
+	@Test
+	@DisplayName("a broken timeline must not turn the connect failure into a proxy failure")
+	void brokenTimelineStillHints() {
+		this.controller = new StreamableHttpProxyController(this.registry, this.transportFactory, this.mcpProxy,
+				this.objectMapper, this.properties, null, null, new McpTrafficRecorder(new ThrowingTimelineService()));
+		stubUpstream(404, true, "text/event-stream", false);
+		final ResponseEntity<Object> response = this.controller.postMcp(null, this.upstreamBase + "/mcp", null,
+				this.objectMapper.readTree("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}"));
+		assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+		final JsonNode error = this.objectMapper.valueToTree(response.getBody()).path("error");
+		assertThat(error.path("hint").path("kind").asText()).isEqualTo("sse_only");
+	}
+
+	/**
+	 * Timeline stub whose append always fails: the guard, not the recorder, is under
+	 * test.
+	 */
+	static final class ThrowingTimelineService implements TimelineService {
+
+		@Override
+		public void append(final TimelineEvent event) {
+			throw new IllegalStateException("timeline broken");
+		}
+
+		@Override
+		public java.util.List<TimelineEvent> query(final TimelineQuery query) {
+			return java.util.List.of();
+		}
+
+		@Override
+		public void clear() {
+		}
+
 	}
 
 }
