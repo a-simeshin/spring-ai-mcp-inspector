@@ -23,6 +23,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -64,6 +65,9 @@ class SseConnectProbeTests {
 
 	private void startServer() throws IOException {
 		this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		// Thread-per-exchange executor: a sleeping handler must not delay the
+		// dispatch of a second probe request.
+		this.server.setExecutor(Executors.newCachedThreadPool());
 		this.server.createContext("/", (exchange) -> {
 			this.requests.add(new RecordedRequest(exchange));
 			final long sleep = this.sleepMillis;
@@ -274,6 +278,26 @@ class SseConnectProbeTests {
 			assertThat(verdict.hint()).isNull();
 			// Per-path 500ms cap + scheduling slack, well under the 5s spec budget.
 			assertThat(wallMillis).isLessThan(3000);
+		}
+
+		@Test
+		@DisplayName("M5 with shipped defaults: never-answering server => timeout outcome bounded near the 5s sequence budget")
+		void m5_defaultBudgetsBoundSequenceWallClock() throws IOException {
+			startServer();
+			SseConnectProbeTests.this.pathBehavior = "500";
+			SseConnectProbeTests.this.sleepMillis = 30000;
+			final SseConnectProbe defaultProbe = new SseConnectProbe();
+			final long start = System.nanoTime();
+			final SseConnectProbe.SseProbeVerdict verdict = defaultProbe.evaluate(notFound(),
+					new RuntimeException("boom"), SseConnectProbeTests.this.base);
+			final long wallMillis = Duration.ofNanos(System.nanoTime() - start).toMillis();
+			assertThat(verdict.outcome()).isEqualTo(SseConnectProbe.SseProbeVerdict.OUTCOME_TIMEOUT);
+			assertThat(verdict.hint()).isNull();
+			// Pins the published budgets (2500 ms per path, 5000 ms per sequence): the
+			// wall clock stays under 8s, and the sibling path is only requested while
+			// sequence budget remains after the 2500 ms first-path timeout.
+			assertThat(wallMillis).isLessThan(8000);
+			assertThat(SseConnectProbeTests.this.requests).hasSize(2);
 		}
 
 		@Test
