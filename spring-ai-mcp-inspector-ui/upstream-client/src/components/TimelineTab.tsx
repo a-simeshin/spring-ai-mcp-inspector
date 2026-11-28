@@ -348,8 +348,22 @@ function TimelineEventRow({
       onClick={() => setExpanded(!expanded)}
     >
       <div className="flex items-center gap-2 text-xs">
-        <span className="font-mono opacity-70 shrink-0 w-14">{formatTimestamp(event.timestamp)}</span>
-        <span className="font-semibold shrink-0 w-20">{typeLabel}</span>
+        {/* [spring-ai-mcp-inspector PATCH] Row layout contract (issue #295): the
+            timestamp renders HH:MM:SS.mmm and the type label renders up to
+            JSONRPC NOTIFICATION; the old fixed w-14/w-20 cells were narrower
+            than their content, so the timestamp painted over the type column and
+            the label wrapped onto two lines. whitespace-nowrap plus enough width
+            keeps both texts inside their cells; the demo E2E measures the painted
+            text boxes (InspectorUiIT TimelineRowLayout, issue #295). */}
+        <span
+          data-testid="timeline-row-timestamp"
+          className="font-mono opacity-70 shrink-0 w-24 whitespace-nowrap"
+        >
+          {formatTimestamp(event.timestamp)}
+        </span>
+        <span data-testid="timeline-row-type" className="font-semibold shrink-0 w-36 whitespace-nowrap">
+          {typeLabel}
+        </span>
         <span className="truncate min-w-0 flex-1">{label}</span>
         {/* [spring-ai-mcp-inspector PATCH] Client-traffic badge (#120):
             provenance of side=client frames, with the client name and the
