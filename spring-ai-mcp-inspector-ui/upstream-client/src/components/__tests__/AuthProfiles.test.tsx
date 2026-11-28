@@ -449,6 +449,45 @@ describe("AuthProfiles list / rename / delete (AC2)", () => {
       expect(props.onActiveProfileChange).toHaveBeenCalledWith(null);
     });
   });
+
+  // [spring-ai-mcp-inspector PATCH] Issue #432: deleting the profile currently
+  // loaded in the editor resets the editor to create mode; a stale Update
+  // against a deleted profile is no longer offered.
+  it("resets the editor to create mode when the profile being edited is deleted (issue #432)", async () => {
+    const fetchMock = global.fetch as jest.Mock;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === `${API_BASE}/auth-profile/prefill`) {
+        return okJson([]);
+      }
+      if (init?.method === "DELETE") {
+        return okJson(null, 204);
+      }
+      return okJson([{ profileId: "p-1", name: "Prod", type: "BEARER" }]);
+    });
+
+    renderPanel({
+      profiles: [{ profileId: "p-1", name: "Prod", type: "BEARER" }],
+    });
+
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId("auth-profile-edit-p-1"));
+    });
+    expect(screen.getByTestId("auth-profile-update")).toBeInTheDocument();
+    expect(screen.getByTestId("auth-profile-edit-hint")).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("auth-profile-delete-p-1"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // The editor stays open but falls back to create mode: Save profile, no
+    // Update button and no "Editing an existing profile" hint; the loaded
+    // profile's fields are gone.
+    expect(await screen.findByTestId("auth-profile-save")).toBeInTheDocument();
+    expect(screen.queryByTestId("auth-profile-update")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("auth-profile-edit-hint")).not.toBeInTheDocument();
+    expect(screen.getByTestId("auth-profile-name")).toHaveValue("");
+  });
 });
 
 describe("AuthProfiles prefill selection (AC3)", () => {
