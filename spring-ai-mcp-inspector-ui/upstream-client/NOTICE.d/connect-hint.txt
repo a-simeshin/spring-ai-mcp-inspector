@@ -43,6 +43,8 @@ legacy byte-identity, verbatim-copy string asserts) and
 src/components/__tests__/Sidebar.connectHint.test.tsx (strong hint
 verbatim copy + refs + button, click delegates to onSwitchToSse and
 does not double as Retry, weak hint without links or button, legacy
-payload renders the untouched alert), and end to end by
+payload renders the untouched alert),
+src/components/__tests__/TimelineTab.test.tsx (MCP_CONNECT_FAILED row:
+the full collapsed title with the reason and the amber classes), and end to end by
 spring-ai-mcp-inspector-demo-webmvc ConnectHintSseOnlyIT (Selenide:
 verbatim hint, switch reconnects, timeline entry).

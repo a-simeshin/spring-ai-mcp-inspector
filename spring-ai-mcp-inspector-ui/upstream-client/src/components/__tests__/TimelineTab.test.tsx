@@ -5,6 +5,7 @@ import "@testing-library/jest-dom";
 import TimelineTab from "../TimelineTab";
 import { Tabs } from "@/components/ui/tabs";
 import { requestTimelineScrollTo } from "@/lib/leakAnnotations";
+import { CONNECT_HINT_STRONG_TEXT } from "@/lib/connectionErrors";
 
 /**
  * TimelineTab consumes the serialized io.inspector.mcp.core.timeline.TimelineEvent
@@ -1007,6 +1008,40 @@ describe("TimelineTab SEP-2322 input_required chain", () => {
     );
     // The label should show the method from payload
     expect(screen.getByText("ping")).toBeInTheDocument();
+  });
+
+  // [spring-ai-mcp-inspector PATCH] Connect-failure row pin (issue #250):
+  // the collapsed title carries the classified reason ("MCP connect failed
+  // (reason)") and the row is amber, distinct from keep-alive cyan and
+  // error red.
+
+  const CONNECT_FAILED_EVENT: WireEvent = {
+    id: "evt-9",
+    correlationId: null,
+    sessionId: "s-1",
+    type: "MCP_CONNECT_FAILED",
+    timestamp: "2026-11-27T12:00:09.000Z",
+    payload: { reason: "unknown", hintKind: "sse_only" },
+  };
+
+  it("renders MCP_CONNECT_FAILED with the reason in the title and amber styling", async () => {
+    mockFetch([CONNECT_FAILED_EVENT]);
+    renderTab();
+
+    // The collapsed title span holds the full title plus the hint text, so
+    // pin the exact textContent: dropping the "(reason)" suffix must fail.
+    const expectedTitle = `MCP connect failed (unknown). ${CONNECT_HINT_STRONG_TEXT}`;
+    const titleSpan = () =>
+      screen.getByText(
+        (_content, element) =>
+          element?.tagName === "SPAN" && element.textContent === expectedTitle,
+      );
+    await waitFor(() => expect(titleSpan()).toBeInTheDocument());
+
+    const row = screen.getByTestId("timeline-row");
+    expect(row).toHaveClass("text-amber-400");
+    expect(row).toHaveClass("border-l-amber-500");
+    expect(row).toHaveClass("bg-amber-950/30");
   });
 
   // [spring-ai-mcp-inspector PATCH] The client-side merge is the only source
