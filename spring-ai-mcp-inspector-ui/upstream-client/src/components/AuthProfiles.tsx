@@ -346,6 +346,14 @@ const AuthProfiles = ({
       if (activeProfileId === summary.profileId) {
         onActiveProfileChange(null);
       }
+      // [spring-ai-mcp-inspector PATCH] Issue #432: deleting the profile being
+      // edited resets the editor to create mode, the same way Cancel does; a
+      // stale Update is never offered against a deleted profile.
+      if (editingProfileId === summary.profileId) {
+        setEditingProfileId(null);
+        setDraft(draftTemplate(draft.type));
+        setTouched(false);
+      }
       await refreshProfiles();
     } catch (err) {
       notifyError(err instanceof Error ? err.message : String(err));

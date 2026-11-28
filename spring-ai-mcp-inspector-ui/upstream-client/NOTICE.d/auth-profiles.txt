@@ -28,6 +28,10 @@ stdio transport; await refreshProfiles after save/update/delete; focus name
 input on edit; role="radiogroup" on profile list; htmlFor/id on Type/Grant/
 Placement labels (native selects retained for testability; shadcn Select uses
 portals that complicate testing).
+Deleting the profile currently loaded in the editor resets the editor to
+create mode, the same way Cancel does (issue #432): editingProfileId is
+cleared together with the draft and the touched flag, so a stale Update is
+never offered against a deleted profile.
 Disconnect clears the D3 structured error banner alongside the connect-failure
 banner (setAuthError(null) in disconnect(), issue #54).
 Covered by jest unit tests (src/components/__tests__/AuthProfiles.test.tsx,
