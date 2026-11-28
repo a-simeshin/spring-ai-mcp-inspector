@@ -32,14 +32,20 @@ and a specialized row: collapsed title "MCP connect failed (reason)"
 plus the S1/S2 hint text when payload.hintKind says so (plain text,
 no button; hintKind carries no links in the timeline), the same title
 and hint in the expanded block above the raw payload.
-4. App.tsx: owns the switch (onSwitchToSse): setTransportType("sse")
-plus a pending-flag effect that re-runs the shared validating connect
-handler only after the re-render carrying the new transport, so
-connect() (which closes over transportType) actually connects over
-SSE with the same, unrewritten URL.
+4. App.tsx: owns the switch (onSwitchToSse): when the failure's hint
+is the proven sse_only kind and its probePath differs from the path
+of the URL field, the path of the URL field is rewritten to the
+probe path (scheme, host, port and query untouched; equal paths keep
+the same-URL behaviour, PR #436 owner rework) via the exported
+rewriteUrlPathToProbePath helper in connectionErrors.ts, then
+setTransportType("sse") plus a pending-flag effect that re-runs the
+shared validating connect handler only after the re-render carrying
+the new transport, so connect() (which closes over transportType)
+actually connects over SSE against the rewritten URL.
 
 Covered by src/lib/__tests__/connectHint.test.ts (parsing matrix,
-legacy byte-identity, verbatim-copy string asserts) and
+legacy byte-identity, verbatim-copy string asserts, the path-rewrite
+matrix for rewriteUrlPathToProbePath) and
 src/components/__tests__/Sidebar.connectHint.test.tsx (strong hint
 verbatim copy + refs + button, click delegates to onSwitchToSse and
 does not double as Retry, weak hint without links or button, legacy

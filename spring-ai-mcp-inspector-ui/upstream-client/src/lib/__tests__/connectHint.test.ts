@@ -5,6 +5,7 @@
 // and the S1/S2 copy constants match the spec verbatim.
 import {
   parseConnectFailureResponse,
+  rewriteUrlPathToProbePath,
   CONNECT_HINT_STRONG_TEXT,
   CONNECT_HINT_WEAK_TEXT,
   CONNECT_HINT_UPSTREAM_REF_LABEL,
@@ -143,5 +144,33 @@ describe("transport-switch hint verbatim copy", () => {
     expect(CONNECT_HINT_LOCAL_REF_URL).toBe(
       "https://github.com/a-simeshin/spring-ai-mcp-inspector/issues/250",
     );
+  });
+});
+
+// [spring-ai-mcp-inspector PATCH] Switch-to-SSE path rewrite (issue #250,
+// owner rework on PR #436): the button must reconnect to the probe-proven
+// path when it differs, touching only the path of the URL field.
+describe("rewriteUrlPathToProbePath", () => {
+  it("rewrites only the path, keeping scheme, host, port and query", () => {
+    expect(
+      rewriteUrlPathToProbePath("http://127.0.0.1:8080/mcp?x=1&y=2", "/sse"),
+    ).toBe("http://127.0.0.1:8080/sse?x=1&y=2");
+    expect(
+      rewriteUrlPathToProbePath("https://mcp.example.com/api/mcp", "/sse"),
+    ).toBe("https://mcp.example.com/sse");
+  });
+
+  it("returns the identical string when the path already matches", () => {
+    // Identity (not deep equality) matters: App feeds this straight into
+    // setSseUrl, and the same string lets React bail out of the re-render.
+    const url = "http://127.0.0.1:8080/sse";
+    expect(rewriteUrlPathToProbePath(url, "/sse")).toBe(url);
+    expect(rewriteUrlPathToProbePath("http://127.0.0.1:8080", "/sse")).toBe(
+      "http://127.0.0.1:8080/sse",
+    );
+  });
+
+  it("returns an unparseable input unchanged", () => {
+    expect(rewriteUrlPathToProbePath("not a url", "/sse")).toBe("not a url");
   });
 });

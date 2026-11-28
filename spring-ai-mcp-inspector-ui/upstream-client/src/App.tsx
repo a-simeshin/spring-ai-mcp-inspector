@@ -26,6 +26,7 @@ import type {
   SchemaOutput,
 } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import { SESSION_KEYS, getServerSpecificKey } from "./lib/constants";
+import { rewriteUrlPathToProbePath } from "./lib/connectionErrors";
 import {
   hasValidMetaName,
   hasValidMetaPrefix,
@@ -1215,17 +1216,28 @@ const App = () => {
   ]);
 
   // [spring-ai-mcp-inspector PATCH] Switch to SSE (issue #250): the sidebar
-  // hint button flips the transport selector to SSE and reconnects with the
-  // same URL (the URL field is not rewritten). connect() closes over the
-  // current transportType state, so the reconnect must wait for the
-  // re-render that carries the new transport: the pending flag makes the
-  // effect below fire handleConnectRequest exactly once, after the selector
-  // actually switched, and lets the same validation run as a normal connect.
+  // hint button flips the transport selector to SSE and reconnects. When the
+  // probe-proven path differs from the path of the URL field (owner rework
+  // on PR #436: a developer types the Streamable default /mcp while the SSE
+  // probe proves /sse alive), the rewrite touches ONLY the path of the URL
+  // field, keeping scheme, host, port and query; equal paths keep the
+  // same-URL behaviour. connect() closes over the current transportType
+  // state, so the reconnect must wait for the re-render that carries the new
+  // transport: the pending flag makes the effect below fire
+  // handleConnectRequest exactly once, after the selector actually switched
+  // (setSseUrl and setTransportType batch into that same re-render), and
+  // lets the same validation run as a normal connect.
   const pendingSseSwitchRef = useRef(false);
   const handleSwitchToSse = useCallback(() => {
+    const hint = connectionError?.hint;
+    if (hint?.kind === "sse_only") {
+      setSseUrl((current) =>
+        rewriteUrlPathToProbePath(current, hint.probePath),
+      );
+    }
     pendingSseSwitchRef.current = true;
     setTransportType("sse");
-  }, [setTransportType]);
+  }, [setTransportType, setSseUrl, connectionError]);
   useEffect(() => {
     if (!pendingSseSwitchRef.current || transportType !== "sse") {
       return;

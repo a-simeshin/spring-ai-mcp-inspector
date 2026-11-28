@@ -481,6 +481,32 @@ export const CONNECT_HINT_LOCAL_REF_URL =
   "https://github.com/a-simeshin/spring-ai-mcp-inspector/issues/250";
 
 /**
+ * [spring-ai-mcp-inspector PATCH] Rewrites ONLY the path of a URL string to
+ * the probe-proven path (issue #250, owner rework on PR #436): the main
+ * Spring AI scenario types the Streamable default path (/mcp) while the SSE
+ * probe proves /sse alive, so the Switch to SSE button must reconnect to
+ * the path that actually answers. Scheme, host, port and query stay
+ * untouched; a URL whose path is already the target (or one that does not
+ * parse) comes back unchanged, which keeps the equal-path behaviour of the
+ * first shipped switch (same URL, no rewrite).
+ */
+export function rewriteUrlPathToProbePath(
+  url: string,
+  probePath: string,
+): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.pathname === probePath) {
+      return url;
+    }
+    parsed.pathname = probePath;
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+/**
  * Human-readable phase name shown in the timeout error banner.
  * Maps internal phase wire values to user-facing labels.
  */

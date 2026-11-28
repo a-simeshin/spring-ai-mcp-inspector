@@ -62,7 +62,8 @@ import static com.codeborne.selenide.Selenide.open;
  * spring-projects/spring-ai#7207): pointing the inspector at an SSE-only upstream with
  * the Streamable HTTP transport must surface the strong S1 hint verbatim inside the
  * connect-failure alert, and clicking "Switch to SSE" must flip the transport selector to
- * SSE and reconnect against the same URL.
+ * SSE and reconnect: against the same URL when its path already matches the probe path,
+ * otherwise with only the URL field's path rewritten to the probe-proven path.
  *
  * <p>
  * The upstream is the shared {@link E2eSseMcpStub} (JDK {@code HttpServer}): it serves
@@ -233,7 +234,8 @@ class ConnectHintSseOnlyIT {
 			$("[data-testid=switch-to-sse-button]").click();
 
 			// then - the connected branch mounts the Restart/Reconnect button; the URL
-			// field still carries the exact URL the user typed (not rewritten).
+			// field still carries the exact URL the user typed byte for byte: its
+			// path already matches the probe path, so the rewrite is a no-op.
 			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
 			sidebar().$(byText("Disconnect")).shouldBe(visible);
 			$("#sse-url-input").shouldHave(exactValue(stub.sseUrl()));
@@ -245,6 +247,56 @@ class ConnectHintSseOnlyIT {
 			$$("[data-testid=timeline-row]").findBy(text("MCP connect failed"))
 				.shouldBe(visible, Duration.ofSeconds(15))
 				.shouldHave(text(STRONG_HINT_TEXT));
+		}
+	}
+
+	/**
+	 * The owner-rework case (PR #436 review, issue #250): the developer types the
+	 * Streamable default path {@code /mcp}, while this SSE-only stub serves legacy SSE on
+	 * {@code /sse}. The probe proves {@code /sse} alive, so the strong hint carries
+	 * {@code probePath=/sse}; clicking "Switch to SSE" must rewrite ONLY the path of the
+	 * URL field to the probe path (scheme, host, port and query stay) and reconnect over
+	 * SSE. The first test covers the equal-path case (typed URL already {@code /sse}: no
+	 * rewrite).
+	 */
+	@Test
+	@Story("Connect hint")
+	@Severity(SeverityLevel.CRITICAL)
+	@Description("Streamable connect typed against the default /mcp path of an SSE-only stub: Switch to SSE rewrites the URL field's path to the probe-proven /sse and the session comes up over SSE.")
+	@DisplayName("switchToSseWithWrongPath - URL path rewritten to the probe path, session up over SSE")
+	void switchToSseWithWrongPath_rewritesUrlPathToProbePath_andConnectsOverSse() throws IOException {
+		try (final E2eSseMcpStub stub = new E2eSseMcpStub("{\"tools\":{}}")) {
+			startApp();
+			open("/mcp-inspector/index.html");
+
+			// given - Streamable HTTP transport pointed at the Streamable default
+			// path /mcp, which this SSE-only stub does not serve: the connect POST
+			// fails upstream, the probe proves /sse alive, hint.probePath=/sse.
+			String typedUrl = stub.sseUrl().replace("/sse", "/mcp");
+			connectButton().shouldBe(visible, Duration.ofSeconds(15));
+			$("#transport-type-select").shouldBe(visible).click();
+			$("[data-testid=select-option-streamable-http]").shouldBe(visible).click();
+			$("#sse-url-input").shouldBe(visible);
+			setReactInputValue("#sse-url-input", typedUrl);
+
+			connectButton().click();
+
+			// then - the strong hint appears: the probe proved /sse alive even
+			// though the typed URL points at /mcp.
+			alert().shouldBe(visible, Duration.ofSeconds(30));
+			alert().shouldHave(text(STRONG_HINT_TEXT));
+			$("[data-testid=switch-to-sse-button]").shouldBe(visible);
+
+			// when - a real Selenide click on Switch to SSE: the handler rewrites
+			// only the path of the URL field to the probe path and reconnects.
+			$("[data-testid=switch-to-sse-button]").click();
+
+			// then - the URL field reads the stub's /sse URL and the session is
+			// up over SSE: this stub never answers a streamable POST on /mcp, so
+			// a session against <stub>/sse is the SSE path by construction.
+			$("#sse-url-input").shouldHave(exactValue(stub.sseUrl()));
+			$("[data-testid=connect-button]").shouldBe(visible, Duration.ofSeconds(30));
+			sidebar().$(byText("Disconnect")).shouldBe(visible);
 		}
 	}
 
