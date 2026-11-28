@@ -199,11 +199,21 @@ const NO_ISERROR_RESPONSE_EVENT: WireEvent = {
 // [spring-ai-mcp-inspector PATCH] Timeline auth header tests (#316): ok/status
 // options let tests exercise non-OK timeline responses.
 function mockFetch(events: WireEvent[], options?: { ok?: boolean; status?: number }) {
-  const fetchMock = jest.fn().mockResolvedValue({
+  const timelineResponse = {
     ok: options?.ok ?? true,
     status: options?.status ?? 200,
     json: async () => events,
-  });
+  };
+  // [spring-ai-mcp-inspector PATCH] Tool Health panel (#370): the tab mounts
+  // the tool-health poll next to the timeline poll, so the mock routes by URL
+  // and the panel always sees an empty (and silent) aggregate window.
+  const fetchMock = jest.fn((url: unknown) =>
+    Promise.resolve(
+      String(url).includes("/timeline/tool-health")
+        ? { ok: true, status: 200, json: async () => [] }
+        : timelineResponse,
+    ),
+  );
   (global as unknown as { fetch: jest.Mock }).fetch = fetchMock;
   return fetchMock;
 }
@@ -241,7 +251,12 @@ describe("TimelineTab", () => {
     await waitFor(() =>
       expect(screen.getByText("No timeline events yet")).toBeInTheDocument(),
     );
-    const init = fetchMock.mock.calls[0][1] as {
+    // [spring-ai-mcp-inspector PATCH] the Tool Health poll runs alongside
+    // this one; assert on the timeline call, not on the first fetch overall.
+    const timelineCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/api/timeline?"),
+    );
+    const init = timelineCall![1] as {
       headers: Record<string, string>;
     };
     expect(init.headers["X-MCP-Inspector-Auth"]).toBe("tok-316-secret");
@@ -255,7 +270,12 @@ describe("TimelineTab", () => {
     await waitFor(() =>
       expect(screen.getByText("No timeline events yet")).toBeInTheDocument(),
     );
-    const init = fetchMock.mock.calls[0][1] as {
+    // [spring-ai-mcp-inspector PATCH] the Tool Health poll runs alongside
+    // this one; assert on the timeline call, not on the first fetch overall.
+    const timelineCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).includes("/api/timeline?"),
+    );
+    const init = timelineCall![1] as {
       headers: Record<string, string>;
     };
     expect(init.headers).toEqual({});
@@ -290,14 +310,24 @@ describe("TimelineTab", () => {
   it("clears the error banner and restores the events once a poll succeeds", async () => {
     jest.useFakeTimers();
     try {
-      const fetchMock = jest
-        .fn()
-        .mockResolvedValueOnce({ ok: false, status: 401, json: async () => [] })
-        .mockResolvedValue({
-          ok: true,
-          status: 200,
-          json: async () => [APP_LOG_EVENT],
-        });
+      // [spring-ai-mcp-inspector PATCH] Tool Health panel (#370): the 401
+      // hits the timeline poll only; the tool-health poll is routed to a
+      // quiet 200 so the banner under test stays the timeline one.
+      const timelineResponses = [
+        { ok: false, status: 401, json: async () => [] },
+        { ok: true, status: 200, json: async () => [APP_LOG_EVENT] },
+      ];
+      const fetchMock = jest.fn((url: unknown) =>
+        Promise.resolve(
+          String(url).includes("/timeline/tool-health")
+            ? { ok: true, status: 200, json: async () => [] }
+            : (timelineResponses.shift() ?? {
+                ok: true,
+                status: 200,
+                json: async () => [APP_LOG_EVENT],
+              }),
+        ),
+      );
       (global as unknown as { fetch: jest.Mock }).fetch = fetchMock;
       renderTab();
 
@@ -356,7 +386,9 @@ describe("TimelineTab", () => {
     renderTab();
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    const calledUrl = String(fetchMock.mock.calls[0][0]);
+    const calledUrl = String(
+      fetchMock.mock.calls.find(([url]) => String(url).includes("/api/timeline?"))?.[0],
+    );
     expect(calledUrl).toBe("/app/inspector-custom/api/timeline?limit=200");
   });
 
@@ -368,7 +400,9 @@ describe("TimelineTab", () => {
     renderTab();
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    const calledUrl = String(fetchMock.mock.calls[0][0]);
+    const calledUrl = String(
+      fetchMock.mock.calls.find(([url]) => String(url).includes("/api/timeline?"))?.[0],
+    );
     expect(calledUrl).toBe("/mcp-inspector/api/timeline?limit=200");
   });
 
@@ -1058,6 +1092,12 @@ describe("TimelineTab SEP-2322 input_required chain", () => {
       const url = String(input);
       if (url.includes("/api/keepalive")) {
         return { ok: true, json: async () => keepalive };
+      }
+      // [spring-ai-mcp-inspector PATCH] Tool Health panel (#370): the more
+      // specific tool-health URL must be matched first; it contains the
+      // timeline prefix but serves the aggregate payload.
+      if (url.includes("/timeline/tool-health")) {
+        return { ok: true, status: 200, json: async () => [] };
       }
       if (url.includes("/api/timeline")) {
         return { ok: true, json: async () => timeline };

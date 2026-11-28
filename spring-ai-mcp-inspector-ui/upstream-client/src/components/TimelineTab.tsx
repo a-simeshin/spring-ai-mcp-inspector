@@ -19,6 +19,11 @@ import {
 // [spring-ai-mcp-inspector PATCH] Common Spring AI 2.0 pitfalls hint panel
 // reachable from the Timeline view (t_406cfdce).
 import { SpringAiPitfallsPanel } from "./SpringAiPitfallsPanel";
+// [spring-ai-mcp-inspector PATCH] Tool Health click-through filter (#370):
+// narrows the rendered list to the selected tool's calls; the panel itself
+// is a separate component fed by the tool-health REST endpoint.
+import { filterEventsByTool } from "@/lib/toolHealth";
+import { ToolHealthPanel } from "./ToolHealthPanel";
 
 // [spring-ai-mcp-inspector PATCH] New TimelineTab — MCP event timeline panel (#112).
 // [spring-ai-mcp-inspector PATCH] Protocol-version negotiation badge on initialize
@@ -501,6 +506,10 @@ const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
   // traffic the log shows; purely client-side, the server exposes no filter
   // parameter for it.
   const [sideFilter, setSideFilter] = useState<"all" | "client" | "server">("all");
+  // [spring-ai-mcp-inspector PATCH] Tool Health click-through (#370): the
+  // selected tool name narrows the list to that tool's calls; null = no
+  // filter. Purely client-side over the loaded window, like the side filter.
+  const [toolFilter, setToolFilter] = useState<string | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const keepAlive = useKeepAlive(sessionId ?? null);
 
@@ -636,8 +645,11 @@ const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
       sideFilter === "all"
         ? events
         : events.filter((event) => sideOf(event) === sideFilter);
+    // [spring-ai-mcp-inspector PATCH] Tool Health click-through (#370): the
+    // selected tool narrows the window to its calls before chain threading.
+    const toolVisible = toolFilter ? filterEventsByTool(visible, toolFilter) : visible;
     const threaded = threadInputRequiredChains(
-      visible as ChainSourceEvent[],
+      toolVisible as ChainSourceEvent[],
     ) as (TimelineEvent & { chainId: string | null })[];
     const items: (
       | { kind: "single"; event: TimelineEvent }
@@ -660,7 +672,7 @@ const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
       });
     }
     return items;
-  }, [events, sideFilter]);
+  }, [events, sideFilter, toolFilter]);
 
   // [spring-ai-mcp-inspector PATCH] Pitfalls panel detector (#184): the
   // isError=true entry activates when the timeline holds a CallToolResult
@@ -708,6 +720,19 @@ const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
                   </button>
                 ))}
             </div>
+            {/* [spring-ai-mcp-inspector PATCH] Tool Health click-through
+                (#370): chip for the active tool filter, clears it. */}
+            {toolFilter && (
+              <button
+                type="button"
+                data-testid="timeline-tool-filter-clear"
+                className="px-1.5 py-0.5 rounded text-[10px] font-mono cursor-pointer bg-blue-800 text-blue-200"
+                title="Clear the tool filter applied from the Tool Health table"
+                onClick={() => setToolFilter(null)}
+              >
+                tool: {toolFilter} ×
+              </button>
+            )}
             <label className="flex items-center gap-1 text-xs opacity-70 cursor-pointer">
               <input
                 type="checkbox"
@@ -726,6 +751,10 @@ const TimelineTab = ({ sessionId }: { sessionId?: string | null }) => {
           className="mb-2 shrink-0"
           hasIsErrorWarning={hasIsErrorWarning}
         />
+        {/* [spring-ai-mcp-inspector PATCH] Tool Health table (#370): per-tool
+            aggregates over the recorded traffic; row click filters this
+            timeline to that tool's calls. */}
+        <ToolHealthPanel className="mb-2 shrink-0" onFilterTool={setToolFilter} />
         <div className="flex-1 overflow-y-auto">
           {fetchError ? (
             // [spring-ai-mcp-inspector PATCH] Timeline error state (#316): a
