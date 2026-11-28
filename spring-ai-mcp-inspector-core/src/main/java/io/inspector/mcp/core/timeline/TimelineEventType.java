@@ -44,9 +44,15 @@ public enum TimelineEventType {
 	MCP_JSONRPC_NOTIFICATION("mcp.jsonrpc.notification"),
 
 	/**
-	 * A streamable HTTP streaming event (e.g. SSE chunk).
+	 * A streamable-HTTP streaming event (e.g. SSE chunk).
 	 */
 	MCP_STREAM_EVENT("mcp.stream.event"),
+
+	/**
+	 * A failed connect attempt against the upstream MCP server, recorded by the proxy
+	 * right after the failure was classified (and after the optional SSE probe ran).
+	 */
+	MCP_CONNECT_FAILED("mcp.connect.failed"),
 
 	/**
 	 * An application log entry captured by the {@link TimelineAppender} or

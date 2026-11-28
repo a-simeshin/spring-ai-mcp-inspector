@@ -62,6 +62,7 @@ import io.inspector.mcp.core.auth.OAuth2ClientCredentialsTokenManager;
 import io.inspector.mcp.core.config.McpInspectorProperties;
 import io.inspector.mcp.core.keepalive.KeepAliveTracker;
 import io.inspector.mcp.core.keepalive.PingDetectingClientTransport;
+import io.inspector.mcp.core.proxy.ConnectHint;
 import io.inspector.mcp.core.proxy.CustomHeaderNames;
 import io.inspector.mcp.core.proxy.LegacySessionAccessWarner;
 import io.inspector.mcp.core.proxy.McpProxy;
@@ -76,11 +77,13 @@ import io.inspector.mcp.core.proxy.ProxySession;
 import io.inspector.mcp.core.proxy.ProxySessionRegistry;
 import io.inspector.mcp.core.proxy.ProxyTargetResolver;
 import io.inspector.mcp.core.proxy.ProxyTransportFactory;
+import io.inspector.mcp.core.proxy.SseConnectProbe;
 import io.inspector.mcp.core.proxy.TransportKind;
 import io.inspector.mcp.core.task.TaskHandle;
 import io.inspector.mcp.core.task.TaskNotCancelableException;
 import io.inspector.mcp.core.task.TaskNotFoundException;
 import io.inspector.mcp.core.task.TaskService;
+import io.inspector.mcp.core.timeline.McpTrafficRecorder;
 import io.inspector.mcp.webmvc.InspectorServerPortHolder;
 import io.inspector.mcp.webmvc.auth.ServletSessionOwnerResolver;
 import io.inspector.mcp.webmvc.sse.InspectorSseEmitterRegistry;
@@ -156,6 +159,8 @@ public class StreamableHttpProxyController {
 
 	private final InspectorSseEmitterRegistry emitterRegistry;
 
+	private final ObjectProvider<McpTrafficRecorder> trafficRecorderProvider;
+
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
 			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper) {
 		this(registry, transportFactory, mcpProxy, objectMapper, null, null, null, null, null, null);
@@ -226,6 +231,32 @@ public class StreamableHttpProxyController {
 		this.authCodeExchanger = authCodeExchanger;
 		this.taskServiceProvider = null;
 		this.emitterRegistry = null;
+		this.trafficRecorderProvider = null;
+	}
+
+	/**
+	 * Constructor variant for tests and minimal wiring: the optional {@link TaskService}
+	 * via an {@link ObjectProvider} plus the optional timeline {@link McpTrafficRecorder}
+	 * (issue #250) via a provider, used to record {@code MCP_CONNECT_FAILED} events. An
+	 * absent recorder simply disables connect-failure timeline recording. No D8/D9 auth
+	 * wiring.
+	 * @param registry the proxy session registry
+	 * @param transportFactory the proxy transport factory
+	 * @param mcpProxy the MCP proxy relay
+	 * @param objectMapper the JSON object mapper
+	 * @param properties the inspector properties
+	 * @param portHolder the server port holder
+	 * @param taskServiceProvider provider for an optional {@link TaskService}
+	 * @param trafficRecorderProvider provider for the optional traffic recorder, or
+	 * {@code null}
+	 */
+	public StreamableHttpProxyController(final ProxySessionRegistry registry,
+			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
+			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,
+			final ObjectProvider<TaskService> taskServiceProvider,
+			final ObjectProvider<McpTrafficRecorder> trafficRecorderProvider) {
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, null, null, null, null,
+				taskServiceProvider, null, trafficRecorderProvider);
 	}
 
 	/**
@@ -252,7 +283,7 @@ public class StreamableHttpProxyController {
 			final OAuth2AuthCodeTokenExchanger authCodeExchanger,
 			final ObjectProvider<TaskService> taskServiceProvider) {
 		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, sessionOwnerResolver,
-				authProfileStore, ccTokenManager, authCodeExchanger, taskServiceProvider, null);
+				authProfileStore, ccTokenManager, authCodeExchanger, taskServiceProvider, null, null);
 	}
 
 	/**
@@ -270,8 +301,11 @@ public class StreamableHttpProxyController {
 	 * @param ccTokenManager the client-credentials token manager
 	 * @param authCodeExchanger the auth-code exchanger
 	 * @param taskServiceProvider provider for an optional {@link TaskService}
-	 * @param emitterRegistry the SSE emitter registry used to broadcast
-	 * {@code mcp:keepalive-ping} events to UI subscribers
+	 * @param emitterRegistry the SSE emitter registry used to broadcast keep-alive pings;
+	 * may be {@code null} to disable broadcasting
+	 * @param trafficRecorderProvider provider for the optional timeline recorder used to
+	 * record {@code MCP_CONNECT_FAILED} events; an absent recorder simply disables
+	 * connect-failure timeline recording
 	 */
 	@Autowired
 	public StreamableHttpProxyController(final ProxySessionRegistry registry,
@@ -280,7 +314,8 @@ public class StreamableHttpProxyController {
 			final ServletSessionOwnerResolver sessionOwnerResolver, final AuthProfileStore authProfileStore,
 			final OAuth2ClientCredentialsTokenManager ccTokenManager,
 			final OAuth2AuthCodeTokenExchanger authCodeExchanger, final ObjectProvider<TaskService> taskServiceProvider,
-			final InspectorSseEmitterRegistry emitterRegistry) {
+			final InspectorSseEmitterRegistry emitterRegistry,
+			final ObjectProvider<McpTrafficRecorder> trafficRecorderProvider) {
 		this.registry = registry;
 		this.transportFactory = transportFactory;
 		this.mcpProxy = mcpProxy;
@@ -293,10 +328,44 @@ public class StreamableHttpProxyController {
 		this.authCodeExchanger = authCodeExchanger;
 		this.taskServiceProvider = taskServiceProvider;
 		this.emitterRegistry = emitterRegistry;
+		this.trafficRecorderProvider = trafficRecorderProvider;
+	}
+
+	/**
+	 * Constructor variant that wires keep-alive ping broadcasting through the SSE emitter
+	 * registry on top of the D8/D9 auth wiring (no task interception, no timeline
+	 * recording).
+	 * @param registry the proxy session registry
+	 * @param transportFactory the transport factory
+	 * @param mcpProxy the proxy pump
+	 * @param objectMapper the JSON mapper
+	 * @param properties the inspector properties
+	 * @param portHolder the loopback port holder
+	 * @param sessionOwnerResolver the signed-cookie owner resolver
+	 * @param authProfileStore the owner-scoped profile store
+	 * @param ccTokenManager the client-credentials token manager
+	 * @param authCodeExchanger the auth-code exchanger
+	 * @param taskServiceProvider provider for an optional {@link TaskService}
+	 * @param emitterRegistry the SSE emitter registry used to broadcast keep-alive pings;
+	 * may be {@code null} to disable broadcasting
+	 */
+	public StreamableHttpProxyController(final ProxySessionRegistry registry,
+			final ProxyTransportFactory transportFactory, final McpProxy mcpProxy, final JsonMapper objectMapper,
+			final McpInspectorProperties properties, final InspectorServerPortHolder portHolder,
+			final ServletSessionOwnerResolver sessionOwnerResolver, final AuthProfileStore authProfileStore,
+			final OAuth2ClientCredentialsTokenManager ccTokenManager,
+			final OAuth2AuthCodeTokenExchanger authCodeExchanger, final ObjectProvider<TaskService> taskServiceProvider,
+			final InspectorSseEmitterRegistry emitterRegistry) {
+		this(registry, transportFactory, mcpProxy, objectMapper, properties, portHolder, sessionOwnerResolver,
+				authProfileStore, ccTokenManager, authCodeExchanger, taskServiceProvider, emitterRegistry, null);
 	}
 
 	private TaskService taskService() {
 		return (this.taskServiceProvider != null) ? this.taskServiceProvider.getIfAvailable() : null;
+	}
+
+	private McpTrafficRecorder trafficRecorder() {
+		return (this.trafficRecorderProvider != null) ? this.trafficRecorderProvider.getIfAvailable() : null;
 	}
 
 	/**
@@ -447,7 +516,7 @@ public class StreamableHttpProxyController {
 			session = openSession(url, profileId, customHeaders, connectionBudget);
 		}
 		catch (final ProxyConnectFailureException ex) {
-			return connectFailureResponse(ex.failure());
+			return connectFailureResponse(ex.failure(), ex.hint());
 		}
 		if (session == null) {
 			// D8: a foreign/unknown profileId is a structured 400; any other bring-up
@@ -491,15 +560,16 @@ public class StreamableHttpProxyController {
 	 * The body carries a machine-readable {@code error} payload; stack traces and
 	 * internal details stay server-side in the log.
 	 * @param failure the classified connect failure (never {@code null})
+	 * @param hint the SSE probe hint to append, or {@code null} to omit the hint key
 	 * @return the HTTP response entity
 	 */
-	private static ResponseEntity<Object> connectFailureResponse(final ProxyConnectFailure failure) {
+	private static ResponseEntity<Object> connectFailureResponse(final ProxyConnectFailure failure,
+			final ConnectHint hint) {
 		final HttpStatus status = (failure.reason() == ProxyConnectFailure.Reason.TIMEOUT) ? HttpStatus.GATEWAY_TIMEOUT
 				: HttpStatus.BAD_GATEWAY;
 		return ResponseEntity.status(status)
 			.contentType(MediaType.APPLICATION_JSON)
-			.body(Map.of("error", Map.of("code", ERROR_CODE_MCP_CONNECT_FAILED, "reason", failure.reason().wire(),
-					"message", failure.message(), "retryable", failure.retryable())));
+			.body(Map.of("error", ConnectHint.errorPayload(failure, hint, ERROR_CODE_MCP_CONNECT_FAILED)));
 	}
 
 	/**
@@ -528,6 +598,34 @@ public class StreamableHttpProxyController {
 		return ResponseEntity.badRequest()
 			.contentType(MediaType.APPLICATION_JSON)
 			.body(ProxyConnectionBudgets.invalidParameterBody(ex.rawValue(), ex.getMessage()));
+	}
+
+	/**
+	 * Records a {@code MCP_CONNECT_FAILED} timeline event for a failed connect attempt
+	 * (issue #250). Skipped silently when the recorder bean is absent, mirroring how
+	 * traffic recording degrades.
+	 * @param sessionId the proxy session id of the failed attempt (may be {@code null})
+	 * @param failure the classified connect failure
+	 * @param verdict the SSE probe verdict ({@code null} treated as {@code not_run})
+	 * @param target the resolved target URI the connect attempted (may be {@code null})
+	 */
+	private void recordConnectFailed(final String sessionId, final ProxyConnectFailure failure,
+			final SseConnectProbe.SseProbeVerdict verdict, final URI target) {
+		final McpTrafficRecorder trafficRecorder = trafficRecorder();
+		if (trafficRecorder == null) {
+			return;
+		}
+		final SseConnectProbe.SseProbeVerdict effective = (verdict != null) ? verdict
+				: SseConnectProbe.SseProbeVerdict.notRun();
+		final String hintKind = (effective.hint() != null) ? effective.hint().kind() : null;
+		try {
+			trafficRecorder.recordConnectFailed(sessionId, failure.reason().wire(), hintKind, effective.probedPaths(),
+					effective.outcome(), (target != null) ? target.toString() : null);
+		}
+		catch (final RuntimeException ex) {
+			// A broken timeline must never turn a connect failure into a proxy failure.
+			LOG.debug("MCP_CONNECT_FAILED timeline recording failed; the connect error path continues", ex);
+		}
 	}
 
 	/**
@@ -677,12 +775,19 @@ public class StreamableHttpProxyController {
 			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
 			LOG.warn("proxy[{}] await response failed ({}): {}", session.sessionId(), failure.reason().wire(),
 					ex.toString());
+			// [issue #250] The first streamable POST may fail (404/405 bucket) because
+			// the upstream serves the legacy SSE transport only: probe for SSE before
+			// answering. This is the path the mcp-core 2.0.0 SDK failure actually
+			// surfaces on (openSession only builds the transport).
+			final SseConnectProbe.SseProbeVerdict verdict = new SseConnectProbe().evaluate(failure, ex,
+					session.targetUri());
+			recordConnectFailed(session.sessionId(), failure, verdict, session.targetUri());
 			// A failed first POST (the initialize) never returned a session id to the
 			// client, so the session is orphaned — tear it down instead of leaking it.
 			if (includeSessionHeader) {
 				this.registry.removeAndClose(session.sessionId());
 			}
-			return connectFailureResponse(failure);
+			return connectFailureResponse(failure, verdict.hint());
 		}
 	}
 
@@ -719,7 +824,7 @@ public class StreamableHttpProxyController {
 		final AtomicReference<String> authorizationRef = new AtomicReference<>(
 				(headers != null) ? headers.authorization() : null);
 		final McpClientTransport target;
-		final URI resolved;
+		URI resolved = null;
 		final long connectStartNanos = System.nanoTime();
 		try {
 			resolved = ProxyTargetResolver.resolve(url, loopbackPort(), "/mcp");
@@ -730,7 +835,13 @@ public class StreamableHttpProxyController {
 		catch (final Exception ex) {
 			final ProxyConnectFailure failure = ProxyConnectFailure.classify(ex);
 			LOG.warn("proxy[{}] upstream connect failed ({}): {}", sessionId, failure.reason().wire(), ex.toString());
-			throw new ProxyConnectFailureException(failure, ex);
+			// [issue #250] The streamable POST may fail because the upstream serves
+			// the legacy SSE transport only: run the SSE probe before answering so the
+			// failure can carry a transport-switch hint. A target that could not even
+			// be resolved yields a null URI and the probe answers not_run.
+			final SseConnectProbe.SseProbeVerdict verdict = new SseConnectProbe().evaluate(failure, ex, resolved);
+			recordConnectFailed(sessionId, failure, verdict, resolved);
+			throw new ProxyConnectFailureException(failure, ex, verdict.hint(), verdict);
 		}
 		final Sinks.Many<JsonNode> browserToTarget = Sinks.many().unicast().onBackpressureBuffer();
 		final Sinks.Many<JsonNode> targetToBrowser = Sinks.many().replay().limit(REPLAY_BUFFER);
