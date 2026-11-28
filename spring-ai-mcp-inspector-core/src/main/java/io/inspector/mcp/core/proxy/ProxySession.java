@@ -19,6 +19,8 @@ package io.inspector.mcp.core.proxy;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -109,6 +111,17 @@ public final class ProxySession {
 	 * non-blocking thread.
 	 */
 	private static final Duration EMIT_SPIN_BUDGET = Duration.ofSeconds(1);
+
+	/**
+	 * Bound on the per-session set of upstream answer frames already handed to a
+	 * per-request POST awaiter (FIFO eviction). An entry only has to outlive its frame's
+	 * stay in the {@code targetToBrowser} replay buffer, because only buffered frames can
+	 * be offered to a later awaiter a second time. Both stacks build sessions with a
+	 * replay limit of 256 frames, far below this bound, so an evicted entry's frame is
+	 * guaranteed to be out of every replay window already and can never be stale-matched
+	 * again.
+	 */
+	static final int CONSUMED_ANSWER_CAPACITY = 1024;
 
 	/** Web-app session identifier. Random UUID by default. */
 	private final String sessionId;
@@ -240,6 +253,20 @@ public final class ProxySession {
 
 	/** Monotonic counter for generating unique probe request IDs. */
 	private static final AtomicLong PROBE_ID_SEQ = new AtomicLong(0);
+
+	/**
+	 * Upstream answer frames already handed to a per-request POST awaiter, keyed by
+	 * identity (two structurally identical upstream answers must stay independently
+	 * consumable). FIFO-bounded, see {@link #CONSUMED_ANSWER_CAPACITY}.
+	 */
+	private final Set<Object> consumedAnswerFrames = Collections
+		.newSetFromMap(Collections.synchronizedMap(new LinkedHashMap<>() {
+
+			@Override
+			protected boolean removeEldestEntry(final java.util.Map.Entry<Object, Boolean> eldest) {
+				return size() > CONSUMED_ANSWER_CAPACITY;
+			}
+		}));
 
 	private final io.inspector.mcp.core.keepalive.KeepAliveTracker keepAliveTracker;
 
@@ -556,6 +583,21 @@ public final class ProxySession {
 		return id;
 	}
 
+	/**
+	 * Marks an upstream answer frame as consumed by a per-request POST awaiter and
+	 * reports whether this caller may use it. Only the first consumer of a frame is
+	 * admitted, so a late awaiter skips buffered frames an earlier awaiter already
+	 * delivered (issue #271: a client reusing a JSON-RPC id within one session would
+	 * otherwise instantly receive the earlier request's answer from the replay buffer
+	 * instead of waiting for its own fresh one).
+	 * @param frame the inbound frame an awaiter is about to hand to its caller
+	 * @return {@code true} if this caller may use the frame; {@code false} when the frame
+	 * was already consumed
+	 */
+	public boolean tryConsumeAnswerFrame(final JsonNode frame) {
+		return this.consumedAnswerFrames.add(new ConsumedAnswerFrame(frame));
+	}
+
 	public void failUpstream(final Throwable error) {
 		if (!this.upstreamTerminated.compareAndSet(false, true)) {
 			return;
@@ -583,6 +625,9 @@ public final class ProxySession {
 		}
 		// Clear any pending probe IDs so they do not leak past this session.
 		this.probeIds.clear();
+		// Same for the consumed answer frames: the session object is the only
+		// holder, so clearing here is what releases them.
+		this.consumedAnswerFrames.clear();
 		// First, and lock-free: this is what actually ends the browser-facing streams.
 		this.closeFuture.complete(null);
 		try {
@@ -623,6 +668,31 @@ public final class ProxySession {
 			// exactly what hid the event-loop bug above for as long as it lasted.
 			LOG.debug("proxy[{}] upstream close failed: {}", this.sessionId, ex.toString());
 		}
+	}
+
+	/**
+	 * Identity key for a consumed answer frame: structural {@code equals} on
+	 * {@link JsonNode} would wrongly refuse a distinct upstream answer that happens to
+	 * carry an identical payload.
+	 */
+	private static final class ConsumedAnswerFrame {
+
+		private final JsonNode frame;
+
+		ConsumedAnswerFrame(final JsonNode frame) {
+			this.frame = frame;
+		}
+
+		@Override
+		public boolean equals(final Object other) {
+			return (other instanceof ConsumedAnswerFrame that) && (this.frame == that.frame);
+		}
+
+		@Override
+		public int hashCode() {
+			return System.identityHashCode(this.frame);
+		}
+
 	}
 
 }
