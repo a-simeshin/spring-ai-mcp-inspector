@@ -19,6 +19,13 @@ import {
 // [spring-ai-mcp-inspector PATCH] Common Spring AI 2.0 pitfalls hint panel
 // reachable from the Timeline view (t_406cfdce).
 import { SpringAiPitfallsPanel } from "./SpringAiPitfallsPanel";
+// [spring-ai-mcp-inspector PATCH] Transport-switch hint copy (issue #250):
+// the timeline entry shows the same verbatim S1/S2 strings as the sidebar
+// alert, plain text without a button.
+import {
+  CONNECT_HINT_STRONG_TEXT,
+  CONNECT_HINT_WEAK_TEXT,
+} from "@/lib/connectionErrors";
 
 // [spring-ai-mcp-inspector PATCH] New TimelineTab — MCP event timeline panel (#112).
 // [spring-ai-mcp-inspector PATCH] Protocol-version negotiation badge on initialize
@@ -37,6 +44,10 @@ type TimelineEventType =
   | "MCP_JSONRPC_RESPONSE"
   | "MCP_JSONRPC_NOTIFICATION"
   | "MCP_STREAM_EVENT"
+  // [spring-ai-mcp-inspector PATCH] Failed connect attempts recorded by the
+  // proxy connect-failure path (issue #250); mirrors
+  // io.inspector.mcp.core.timeline.TimelineEventType.MCP_CONNECT_FAILED.
+  | "MCP_CONNECT_FAILED"
   | "APP_LOG"
   | "KEEP_ALIVE";
 
@@ -67,6 +78,9 @@ const EVENT_COLORS: Record<TimelineEventType, string> = {
   MCP_JSONRPC_RESPONSE: "text-green-400 border-l-green-500",
   MCP_JSONRPC_NOTIFICATION: "text-yellow-400 border-l-yellow-500",
   MCP_STREAM_EVENT: "text-purple-400 border-l-purple-500",
+  // [spring-ai-mcp-inspector PATCH] Amber for connect failures (issue #250):
+  // distinct from request blue / response green / notification yellow.
+  MCP_CONNECT_FAILED: "text-amber-400 border-l-amber-500",
   APP_LOG: "text-gray-400 border-l-gray-500",
   KEEP_ALIVE: "text-cyan-400 border-l-cyan-500",
 };
@@ -76,6 +90,8 @@ const EVENT_BG: Record<TimelineEventType, string> = {
   MCP_JSONRPC_RESPONSE: "bg-green-950/30",
   MCP_JSONRPC_NOTIFICATION: "bg-yellow-950/30",
   MCP_STREAM_EVENT: "bg-purple-950/30",
+  // [spring-ai-mcp-inspector PATCH] Amber for connect failures (issue #250).
+  MCP_CONNECT_FAILED: "bg-amber-950/30",
   APP_LOG: "bg-gray-950/30",
   KEEP_ALIVE: "bg-cyan-950/30",
 };
@@ -329,6 +345,28 @@ function TimelineEventRow({
       ? payload["direction"]
       : null;
 
+  // [spring-ai-mcp-inspector PATCH] Connect-failure rows (issue #250): the
+  // collapsed title carries "MCP connect failed" with the classified reason
+  // and, when a hint kind is present, the verbatim S1/S2 hint text (plain
+  // text, no button). The payload fields come from
+  // McpTrafficRecorder.recordConnectFailed.
+  const connectFailedTitle =
+    type === "MCP_CONNECT_FAILED"
+      ? `MCP connect failed${
+          typeof payload["reason"] === "string"
+            ? ` (${payload["reason"]})`
+            : ""
+        }`
+      : null;
+  const connectFailedHintText =
+    type === "MCP_CONNECT_FAILED"
+      ? payload["hintKind"] === "sse_only"
+        ? CONNECT_HINT_STRONG_TEXT
+        : payload["hintKind"] === "maybe_sse"
+          ? CONNECT_HINT_WEAK_TEXT
+          : null
+      : null;
+
   const colorClass = isError ? ERROR_COLOR : (EVENT_COLORS[type] || "text-gray-400");
   const bgClass = isError ? ERROR_BG : (EVENT_BG[type] || "bg-gray-950/30");
 
@@ -350,7 +388,20 @@ function TimelineEventRow({
       <div className="flex items-center gap-2 text-xs">
         <span className="font-mono opacity-70 shrink-0 w-14">{formatTimestamp(event.timestamp)}</span>
         <span className="font-semibold shrink-0 w-20">{typeLabel}</span>
-        <span className="truncate min-w-0 flex-1">{label}</span>
+        {/* [spring-ai-mcp-inspector PATCH] Connect-failure rows (issue #250):
+            specialized collapsed title with the reason and hint text; other
+            types keep the generic label. */}
+        {connectFailedTitle ? (
+          <span
+            className="truncate min-w-0 flex-1"
+            title={connectFailedHintText ?? connectFailedTitle}
+          >
+            {connectFailedTitle}
+            {connectFailedHintText ? `. ${connectFailedHintText}` : ""}
+          </span>
+        ) : (
+          <span className="truncate min-w-0 flex-1">{label}</span>
+        )}
         {/* [spring-ai-mcp-inspector PATCH] Client-traffic badge (#120):
             provenance of side=client frames, with the client name and the
             direction arrow (out = client sent it, in = client received it). */}
@@ -399,6 +450,14 @@ function TimelineEventRow({
           {negotiation && <ProtocolNegotiationBlock negotiation={negotiation} />}
           {isError && <ToolErrorBlock text={errorText} />}
           {leak && <LeakDetailBlock leak={leak} onJumpToLog={onJumpToLog} />}
+          {/* [spring-ai-mcp-inspector PATCH] Connect-failure rows (issue #250):
+              the hint as a readable paragraph, then the raw payload. */}
+          {connectFailedTitle && (
+            <div className="mb-1 whitespace-normal">
+              {connectFailedTitle}
+              {connectFailedHintText ? `. ${connectFailedHintText}` : ""}
+            </div>
+          )}
           {Object.keys(payload).length > 0 ? (
             <div className="mb-1">{JSON.stringify(payload, null, 2)}</div>
           ) : (

@@ -18,6 +18,7 @@ import {
   Server,
   AlertTriangle,
   Lock,
+  ArrowRightLeft,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -64,6 +65,17 @@ import { validateRedirectUrl, validateServerUrl } from "@/utils/urlValidation";
 import AuthProfiles from "./AuthProfiles";
 import { AuthProfileSummary } from "@/lib/auth-profiles";
 import { ProxyErrorDto } from "@/lib/connectionErrors";
+// [spring-ai-mcp-inspector PATCH] Transport-switch hint copy (issue #250):
+// rendered verbatim from the shared constants so the sidebar alert and the
+// timeline entry stay in sync.
+import {
+  CONNECT_HINT_STRONG_TEXT,
+  CONNECT_HINT_WEAK_TEXT,
+  CONNECT_HINT_UPSTREAM_REF_LABEL,
+  CONNECT_HINT_UPSTREAM_REF_URL,
+  CONNECT_HINT_LOCAL_REF_LABEL,
+  CONNECT_HINT_LOCAL_REF_URL,
+} from "@/lib/connectionErrors";
 // [spring-ai-mcp-inspector PATCH] Version badge in the connect zone showing
 // the negotiated protocol revision (see NOTICE.d/version-badge.txt).
 import VersionBadge from "./VersionBadge";
@@ -112,6 +124,10 @@ interface SidebarProps {
   urlTouched: boolean;
   setUrlTouched: (touched: boolean) => void;
   onConnect: () => void;
+  // [spring-ai-mcp-inspector PATCH] Transport-switch hint (issue #250):
+  // flips the transport selector to SSE and reconnects with the same URL;
+  // owned by App so the reconnect runs after the selector switched.
+  onSwitchToSse?: () => void;
   onDisconnect: () => Promise<void>;
   onResetSession: () => void;
   logLevel: LoggingLevel;
@@ -260,6 +276,7 @@ const Sidebar = ({
   urlTouched,
   setUrlTouched,
   onConnect,
+  onSwitchToSse,
   onDisconnect,
   onResetSession,
   logLevel,
@@ -851,6 +868,58 @@ const Sidebar = ({
                     </>
                   )}
                 </p>
+                {/* [spring-ai-mcp-inspector PATCH] Transport-switch hint
+                    (issue #250): the strong hint adds the verbatim S1 copy,
+                    the upstream/local refs links and a Switch to SSE button;
+                    the weak hint adds the S2 paragraph only, without links or
+                    a button. A failure without a hint keeps the legacy alert
+                    byte-identical. */}
+                {connectionError.hint?.kind === "sse_only" && (
+                  <div
+                    data-testid="connect-hint-strong"
+                    className="text-amber-700 dark:text-amber-300"
+                  >
+                    <p className="text-xs mb-2">{CONNECT_HINT_STRONG_TEXT}</p>
+                    <p className="text-xs mb-2">
+                      Refs:{" "}
+                      <a
+                        href={CONNECT_HINT_UPSTREAM_REF_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline"
+                      >
+                        {CONNECT_HINT_UPSTREAM_REF_LABEL}
+                      </a>
+                      {", "}
+                      <a
+                        href={CONNECT_HINT_LOCAL_REF_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline"
+                      >
+                        {CONNECT_HINT_LOCAL_REF_LABEL}
+                      </a>
+                    </p>
+                    <Button
+                      data-testid="switch-to-sse-button"
+                      size="sm"
+                      variant="outline"
+                      className="w-full"
+                      onClick={onSwitchToSse}
+                    >
+                      <ArrowRightLeft className="w-4 h-4 mr-2" />
+                      Switch to SSE
+                    </Button>
+                  </div>
+                )}
+                {connectionError.hint?.kind === "maybe_sse" && (
+                  <div
+                    data-testid="connect-hint-weak"
+                    className="text-amber-700 dark:text-amber-300"
+                  >
+                    <p className="text-xs mb-2">{CONNECT_HINT_WEAK_TEXT}</p>
+                  </div>
+                )}
                 {connectionError.reason === "timeout" ? (
                   <div className="grid grid-cols-2 gap-2">
                     <Button

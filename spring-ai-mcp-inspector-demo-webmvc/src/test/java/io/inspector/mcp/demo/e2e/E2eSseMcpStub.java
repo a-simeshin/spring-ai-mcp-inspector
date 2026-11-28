@@ -90,6 +90,16 @@ final class E2eSseMcpStub implements AutoCloseable {
 	private final AtomicBoolean stopped = new AtomicBoolean();
 
 	E2eSseMcpStub() throws IOException {
+		this("{}");
+	}
+
+	/**
+	 * Same stub with explicit server capabilities in the initialize result, e.g.
+	 * {@code "{\"tools\":{}}"} so the inspector mounts its capability tabs. The no-arg
+	 * constructor keeps the historical empty capabilities used by {@code InspectorUiIT}.
+	 */
+	E2eSseMcpStub(final String capabilitiesJson) throws IOException {
+		this.capabilitiesJson = capabilitiesJson;
 		this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		// The held-open SSE stream blocks one handler thread; give the server an
 		// unbounded pool so message POSTs are never starved of a thread.
@@ -98,6 +108,9 @@ final class E2eSseMcpStub implements AutoCloseable {
 		this.server.createContext("/message", this::handleMessage);
 		this.server.start();
 	}
+
+	/** Capabilities fragment embedded into every initialize-style response. */
+	private final String capabilitiesJson;
 
 	/** The SSE handshake URL to put in the inspector's server-URL input. */
 	String sseUrl() {
@@ -174,15 +187,27 @@ final class E2eSseMcpStub implements AutoCloseable {
 		final String id = extractId(body);
 		if (id != null) {
 			final BlockingQueue<String> stream = this.activeStream.get();
-			final String response = """
-					{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25",\
-					"capabilities":{},"serverInfo":{"name":"e2e-stub-mcp","version":"1.0.0"}}}""".formatted(id);
+			final String response = toolsListResponse(body, id);
 			if (stream != null) {
 				stream.offer(response);
 			}
 		}
 		exchange.sendResponseHeaders(202, -1);
 		exchange.close();
+	}
+
+	/**
+	 * Builds the JSON-RPC response for a request frame: a proper {@code tools/list}
+	 * result when asked (the capability tabs poll it), an initialize-style result with
+	 * the configured capabilities otherwise.
+	 */
+	private String toolsListResponse(final String body, final String id) {
+		if (body.contains("\"method\":\"tools/list\"")) {
+			return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"tools\":[],\"nextCursor\":null}}";
+		}
+		return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"protocolVersion\":\"2025-11-25\","
+				+ "\"capabilities\":" + this.capabilitiesJson
+				+ ",\"serverInfo\":{\"name\":\"e2e-stub-mcp\",\"version\":\"1.0.0\"}}}";
 	}
 
 	/**

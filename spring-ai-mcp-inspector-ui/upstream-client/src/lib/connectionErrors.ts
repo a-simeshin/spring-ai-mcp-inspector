@@ -185,6 +185,31 @@ export interface ConnectFailure {
   elapsedMs?: number;
   /** Per-phase budget in ms. */
   budgetMs?: number;
+  // [spring-ai-mcp-inspector PATCH] Transport-switch hint (issue #250):
+  // the optional SSE-probe verdict attached by the proxy. The key is present
+  // (well-formed) or null (present but malformed) only when the payload
+  // carries a `hint` value; legacy payloads leave this field absent.
+  hint?: ConnectFailureHint | null;
+}
+
+// [spring-ai-mcp-inspector PATCH] Transport-switch hint contract (issue #250,
+// upstream spring-projects/spring-ai#7207). The proxy attaches it to the
+// MCP_CONNECT_FAILED payload when the SSE probe ran: "sse_only" when the
+// probe confirmed an SSE endpoint is alive (strong hint), "maybe_sse" when
+// the probe ruled SSE out but the failure still looks like a transport
+// mismatch (weak hint). Parsing is tolerant: a malformed hint degrades to
+// null and never fails the legacy parse.
+export type ConnectFailureHintKind = "sse_only" | "maybe_sse";
+
+export interface ConnectFailureHintRefs {
+  upstream: string;
+  local: string;
+}
+
+export interface ConnectFailureHint {
+  kind: ConnectFailureHintKind;
+  probePath: string;
+  refs?: ConnectFailureHintRefs;
 }
 
 export const CONNECT_FAILED_ERROR_CODE = "MCP_CONNECT_FAILED";
@@ -214,6 +239,10 @@ export class ConnectFailedError extends Error {
   readonly phase?: string;
   readonly elapsedMs?: number;
   readonly budgetMs?: number;
+  // [spring-ai-mcp-inspector PATCH] Transport-switch hint (issue #250):
+  // carried through the transport error so connectionFailureFromError can
+  // restore it for the sidebar alert.
+  readonly hint?: ConnectFailureHint | null;
 
   constructor(failure: ConnectFailure) {
     super(failure.message);
@@ -224,6 +253,7 @@ export class ConnectFailedError extends Error {
     this.phase = failure.phase;
     this.elapsedMs = failure.elapsedMs;
     this.budgetMs = failure.budgetMs;
+    this.hint = failure.hint;
   }
 }
 
@@ -231,6 +261,35 @@ export function isConnectFailedError(
   error: unknown,
 ): error is ConnectFailedError {
   return error instanceof ConnectFailedError;
+}
+
+/**
+ * [spring-ai-mcp-inspector PATCH] Validates the optional transport-switch
+ * hint carried on an MCP_CONNECT_FAILED payload (issue #250). Returns the
+ * well-formed hint or null for anything else (absent, wrong shape, unknown
+ * kind, non-string probePath); a malformed refs pair degrades to an absent
+ * refs without invalidating the hint itself. Never throws.
+ */
+export function parseConnectFailureHint(value: unknown): ConnectFailureHint | null {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  const kind = value.kind;
+  const probePath = value.probePath;
+  if (
+    (kind !== "sse_only" && kind !== "maybe_sse") ||
+    typeof probePath !== "string"
+  ) {
+    return null;
+  }
+  const refsValue = value.refs;
+  const refs: ConnectFailureHintRefs | undefined =
+    isPlainObject(refsValue) &&
+    typeof refsValue.upstream === "string" &&
+    typeof refsValue.local === "string"
+      ? { upstream: refsValue.upstream, local: refsValue.local }
+      : undefined;
+  return { kind, probePath, refs };
 }
 
 /**
@@ -295,7 +354,7 @@ export async function parseConnectFailureResponse(
     return null;
   }
 
-  return {
+  const failure: ConnectFailure = {
     code: CONNECT_FAILED_ERROR_CODE,
     reason: reason as ConnectFailureReason,
     message:
@@ -308,6 +367,14 @@ export async function parseConnectFailureResponse(
       typeof error.elapsedMs === "number" ? error.elapsedMs : undefined,
     budgetMs: typeof error.budgetMs === "number" ? error.budgetMs : undefined,
   };
+  // [spring-ai-mcp-inspector PATCH] Transport-switch hint (issue #250): the
+  // key is added only when the payload carried a hint value (well-formed or
+  // null when malformed), so legacy payloads stay byte-identical for the
+  // existing strict deep-equality expectations.
+  if ("hint" in error) {
+    failure.hint = parseConnectFailureHint(error.hint);
+  }
+  return failure;
 }
 
 /**
@@ -344,6 +411,9 @@ export function connectionFailureFromError(error: unknown): ConnectFailure {
       phase: error.phase,
       elapsedMs: error.elapsedMs,
       budgetMs: error.budgetMs,
+      // [spring-ai-mcp-inspector PATCH] Transport-switch hint (issue #250):
+      // restored so the sidebar alert can render it.
+      hint: error.hint,
     };
   }
   if (isHttp401Error(error)) {
@@ -390,6 +460,49 @@ export function humanReadableReason(reason: ConnectFailureReason): string {
       return "Server responded 404: check the URL path";
     default:
       return "";
+  }
+}
+
+// [spring-ai-mcp-inspector PATCH] Transport-switch hint copy (issue #250):
+// verbatim user-facing strings, the single source of truth for the sidebar
+// alert and the timeline entry so a future i18n pass picks them up together.
+// No em dashes anywhere in the copy.
+export const CONNECT_HINT_STRONG_TEXT =
+  "This server appears to serve the legacy SSE transport only. For Spring AI servers set `spring.ai.mcp.server.protocol=STREAMABLE`, or connect with the SSE transport.";
+
+export const CONNECT_HINT_WEAK_TEXT =
+  "If this is a Spring AI server, its SSE transport may be active instead: try Transport Type SSE or set `spring.ai.mcp.server.protocol=STREAMABLE` on the server (#250).";
+
+export const CONNECT_HINT_UPSTREAM_REF_LABEL = "spring-projects/spring-ai#7207";
+export const CONNECT_HINT_UPSTREAM_REF_URL =
+  "https://github.com/spring-projects/spring-ai/issues/7207";
+export const CONNECT_HINT_LOCAL_REF_LABEL = "#250";
+export const CONNECT_HINT_LOCAL_REF_URL =
+  "https://github.com/a-simeshin/spring-ai-mcp-inspector/issues/250";
+
+/**
+ * [spring-ai-mcp-inspector PATCH] Rewrites ONLY the path of a URL string to
+ * the probe-proven path (issue #250, owner rework on PR #436): the main
+ * Spring AI scenario types the Streamable default path (/mcp) while the SSE
+ * probe proves /sse alive, so the Switch to SSE button must reconnect to
+ * the path that actually answers. Scheme, host, port and query stay
+ * untouched; a URL whose path is already the target (or one that does not
+ * parse) comes back unchanged, which keeps the equal-path behaviour of the
+ * first shipped switch (same URL, no rewrite).
+ */
+export function rewriteUrlPathToProbePath(
+  url: string,
+  probePath: string,
+): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.pathname === probePath) {
+      return url;
+    }
+    parsed.pathname = probePath;
+    return parsed.toString();
+  } catch {
+    return url;
   }
 }
 
