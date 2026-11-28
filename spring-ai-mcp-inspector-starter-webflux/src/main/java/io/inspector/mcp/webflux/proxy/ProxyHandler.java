@@ -1301,11 +1301,15 @@ public class ProxyHandler {
 		// framework. Without this the replay sink may not carry the error to
 		// a late subscriber, and the awaiter would block for the full
 		// streamable-request timeout instead of failing fast.
+		// The filter also consumes each frame it accepts (issue #271): a client
+		// reusing a JSON-RPC id within the session waits for its own upstream
+		// answer instead of instantly receiving the earlier request's buffered
+		// one.
 		final Duration requestTimeout = includeSessionHeader ? connectionBudget : this.timeouts.getStreamableRequest();
 		final Sinks.One<JsonNode> awaiterSink = Sinks.one();
 		session.targetToBrowser()
 			.asFlux()
-			.filter((frame) -> matchesId(frame, idNode))
+			.filter((frame) -> matchesId(frame, idNode) && session.tryConsumeAnswerFrame(frame))
 			.next()
 			.timeout(requestTimeout)
 			.subscribe(awaiterSink::tryEmitValue, awaiterSink::tryEmitError, () -> awaiterSink.tryEmitEmpty());

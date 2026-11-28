@@ -706,6 +706,10 @@ public class StreamableHttpProxyController {
 		// if the upstream answer lands before .block() registers a subscriber,
 		// the replay buffer still hands it over). We still emit AFTER preparing
 		// the await pipeline so the read-side wiring exists first.
+		// The filter also consumes each frame it accepts (issue #271): a client
+		// reusing a JSON-RPC id within the session waits for its own upstream
+		// answer instead of instantly receiving the earlier request's buffered
+		// one.
 		// Eagerly subscribe to targetToBrowser via Sinks.One so the upstream
 		// transport's connect() error (ECONNREFUSED/DNS/timeout) is captured
 		// even when the await pipeline is subscribed to later by block().
@@ -717,7 +721,7 @@ public class StreamableHttpProxyController {
 		final Sinks.One<JsonNode> awaiterSink = Sinks.one();
 		session.targetToBrowser()
 			.asFlux()
-			.filter((frame) -> matchesId(frame, idNode))
+			.filter((frame) -> matchesId(frame, idNode) && session.tryConsumeAnswerFrame(frame))
 			.next()
 			.timeout(requestTimeout)
 			.subscribe(awaiterSink::tryEmitValue, awaiterSink::tryEmitError, () -> awaiterSink.tryEmitEmpty());

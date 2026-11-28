@@ -1529,6 +1529,105 @@ class ProxyHandlerTests {
 
 		@Test
 		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("postMcp() twice with the same JSON-RPC id returns the fresh upstream answer, "
+				+ "not the buffered answer of the first request (issue #271)")
+		void postMcp_repeatedRequestId_returnsFreshAnswerNotBufferedStale() throws Exception {
+			// given: a known session whose replay sink already holds the first
+			// request's answer (it raced the awaiter; the case the replay buffer
+			// exists for)
+			final ProxySession session = newSession("s-repeat");
+			given(ProxyHandlerTests.this.registry.get("s-repeat")).willReturn(session);
+			final JsonNode firstAnswer = ProxyHandlerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"content\":\"first\"}}");
+			session.targetToBrowser().tryEmitNext(firstAnswer);
+			final ServerRequest firstRequest = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s-repeat")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\"}"));
+
+			// when: the first tools/call is answered with the fresh answer
+			final ServerResponse first = ProxyHandlerTests.this.handler.postMcp(firstRequest).block();
+			// ... and the upstream answers the repeated id with a distinct result
+			// that again reaches the replay buffer before the second awaiter
+			// subscribes
+			final JsonNode secondAnswer = ProxyHandlerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"content\":\"second\"}}");
+			session.targetToBrowser().tryEmitNext(secondAnswer);
+			final ServerRequest secondRequest = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s-repeat")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\"}"));
+			final ServerResponse second = ProxyHandlerTests.this.handler.postMcp(secondRequest).block();
+
+			// then: the repeated id must not be answered with the first
+			// request's buffered result
+			assertThat(first).isNotNull();
+			assertThat(first.statusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(second).isNotNull();
+			assertThat(second.statusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(entityJson(second))
+				.as("a repeated JSON-RPC id must be answered with its own upstream "
+						+ "response, not the earlier request's buffered answer")
+				.isEqualTo(secondAnswer);
+		}
+
+		@Test
+		@Story("Streamable-HTTP relay")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("two concurrent in-flight requests reusing the same JSON-RPC id each receive their own "
+				+ "distinct upstream answer (issue #271)")
+		void postMcp_concurrentDuplicateRequestId_eachAwaiterReceivesDistinctAnswer() throws Exception {
+			// given: one session, two overlapping POSTs with the same id
+			final ProxySession session = newSession("s-dup");
+			given(ProxyHandlerTests.this.registry.get("s-dup")).willReturn(session);
+			final ServerRequest requestOne = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s-dup")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\"}"));
+			final ServerRequest requestTwo = toServerRequest(MockServerHttpRequest.post("/mcp-inspector-api/mcp")
+				.header(ProxyConstants.MCP_SESSION_ID_HEADER, "s-dup")
+				.contentType(MediaType.APPLICATION_JSON)
+				.body("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\"}"));
+			final CountDownLatch bothRelayed = new CountDownLatch(2);
+			session.browserToTarget().asFlux().subscribe((frame) -> bothRelayed.countDown());
+			final AtomicReference<ServerResponse> firstResult = new AtomicReference<>();
+			final AtomicReference<ServerResponse> secondResult = new AtomicReference<>();
+			final Thread one = new Thread(
+					() -> firstResult.set(ProxyHandlerTests.this.handler.postMcp(requestOne).block()));
+			final Thread two = new Thread(
+					() -> secondResult.set(ProxyHandlerTests.this.handler.postMcp(requestTwo).block()));
+
+			// when: both awaiters are subscribed before any answer exists (the
+			// relay emits the browser frame only after subscribing its awaiter,
+			// so the relayed frames are the deterministic signal)
+			one.start();
+			two.start();
+			assertThat(bothRelayed.await(5, TimeUnit.SECONDS)).as("both duplicate-id requests relayed").isTrue();
+			final JsonNode answerOne = ProxyHandlerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"n\":1}}");
+			final JsonNode answerTwo = ProxyHandlerTests.this.objectMapper
+				.readTree("{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"n\":2}}");
+			session.targetToBrowser().tryEmitNext(answerOne);
+			session.targetToBrowser().tryEmitNext(answerTwo);
+			one.join(5000);
+			two.join(5000);
+
+			// then: each awaiter receives a distinct fresh answer, nobody is
+			// handed a frame the other awaiter already consumed
+			assertThat(firstResult.get()).isNotNull();
+			assertThat(secondResult.get()).isNotNull();
+			assertThat(firstResult.get().statusCode()).isEqualTo(HttpStatus.OK);
+			assertThat(secondResult.get().statusCode()).isEqualTo(HttpStatus.OK);
+			final JsonNode firstBody = entityJson(firstResult.get());
+			final JsonNode secondBody = entityJson(secondResult.get());
+			assertThat(firstBody).as("first awaiter answer").isIn(answerOne, answerTwo);
+			assertThat(secondBody).as("second awaiter answer").isIn(answerOne, answerTwo);
+			assertThat(firstBody).as("duplicate-id awaiters must not share one answer").isNotEqualTo(secondBody);
+		}
+
+		@Test
+		@Story("Streamable-HTTP relay")
 		@Severity(SeverityLevel.NORMAL)
 		@Description("postMcp() referencing an unknown mcp-session-id returns 404")
 		void postMcp_withUnknownSessionHeader_returnsNotFound() {

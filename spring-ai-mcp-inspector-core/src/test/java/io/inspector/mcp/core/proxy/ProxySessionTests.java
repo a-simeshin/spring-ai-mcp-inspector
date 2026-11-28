@@ -408,4 +408,79 @@ class ProxySessionTests {
 
 	}
 
+	@Nested
+	@DisplayName("tryConsumeAnswerFrame()")
+	class ConsumeAnswerFrame {
+
+		@Test
+		@Story("Replayed answer consumption")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("the first awaiter consumes a frame once; a second consumer of the same frame is refused")
+		void tryConsumeAnswerFrame_firstConsumerWins_repeatedConsumerRefused() {
+			// given
+			final ProxySession session = newSession();
+			final JsonNode answer = ProxySessionTests.this.mapper.createObjectNode().put("id", 1);
+
+			// when / then
+			assertThat(session.tryConsumeAnswerFrame(answer)).isTrue();
+			assertThat(session.tryConsumeAnswerFrame(answer)).isFalse();
+		}
+
+		@Test
+		@Story("Replayed answer consumption")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("a structurally identical but distinct frame instance stays consumable")
+		void tryConsumeAnswerFrame_distinctInstanceStaysConsumable() {
+			// given
+			final ProxySession session = newSession();
+			final JsonNode first = ProxySessionTests.this.mapper.createObjectNode().put("id", 1);
+			final JsonNode second = ProxySessionTests.this.mapper.createObjectNode().put("id", 1);
+
+			// when / then: identity, not structural equality, decides
+			assertThat(session.tryConsumeAnswerFrame(first)).isTrue();
+			assertThat(session.tryConsumeAnswerFrame(second)).isTrue();
+		}
+
+		@Test
+		@Story("Replayed answer consumption")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("the consumed set is FIFO-bounded: the oldest entry becomes consumable again once "
+				+ "evicted, the newest stays consumed")
+		void tryConsumeAnswerFrame_fifoEviction_boundsMemory() {
+			// given
+			final ProxySession session = newSession();
+			final JsonNode oldest = ProxySessionTests.this.mapper.createObjectNode().put("i", 0);
+			assertThat(session.tryConsumeAnswerFrame(oldest)).isTrue();
+
+			// when: overflow the bounded set
+			JsonNode newest = null;
+			for (int i = 1; i <= ProxySession.CONSUMED_ANSWER_CAPACITY; i++) {
+				newest = ProxySessionTests.this.mapper.createObjectNode().put("i", i);
+				assertThat(session.tryConsumeAnswerFrame(newest)).isTrue();
+			}
+
+			// then: the oldest entry was evicted (consumable again), the newest was not
+			assertThat(session.tryConsumeAnswerFrame(oldest)).as("oldest entry evicted").isTrue();
+			assertThat(session.tryConsumeAnswerFrame(newest)).as("newest entry still consumed").isFalse();
+		}
+
+		@Test
+		@Story("Replayed answer consumption")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("closing the session clears the consumed answers")
+		void tryConsumeAnswerFrame_clearedOnClose() {
+			// given
+			final ProxySession session = newSession();
+			final JsonNode answer = ProxySessionTests.this.mapper.createObjectNode().put("id", 1);
+			assertThat(session.tryConsumeAnswerFrame(answer)).isTrue();
+
+			// when
+			session.close();
+
+			// then
+			assertThat(session.tryConsumeAnswerFrame(answer)).isTrue();
+		}
+
+	}
+
 }
