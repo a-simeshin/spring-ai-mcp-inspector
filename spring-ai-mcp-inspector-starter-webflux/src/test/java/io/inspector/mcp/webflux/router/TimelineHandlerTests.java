@@ -41,13 +41,16 @@ import tools.jackson.databind.node.ObjectNode;
 import io.inspector.mcp.core.timeline.ExceptionLeakDetector;
 import io.inspector.mcp.core.timeline.TimelineEvent;
 import io.inspector.mcp.core.timeline.TimelineEventType;
+import io.inspector.mcp.core.timeline.TimelineQuery;
 import io.inspector.mcp.core.timeline.TimelineService;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 /**
  * Unit tests for {@link TimelineHandler}: the query-time {@code _leak} enrichment
@@ -131,6 +134,70 @@ class TimelineHandlerTests {
 		// then
 		assertThat(body).doesNotContain("_leak");
 		assertThat(response.payload().has("_leak")).isFalse();
+	}
+
+	@Test
+	@Story("Tool health")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("toolHealth() aggregates the recorded tools/call traffic over the whole-buffer window")
+	void toolHealth_aggregatesRecordedCalls() {
+		// given: one answered tools/call (request + correlated response, 40 ms apart)
+		final Instant base = Instant.parse("2026-01-01T10:00:00Z");
+		given(this.timelineService.query(any())).willReturn(List.of(callRequest("req-1", "echo", base),
+				callResponse("resp-1", "corr-req-1", false, base.plusMillis(40))));
+		final TimelineHandler handler = new TimelineHandler(this.timelineService, null);
+
+		// when
+		final String body = renderBody(handler.toolHealth(this.request).block());
+
+		// then
+		assertThat(body).contains("\"method\":\"echo\"");
+		assertThat(body).contains("\"calls\":1");
+		assertThat(body).contains("\"errors\":0");
+		assertThat(body).contains("\"p50Ms\":40");
+		verify(this.timelineService).query(argThat((q) -> q.limit() == TimelineQuery.MAX_LIMIT
+				&& q.eventTypes().size() == 2 && q.eventTypes().contains(TimelineEventType.MCP_JSONRPC_REQUEST)
+				&& q.eventTypes().contains(TimelineEventType.MCP_JSONRPC_RESPONSE)));
+	}
+
+	@Test
+	@Story("Tool health")
+	@Severity(SeverityLevel.NORMAL)
+	@Description("toolHealth() returns an empty JSON array when the buffer holds no tools/call traffic")
+	void toolHealth_emptyBuffer_returnsEmptyArray() {
+		given(this.timelineService.query(any())).willReturn(List.of());
+		final TimelineHandler handler = new TimelineHandler(this.timelineService, null);
+
+		assertThat(renderBody(handler.toolHealth(this.request).block())).isEqualTo("[]");
+	}
+
+	private String renderBody(final ServerResponse serverResponse) {
+		final MockServerWebExchange exchange = MockServerWebExchange
+			.from(MockServerHttpRequest.get("/mcp-inspector/api/timeline/tool-health").build());
+		final ServerResponse.Context context = mock(ServerResponse.Context.class);
+		given(context.messageWriters()).willReturn(HandlerStrategies.withDefaults().messageWriters());
+		serverResponse.writeTo(exchange, context).block();
+		return exchange.getResponse().getBodyAsString().block();
+	}
+
+	private static TimelineEvent callRequest(final String id, final String tool, final Instant at) {
+		final ObjectNode payload = JsonNodeFactory.instance.objectNode();
+		payload.put("jsonrpc", "2.0");
+		payload.put("id", 1);
+		payload.put("method", "tools/call");
+		payload.set("params", JsonNodeFactory.instance.objectNode().put("name", tool));
+		return new TimelineEvent(id, "corr-" + id, null, TimelineEventType.MCP_JSONRPC_REQUEST, at, payload);
+	}
+
+	private static TimelineEvent callResponse(final String id, final String correlationId, final boolean error,
+			final Instant at) {
+		final ObjectNode payload = JsonNodeFactory.instance.objectNode();
+		payload.put("jsonrpc", "2.0");
+		payload.put("id", 1);
+		final ObjectNode result = payload.putObject("result");
+		result.put("isError", error);
+		result.putArray("content").addObject().put("type", "text").put("text", "ok");
+		return new TimelineEvent(id, correlationId, null, TimelineEventType.MCP_JSONRPC_RESPONSE, at, payload);
 	}
 
 	private String bodyOf(final TimelineHandler handler) {

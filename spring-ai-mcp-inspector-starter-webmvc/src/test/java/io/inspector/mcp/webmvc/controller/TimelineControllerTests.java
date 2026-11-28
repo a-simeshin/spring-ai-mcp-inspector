@@ -39,6 +39,7 @@ import io.inspector.mcp.core.timeline.TimelineEvent;
 import io.inspector.mcp.core.timeline.TimelineEventType;
 import io.inspector.mcp.core.timeline.TimelineQuery;
 import io.inspector.mcp.core.timeline.TimelineService;
+import io.inspector.mcp.core.timeline.ToolHealthStat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -305,6 +306,71 @@ class TimelineControllerTests {
 			payload.put("throwable", "org.springframework.dao.DuplicateKeyException: " + E11000
 					+ "\n\tat org.example.Foo.bar(Foo.java:10)");
 			return payload;
+		}
+
+	}
+
+	@Nested
+	@DisplayName("toolHealth()")
+	class ToolHealth {
+
+		@Test
+		@Story("Aggregation")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("toolHealth() aggregates the recorded tools/call traffic with the fixed whole-buffer window")
+		void toolHealth_aggregatesRecordedCalls() {
+			// given: one answered tools/call (request + correlated response, 40 ms apart)
+			final Instant base = Instant.parse("2026-01-01T10:00:00Z");
+			given(TimelineControllerTests.this.timelineService.query(any()))
+				.willReturn(List.of(callRequest("req-1", "echo", base),
+						callResponse("resp-1", "corr-req-1", false, base.plusMillis(40))));
+
+			// when
+			final List<ToolHealthStat> result = TimelineControllerTests.this.controller.toolHealth();
+
+			// then
+			assertThat(result).hasSize(1);
+			final ToolHealthStat stat = result.get(0);
+			assertThat(stat.method()).isEqualTo("echo");
+			assertThat(stat.calls()).isEqualTo(1);
+			assertThat(stat.errors()).isZero();
+			assertThat(stat.noResponse()).isZero();
+			assertThat(stat.p50Ms()).isEqualTo(40);
+			assertThat(stat.lastIsError()).isFalse();
+			verify(TimelineControllerTests.this.timelineService)
+				.query(argThat((q) -> q.limit() == TimelineQuery.MAX_LIMIT && q.eventTypes().size() == 2
+						&& q.eventTypes().contains(TimelineEventType.MCP_JSONRPC_REQUEST)
+						&& q.eventTypes().contains(TimelineEventType.MCP_JSONRPC_RESPONSE)));
+		}
+
+		@Test
+		@Story("Empty buffer")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("toolHealth() returns an empty list when the buffer holds no tools/call traffic")
+		void toolHealth_emptyBuffer_returnsEmptyList() {
+			given(TimelineControllerTests.this.timelineService.query(any())).willReturn(List.of());
+
+			assertThat(TimelineControllerTests.this.controller.toolHealth()).isEmpty();
+		}
+
+		private static TimelineEvent callRequest(final String id, final String tool, final Instant at) {
+			final ObjectNode payload = JsonNodeFactory.instance.objectNode();
+			payload.put("jsonrpc", "2.0");
+			payload.put("id", 1);
+			payload.put("method", "tools/call");
+			payload.set("params", JsonNodeFactory.instance.objectNode().put("name", tool));
+			return new TimelineEvent(id, "corr-" + id, null, TimelineEventType.MCP_JSONRPC_REQUEST, at, payload);
+		}
+
+		private static TimelineEvent callResponse(final String id, final String correlationId, final boolean error,
+				final Instant at) {
+			final ObjectNode payload = JsonNodeFactory.instance.objectNode();
+			payload.put("jsonrpc", "2.0");
+			payload.put("id", 1);
+			final ObjectNode result = payload.putObject("result");
+			result.put("isError", error);
+			result.putArray("content").addObject().put("type", "text").put("text", "ok");
+			return new TimelineEvent(id, correlationId, null, TimelineEventType.MCP_JSONRPC_RESPONSE, at, payload);
 		}
 
 	}

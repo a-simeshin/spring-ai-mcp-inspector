@@ -83,10 +83,16 @@ const UNANNOTATED_RESPONSE_EVENT = {
 };
 
 function mockFetch(events: unknown[]) {
-  const fetchMock = jest.fn().mockResolvedValue({
-    ok: true,
-    json: async () => events,
-  });
+  // [spring-ai-mcp-inspector PATCH] Tool Health panel (#370): the Timeline
+  // mounts the tool-health poll next to the timeline poll; route by URL so
+  // the panel always sees an empty (and silent) aggregate window.
+  const fetchMock = jest.fn((url: unknown) =>
+    Promise.resolve(
+      String(url).includes("/timeline/tool-health")
+        ? { ok: true, status: 200, json: async () => [] }
+        : { ok: true, status: 200, json: async () => events },
+    ),
+  );
   (global as unknown as { fetch: jest.Mock }).fetch = fetchMock;
   return fetchMock;
 }

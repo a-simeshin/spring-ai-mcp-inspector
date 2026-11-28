@@ -30,6 +30,7 @@ import io.inspector.mcp.core.timeline.TimelineEvent;
 import io.inspector.mcp.core.timeline.TimelineEventType;
 import io.inspector.mcp.core.timeline.TimelineQuery;
 import io.inspector.mcp.core.timeline.TimelineService;
+import io.inspector.mcp.core.timeline.ToolHealthAggregator;
 
 /**
  * Reactive HTTP handler for {@code GET ${path}/api/timeline}. Mirrors the WebMVC
@@ -80,6 +81,26 @@ public class TimelineHandler {
 		final List<TimelineEvent> events = this.timelineService.query(query);
 		final List<TimelineEvent> enriched = (this.leakDetector != null) ? this.leakDetector.enrich(events) : events;
 		return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON).bodyValue(enriched);
+	}
+
+	/**
+	 * Returns aggregated per-tool health statistics computed over the whole timeline ring
+	 * buffer window by {@link ToolHealthAggregator#computeToolHealth(List)}. Mirrors the
+	 * WebMVC {@code TimelineController} {@code GET .../api/timeline/tool-health} contract
+	 * exactly: no query parameters, one entry per tool that received a
+	 * {@code tools/call}.
+	 * @param request the incoming request (no query params consumed)
+	 * @return per-tool statistics as JSON, sorted by tool name (empty when no
+	 * {@code tools/call} was recorded)
+	 */
+	public Mono<ServerResponse> toolHealth(final ServerRequest request) {
+		final TimelineQuery query = TimelineQuery.builder()
+			.eventTypes(List.of(TimelineEventType.MCP_JSONRPC_REQUEST, TimelineEventType.MCP_JSONRPC_RESPONSE))
+			.limit(TimelineQuery.MAX_LIMIT)
+			.build();
+		return ServerResponse.ok()
+			.contentType(MediaType.APPLICATION_JSON)
+			.bodyValue(ToolHealthAggregator.computeToolHealth(this.timelineService.query(query)));
 	}
 
 	/**

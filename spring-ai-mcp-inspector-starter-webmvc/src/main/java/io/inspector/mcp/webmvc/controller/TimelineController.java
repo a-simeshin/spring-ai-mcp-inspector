@@ -30,6 +30,8 @@ import io.inspector.mcp.core.timeline.TimelineEvent;
 import io.inspector.mcp.core.timeline.TimelineEventType;
 import io.inspector.mcp.core.timeline.TimelineQuery;
 import io.inspector.mcp.core.timeline.TimelineService;
+import io.inspector.mcp.core.timeline.ToolHealthAggregator;
+import io.inspector.mcp.core.timeline.ToolHealthStat;
 
 /**
  * REST controller exposing the {@link TimelineService} to the inspector SPA.
@@ -89,6 +91,24 @@ public class TimelineController {
 			.build();
 		final List<TimelineEvent> events = this.timelineService.query(query);
 		return (this.leakDetector != null) ? this.leakDetector.enrich(events) : events;
+	}
+
+	/**
+	 * Returns aggregated per-tool health statistics computed over the whole timeline ring
+	 * buffer window by {@link ToolHealthAggregator#computeToolHealth(List)}: one entry
+	 * per tool that received a {@code tools/call}, with call/error counts, error rate and
+	 * nearest-rank p50/p95 durations. No query parameters: the aggregates always cover
+	 * everything the buffer currently holds.
+	 * @return per-tool statistics, sorted by tool name (empty when no {@code tools/call}
+	 * was recorded)
+	 */
+	@GetMapping(path = "/tool-health", produces = MediaType.APPLICATION_JSON_VALUE)
+	public List<ToolHealthStat> toolHealth() {
+		final TimelineQuery query = TimelineQuery.builder()
+			.eventTypes(List.of(TimelineEventType.MCP_JSONRPC_REQUEST, TimelineEventType.MCP_JSONRPC_RESPONSE))
+			.limit(TimelineQuery.MAX_LIMIT)
+			.build();
+		return ToolHealthAggregator.computeToolHealth(this.timelineService.query(query));
 	}
 
 	/**

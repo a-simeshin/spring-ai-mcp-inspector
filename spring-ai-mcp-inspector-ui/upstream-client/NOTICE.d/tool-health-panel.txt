@@ -1,0 +1,23 @@
+src/lib/toolHealth.ts, src/components/ToolHealthPanel.tsx, src/components/TimelineTab.tsx, src/lib/__tests__/toolHealth.test.ts, src/components/__tests__/ToolHealthPanel.test.tsx:
+Tool Health section for the inspector Timeline (#370): a per-tool health table
+over the traffic the timeline already records. Aggregation is server-side:
+ToolHealthAggregator (merged in b90c9df5) over the ring-buffer window, exposed
+as GET ${path}/api/timeline/tool-health by the webmvc TimelineController and
+the webflux TimelineHandler (same conditional timeline.enabled bean gating as
+the rest of the timeline API). ToolHealthPanel polls the endpoint every 3s
+with the raw X-MCP-Inspector-Auth bootstrap header and renders one row per
+tool: calls, errors (tooltip counts calls without a response in the window),
+error rate, p50/p95 ms, last result flag (ok/error/-). Rows sort by error
+rate, p50 and p95 via header buttons (first click descending, second click
+ascending, ties by tool name); clicking a row filters the Timeline list to
+that tool's calls client-side (lib/toolHealth filterEventsByTool keeps the
+tool's tools/call requests plus correlationId-matched responses, the same
+purely client-side pattern as the side filter) and a chip
+(timeline-tool-filter-clear) removes the filter. Empty state when no
+tools/call was recorded; explicit disabled state on 404 (timeline subsystem
+off); role=alert error state on other non-OK responses. Data-testid anchors:
+tool-health-panel, tool-health-table, tool-health-row-<tool>,
+tool-health-sort-error-rate, tool-health-sort-p50, tool-health-sort-p95,
+tool-health-empty, tool-health-disabled, tool-health-error,
+timeline-tool-filter-clear. No upstream equivalent exists; this is a Spring AI
+MCP Inspector extension.

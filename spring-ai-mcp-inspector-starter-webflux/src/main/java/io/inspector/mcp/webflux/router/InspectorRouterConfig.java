@@ -112,7 +112,8 @@ public class InspectorRouterConfig {
 		if (timeline != null) {
 			// Same path and query contract as the WebMVC TimelineController; the
 			// route must be claimed before the /** resource catch-all below.
-			router = router.andRoute(GET(apiPath + "/timeline"), timeline::query);
+			router = router.andRoute(GET(apiPath + "/timeline"), timeline::query)
+				.andRoute(GET(apiPath + "/timeline/tool-health"), timeline::toolHealth);
 		}
 		if (clientConnections != null) {
 			// Same path and payload contract as the WebMVC
