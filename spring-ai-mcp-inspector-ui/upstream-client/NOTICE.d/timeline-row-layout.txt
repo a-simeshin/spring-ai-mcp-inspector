@@ -1,0 +1,12 @@
+src/components/TimelineTab.tsx - timeline row layout contract (#295). The
+collapsed row rendered formatTimestamp's HH:MM:SS.mmm (12 monospace characters,
+about 87px at text-xs) into a fixed w-14 (56px) cell and the type label (up to
+JSONRPC NOTIFICATION) into a fixed w-20 (80px) cell, both without overflow
+clipping: the timestamp glyphs painted over the type column and the type label
+wrapped onto two lines on every row. The cells now carry whitespace-nowrap and
+enough width (w-24 / w-36) and gained the data-testid anchors
+timeline-row-timestamp / timeline-row-type. The demo E2E
+(spring-ai-mcp-inspector-demo-webmvc InspectorUiIT$TimelineRowLayout, issue
+#295) measures the painted text boxes via Range.getBoundingClientRect() and
+fails when the timestamp text overlaps the type cell, the type label wraps, or
+the anchors disappear, at the 1280x800 desktop and 375x812 mobile viewports.

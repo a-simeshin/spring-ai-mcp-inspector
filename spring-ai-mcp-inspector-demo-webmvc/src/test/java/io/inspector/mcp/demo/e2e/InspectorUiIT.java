@@ -6075,4 +6075,176 @@ class InspectorUiIT {
 
 	}
 
+	// =====================================================================
+	// Timeline row layout: timestamp and type cells must not overlap
+	// (issue #295)
+	// =====================================================================
+
+	/**
+	 * Live end-to-end coverage for the Timeline row layout contract (issue #295). The
+	 * timestamp cell renders {@code HH:MM:SS.mmm} (12 monospace characters, about 87px at
+	 * {@code text-xs}) and the type cell renders labels up to
+	 * {@code JSONRPC NOTIFICATION} (20 characters). Pre-fix both cells were hard-widthed
+	 * below their content ({@code w-14} / {@code w-20}) without overflow clipping, so the
+	 * timestamp glyphs painted over the type column and the type label wrapped onto two
+	 * lines. The cells now carry {@code whitespace-nowrap} and enough width ({@code w-24}
+	 * / {@code w-36}).
+	 *
+	 * <p>
+	 * The measurement takes <em>text</em> boxes, not the host span boxes: a fixed-width
+	 * span keeps its border box at the fixed width while the text inside overflows
+	 * visibly, so {@code Range.getBoundingClientRect()} (the union of the text's client
+	 * rects) is what exposes the painted glyph width. A row satisfies the contract when
+	 * the timestamp text ends at or before the left edge of the type cell box and the
+	 * type label occupies a single text line.
+	 */
+	@Nested
+	@DisplayName("Timeline row layout (timestamp/type cells do not overlap)")
+	@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+	class TimelineRowLayout {
+
+		/**
+		 * Boot once per group and generate deterministic JSONRPC traffic: one sum tool
+		 * call through the UI, so both methods measure real request/response rows
+		 * whichever order JUnit picks.
+		 */
+		@BeforeAll
+		void bootConnectAndGenerateRows() {
+			startApp(new Combo("sse"));
+			openAndConnect();
+			clickTab("tools");
+			SelenideElement listTools = activePanel().$(byText("List Tools"));
+			if (listTools.exists() && listTools.isEnabled()) {
+				listTools.click();
+			}
+			activePanel().$$("[data-testid^=tool-row-]")
+				.shouldHave(CollectionCondition.sizeGreaterThan(0), Duration.ofSeconds(15));
+			selectRow("sum");
+			$("#a").shouldBe(visible, Duration.ofSeconds(10)).setValue("7");
+			$("#b").shouldBe(visible, Duration.ofSeconds(10)).setValue("8");
+			$("[data-testid=run-tool-button]").shouldBe(visible, Duration.ofSeconds(10)).click();
+			activePanel().shouldHave(text("15"), Duration.ofSeconds(15));
+			activePanel().$("[data-testid=tool-result-heading]").shouldHave(text("Success"), Duration.ofSeconds(15));
+		}
+
+		@AfterAll
+		void shutdown() {
+			stopApp();
+		}
+
+		@BeforeEach
+		void resetToDesktopViewport() {
+			ResponsiveTestHelpers.setViewportExactly(1280, 800);
+		}
+
+		@AfterEach
+		void restoreToDesktopViewport() {
+			ResponsiveTestHelpers.setViewportExactly(1280, 800);
+		}
+
+		/**
+		 * Measures every rendered timeline row: the painted timestamp text right edge,
+		 * the type cell box left edge, their horizontal overlap, and the painted height
+		 * of both texts (a wrapped type label doubles its height). The cells resolve by
+		 * the data-testid anchors first and by DOM position (the first two flex children
+		 * of the row) as a fallback, so the overlap assertion measures the real defect
+		 * even before the anchors exist.
+		 */
+		@SuppressWarnings("unchecked")
+		private static List<Map<String, Object>> measureTimelineRows() {
+			$("[data-testid=timeline-row]").shouldBe(visible, Duration.ofSeconds(15));
+			return (List<Map<String, Object>>) Selenide.executeJavaScript("""
+							const rows = Array.from(document.querySelectorAll('[data-testid=timeline-row]'));
+							return rows.map((row) => {
+								const inner = row.firstElementChild;
+								// The data-testid anchors are the contract; the positional fallback
+								// (first two flex children) keeps the measurement honest on the
+								// unpatched layout, where the anchors do not exist yet.
+								const ts = row.querySelector('[data-testid=timeline-row-timestamp]')
+									|| (inner ? inner.children[0] : null);
+								const ty = row.querySelector('[data-testid=timeline-row-type]')
+									|| (inner ? inner.children[1] : null);
+								if (!ts || !ty) {
+									return { error: 'missing layout cells', text: row.textContent.slice(0, 60) };
+								}
+								const tsRange = document.createRange();
+								tsRange.selectNodeContents(ts);
+								const tyRange = document.createRange();
+								tyRange.selectNodeContents(ty);
+								const tsText = tsRange.getBoundingClientRect();
+								const tyText = tyRange.getBoundingClientRect();
+								const tyBox = ty.getBoundingClientRect();
+								return {
+									type: (ty.textContent || '').trim(),
+									anchored: !!(row.querySelector('[data-testid=timeline-row-timestamp]')
+									&& row.querySelector('[data-testid=timeline-row-type]')),
+									overlap: Math.round((tsText.right - tyBox.left) * 10) / 10,
+									tyTextHeight: Math.round(tyText.height * 10) / 10,
+									tsTextHeight: Math.round(tsText.height * 10) / 10
+								};
+							});
+					""");
+		}
+
+		/**
+		 * Every measured row must keep the timestamp text at or before the type cell box
+		 * left edge (no painted overlap) and the type text on a single line (no taller
+		 * than the timestamp line), and at least one JSONRPC request/response row must be
+		 * present so the assertion cannot pass on an empty or non-traffic timeline.
+		 */
+		private static void assertRowsSatisfyLayoutContract(List<Map<String, Object>> rows) {
+			Assertions.assertFalse(rows.isEmpty(), "timeline must render rows to measure");
+			boolean sawJsonRpcRow = false;
+			for (Map<String, Object> row : rows) {
+				Assertions.assertFalse(row.containsKey("error"),
+						"every timeline row must carry layout cells to measure, got " + row);
+				double overlap = ((Number) row.get("overlap")).doubleValue();
+				Assertions.assertTrue(overlap <= 0.5,
+						"timestamp text must not paint over the type cell (overlap " + overlap + "px), row: " + row);
+				double typeHeight = ((Number) row.get("tyTextHeight")).doubleValue();
+				double stampHeight = ((Number) row.get("tsTextHeight")).doubleValue();
+				Assertions.assertTrue(typeHeight <= stampHeight + 0.5,
+						"type label must stay on a single text line (type " + typeHeight + "px vs timestamp "
+								+ stampHeight + "px), row: " + row);
+				Assertions.assertTrue(Boolean.TRUE.equals(row.get("anchored")),
+						"timeline row must carry the data-testid layout anchors (timeline-row-timestamp, "
+								+ "timeline-row-type), row: " + row);
+				if (String.valueOf(row.get("type")).startsWith("JSONRPC")) {
+					sawJsonRpcRow = true;
+				}
+			}
+			Assertions.assertTrue(sawJsonRpcRow,
+					"at least one JSONRPC request/response row must be present, got rows: " + rows);
+		}
+
+		@Test
+		@Story("Timeline layout")
+		@Severity(SeverityLevel.CRITICAL)
+		@Description("Issue #295 desktop regression: on a 1280x800 viewport every timeline row keeps the "
+				+ "painted timestamp text (HH:MM:SS.mmm, about 87px) inside its own cell so it never paints "
+				+ "over the type column, and the type label (JSONRPC REQUEST / JSONRPC RESPONSE) stays on a "
+				+ "single text line instead of wrapping.")
+		@DisplayName("timelineRowsAt1280x800_noOverlapSingleLineType: #295 desktop regression")
+		void timelineRows_at1280x800_noOverlapAndSingleLineTypeLabels() {
+			clickTab("timeline");
+			assertRowsSatisfyLayoutContract(measureTimelineRows());
+		}
+
+		@Test
+		@Story("Timeline layout")
+		@Severity(SeverityLevel.NORMAL)
+		@Description("Issue #295 mobile: at 375x812 the fixed timestamp (w-24) and type (w-36) columns still "
+				+ "fit the inspector column, rows keep the non-overlap and single-line contract and the "
+				+ "document does not overflow horizontally, so the mobile timeline stays usable.")
+		@DisplayName("timelineRowsAt375x812_stayUsable: no overlap, no horizontal overflow")
+		void timelineRows_at375x812_stayUsableWithoutOverlapOrHorizontalOverflow() {
+			ResponsiveTestHelpers.setViewportExactly(375, 812);
+			clickTab("timeline");
+			assertRowsSatisfyLayoutContract(measureTimelineRows());
+			Assertions.assertTrue(ResponsiveTestHelpers.noHorizontalDocumentOverflow(),
+					"document.documentElement must not overflow horizontally at 375px");
+		}
+
+	}
+
 }
